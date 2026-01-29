@@ -2847,8 +2847,8 @@ if onbox:
     initial_macsec_commands.extend([
         f"set event-options generate-event every10mins time-interval 600 start-time {start_time}",
         f"set event-options policy qkd events every10mins",
-        f"set event-options policy qkd then event-script ETSIA_v3.1.0_Turkcell_Phase2_v1.py",
-        f"set event-options event-script file ETSIA_v3.1.0_Turkcell_Phase2_v1.py python-script-user admin",
+        f"set event-options policy qkd then event-script ETSIA_v3.1.0_Phase2_v1.py",
+        f"set event-options event-script file ETSIA_v3.1.0_Phase2_v1.py python-script-user admin",
         f"set event-options traceoptions file script.log",
         f"set event-options traceoptions file size 10m",
     ])
@@ -4503,7 +4503,7 @@ stop process
 ### Onbox execution master
 - Master device under test: mx304-11
 ```bash
-ahanciu@mx304-11-re0> op ETSIA_v3.0.py    
+juniper_ps@mx304-11-re0> op ETSIA_v3.0.py    
 onbox True
 Logging modules initialized successfully
 Onbox approach taken
@@ -4550,7 +4550,7 @@ xe-0/0/1:0   E6388930FE1A773944C09EBA   primary     in-progress   2         0   
 ### Onbox execution slave1
 - Slave device under test: mx304-12
 ```bash
-ahanciu@mx304-12-re0> op ETSIA_v3.0.py    
+juniper_ps@mx304-12-re0> op ETSIA_v3.0.py    
 onbox True
 Logging modules initialized successfully
 Onbox approach taken
@@ -4603,7 +4603,7 @@ et-0/0/9     5DD52C660EA70BD7DE81F439   primary     in-progress   2         0   
 ### Onbox execution additional slave2
 - Additional slave device under test: mx10008-23
 ```bash
-ahanciu@mx10008-23-re0> op ETSIA_v3.0.py    
+juniper_ps@mx10008-23-re0> op ETSIA_v3.0.py    
 onbox True
 Logging modules initialized successfully
 Onbox approach taken
@@ -4663,7 +4663,7 @@ xe-0/0/2:0   BCC4E0D4221BC1B34ADB2ABB   primary     in-progress   2         0   
 ### Onbox execution additional slave3
 - Additional slave device under test: mx10008-24
 ```bash
-ahanciu@mx10008-24> op ETSIA_v3.0.py    
+juniper_ps@mx10008-24> op ETSIA_v3.0.py    
 onbox True
 Logging modules initialized successfully
 Onbox approach taken
