@@ -30,7 +30,7 @@ yes
 
 configure 
 set security ike gateway ike-gate-1 ppk-profile qbt-1
-set security key-manager profiles qbt-1 quantum-key-manager url https://9.173.9.102
+set security key-manager profiles qbt-1 quantum-key-manager url https://10.173.9.102
 set security key-manager profiles qbt-1 quantum-key-manager local-sae-id srx-1
 set security key-manager profiles qbt-1 quantum-key-manager peer-sae-ids srx-2
 set security key-manager profiles qbt-1 quantum-key-manager local-certificate-id Qsafe
@@ -72,7 +72,7 @@ request security pki ca-certificate load ca-profile Qsafe-ca-root filename clien
 
 configure
 set security ike gateway ike-gate-1 ppk-profile qbt-1
-set security key-manager profiles qbt-1 quantum-key-manager url https://9.173.9.103
+set security key-manager profiles qbt-1 quantum-key-manager url https://10.173.9.103
 set security key-manager profiles qbt-1 quantum-key-manager local-sae-id srx-2
 set security key-manager profiles qbt-1 quantum-key-manager peer-sae-ids srx-1
 set security key-manager profiles qbt-1 quantum-key-manager local-certificate-id Qsafe
