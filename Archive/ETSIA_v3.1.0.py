@@ -63,7 +63,7 @@ except ImportError:
     print("onbox {}".format(onbox))
     print(datetime.datetime.now())
 
-CUR_DIR = '/home/telcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main'
+CUR_DIR = '/home/telcocloud/Documents/etsi-gs-qkd-014-referenceimplementation-main'
 
 
 if not onbox:
