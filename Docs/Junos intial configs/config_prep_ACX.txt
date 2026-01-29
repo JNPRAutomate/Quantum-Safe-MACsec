@@ -6,8 +6,8 @@ set system services ssh root-login allow
 set system services ssh sftp-server
 delete security macsec 
 delete system static-host-mapping
-set system static-host-mapping acx-1 inet 9.173.8.201
-set system static-host-mapping acx-2 inet 9.173.8.202
+set system static-host-mapping acx-1 inet 10.173.8.201
+set system static-host-mapping acx-2 inet 10.173.8.202
 
 
 
@@ -18,8 +18,8 @@ set system services ssh root-login allow
 set system services ssh sftp-server
 delete security macsec 
 delete system static-host-mapping
-set system static-host-mapping acx-1 inet 9.173.8.201
-set system static-host-mapping acx-2 inet 9.173.8.202
+set system static-host-mapping acx-1 inet 10.173.8.201
+set system static-host-mapping acx-2 inet 10.173.8.202
 
 FILES
 
@@ -36,29 +36,25 @@ total blocks: 176
 
 SCRIPTS
 
-/var/db/scripts/event/ETSIA_v3.1.0_Turkcell_Phase2_v1.py  
+/var/db/scripts/event/ETSIA_v3.1.0_v1.py  
 /var/db/scripts/event/profile.py  
 
-/var/db/scripts/op/ETSIA_v3.1.0_Turkcell_Phase2_v1.py 
+/var/db/scripts/op/ETSIA_v3.1.0_v1.py 
 /var/db/scripts/op/profile.py
 
 
-
-
-REFERENCE - BISEY YAPMAYA GEREK YOK
-
-81          DATABASE_HOST = '9.173.9.102'
+81          DATABASE_HOST = '10.173.9.102'
 281         ca_cert_path = os.path.join(CERTS_DIR, f'client-root-ca.crt')
 472         CA_CERT = CERTS_DIR + 'client-root-ca.crt'
 878         "root_enc_pass": "$6$3eHulK1c$Yq.kaamV8hcuviwRebQI4gUMRSOGVIiBN8o/QTw7sfZ4GCfExd3TjyuUrsyrgfoBW3xNQVT5/gtGg6.S09okg0",
-879         "ip": "9.173.8.201",
+879         "ip": "10.173.8.201",
 880         "interfaces": ["et-0/0/20:3"],
-882         "kme_name": "https://9.173.9.102",
-883         "kme_ip": "9.173.9.102"
+882         "kme_name": "https://10.173.9.102",
+883         "kme_ip": "10.173.9.102"
 896         "root_enc_pass": "$6$bOeXyUQ7$oefu0aDycBhyLGDE.TCExBrdVkYOhg2IOesMVwRQvid9iDpMzwm5yZPvYhKlBu3sZ0YbHBAH0ro5SQWTnscWf.",
-897         "ip": "9.173.8.202",
+897         "ip": "10.173.8.202",
 898         "interfaces": ["et-0/0/20:3"],
-900         "kme_name": "https://9.173.9.103",
-901         "kme_ip": "9.173.9.103"
+900         "kme_name": "https://10.173.9.103",
+901         "kme_ip": "10.173.9.103"
 
 
