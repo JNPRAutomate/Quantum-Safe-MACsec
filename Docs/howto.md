@@ -302,11 +302,11 @@ acx-1:
     - "et-0/0/20:2"
   kme:
     kme_name: "https://idq-1"
-    kme_ip: "9.173.9.102"
+    kme_ip: "10.173.9.102"
 
 acx-2:
   root_enc_pass: "$6$bOeXyUQ7$oefu0aDycBhyLGDE.TCExBrdVkYOhg2IOesMVwRQvid9iDpMzwm5yZPvYhKlBu3sZ0YbHBAH0ro5SQWTnscWf."
-  ip: "9.173.8.202"
+  ip: "10.173.8.202"
   interfaces:
     - "et-0/0/20:2"
   kme:
@@ -315,21 +315,21 @@ acx-2:
 
 acx-3:
   root_enc_pass: "$6$someotherpass$morehashdata"
-  ip: "9.173.8.203"
+  ip: "10.173.8.203"
   interfaces:
     - "et-0/0/20:2"
   kme:
     kme_name: "https://idq-3"
-    kme_ip: "9.173.9.104"
+    kme_ip: "10.173.9.104"
 
 acx-4:
   root_enc_pass: "$6$randompass$hashxxxyyy"
-  ip: "9.173.8.204"
+  ip: "10.173.8.204"
   interfaces:
     - "et-0/0/20:2"
   kme:
     kme_name: "https://idq-4"
-    kme_ip: "9.173.9.105"
+    kme_ip: "10.173.9.105"
 ```
 
 ---
