@@ -2847,8 +2847,8 @@ if onbox:
     initial_macsec_commands.extend([
         f"set event-options generate-event every10mins time-interval 600 start-time {start_time}",
         f"set event-options policy qkd events every10mins",
-        f"set event-options policy qkd then event-script ETSIA_v3.1.0_Turkcell_Phase2_v1.py",
-        f"set event-options event-script file ETSIA_v3.1.0_Turkcell_Phase2_v1.py python-script-user admin",
+        f"set event-options policy qkd then event-script ETSIA_v3.1.0_cell_Phase2_v1.py",
+        f"set event-options event-script file ETSIA_v3.1.0_cell_Phase2_v1.py python-script-user admin",
         f"set event-options traceoptions file script.log",
         f"set event-options traceoptions file size 10m",
     ])
