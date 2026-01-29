@@ -63,7 +63,7 @@ except ImportError:
     print("onbox {}".format(onbox))
     print(datetime.datetime.now())
 
-CUR_DIR = '/home/turkcelltelcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main'
+CUR_DIR = '/home/telcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main'
 
 
 if not onbox:
@@ -104,13 +104,13 @@ CKN_PREFIX = 'abcd1234abcd5678abcd1234abcd5678'
 # LOG_FILENAME = '/var/log/qkd_trace.log'
 LOG_FILENAME = f'{CUR_DIR}/qkd_test.log'
 # KEYID_JSON_FILENAME = '/var/log/{}last_key.json'
-KEYID_JSON_FILENAME = '/home/turkcelltelcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main/{}_last_key_test.json'
+KEYID_JSON_FILENAME = '/home/telcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main/{}_last_key_test.json'
 # KEYID_JSON_FILENAME = '/home/administrator/{}_last_key_test.json'
 # CERTS_DIR = '/var/tmp/acx1/'
-# CERTS_DIR = '/home/turkcelltelcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main/certs'
+# CERTS_DIR = '/home/telcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main/certs'
 
 
-prof = Profile.Profile(file="/home/turkcelltelcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main/scaler.prof", verbose=True, enabled=True, mode="w+")
+prof = Profile.Profile(file="/home/telcocloud/Documents/ahanciu/etsi-gs-qkd-014-referenceimplementation-main/scaler.prof", verbose=True, enabled=True, mode="w+")
 # prof = Profile.Profile(file="/home/administrator/scaler.prof1", verbose=True, enabled=True, mode="w+")
 
 threads = []
