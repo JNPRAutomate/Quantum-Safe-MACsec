@@ -1,0 +1,82 @@
+name: Markdown to PDF/DOCX Conversion
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write  # needed to push using GITHUB_TOKEN
+
+jobs:
+  convert_docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Pandoc and XeLaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex
+
+      - name: Get version from Python script
+        id: get_version
+        run: |
+          VERSION=$(grep '__version__' qkd_macsec.py | cut -d '"' -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Preprocess __mdinclude into single Markdown
+        run: |
+          TMPFILE="tmp_combined.md"
+          > "$TMPFILE"  # clear file
+          while read -r line; do
+            # skip empty lines and special flags like Increase_headers
+            [[ -z "$line" || "$line" == Increase_headers* ]] && continue
+
+            # fix relative paths for files inside Docs folder
+            if [[ -f "Docs/$line" ]]; then
+              cat "Docs/$line" >> "$TMPFILE"
+            elif [[ -f "$line" ]]; then
+              cat "$line" >> "$TMPFILE"
+            else
+              echo "Warning: file '$line' not found, skipping"
+            fi
+
+            echo -e "\n" >> "$TMPFILE"
+          done < Docs/__mdinclude
+          echo "Preprocessed __mdinclude into $TMPFILE"
+
+      - name: Create output folder
+        run: mkdir -p output
+
+      - name: Convert preprocessed Markdown to PDF and DOCX
+        run: |
+          echo "Converting tmp_combined.md to PDF and DOCX..."
+          pandoc tmp_combined.md \
+            -o "output/QKD_MACsec_${VERSION}.pdf" \
+            --from markdown \
+            --toc \
+            --pdf-engine=xelatex \
+            --variable mainfont="Latin Modern Roman" \
+            --variable fontsize=12pt \
+            --resource-path=.:images
+          pandoc tmp_combined.md \
+            -o "output/QKD_MACsec_${VERSION}.docx" \
+            --from markdown
+
+      - name: Commit and push output files
+        env:
+          VERSION: ${{ env.VERSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.email "aterren@juniper.net"
+          git config --global user.name "anter74"
+          git add output/
+          if ! git diff --cached --quiet; then
+            git commit -m "Add converted documents ${VERSION}" || echo "No changes to commit"
+            git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }} HEAD:main
+          else
+            echo "No changes to commit"
+          fi
