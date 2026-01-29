@@ -1,0 +1,93 @@
+*********** SRX-1 *********** 
+
+
+
+admin@SRX-1> file list detail   
+
+/var/home/admin/:
+-rw-r--r--  1 admin 20        1128 Mar 21 22:30 client-root-ca.crt
+-rw-r--r--  1 admin 20        1705 Mar 21 22:31 client-root-ca.key
+-rw-r--r--  1 admin 20        1148 Mar 21 23:49 srx-1.crt
+-rw-r--r--  1 admin 20        1705 Mar 21 23:49 srx-1.key
+
+
+request system software add optional://junos-ike.tgz
+
+clear security pki ca-certificate all 
+clear security pki local-certificate all
+clear security pki key-pair all 
+
+configure 
+set system host-name srx-1
+set security pki ca-profile Qsafe-ca-root ca-identity Qsafe-ca-root
+commit
+exit 
+
+
+request security pki local-certificate load filename srx-1.crt key srx-1.key certificate-id Qsafe 
+request security pki ca-certificate load ca-profile Qsafe-ca-root filename client-root-ca.crt
+yes
+
+configure 
+set security ike gateway ike-gate-1 ppk-profile qbt-1
+set security key-manager profiles qbt-1 quantum-key-manager url https://9.173.9.102
+set security key-manager profiles qbt-1 quantum-key-manager local-sae-id srx-1
+set security key-manager profiles qbt-1 quantum-key-manager peer-sae-ids srx-2
+set security key-manager profiles qbt-1 quantum-key-manager local-certificate-id Qsafe
+set security key-manager profiles qbt-1 quantum-key-manager trusted-cas Qsafe-ca-root
+commit
+exit 
+
+
+
+*********** SRX-2 *********** 
+
+
+admin@SRX-1> file list detail   
+
+/var/home/admin/:
+-rw-r--r--  1 admin 20        1128 Mar 21 22:30 client-root-ca.crt
+-rw-r--r--  1 admin 20        1705 Mar 21 22:31 client-root-ca.key
+-rw-r--r--  1 admin 20        1148 Mar 21 23:49 srx-2.crt
+-rw-r--r--  1 admin 20        1705 Mar 21 23:49 srx-2.key
+
+
+
+
+request system software add optional://junos-ike.tgz
+
+clear security pki ca-certificate all 
+clear security pki local-certificate all
+clear security pki key-pair all 
+
+configure 
+set system host-name srx-2
+set security pki ca-profile Qsafe-ca-root ca-identity Qsafe-ca-root
+commit
+exit 
+
+
+request security pki local-certificate load filename srx-2.crt key srx-2.key certificate-id Qsafe
+request security pki ca-certificate load ca-profile Qsafe-ca-root filename client-root-ca.crt
+
+configure
+set security ike gateway ike-gate-1 ppk-profile qbt-1
+set security key-manager profiles qbt-1 quantum-key-manager url https://9.173.9.103
+set security key-manager profiles qbt-1 quantum-key-manager local-sae-id srx-2
+set security key-manager profiles qbt-1 quantum-key-manager peer-sae-ids srx-1
+set security key-manager profiles qbt-1 quantum-key-manager local-certificate-id Qsafe
+set security key-manager profiles qbt-1 quantum-key-manager trusted-cas Qsafe-ca-root
+commit
+exit 
+
+
+
+
+show security key-manager profiles detail 
+show security ike security-associations detail 
+show security ipsec sa detail
+
+clear security ike sa 
+show log jkm | last 100 
+ping 1.1.1.1 routing-instance vpn
+ping 2.2.2.2 routing-instance vpn
