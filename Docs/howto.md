@@ -301,7 +301,7 @@ acx-1:
   interfaces:
     - "et-0/0/20:2"
   kme:
-    kme_name: "https://idq-1"
+    kme_name: "https://kme-1"
     kme_ip: "10.173.9.102"
 
 acx-2:
@@ -310,7 +310,7 @@ acx-2:
   interfaces:
     - "et-0/0/20:2"
   kme:
-    kme_name: "https://idq-2"
+    kme_name: "https://kme-2"
     kme_ip: "9.173.9.103"
 
 acx-3:
@@ -319,7 +319,7 @@ acx-3:
   interfaces:
     - "et-0/0/20:2"
   kme:
-    kme_name: "https://idq-3"
+    kme_name: "https://kme-3"
     kme_ip: "10.173.9.104"
 
 acx-4:
@@ -328,7 +328,7 @@ acx-4:
   interfaces:
     - "et-0/0/20:2"
   kme:
-    kme_name: "https://idq-4"
+    kme_name: "https://kme-4"
     kme_ip: "10.173.9.105"
 ```
 

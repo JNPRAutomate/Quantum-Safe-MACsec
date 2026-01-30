@@ -949,7 +949,7 @@ def main():
             "ip": "9.173.8.201",
             "interfaces": ["et-0/0/20:2"],
             "kme": {
-                "kme_name": "https://idq-1",
+                "kme_name": "https://kme-1",
                 "kme_ip": "9.173.9.102"
             }
         },
@@ -967,7 +967,7 @@ def main():
             "ip": "9.173.8.202",
             "interfaces": ["et-0/0/20:2"],
             "kme": {
-                "kme_name": "https://idq-2",
+                "kme_name": "https://kme-2",
                 "kme_ip": "9.173.9.103"
             }
         # }
