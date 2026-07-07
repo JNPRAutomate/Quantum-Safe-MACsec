@@ -22,3 +22,9 @@
   - subprocess
   - ipaddress
 
+### Fixed
+
+- Stop processing when KME key retrieval fails on the master node.
+- Prevent use of an undefined key object after a failed KME request.
+  
+  

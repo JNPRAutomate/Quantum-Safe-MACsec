@@ -447,8 +447,6 @@ def save_key_ids(key_dict, local_name):
         outfile.write(json.dumps(key_dict))
         print(f'Saved the key IDs to the JSON file: {KEYID_JSON_FILENAME.format(local_name)}')
 
-##### def fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_url, key_id=None, additional_slave_SAE_IDs=None):
-
 def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
                   kme_host, key_id, additional_slave_SAE_IDs=None):
     """
@@ -685,16 +683,17 @@ def process(dev, targets_dict, log):
         remote_mnmgt_add = targets_dict["qkd_roles"]['slave']
         print(f"remote_mnmgt_add: {remote_mnmgt_add}")
         additional_slave_SAE_IDs = targets_dict["qkd_roles"]['additional_slave_SAE_IDs']
-#####        r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_url, additional_slave_SAE_IDs=additional_slave_SAE_IDs)
         r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, key_id=None, additional_slave_SAE_IDs=None)
         print(f"response: {r}")
         if r is not None:
-#####            print('KME: [GET] Get Keys API: ' + kme_url + remote_mnmgt_add + '/enc_keys')
             print('KME: [GET] Get Keys API: for {} {}'.format(remote_mnmgt_add,r))
             key = r['keys'][0]
             log.info(f'Received KeyId: {key["key_ID"]}')
             print('Received KeyId:' + key['key_ID'])
             new_key_dict[local_name] = key['key_ID'].strip()
+        else: 
+            log.error("KME request returned no key")
+            return
     else:
         log.info(local_name + ' is Slave')
         print(local_name + ' is Slave')
