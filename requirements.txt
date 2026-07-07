@@ -1,0 +1,7 @@
+junos-eznc
+paramiko
+scp
+lxml
+pyopenssl
+requests
+pyyaml

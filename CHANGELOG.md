@@ -33,3 +33,12 @@
 - Removed obsolete commented code blocks.
 - Simplified source readability.
 
+### Changed
+
+- Moved embedded inventory configuration from qkd.py to external YAML inventory.
+- Added inline documentation and examples to the inventory file.
+
+### Changed
+
+- Introduced dedicated configuration loader.
+- YAML parsing moved outside qkd.py.
