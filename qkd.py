@@ -19,11 +19,11 @@ Unless required by applicable law or otherwise agreed to in writing by the
 parties, software distributed under the License is distributed on an "AS IS"
 BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-Date: 2025-11-27
-Version: 3.2
+Date: 2026-07-07
+Version: 3.2.2
 
 """
-__version__ = "v3.2.0"
+__version__ = "v3.2.2"
 
 import requests
 from jnpr.junos import Device
@@ -40,19 +40,14 @@ import json
 import copy
 import base64
 import uuid
-import hashlib
 import re
-import subprocess
 import os
 import datetime
 from scp import SCPClient, SCPException
 import os.path
 import time
-import Profile
-import ipaddress
 
 try:
-    import jcs
     onbox = True
 except ImportError:
     from OpenSSL import crypto
@@ -103,9 +98,6 @@ KME_URL_T = f'https://{ADDR}/api/v1/keys'
 CKN_PREFIX = 'abcd1234abcd5678abcd1234abcd5678'
 
 
-# Useful for debugging performance issues.
-prof = Profile.Profile(file="/var/home/admin/scaler.prof", verbose=True, enabled=True, mode="w+")
-
 threads = []
 
 # Decorator func for threading
@@ -120,26 +112,18 @@ def background(func):
 
 @background
 def req_thread(tnum, reqs, targets_dict, log):
-    prof.start("Thread-{0}".format(tnum))
     for device in reqs:
         print(device)
         with Device(host=targets_dict[device]['ip'], user=targets_dict["secrets"]["username"], password=targets_dict["secrets"]["password"], port=22) as dev:
             if should_check_certs():
                 # print(targets_dict[dev.facts['hostname'].split('-re')[0]]['ip'])
-                # prof.start("renew_certificates()-Thread {0} Device {1}".format(tnum,device))
                 renew_certificates(dev, log, targets_dict=targets_dict)
-                # prof.stop("renew_certificates()-Thread {0} Device {1}".format(tnum,device))
-            prof.start("check_and_apply_initial_config()-Thread {0} Device {1}".format(tnum,device))
             print("start check_and_apply_initial_config")
             check_and_apply_initial_config(dev, targets_dict, log)
             print("stop check_and_apply_initial_config")
-            prof.stop("check_and_apply_initial_config()-Thread {0} Device {1}".format(tnum,device))
-            prof.start("process()-Thread {0} Device {1}".format(tnum,device))
             print("start process")
             process(dev, targets_dict, log)
             print("stop process")
-            prof.stop("process()-Thread {0} Device {1}".format(tnum,device))
-    prof.stop("Thread-{0}".format(tnum))
 
 def generate_ca_certificate(ca_cert_path, ca_key_path, ca_subject):
     """
@@ -873,7 +857,6 @@ def get_args():
     return parser.parse_args()
 
 def main():
-    global prof
 
     args = get_args()
 
@@ -1041,23 +1024,16 @@ def main():
                 device = dev.facts['hostname'].split('-re')[0]
                 # commented out because pyOpenSSL is not part of the Junos python3 modules
                 # if should_check_certs():
-                #     prof.start("renew_certificates() Device {0}".format(device))
                 #     renew_certificates(dev, targets_dict, log)
-                #     prof.stop("renew_certificates() Device {0}".format(device))
-                prof.start("check_and_apply_initial_config() Device {0}".format(device))
                 print("111")
                 check_and_apply_initial_config(dev, targets_dict, log)
                 print("112")
-                prof.stop("check_and_apply_initial_config() Device {0}".format(device))
                 print("113")
-                prof.start("process() Device {0}".format(device))
                 print("114")
                 process(dev, targets_dict, log)
                 print("115")
-                prof.stop("process() Device {0}".format(device))
         except Exception as e:
             log.error(f"Failed to process host: {str(e)}")
 
 if __name__ == '__main__':
     main()
-    prof.close()

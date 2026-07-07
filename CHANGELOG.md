@@ -3,14 +3,14 @@
 ## v3.2.2 (In Development)
 
 ### Removed
-- Removed legacy `Profile` dependency.
-- Removed performance profiling hooks (`prof.start()`, `prof.stop()`, `prof.close()`).
+- Removed legacy `Profile` dependency from `qkd.py`.
+- Removed profiling initialization and runtime profiling hooks.
 
 ### Changed
-- Simplified event script runtime dependencies.
-- Reduced platform-specific requirements.
+- Updated `qkd.py` script version to `v3.2.2`.
+- Simplified runtime execution path by removing non-functional profiling code.
 
-### Planned
-- Modularize QKD event script.
-- Move hardcoded configuration values to external configuration files.
-- Review certificate management workflow.
+### Notes
+- Functional QKD/MACsec behavior is unchanged.
+- KME key retrieval, CAK/CKN generation, Junos configuration commit, and key ID persistence remain unchanged.
+
