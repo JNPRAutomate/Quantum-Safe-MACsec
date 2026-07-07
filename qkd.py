@@ -50,6 +50,7 @@ from config_loader import load_targets
 import qkd_certs
 import requests
 from qkd_ssh import createSSHClient
+from qkd_identity import get_certs_dir,get_log_file,get_keyid_file
 
 try:
     onbox = True
