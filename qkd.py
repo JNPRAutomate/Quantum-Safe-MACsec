@@ -61,29 +61,27 @@ except ImportError:
     print(datetime.datetime.now())
     
 
+CUR_DIR = "/var/home/admin"
 
-CUR_DIR = '/var/home/admin'
+CERTS_DIR = f"{CUR_DIR}/certs/"
+OFFBOX_CERTS_DIR = "./certs/"
+
+CA_CERT = f"{CERTS_DIR}client-root-ca.crt"
+
+LOG_FILENAME = f"{CUR_DIR}/qkd_test.log"
+
+# Important: the code calls KEYID_JSON_FILENAME.format(local_name)
+# so this must contain one placeholder.
+KEYID_JSON_FILENAME = f"{CUR_DIR}/{{}}last_key.json"
+
+########
 
 
-##### if not onbox:
-#####     # out = subprocess.check_output(["pwd"])
-#####     # subprocess.run(["mkdir", "certs"], stderr=subprocess.PIPE)
-#####     # OFFBOX_CERTS_DIR = out.strip().decode("utf-8") + '/certs/'
-#####     OFFBOX_CERTS_DIR = f'{CUR_DIR}/certs'
-
-OFFBOX_CERTS_DIR = f'{CUR_DIR}/certs'
-
-# etsi-gs-qkd-014-referenceimplementation variables
-# https://github.com/cybermerqury/etsi-gs-qkd-014-referenceimplementation
 DATABASE_PORT = '10000'
 DATABASE_HOST = '9.173.9.102'
 DATABASE_USER = 'db_user'
 DATABASE_PASSWORD = 'db_password'
-
 DATABASE_URL = f'postgres://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/key_store'
-
-# CURDIR=$(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-CERTS_DIR=f'{CUR_DIR}/certs/'
 
 # ETSI 014 reference implementation configuration.
 ETSI_014_REF_IMPL_DB_URL = f'{DATABASE_URL}'
@@ -97,7 +95,6 @@ ETSI_014_REF_IMPL_TLS_ROOT_CRT = f'{OFFBOX_CERTS_DIR}/root.crt'
 
 # match a pipe character | followed by {...} JSON. Used for parsing device output containing inline JSON.
 desc_re = re.compile(r'\|({.*})')
-CA_CERT = f'{CERTS_DIR}/root.crt'
 
 # API URL
 ADDR = f'{ETSI_014_REF_IMPL_IP_ADDR}:{ETSI_014_REF_IMPL_PORT_NUM}'
@@ -105,14 +102,6 @@ KME_URL_T = f'https://{ADDR}/api/v1/keys'
 # this creates https://9.173.9.102:443/api/v1/keys
 CKN_PREFIX = 'abcd1234abcd5678abcd1234abcd5678'
 
-# LOG_FILENAME = '/var/log/qkd_trace.log'
-LOG_FILENAME = f'{CUR_DIR}/qkd_test.log'
-# KEYID_JSON_FILENAME = '/var/log/{}last_key.json'
-##### KEYID_JSON_FILENAME = '/home/testuser/etsi-gs-qkd-014-referenceimplementation-main/{}_last_key_test.json'
-KEYID_JSON_FILENAME = '/var/home/admin/{}last_key.json'
-# KEYID_JSON_FILENAME = '/home/administrator/{}_last_key_test.json'
-# CERTS_DIR = '/var/tmp/acx1/'
-# CERTS_DIR = '/home/testuser/etsi-gs-qkd-014-referenceimplementation-main/certs'
 
 # Useful for debugging performance issues.
 prof = Profile.Profile(file="/var/home/admin/scaler.prof", verbose=True, enabled=True, mode="w+")
@@ -254,58 +243,42 @@ def is_certificate_valid(cert_path, min_valid_days=10):
     remaining_days = (not_after - datetime.datetime.now()).days
     return remaining_days >= min_valid_days
 
-def createSSHClient(device, username, password, port=22, retries=3, delay=5, timeout=10):
+def createSSHClient(device, username, password, port=22, retries=3, delay=5, timeout=30):
     """
     Create an SSH connection to a device with retries and timeout.
-    
-    Parameters:
-        device (str): Hostname or IP of the device
-        username (str): SSH username
-        password (str): SSH password
-        port (int): SSH port (default 22)
-        retries (int): Number of retry attempts (default 3)
-        delay (int): Delay in seconds between retries (default 5)
-        timeout (int): SSH connection timeout in seconds (default 10)
-        
-    Returns:
-        paramiko.SSHClient object if successful, None if connection fails
+
+    Junos bundled Paramiko may not support auth_timeout, so do not use it.
     """
+    last_error = None
+
     for attempt in range(1, retries + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
         try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(
                 hostname=device,
                 port=port,
                 username=username,
                 password=password,
                 timeout=timeout,
-                banner_timeout=timeout,
-                auth_timeout=timeout
+                banner_timeout=timeout
             )
-            print(f"Connected to {device} on attempt {attempt}")
             return client
-        except (SSHException, AuthenticationException, TimeoutError) as e:
-            print(f"Attempt {attempt} failed to connect to {device}: {e}")
+
+        except (SSHException, AuthenticationException, OSError) as e:
+            last_error = e
+            try:
+                client.close()
+            except Exception:
+                pass
+
+            print(f"SSH connection error to {device}, attempt {attempt}/{retries}: {e}")
+
             if attempt < retries:
-                print(f"Retrying in {delay} seconds...")
                 time.sleep(delay)
-            else:
-                print(f"Failed to connect to {device} after {retries} attempts.")
-                return None
 
-
-# def createSSHClient(device, username, password, port=22):
-#     """
-#     Create the ssh connection to the device
-#     """
-#     try:
-#         client = paramiko.SSHClient()
-#         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#         client.connect(device, port=port, username=username, password=password)
-#     except SSHException as e:
-#         print(f'SSH connection error: {e}')
-#     return client
+    raise SSHException(f"Unable to connect to {device} after {retries} attempts: {last_error}")
 
 def get_certificates(dev, log, targets_dict):
     """
@@ -491,96 +464,96 @@ def save_key_ids(key_dict, local_name):
         print(f'Saved the key IDs to the JSON file: {KEYID_JSON_FILENAME.format(local_name)}')
 
 ##### def fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_url, key_id=None, additional_slave_SAE_IDs=None):
-def fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, key_id, additional_slave_SAE_IDs=None):
+
+def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
+                  kme_host, key_id, additional_slave_SAE_IDs=None):
     """
-    Fetches keys from the KME.
+    Fetch keys from the KME.
+
+    If key_id is provided:
+        GET /dec_keys?key_ID=<id>
+
+    Otherwise:
+        GET /enc_keys
     """
+
     if onbox:
-        client_crt  = CERTS_DIR + local_name + '.crt'
-        print(f"client_crt: {client_crt}")
-        client_key  = CERTS_DIR + local_name + '.key'
-        print(f"client_key: {client_key}")
+        client_crt = CERTS_DIR + local_name + '.crt'
+        client_key = CERTS_DIR + local_name + '.key'
         CLIENT_CERT = (client_crt, client_key)
-#####        CA_CERT = CERTS_DIR + 'account-1286-server-ca-qukaydee-com.crt'
-        print(f"CLIENT_CERT: {CLIENT_CERT}")
+
         CA_CERT = CERTS_DIR + 'client-root-ca.crt'
-        print(f"CA_CERT: {CA_CERT}")
     else:
-        # the get_certificates() function is getting the certificates together with the last folder from OFFBOX_CERTS_DIR
-        # client_crt  = OFFBOX_CERTS_DIR + str(CERTS_DIR).split('/')[-2] + '/' + local_name + '.crt'
-        # client_key  = OFFBOX_CERTS_DIR + str(CERTS_DIR).split('/')[-2] + '/' + local_name + '.key'
-        client_crt  = OFFBOX_CERTS_DIR + '/' + local_name + '.crt'
-        client_key  = OFFBOX_CERTS_DIR + '/' + local_name + '.key'
+        client_crt = OFFBOX_CERTS_DIR + '/' + local_name + '.crt'
+        client_key = OFFBOX_CERTS_DIR + '/' + local_name + '.key'
         CLIENT_CERT = (client_crt, client_key)
-        CA_CERT = OFFBOX_CERTS_DIR + '/' + 'root.crt'
-        print(client_crt)
+
+        CA_CERT = OFFBOX_CERTS_DIR + '/root.crt'
+
     try:
+        print(f"KME host      : {kme_host}")
+        print(f"Remote SAE    : {remote_mnmgt_add}")
+        print(f"Client cert   : {client_crt}")
+        print(f"Client key    : {client_key}")
+        print(f"CA cert       : {CA_CERT}")
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+
         if key_id:
-            print(f'retrieving key: {key_id}')
-            # response = session.get(f"{kme_url}dec_keys?key_ID={key_id}", verify=False, cert=CLIENT_CERT)
-            # response = session.get(f"{kme_url}dec_keys?key_ID={key_id}", verify=CA_CERT, cert=CLIENT_CERT)
-            # response = session.get(f"{kme_url}172.30.198.54/dec_keys?key_ID={key_id}", verify=CA_CERT, cert=CLIENT_CERT)
-            # https://kme-1.acct-1286.etsi-qkd-api.qukaydee.com/api/v1/keys/mx304-10/enc_keys
-            # response = session.get(f"{kme_url}{remote_mnmgt_add}/dec_keys?key_ID={key_id}", verify=CA_CERT, cert=CLIENT_CERT)
-            # response = session.get(f"https://{ADDR}/{remote_mnmgt_add}/dec_keys?key_ID={key_id}", verify=CA_CERT, cert=CLIENT_CERT)
-            response = session.get(f"{kme_host}/api/v1/keys/{remote_mnmgt_add}/dec_keys?key_ID={key_id}", verify=CA_CERT, cert=CLIENT_CERT, headers={"Content-Type": "application/json"})
-#####            response = session.get(f"https://{ADDR}/api/v1/keys/{remote_mnmgt_add}/dec_keys?key_ID={key_id}", cert=CLIENT_CERT, verify=CA_CERT)
-            #response = session.get(f"https://{ADDR}/api/v1/keys/sae_001/dec_keys?key_ID={key_id}", cert=CLIENT_CERT, verify=CA_CERT)
-#####            print(remote_mnmgt_add)
-#####            print(f"https://{ADDR}/api/v1/keys/{remote_mnmgt_add}/dec_keys?key_ID={key_id}")
-            #print(f"https://{ADDR}/api/v1/keys/sae_001/dec_keys?key_ID={key_id}")
-            print(response.status_code)
+            url = (
+                f"{kme_host}/api/v1/keys/"
+                f"{remote_mnmgt_add}/dec_keys?key_ID={key_id}"
+            )
+
+            print(f"Retrieving key_id: {key_id}")
+            print(f"GET {url}")
+
+            response = session.get(
+                url,
+                verify=CA_CERT,
+                cert=CLIENT_CERT,
+                headers=headers,
+                timeout=30
+            )
+
         else:
-            # url = f"https://{KME_URL_T}/{remote_mnmgt_add}/enc_keys?number=1&size=128"
-            # print(f"https://{ADDR}/api/v1/keys/{remote_mnmgt_add}/enc_keys?number=1&size=128")
-#####            response = session.get(f"{ADDR}/api/v1/keys/{remote_mnmgt_add}/enc_keys", verify=CA_CERT, cert=CLIENT_CERT)
-#####            response = session.post(f"{ADDR}/api/v1/keys/{remote_mnmgt_add}/enc_keys", cert=CLIENT_CERT, verify=CA_CERT, headers={"Content-Type": "application/json"}, json={"additional_slave_SAE_IDs":["mx10008-24","mx10008-23"]})
-#####            response = session.po('{ADDR}/api/v1/keys/{remote_mnmgt_add}/enc_keys', verify=CA_CERT, cert=CLIENT_CERT)
-            response = session.get(f"{kme_host}/api/v1/keys/{remote_mnmgt_add}/enc_keys", verify=CA_CERT, cert=CLIENT_CERT, headers={"Content-Type": "application/json"})
+            url = (
+                f"{kme_host}/api/v1/keys/"
+                f"{remote_mnmgt_add}/enc_keys"
+            )
 
+            print(f"Requesting new key")
+            print(f"GET {url}")
 
-            # response = session.get(f"{kme_url}172.30.198.55/enc_keys", verify=CA_CERT, cert=CLIENT_CERT)
-            # print(f'{kme_url}{remote_mnmgt_add}/enc_keys')
-            # response = session.get(f"{kme_url}{remote_mnmgt_add}/enc_keys", verify=CA_CERT, cert=CLIENT_CERT)
-            # curl --cacert account-1286-server-ca-qukaydee-com.crt --cert mx304-9.crt --key mx304-9.key -X POST -H "Content-Type: application/json" "https://kme-1.acct-1286.etsi-qkd-api.qukaydee.com/api/v1/keys/mx304-10/enc_keys" -d '{"additional_slave_SAE_IDs":["mx10008-24","mx10008-23"]}'
-            # remote_mnmgt_add is the master device
-            # response = session.post(f"{kme_url}{remote_mnmgt_add}/enc_keys", cert=CLIENT_CERT, verify=CA_CERT, headers={"Content-Type": "application/json"}, json={"additional_slave_SAE_IDs":["mx10008-24","mx10008-23"]})
-            # curl --cacert root.crt --cert client_crt --key client_key -X POST -H "Content-Type: application/json" "https://kme-1.acct-1286.etsi-qkd-api.qukaydee.com/api/v1/keys/mx304-10/enc_keys" -d '{"additional_slave_SAE_IDs":["mx10008-24","mx10008-23"]}'
-#####            response = session.get(f"https://{ADDR}/api/v1/keys/{remote_mnmgt_add}/enc_keys?number=1&size=128", cert=CLIENT_CERT, verify=CA_CERT)
-            #response = session.get(f"https://{ADDR}/sae_002/enc_keys?number=1&size=128", cert=CLIENT_CERT, verify=CA_CERT)
-            #response = session.get(f"https://{ADDR}/sae_002/enc_keys?number=1&size=128", cert=CLIENT_CERT, verify=CA_CERT)
-            #response = session.get(f"https://{KME_URL_T}/{remote_mnmgt_add}/enc_keys?number=1&size=128", cert=CLIENT_CERT, verify=CA_CERT)
-            # TODO:
-            print(response.status_code)
-            print(response.text)
-            print(response)
-            # print("Parsed JSON:")
-            #print(json.dumps(response_json, indent=4))
-            # print(f"https://{ADDR}/api/v1/keys/{remote_mnmgt_add}/enc_keys?number=1&size=128")
-            #print(f"https://{ADDR}/api/v1/keys/sae_002/enc_keys?number=1&size=128")
-            #print(json.loads(response))
-            # curl -i --tlsv1.3 --cacert "${CERTS_DIR}"/root.crt --key "${CERTS_DIR}"/sae_001.key --cert "${CERTS_DIR}"/sae_001.crt "https://${ADDR}/sae_002/enc_keys?number=1&size=24"
-        try:
-            if response.status_code == 200:
-                response_json = response.json()
-            #print(response_json.get("keys", [])[0])
-            # response = re.search(r'\{"keys":\[\{(.*?)\}\]\}', response)
-            # json_str = '{"' + match.group(1) + '}'
-            # json_data = json.loads(json_str)
-            #print(f"local_name: {local_name}: {response.json()}")
-            # return json_data
-            #return response.json()
-                return response_json
-            else:
-                print(f'Request failed with status code {response.status_code}')
-                print(response.text)
-        except requests.RequestException as e:
-            log.error(f"KME request failed: {e.response.text}")
-            print(f"KME request failed: {e.response.text}")
-            return None
+            response = session.get(
+                url,
+                verify=CA_CERT,
+                cert=CLIENT_CERT,
+                headers=headers,
+                timeout=30
+            )
+
+        print(f"HTTP status: {response.status_code}")
+
+        response.raise_for_status()
+
+        response_json = response.json()
+
+        print("KME response OK")
+        print(json.dumps(response_json, indent=2))
+
+        return response_json
+
     except requests.RequestException as e:
-        log.error(f"KME request failed: {e.response.text}")
-        print(f"KME request failed: {e.response.text}")
+        log.error(f"KME request failed: {e}")
+        print(f"KME request failed: {e}")
+        return None
+
+    except Exception as e:
+        log.error(f"Unexpected KME error: {e}")
+        print(f"Unexpected KME error: {e}")
         return None
 
 def check_and_apply_initial_config(dev, targets_dict, log):
@@ -610,11 +583,21 @@ def check_and_apply_initial_config(dev, targets_dict, log):
         f"set security macsec connectivity-association {c_a} pre-shared-key ckn abcd1234abcd5678abcd1234abcd5678abcd1234abcd5678abcd1234abcd5678",
         f"set security macsec connectivity-association {c_a} pre-shared-key cak abcd1234abcd5678abcd1234abcd5678abcd1234abcd5678abcd1234abcd5678"
     ]
+    master_name = targets_dict["qkd_roles"]["master"]
+    slave_name = targets_dict["qkd_roles"]["slave"]
+
+    initial_macsec_commands.append(
+        f"set system static-host-mapping {master_name} inet {targets_dict[master_name]['ip']}"
+    )
+    initial_macsec_commands.append(
+        f"set system static-host-mapping {slave_name} inet {targets_dict[slave_name]['ip']}"
+    )
+    
     for interface in interfaces:
         initial_macsec_commands.extend([
             f"set security macsec interfaces {interface} apply-macro qkd kme-ca false",
             f"set security macsec interfaces {interface} apply-macro qkd kme-host {kme_name}",
-            f"set security macsec interfaces {interface} apply-macro qkd kme-port 443",
+            f"set security macsec interfaces {interface} apply-macro qkd kme-port 8443",
             f"set security macsec interfaces {interface} connectivity-association {c_a}",
             f"set security macsec interfaces {interface} apply-macro qkd kme-keyid-check true",
             # f"set system static-host-mapping {kme_name} inet {kme_ip}",
@@ -626,9 +609,9 @@ def check_and_apply_initial_config(dev, targets_dict, log):
             # even-options configuration
             f"set event-options generate-event every10mins time-interval 600 start-time {start_time}",
             f"set event-options policy qkd events every10mins",
-            f"set event-options policy qkd then event-script ETSIA_v3.1.0_Phase2_v1.py",
+            f"set event-options policy qkd then event-script qkd.py",
 #####            f"set event-options event-script file onbox.py python-script-user remote",
-            f"set event-options event-script file ETSIA_v3.1.0_Phase2_v1.py python-script-user admin",
+            f"set event-options event-script file qkd.py python-script-user admin",
             f"set event-options traceoptions file script.log",
             f"set event-options traceoptions file size 10m",
         ])
@@ -899,80 +882,123 @@ def main():
     # The dictionary containing target devices and their respective information
     # (ex: interfaces, kme, connectivity-association etc.) forming a 121 tunnel 
     # for a number of channelled devices
+    
+#    targets_dict = {
+#            "system": {
+#                "maxthreads": 1,
+#                "event_options": {
+#                    "start_time": "2026-07-07.13:00:00"
+#                }
+#            },
+#            "secrets": {
+#                "username": "admin",
+#                "password": "YOUR_PASSWORD"
+#            },
+#            "CA_server": {
+#                "CA_cert": {
+#                    "fetch": False,
+#                    "generate": False
+#                },
+#                "c_a": "QKD_CA1",
+#                "ca_server_ip": "YOUR_KME_SERVER_IP",
+#                "ca_path": "/root/qkd-certs/",
+#                "ca_cert_name": "ca.crt",
+#                "ca_key_name": "ca.key",
+#                "ca_user": "root",
+#                "ca_pass": "YOUR_CA_SERVER_PASSWORD"
+#            },
+#            "qkd_roles": {
+#                "master": "acx1",
+#                "slave": "acx2",
+#                "additional_slave_SAE_IDs": []
+#            },
+#            "acx1": {
+#                "root_enc_pass": "ROOT_ENCRYPTED_PASSWORD_ACX1",
+#                "ip": "ACX1_MGMT_IP",
+#                "interfaces": ["YOUR_ACX1_MACSEC_INTERFACE"],
+#                "kme": {
+#                    "kme_name": "https://YOUR_KME_SERVER_IP",
+#                    "kme_ip": "YOUR_KME_SERVER_IP"
+#                }
+#            },
+#            "acx2": {
+#                "root_enc_pass": "ROOT_ENCRYPTED_PASSWORD_ACX2",
+#                "ip": "ACX2_MGMT_IP",
+#                "interfaces": ["YOUR_ACX2_MACSEC_INTERFACE"],
+#                "kme": {
+#                    "kme_name": "https://YOUR_KME_SERVER_IP",
+#                    "kme_ip": "YOUR_KME_SERVER_IP"
+#                }
+#            }
+#    }
+    
     targets_dict = {
-        "system": {
-            "maxthreads": 1,
-            "event_options": {
-#####                "start_time": "yyyy-mm-dd.hh:mm(+|-)hhmm"
-                "start_time": "2025-3-23.13:00:00"
-            }
-        },
-        "secrets": {
-            "username": "admin",
-            "password": "admin123!"
-        },
-        "CA_server": {
-            "CA_cert": {
-                "fetch": False,
-                "generate": False
+
+            "system": {
+                "maxthreads": 1,
+                "event_options": {
+                    "start_time": "2026-07-07.13:00:00"
+                }
             },
-            "c_a":  "CA_basic", # connectivity-association
-            "ca_server_ip": "ca_server_ip",
-            "ca_path": "ca_path",
-            "ca_cert_name": "ca_cert_name",
-            "ca_key_name": "ca_key_name",
-            "ca_user": "username",
-            "ca_pass": "password"
-        },
-        "qkd_roles": {
-            # "master": "sae-001",
-            # "slave": "sae-002",
-#####            "master": "nw-rt-igw-acx7-01.34krtl",
-#####            "slave": "nw-rt-igw-acx7-02.34krtl",
-            "master": "acx-1",
-            "slave": "acx-2",
-            # additional devices in the case of the MacSec chain formed from at least 3 devices ->
-            # otherwise additional_slave_SAE_IDs list has to be empty
-            "additional_slave_SAE_IDs": []
-        },
-        # "sae-001": {
-#####        "nw-rt-igw-acx7-01.34krtl": {
-#####            "root_enc_pass": "$6$twmogE0q$D5jBfJp2hSTuBgYqHdfwa7tVhXhYd.XS5FMrKwwtwzW8LBpJ5PXchjO8Os8Aaddjtb6hZNOdayZmG2Lq1yFbS.",
-#####            "ip": "172.16.51.242",
-#####            "interfaces": ["et-0/0/22:0"],
-#####            "kme": {
-#####                "kme_name": "172.16.51.241",
-#####                "kme_ip": "172.16.51.241"
-#####            }
-        "acx-1": {
-            "root_enc_pass": "$6$3eHulK1c$Yq.kaamV8hcuviwRebQI4gUMRSOGVIiBN8o/QTw7sfZ4GCfExd3TjyuUrsyrgfoBW3xNQVT5/gtGg6.S09okg0",
-            "ip": "9.173.8.201",
-            "interfaces": ["et-0/0/20:2"],
-            "kme": {
-                "kme_name": "https://kme-1",
-                "kme_ip": "9.173.9.102"
+
+            "secrets": {
+                "username": "admin",
+                "password": "juniper1"
+            },
+
+            "CA_server": {
+                "CA_cert": {
+                    "fetch": False,
+                    "generate": False
+                },
+
+                "c_a": "QKD_CA1",
+
+                # KME1
+                "ca_server_ip": "100.100.100.10",
+
+                "ca_path": "/root/qkd-certs/",
+                "ca_cert_name": "root.crt",
+                "ca_key_name": "root.key",
+
+                "ca_user": "root",
+                "ca_pass": "juniper1"
+            },
+
+            "qkd_roles": {
+                "master": "vqfx-1",
+                "slave": "vqfx-2",
+                "additional_slave_SAE_IDs": []
+            },
+
+            "vqfx-1": {
+                "root_enc_pass": "",
+                "ip": "10.54.13.14",
+
+                "interfaces": [
+                    "xe-0/0/1"
+                ],
+
+                "kme": {
+                    "kme_name": "https://100.100.100.10:8443",
+                    "kme_ip": "100.100.100.10"
+                }
+            },
+
+            "vqfx-2": {
+                "root_enc_pass": "",
+                "ip": "10.54.12.193",
+
+                "interfaces": [
+                    "xe-0/0/1"
+                ],
+
+                "kme": {
+                    "kme_name": "https://100.100.100.11:8443",
+                    "kme_ip": "100.100.100.11"
+                }
             }
-        },
-        # "sae-002": {
-#####        "nw-rt-igw-acx7-02.34krtl": {
-#####            "root_enc_pass": "$6$XKNVDbaq$BP9ZiF/g246snGqZGjRoA2BqCouKiH1WjmL3yXThBJPeJ.Pj211zM.OOOy/wXCRN/WWAeekMR.8mlhfTTCMhl1",
-#####            "ip": "172.16.51.243",
-#####            "interfaces": ["et-0/0/20:0"],
-#####            "kme": {
-#####                "kme_name": "172.16.51.241",
-#####                "kme_ip": "172.16.51.241"
-#####            }
-        "acx-2": {
-            "root_enc_pass": "$6$bOeXyUQ7$oefu0aDycBhyLGDE.TCExBrdVkYOhg2IOesMVwRQvid9iDpMzwm5yZPvYhKlBu3sZ0YbHBAH0ro5SQWTnscWf.",
-            "ip": "9.173.8.202",
-            "interfaces": ["et-0/0/20:2"],
-            "kme": {
-                "kme_name": "https://kme-2",
-                "kme_ip": "9.173.9.103"
-            }
-        # }
-        }
-    }
+    }       
 
 
     if not onbox:
