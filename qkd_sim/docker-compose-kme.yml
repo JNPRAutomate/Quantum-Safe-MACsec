@@ -1,0 +1,69 @@
+services:
+
+  postgres-kme1:
+    image: postgres:15
+    container_name: postgres-kme1
+    environment:
+      POSTGRES_USER: db_user
+      POSTGRES_PASSWORD: db_password
+      POSTGRES_DB: key_store
+    volumes:
+      - ./db-init:/docker-entrypoint-initdb.d                        
+    networks:
+      qkd_net:
+        ipv4_address: 100.100.100.20
+
+  postgres-kme2:
+    image: postgres:15
+    container_name: postgres-kme2
+    environment:
+      POSTGRES_USER: db_user
+      POSTGRES_PASSWORD: db_password
+      POSTGRES_DB: key_store
+    volumes:
+      - ./db-init:/docker-entrypoint-initdb.d
+    networks:
+      qkd_net:
+        ipv4_address: 100.100.100.21
+
+  kme1:
+    image: etsi-kme:local
+    container_name: kme1
+    depends_on:
+      - postgres-kme1
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.100.100.20:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_001.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_001.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_net:
+        ipv4_address: 100.100.100.10
+
+  kme2:
+    image: etsi-kme:local
+    container_name: kme2
+    depends_on:
+      - postgres-kme2
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.100.100.21:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_002.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_002.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_net:
+        ipv4_address: 100.100.100.11
+
+networks:
+  qkd_net:
+    external: true

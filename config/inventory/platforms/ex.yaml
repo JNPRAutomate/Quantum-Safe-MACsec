@@ -1,0 +1,4 @@
+platform: ex
+
+macsec:
+  cipher: gcm-aes-xpn-128

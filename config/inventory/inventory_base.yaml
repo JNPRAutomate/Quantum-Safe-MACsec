@@ -1,0 +1,9 @@
+system:
+  threads: 1
+
+secrets:
+  default_user: admin
+  default_password: juniper1
+  script_user: admin
+kme:
+  port: 8443

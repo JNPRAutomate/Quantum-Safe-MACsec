@@ -1,0 +1,237 @@
+services:
+
+  postgres-kme:
+    image: postgres:15
+    container_name: aterren-postgres-kme
+    environment:
+      POSTGRES_USER: db_user
+      POSTGRES_PASSWORD: db_password
+      POSTGRES_DB: key_store
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.30
+    restart: unless-stopped
+
+  kme01:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme01
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_001.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_001.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.10
+    restart: unless-stopped
+
+  kme02:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme02
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_002.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_002.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.11
+    restart: unless-stopped
+
+  kme03:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme03
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_003.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_003.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.12
+    restart: unless-stopped
+
+  kme04:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme04
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_004.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_004.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.13
+    restart: unless-stopped
+
+  kme05:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme05
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_005.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_005.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.14
+    restart: unless-stopped
+
+  kme06:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme06
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_006.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_006.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.15
+    restart: unless-stopped
+
+  kme07:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme07
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_007.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_007.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.16
+    restart: unless-stopped
+
+  kme08:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme08
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_008.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_008.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.17
+    restart: unless-stopped
+
+  kme09:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme09
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_009.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_009.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.18
+    restart: unless-stopped
+
+  kme10:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme10
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_010.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_010.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.19
+    restart: unless-stopped
+
+  kme11:
+    image: aterren-etsi-kme:local
+    container_name: aterren-kme11
+    depends_on:
+      - postgres-kme
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://db_user:db_password@100.123.252.30:5432/key_store
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: 8443
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: 2
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/kme_011.crt
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/kme_011.key
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+    networks:
+      qkd_aterren_net:
+        ipv4_address: 100.123.252.20
+    restart: unless-stopped
+
+networks:
+  qkd_aterren_net:
+    external: true
