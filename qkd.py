@@ -61,18 +61,12 @@ except ImportError:
     print(datetime.datetime.now())
     
 
-CUR_DIR = "/var/home/admin"
+CERTS_DIR = get_certs_dir()
+LOG_FILENAME = get_log_file()
 
-CERTS_DIR = f"{CUR_DIR}/certs/"
 OFFBOX_CERTS_DIR = "./certs/"
 
 CA_CERT = f"{CERTS_DIR}client-root-ca.crt"
-
-LOG_FILENAME = f"{CUR_DIR}/qkd_test.log"
-
-# Important: the code calls KEYID_JSON_FILENAME.format(local_name)
-# so this must contain one placeholder.
-KEYID_JSON_FILENAME = f"{CUR_DIR}/{{}}last_key.json"
 
 
 
@@ -181,7 +175,7 @@ def get_previous_key_ids(log, name):
     Retrieves the previous key IDs from the JSON file.
     """
     try:
-        with open(KEYID_JSON_FILENAME.format(name), 'r') as openfile:
+        with open(get_keyid_file(name), 'r') as openfile:
             return json.load(openfile)
     except FileNotFoundError:
         # File is not created yet. Maybe this script is being run for 1st time.
@@ -196,9 +190,9 @@ def save_key_ids(key_dict, local_name):
     """
     Saves the key IDs to the JSON file.
     """
-    with open(KEYID_JSON_FILENAME.format(local_name), 'w+') as outfile:
+    with open(get_keyid_file(local_name), 'w+') as outfile:
         outfile.write(json.dumps(key_dict))
-        print(f'Saved the key IDs to the JSON file: {KEYID_JSON_FILENAME.format(local_name)}')
+        print(f'Saved the key IDs to the JSON file: {get_keyid_file(local_name)}')
 
 def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
                   kme_host, key_id, additional_slave_SAE_IDs=None):
