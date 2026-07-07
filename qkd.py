@@ -69,7 +69,6 @@ LOG_FILENAME = f"{CUR_DIR}/qkd_test.log"
 # so this must contain one placeholder.
 KEYID_JSON_FILENAME = f"{CUR_DIR}/{{}}last_key.json"
 
-########
 
 
 DATABASE_PORT = '10000'
@@ -116,7 +115,6 @@ def req_thread(tnum, reqs, targets_dict, log):
         print(device)
         with Device(host=targets_dict[device]['ip'], user=targets_dict["secrets"]["username"], password=targets_dict["secrets"]["password"], port=22) as dev:
             if should_check_certs():
-                # print(targets_dict[dev.facts['hostname'].split('-re')[0]]['ip'])
                 renew_certificates(dev, log, targets_dict=targets_dict)
             print("start check_and_apply_initial_config")
             check_and_apply_initial_config(dev, targets_dict, log)
@@ -138,10 +136,7 @@ def generate_ca_certificate(ca_cert_path, ca_key_path, ca_subject):
     ca_cert = crypto.X509()
     ca_cert.set_version(2)
     ca_cert.set_serial_number(int(uuid.uuid4()))
-    # ca_subj = ca_cert.get_subject()
-    # ca_subj.commonName = ca_subject
     ca_cert.get_subject().CN = ca_subject
-    # ca_cert.set_issuer(ca_subj)
     ca_cert.set_issuer(ca_cert.get_subject())
     ca_cert.set_pubkey(ca_key)
     ca_cert.gmtime_adj_notBefore(0)
@@ -149,10 +144,7 @@ def generate_ca_certificate(ca_cert_path, ca_key_path, ca_subject):
     # Add extensions
     ca_cert.add_extensions([
         crypto.X509Extension(b"subjectKeyIdentifier", False, b"hash", subject=ca_cert),
-        # crypto.X509Extension(b"authorityKeyIdentifier", False, b"keyid:always", issuer=ca_cert),
-        # crypto.X509Extension(b"authorityKeyIdentifier", False, b"keyid", issuer=ca_cert),
         crypto.X509Extension(b"basicConstraints", False, b"CA:TRUE"),
-        # crypto.X509Extension(b"keyUsage", False, b"keyCertSign, cRLSign"),
     ])
     # Sign the certificate with the key
     ca_cert.sign(ca_key, 'sha256')
@@ -187,8 +179,6 @@ def generate_client_certificate(client_cert_path, client_key_path, ca_cert_path,
     client_cert.set_version(2)
     client_cert.set_serial_number(int(uuid.uuid4()))
 
-    # client_subj = client_cert.get_subject()
-    # client_subj.commonName = client_subject
     client_cert.get_subject().CN = client_subject
     client_cert.set_issuer(ca_cert.get_subject())
     client_cert.set_pubkey(client_key)
@@ -197,10 +187,7 @@ def generate_client_certificate(client_cert_path, client_key_path, ca_cert_path,
     # Add extensions
     client_cert.add_extensions([
         crypto.X509Extension(b"basicConstraints", False, b"CA:FALSE"),
-        # crypto.X509Extension(b"subjectKeyIdentifier", False, b"hash", subject=client_cert),
         crypto.X509Extension(b"authorityKeyIdentifier", False, b"keyid:always", issuer=ca_cert),
-        # crypto.X509Extension(b"authorityKeyIdentifier", False, b"keyid", issuer=ca_cert),
-        # crypto.X509Extension(b"extendedKeyUsage", False, b"clientAuth"),
         crypto.X509Extension(b"keyUsage", False, b"Digital Signature, Non Repudiation, Key Encipherment, Data Encipherment"),
     ])
     # Sign the certificate with the key
@@ -271,9 +258,7 @@ def get_certificates(dev, log, targets_dict):
 
     if onbox:
         local_name = dev.facts['hostname']
-#####        ca_cert_path = os.path.join(CERTS_DIR, f'account-1286-server-ca-qukaydee-com.crt')
         ca_cert_path = os.path.join(CERTS_DIR, f'client-root-ca.crt')
-#####        ca_key_path = os.path.join(CERTS_DIR, f'ca_JUNIPER.key')
         ca_key_path = os.path.join(CERTS_DIR, f'client-root-ca.key')
         client_cert_path = os.path.join(CERTS_DIR, f'{local_name}.crt')
         client_key_path = os.path.join(CERTS_DIR, f'{local_name}.key')
@@ -287,7 +272,6 @@ def get_certificates(dev, log, targets_dict):
                 # ca_cert_path and ca_key_path has the same name only for tests.
                 ca_cert_path = os.path.join(OFFBOX_CERTS_DIR, f'account-1286-server-ca-qukaydee-com.crt')
                 ca_key_path = os.path.join(OFFBOX_CERTS_DIR, f'account-1286-server-ca-qukaydee-com.crt')
-                # local_name = dev.facts['hostname'].split('-re')[0]
                 client_cert_path = os.path.join(OFFBOX_CERTS_DIR, f'{local_name}.crt')
                 client_key_path = os.path.join(OFFBOX_CERTS_DIR, f'{local_name}.key')
         except SCPException as e:
@@ -582,7 +566,6 @@ def check_and_apply_initial_config(dev, targets_dict, log):
             f"set security macsec interfaces {interface} apply-macro qkd kme-port 8443",
             f"set security macsec interfaces {interface} connectivity-association {c_a}",
             f"set security macsec interfaces {interface} apply-macro qkd kme-keyid-check true",
-            # f"set system static-host-mapping {kme_name} inet {kme_ip}",
             f"set system static-host-mapping {device_name} inet {device_ip}"
         ])
 
@@ -592,7 +575,6 @@ def check_and_apply_initial_config(dev, targets_dict, log):
             f"set event-options generate-event every10mins time-interval 600 start-time {start_time}",
             f"set event-options policy qkd events every10mins",
             f"set event-options policy qkd then event-script qkd.py",
-#####            f"set event-options event-script file onbox.py python-script-user remote",
             f"set event-options event-script file qkd.py python-script-user admin",
             f"set event-options traceoptions file script.log",
             f"set event-options traceoptions file size 10m",
@@ -709,7 +691,6 @@ def process(dev, targets_dict, log):
             else:
                 master_key_id_file = get_key_id_from_master(dev, log, targets_dict)
                 print(master_key_id_file)
-                # master_key_id_file_path = KEYID_JSON_FILENAME.format(targets_dict["qkd_roles"]['master'])
                 # check if the new master_key_id was updated for the master device (.json file created less than 10 mins ago - in the case the script is running every 10 mins)
                 if os.path.isfile(master_key_id_file) and ((datetime.datetime.now() - datetime.datetime.fromtimestamp(os.path.getmtime(master_key_id_file))) > datetime.timedelta(minutes=10)):
                     retries += 1
@@ -736,7 +717,6 @@ def process(dev, targets_dict, log):
                 else:
                     break
 
-#####        r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_url, key_id=new_key_dict[local_name])
         r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, key_id=new_key_dict[local_name], additional_slave_SAE_IDs=None)
         print(f"response: {r}")
         if r is not None:
@@ -766,7 +746,6 @@ def process(dev, targets_dict, log):
     )
 
     qkd_config_xml = E.configuration(E.security(qkd_macsec_xml))
-    # qkd_config_xml = E.configuration(root_auth_xml, E.security(qkd_macsec_xml))
     
     print(f"local_name: {local_name} commit {commit}")
     print("Configuration {}".format(etree.tostring(qkd_config_xml,pretty_print=True).decode()))
@@ -778,14 +757,9 @@ def process(dev, targets_dict, log):
             # with Config(dev, mode = 'exclusive') as cu:
             with Config(dev) as cu:
                 cu.lock()
-                # cu.load(qkd_config_xml, merge=True)
                 print('before load and commit')
-                # print('before load and commit')
                 cu.load(qkd_config_xml, format = 'xml', merge = True)
-                # cu.load(qkd_config_xml, format = 'xml')
-                # cu.load(qkd_config_xml, format = 'xml', update = True)
                 print(cu.diff())
-                # cu.commit(confirm = 15, timeout = 900)
                 cu.commit()
                 log.info('QKD commit passed')
                 print(f'========================== Device: {local_name} =============================')
@@ -802,22 +776,8 @@ def process(dev, targets_dict, log):
             cu.unlock()
         # Save the key-ID in a persistant file
         save_key_ids(new_key_dict, local_name)
-    # time.sleep(10)
     mka_session_info_xml = dev.rpc.get_mka_session_information({'format':'text'}, summary=True)
     print(f'----------------------{local_name}-----------------------------')
-#####    print(etree.tostring(mka_session_info_xml, pretty_print=True).decode())
-
-# def get_args():
-#     """
-#     Defines and parses command-line arguments.
-#     """
-#     parser = argparse.ArgumentParser()
-#     # parser.add_argument('targets', metavar='host', nargs='*', help="list of target hosts")
-#     parser.add_argument("-t", "--threads", type=int, help="Number of threads to use")
-#     parser.add_argument('-v','--verbose', default=0, action='count', help="increase verbosity level")
-#     parser.add_argument('-tr','--trace', action='store_true', help="dump debug level logs to trace.log file")
-#     return parser.parse_args()
-
 
 def get_args():
     """
@@ -987,7 +947,6 @@ def main():
         log.info('Offbox approach taken')
         print('Offbox approach taken')
         # execute the process function for all the devices on multiple threads
-        # dlist = []
         dlist = [d for d in targets_dict["qkd_roles"]["additional_slave_SAE_IDs"]]
         dlist.insert(0, targets_dict["qkd_roles"]["slave"])
         dlist.insert(0, targets_dict["qkd_roles"]["master"])
@@ -998,16 +957,12 @@ def main():
             maxthreads = targets_dict["system"]["maxthreads"]
         rpt = int(len(dlist) / maxthreads)
         if len(dlist) % maxthreads > 0:
-            # log.info('Adjusting threadload +1')
             rpt += 1
-        # log.info("reqs: {0} maxt: {1} rpt: {2} cap: {3}".format(
-        #    len(dlist), maxthreads, rpt, maxthreads * rpt))
         n = 0
         print('before threads')
         while dlist:
             sreqs = dlist[:rpt]
             dlist = dlist[rpt:]
-            # log.info("sreqs: {0} reqs: {1}".format(len(sreqs), len(dlist)))
             req_thread(n, sreqs, targets_dict, log)
             n += 1
         log.info("Waiting on {0} threads".format(len(threads)))
@@ -1020,10 +975,7 @@ def main():
         print('Onbox approach taken')
         try:
             with Device() as dev:
-                device = dev.facts['hostname'].split('-re')[0]
-                # commented out because pyOpenSSL is not part of the Junos python3 modules
-                # if should_check_certs():
-                #     renew_certificates(dev, targets_dict, log)
+                device = dev.facts['hostname'].split('-re')[0]                
                 print("111")
                 check_and_apply_initial_config(dev, targets_dict, log)
                 print("112")
