@@ -14,3 +14,11 @@
 - MACsec configuration workflow unchanged.
 - On-box and off-box execution logic unchanged.
 
+### Removed
+
+- Removed unused imports:
+  - Lock
+  - hashlib
+  - subprocess
+  - ipaddress
+

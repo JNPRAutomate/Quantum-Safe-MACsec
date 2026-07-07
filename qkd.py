@@ -33,7 +33,7 @@ from paramiko import SSHException, AuthenticationException
 from lxml import etree
 from lxml.builder import E
 import argparse
-from threading import Thread, Lock
+from threading import Thread
 import logging
 import logging.handlers
 import json
