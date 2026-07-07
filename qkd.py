@@ -25,11 +25,8 @@ Version: 3.2.2
 """
 __version__ = "v3.2.2"
 
-import requests
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
-import paramiko
-from paramiko import SSHException, AuthenticationException
 from lxml import etree
 from lxml.builder import E
 import argparse
@@ -52,8 +49,19 @@ import requests
 from qkd_ssh import createSSHClient
 from qkd_identity import get_certs_dir,get_log_file,get_keyid_file
 from qkd_kme import fetch_kme_key
+from qkd_certs import (
+    generate_ca_certificate,
+    generate_client_certificate,
+    is_certificate_valid,
+    get_certificates,
+    upload_certificates,
+    fetch_ca_certificate,
+    renew_certificates,
+    should_check_certs,
+)
 
 try:
+    import jcs
     onbox = True
 except ImportError:
     from OpenSSL import crypto
@@ -70,30 +78,6 @@ OFFBOX_CERTS_DIR = "./certs/"
 CA_CERT = f"{CERTS_DIR}client-root-ca.crt"
 
 
-
-DATABASE_PORT = '10000'
-DATABASE_HOST = '9.173.9.102'
-DATABASE_USER = 'db_user'
-DATABASE_PASSWORD = 'db_password'
-DATABASE_URL = f'postgres://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/key_store'
-
-# ETSI 014 reference implementation configuration.
-ETSI_014_REF_IMPL_DB_URL = f'{DATABASE_URL}'
-ETSI_014_REF_IMPL_IP_ADDR = f'{DATABASE_HOST}'
-ETSI_014_REF_IMPL_NUM_WORKER_THREADS = 2
-ETSI_014_REF_IMPL_PORT_NUM = 443
-ETSI_014_REF_IMPL_TLS_CERT = f'{OFFBOX_CERTS_DIR}/kme_001.crt'
-ETSI_014_REF_IMPL_TLS_PRIVATE_KEY = f'{OFFBOX_CERTS_DIR}/kme_001.key'
-ETSI_014_REF_IMPL_TLS_ROOT_CRT = f'{OFFBOX_CERTS_DIR}/root.crt'
-
-
-
-# match a pipe character | followed by {...} JSON. Used for parsing device output containing inline JSON.
-desc_re = re.compile(r'\|({.*})')
-
-# API URL
-ADDR = f'{ETSI_014_REF_IMPL_IP_ADDR}:{ETSI_014_REF_IMPL_PORT_NUM}'
-KME_URL_T = f'https://{ADDR}/api/v1/keys'
 # this creates https://9.173.9.102:443/api/v1/keys
 CKN_PREFIX = 'abcd1234abcd5678abcd1234abcd5678'
 
@@ -328,10 +312,8 @@ def process(dev, targets_dict, log):
     local_name = dev.facts['hostname'].split('-re')[0]
     print(f"local_name: {local_name}")
     kme_host = targets_dict[local_name]["kme"]["kme_name"]
-    #kme_url = KME_URL_T.format(kme_host)
-    kme_url = KME_URL_T
     print(f"kme_host: {kme_host}")
-    log.info('base url: ' + kme_url)
+    log.info('base url: ' + kme_host)
 
     if targets_dict["qkd_roles"]['master'] == local_name:
         log.info(local_name + ' is Master')
