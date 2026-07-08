@@ -24,6 +24,9 @@ Version: 3.2.2
 
 """
 __version__ = "v3.2.2"
+import warnings
+warnings.filterwarnings("ignore",category=DeprecationWarning)
+warnings.filterwarnings("ignore",message=".*TripleDES.*")
 
 from qkd_process import process
 

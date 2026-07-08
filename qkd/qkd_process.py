@@ -43,20 +43,26 @@ def process(dev, targets_dict, log):
 
     commit = False
 
-    ca_name = macsec_xml.findtext('connectivity-association/name')
+    ca_name = targets_dict["CA_server"]["c_a"]
+
     if not ca_name:
-        log.error("No connectivity-association found")
+        log.error("No QKD connectivity-association configured in targets_dict")
         return
-    
+
     print(f"ca_name: {ca_name}")
-    qkd_ca_xml = copy.deepcopy(macsec_xml.find(f'connectivity-association[name="{ca_name}"]'))
+
+    qkd_ca_xml = copy.deepcopy(
+        macsec_xml.find(f'connectivity-association[name="{ca_name}"]')
+    )
+
     if qkd_ca_xml is None:
-        log.error(f"Connectivity association {ca_name} not found")
+        log.error(f"QKD connectivity association {ca_name} not found")
         return
 
     local_name = dev.facts['hostname'].split('-re')[0]
     print(f"local_name: {local_name}")
     kme_host = targets_dict[local_name]["kme"]["kme_name"]
+    kme_port = targets_dict[local_name]["kme"]["kme_port"]
     print(f"kme_host: {kme_host}")
     log.info('base url: ' + kme_host)
 
@@ -66,7 +72,7 @@ def process(dev, targets_dict, log):
         remote_mnmgt_add = targets_dict["qkd_roles"]['slave']
         print(f"remote_mnmgt_add: {remote_mnmgt_add}")
         additional_slave_SAE_IDs = targets_dict["qkd_roles"]['additional_slave_SAE_IDs']
-        r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, key_id=None, additional_slave_SAE_IDs=additional_slave_SAE_IDs)
+        r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, kme_port, key_id=None, additional_slave_SAE_IDs=additional_slave_SAE_IDs)
         print(f"response: {r}")
         if r is not None:
             print('KME: [GET] Get Keys API: for {} {}'.format(remote_mnmgt_add,r))
@@ -124,7 +130,7 @@ def process(dev, targets_dict, log):
                 else:
                     break
 
-        r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, key_id=new_key_dict[local_name], additional_slave_SAE_IDs=None)
+        r = fetch_kme_key(session, local_name, log, remote_mnmgt_add, kme_host, kme_port, key_id=new_key_dict[local_name], additional_slave_SAE_IDs=None)
         print(f"response: {r}")
         if r is not None:
             print('KME: [GET] Get Keys API: for {} {}'.format(remote_mnmgt_add,r))

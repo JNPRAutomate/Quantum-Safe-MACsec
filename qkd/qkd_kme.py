@@ -4,7 +4,7 @@ import json,os, requests
 from qkd_runtime import *
 
 def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
-                  kme_host, key_id, additional_slave_SAE_IDs=None):
+                  kme_host, kme_port, key_id, additional_slave_SAE_IDs=None):
     """
     Fetch keys from the KME.
 
@@ -46,10 +46,12 @@ def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
         headers = {
             "Content-Type": "application/json"
         }
-
+        
+        base_url = f"{kme_host}:{kme_port}"
+        
         if key_id:
             url = (
-                f"{kme_host}/api/v1/keys/"
+                f"{base_url}/api/v1/keys/"
                 f"{remote_mnmgt_add}/dec_keys?key_ID={key_id}"
             )
 
@@ -66,7 +68,7 @@ def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
 
         else:
             url = (
-                f"{kme_host}/api/v1/keys/"
+                f"{base_url}/api/v1/keys/"
                 f"{remote_mnmgt_add}/enc_keys"
             )
 

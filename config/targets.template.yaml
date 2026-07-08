@@ -1,0 +1,101 @@
+#
+# Quantum Safe MACsec
+#
+# Example inventory
+#
+# Required sections:
+#
+# - system
+# - secrets
+# - CA_server
+# - qkd_roles
+# - device definitions
+#
+# Example:
+#
+# qkd_roles:
+#   master: acx1
+#   slave: acx2
+#
+# Device names referenced above must exist below.
+#
+
+system:
+  maxthreads: 1
+
+  event_options:
+    start_time: "2026-07-07.13:00:00"
+
+secrets:
+  username: admin
+  password: juniper1
+
+CA_server:
+
+  CA_cert:
+    fetch: false
+    generate: false
+
+  c_a: QKD_CA1
+
+  ca_server_ip: 100.100.100.10
+
+  ca_path: /root/qkd-certs/
+  ca_cert_name: root.crt
+  ca_key_name: root.key
+
+  ca_user: root
+  ca_pass: juniper1
+
+qkd_roles:
+  master: vqfx-1
+  slave: vqfx-2
+
+  additional_slave_SAE_IDs: []
+
+#
+# Device definition
+#
+# root_enc_pass:
+#   encrypted root password
+#
+# ip:
+#   management address
+#
+# interfaces:
+#   MACsec-enabled interfaces
+#
+# kme_name:
+#   full KME URL
+#
+# kme_ip:
+#   KME management address
+#
+
+vqfx-1:
+
+  root_enc_pass: ""
+
+  ip: 10.54.13.14
+
+  interfaces:
+    - xe-0/0/1
+
+  kme:
+    kme_name: https://100.100.100.10:8443
+    kme_ip: 100.100.100.10
+    kme_port: 8443
+
+vqfx-2:
+
+  root_enc_pass: ""
+
+  ip: 10.54.12.193
+
+  interfaces:
+    - xe-0/0/1
+
+  kme:
+    kme_name: https://100.100.100.11:8443
+    kme_ip: 100.100.100.11
+    kme_port: 8443
