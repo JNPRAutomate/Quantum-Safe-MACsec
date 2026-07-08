@@ -1,18 +1,12 @@
+# PKI certificates management
+
 import os
 import datetime
+import uuid
+from OpenSSL import crypto
 from scp import SCPClient, SCPException
 from qkd_ssh import createSSHClient
-
-
-try:
-    import jcs
-    onbox = True
-except ImportError:
-    from OpenSSL import crypto
-    onbox = False
-
-from qkd_ssh import createSSHClient
-
+from qkd_runtime import *
 
 def generate_ca_certificate(ca_cert_path, ca_key_path, ca_subject):
     """
@@ -31,7 +25,7 @@ def generate_ca_certificate(ca_cert_path, ca_key_path, ca_subject):
     ca_cert.set_issuer(ca_cert.get_subject())
     ca_cert.set_pubkey(ca_key)
     ca_cert.gmtime_adj_notBefore(0)
-    ca_cert.gmtime_adj_notAfter(5 * 365 * 24 * 60 * 60)  # 10 years
+    ca_cert.gmtime_adj_notAfter(5 * 365 * 24 * 60 * 60)  # 5 years: 5 * x seconds = 5 * (365 days * 24 hrs * 60 minutes * 60 secs) = 5 * 31536000 seconds
     # Add extensions
     ca_cert.add_extensions([
         crypto.X509Extension(b"subjectKeyIdentifier", False, b"hash", subject=ca_cert),
@@ -56,11 +50,14 @@ def generate_client_certificate(client_cert_path, client_key_path, ca_cert_path,
     """
 
     # Load CA key
-    ca_key = crypto.load_privatekey(crypto.FILETYPE_PEM, open(ca_key_path, 'rb').read())
-
+    
+    with open(ca_key_path, "rb") as f:
+        ca_key = crypto.load_privatekey(crypto.FILETYPE_PEM,f.read())
+        
     # Load CA certificate
-    ca_cert = crypto.load_certificate(crypto.FILETYPE_PEM, open(ca_cert_path, 'rb').read())
-
+    with open(ca_cert_path, "rb") as f:
+        ca_cert = crypto.load_certificate(crypto.FILETYPE_PEM,f.read())
+    
     # Generate client key
     client_key = crypto.PKey()
     client_key.generate_key(crypto.TYPE_RSA, 2048)
@@ -110,8 +107,8 @@ def get_certificates(dev, log, targets_dict):
     Get the certificates from a device.
     """
 
-    if onbox:
-        local_name = dev.facts['hostname']
+    if ONBOX:
+        local_name = dev.facts['hostname'].split('-re')[0]
         ca_cert_path = os.path.join(CERTS_DIR, f'client-root-ca.crt')
         ca_key_path = os.path.join(CERTS_DIR, f'client-root-ca.key')
         client_cert_path = os.path.join(CERTS_DIR, f'{local_name}.crt')
@@ -119,18 +116,26 @@ def get_certificates(dev, log, targets_dict):
     else:
         # if the certificate is generated on one device -> it will be generated on all the devices
         local_name = dev.facts['hostname'].split('-re')[0]
-        client = createSSHClient(local_name, username=targets_dict["secrets"]["username"], password=targets_dict["secrets"]["password"], port=22)
+        client = createSSHClient(targets_dict[local_name]["ip"], username=targets_dict["secrets"]["username"], password=targets_dict["secrets"]["password"], port=22)
+        
         try:
             with SCPClient(client.get_transport()) as scp:
                 scp.get(remote_path=CERTS_DIR, local_path=OFFBOX_CERTS_DIR, recursive=True)
-                # ca_cert_path and ca_key_path has the same name only for tests.
-                ca_cert_path = os.path.join(OFFBOX_CERTS_DIR, f'account-1286-server-ca-qukaydee-com.crt')
-                ca_key_path = os.path.join(OFFBOX_CERTS_DIR, f'account-1286-server-ca-qukaydee-com.crt')
-                client_cert_path = os.path.join(OFFBOX_CERTS_DIR, f'{local_name}.crt')
-                client_key_path = os.path.join(OFFBOX_CERTS_DIR, f'{local_name}.key')
-        except SCPException as e:
-            print(f'SCP get exception error: {e}')
+                ca_cert_path = os.path.join(OFFBOX_CERTS_DIR,targets_dict["CA_server"]["ca_cert_name"])
+                ca_key_path = os.path.join(OFFBOX_CERTS_DIR,targets_dict["CA_server"]["ca_key_name"])
+                client_cert_path = os.path.join(OFFBOX_CERTS_DIR,f"{local_name}.crt")
+                client_key_path = os.path.join(OFFBOX_CERTS_DIR,f"{local_name}.key")
 
+        except SCPException as e:
+                log.error(f"SCP get exception error: {e}")
+                raise
+
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+            
     return ca_cert_path, ca_key_path, client_cert_path, client_key_path
 
 def upload_certificates(dev, cert_path, key_path, log, targets_dict):
@@ -139,17 +144,22 @@ def upload_certificates(dev, cert_path, key_path, log, targets_dict):
     """
 
     local_name = dev.facts['hostname'].split('-re')[0]
-    # TODO: line below used for testing
-    local_name = targets_dict[local_name]['ip']
-    client = createSSHClient(local_name, username=targets_dict["secrets"]["username"], password=targets_dict["secrets"]["password"], port=22)
+    device_ip = targets_dict[local_name]['ip']
+    client = createSSHClient(device_ip, username=targets_dict["secrets"]["username"], password=targets_dict["secrets"]["password"], port=22)
     try:
         with SCPClient(client.get_transport()) as scp:
             cert_files = [cert_path, key_path]
             scp.put(files=cert_files, remote_path=CERTS_DIR)
     except SCPException as e:
-        print(f'SCP put exception error: {e}')
+        log.error(f"SCP put exception error: {e}")
+    
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
-def fetch_ca_certificate(targets_dict):
+def fetch_ca_certificate(targets_dict, log):
     """
     Get the CA certificate from remote server.
     """
@@ -160,14 +170,21 @@ def fetch_ca_certificate(targets_dict):
     ca_cert_name = targets_dict["CA_server"]["ca_cert_name"]
     ca_key_name = targets_dict["CA_server"]["ca_key_name"]
     client = createSSHClient(ca_server_ip, username=ca_user, password=ca_pass, port=22)
-    LOCAL_PATH = CERTS_DIR if onbox else OFFBOX_CERTS_DIR
+    LOCAL_PATH = CERTS_DIR if ONBOX else OFFBOX_CERTS_DIR
     try:
         with SCPClient(client.get_transport()) as scp:
             scp.get(remote_path=ca_path, local_path=LOCAL_PATH, recursive=True)
             ca_cert_path = os.path.join(LOCAL_PATH, ca_cert_name)
             ca_key_path = os.path.join(LOCAL_PATH, ca_key_name)
     except SCPException as e:
-        print(f'SCP exception error: {e}')
+        log.error(f"SCP exception error: {e}")
+        raise
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+        
     return ca_cert_path, ca_key_path
 
 def renew_certificates(dev, log, targets_dict):
@@ -175,10 +192,8 @@ def renew_certificates(dev, log, targets_dict):
     Renew certificates either if they are valid for less than `min_valid_days` days 
     or if they are not present on the device yet and then upload them to device.
     """
-    if not onbox:
-        # assuming all the certificates are generated for all the devices in the 1st script run
-        ca_cert_path, ca_key_path, client_cert_path, client_key_path = \
-            get_certificates(dev, log, targets_dict=targets_dict)
+    # assuming all the certificates are generated for all the devices in the 1st script run
+    ca_cert_path, ca_key_path, client_cert_path, client_key_path = get_certificates(dev, log, targets_dict=targets_dict)
     if not os.path.isfile(client_cert_path) and not os.path.isfile(ca_cert_path):
         renew = True
     elif not is_certificate_valid(client_cert_path):
@@ -187,13 +202,13 @@ def renew_certificates(dev, log, targets_dict):
         renew = False
     if renew:
         if targets_dict["CA_server"]["CA_cert"]["fetch"]:
-            ca_cert_path, ca_key_path = fetch_ca_certificate(targets_dict)
+            ca_cert_path, ca_key_path = fetch_ca_certificate(targets_dict,log)
         elif targets_dict["CA_server"]["CA_cert"]["generate"]:
             ca_cert_path, ca_key_path = generate_ca_certificate(ca_cert_path, ca_key_path, 'Juniper CA')
         else:
             log.info('The CA certificate was manually generated and uploaded')
         generate_client_certificate(client_cert_path, client_key_path, ca_cert_path, ca_key_path, 'client')
-        if not onbox:
+        if not ONBOX:
             upload_certificates(dev, client_cert_path, client_key_path, log, targets_dict=targets_dict)
             # assumed that the CA certificate was manually generated and uploaded to devices
             if targets_dict["CA_server"]["CA_cert"]["fetch"] or targets_dict["CA_server"]["CA_cert"]["generate"]:

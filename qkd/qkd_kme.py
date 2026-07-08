@@ -1,5 +1,7 @@
-import json
-import requests
+# ETSI API logic
+
+import json,os, requests
+from qkd_runtime import *
 
 def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
                   kme_host, key_id, additional_slave_SAE_IDs=None):
@@ -13,25 +15,33 @@ def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
         GET /enc_keys
     """
 
-    if onbox:
+    if ONBOX:
         client_crt = CERTS_DIR + local_name + '.crt'
         client_key = CERTS_DIR + local_name + '.key'
         CLIENT_CERT = (client_crt, client_key)
-
         CA_CERT = CERTS_DIR + 'client-root-ca.crt'
+    
     else:
         client_crt = OFFBOX_CERTS_DIR + '/' + local_name + '.crt'
         client_key = OFFBOX_CERTS_DIR + '/' + local_name + '.key'
         CLIENT_CERT = (client_crt, client_key)
-
         CA_CERT = OFFBOX_CERTS_DIR + '/root.crt'
+        
+    if not os.path.isfile(client_crt):
+        log.error(f"Client certificate not found: {client_crt}")
+        return None
+    if not os.path.isfile(client_key):
+        log.error(f"Client key not found: {client_key}")
+        return None
+    if not os.path.isfile(CA_CERT):
+        log.error(f"CA certificate not found: {CA_CERT}")
+        return None
 
     try:
-        print(f"KME host      : {kme_host}")
-        print(f"Remote SAE    : {remote_mnmgt_add}")
-        print(f"Client cert   : {client_crt}")
-        print(f"Client key    : {client_key}")
-        print(f"CA cert       : {CA_CERT}")
+        log.debug(f"KME host      : {kme_host}")
+        log.debug(f"Remote SAE    : {remote_mnmgt_add}")
+        log.debug(f"Client cert   : {client_crt}")
+        log.debug(f"CA cert       : {CA_CERT}")
 
         headers = {
             "Content-Type": "application/json"
@@ -43,8 +53,8 @@ def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
                 f"{remote_mnmgt_add}/dec_keys?key_ID={key_id}"
             )
 
-            print(f"Retrieving key_id: {key_id}")
-            print(f"GET {url}")
+            log.debug(f"Retrieving key_id: {key_id}")
+            log.debug(f"GET {url}")
 
             response = session.get(
                 url,
@@ -60,8 +70,8 @@ def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
                 f"{remote_mnmgt_add}/enc_keys"
             )
 
-            print(f"Requesting new key")
-            print(f"GET {url}")
+            log.debug(f"Requesting new key")
+            log.debug(f"GET {url}")
 
             response = session.get(
                 url,
@@ -71,24 +81,22 @@ def fetch_kme_key(session, local_name, log, remote_mnmgt_add,
                 timeout=30
             )
 
-        print(f"HTTP status: {response.status_code}")
+        log.debug(f"HTTP status: {response.status_code}")
 
         response.raise_for_status()
 
         response_json = response.json()
 
-        print("KME response OK")
-        print(json.dumps(response_json, indent=2))
+        log.debug("KME response OK")
+        log.debug("KME response:\n%s",json.dumps(response_json, indent=2))
 
         return response_json
 
     except requests.RequestException as e:
         log.error(f"KME request failed: {e}")
-        print(f"KME request failed: {e}")
         return None
 
     except Exception as e:
         log.error(f"Unexpected KME error: {e}")
-        print(f"Unexpected KME error: {e}")
         return None
 

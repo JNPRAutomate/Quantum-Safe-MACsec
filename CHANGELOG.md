@@ -42,3 +42,8 @@
 
 - Introduced dedicated configuration loader.
 - YAML parsing moved outside qkd.py.
+
+### Changed
+
+- Moved certificate lifecycle functions from qkd.py into qkd_certs.py.
+
