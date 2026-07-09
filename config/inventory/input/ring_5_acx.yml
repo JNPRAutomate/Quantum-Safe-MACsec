@@ -1,0 +1,40 @@
+topology: ring
+platform: acx
+mode: qkd
+
+devices:
+
+  - name: acx1
+    ip: 100.123.170.202
+    kme: 100.123.252.10
+    interfaces:
+      - et-2/0/4
+      - et-2/0/2
+
+  - name: acx2
+    ip: 100.123.170.201
+    kme: 100.123.252.11
+    interfaces:
+      - et-2/0/0
+      - et-2/0/2
+
+  - name: acx3
+    ip: 100.123.170.203
+    kme: 100.123.252.12
+    interfaces:
+      - et-2/0/4
+      - et-2/0/2
+
+  - name: acx4
+    ip: 100.123.182.2
+    kme: 100.123.252.13
+    interfaces:
+      - et-0/0/2
+      - et-0/0/0
+
+  - name: acx5
+    ip: 100.123.182.1
+    kme: 100.123.252.14
+    interfaces:
+      - et-0/0/0
+      - et-0/0/2

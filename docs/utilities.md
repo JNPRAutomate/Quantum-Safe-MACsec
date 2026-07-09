@@ -1479,3 +1479,10 @@ docker run -d \
 ```bash
 [vrf:none] admin@acx7348-p1-re0:/var/db/scripts/certs_dual_pki$ curl -vk --cert sae_001.crt --key sae_001.key --cacert trusted-kme-ca-bundle.crt "https://100.123.252.99:8443"
 ```
+
+```bash
+python3  -m compileall lib *
+find . -type d -name "__pycache__" -exec rm -rf {} +
+find . -type f -name "*.pyc" -delete
+```
+
