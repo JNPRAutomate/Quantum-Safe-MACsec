@@ -1,9 +1,8 @@
 from pathlib import Path
 import json
 
-from newMACSEC39_ready_for_git.lib.settings import CONFIG, QKD
-from newMACSEC39_ready_for_git.lib.pki_profile import load_runtime_pki_profile
-
+from lib.qkd_settings import CONFIG, QKD
+from lib.qkd_config import load_runtime_pki_profile
 # ----------------------------
 # PATHS
 # ----------------------------

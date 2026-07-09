@@ -18,16 +18,17 @@ from pathlib import Path
 import subprocess
 import copy
 import shutil
+import os
 
-from lib.logger import setup_logger
-from lib.inventory_builder import build_inventory, build_full_inventory
-from lib.pki_profile import load_runtime_pki_profile
+from lib.qkd_logger import setup_logger
+from lib.qkd_inventory_builder import build_full_inventory
 from lib.qkd_pki_self_signed import build_self_signed_pki
 from lib.qkd_pki_hierarchical import build_hierarchical_pki
-from lib.settings import CONFIG, PKI, QKD
-from lib.onbox_builder import build_onbox_artifacts
-from lib.provisioning import run_provisioning
-
+from lib.qkd_settings import CONFIG, PKI, QKD
+from lib.qkd_onbox_builder import build_onbox_artifacts
+from lib.qkd_provisioning import run_provisioning
+from lib.qkd_config import load_inventory_file, load_runtime_devices, load_inventory_base, load_yaml, resolve_inventory
+from lib.qkd_config import load_runtime_pki_profile
 from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
 from lib.qkd_identity import preflight_all_devices
@@ -57,17 +58,19 @@ def parse_args():
     # CREATE COMMAND
     # ---------------------------
     create = subparsers.add_parser("create")
-    create.add_argument("--devices", nargs="+", required=True)
-    create.add_argument("--ips", nargs="+", required=True)
-    create.add_argument("--interfaces", nargs="+", required=True)
-    create.add_argument("--kmes", nargs="+", required=True)
-    create.add_argument("--platform", default="qfx")
-    create.add_argument("--topology",required=True,choices=["pair", "chain", "ring", "hub"])
-    create.add_argument("--hub", help="Hub device (for hub topology)")
-    create.add_argument("--mode",choices=["static", "qkd"],default="qkd",required=False,help="MACsec key mode: 'static' for locally generated keys, 'qkd' for KME-driven key retrieval")
+    create.add_argument("--inventory",required=True,help="Inventory YAML file")
+    create.add_argument("--pki-profile",choices=["self_signed", "hierarchical_ca"],default="self_signed",help="PKI profile to use for this runtime")
     create.add_argument("--rekey", action="store_true")
     create.add_argument("--interval", type=int, default=60)
-    create.add_argument("--pki-profile",choices=["self_signed", "hierarchical_ca"],default="self_signed",help="PKI profile to use for this runtime")
+    
+    #create.add_argument("--devices", nargs="+", required=True)
+    #create.add_argument("--ips", nargs="+", required=True)
+    #create.add_argument("--interfaces", nargs="+", required=True)
+    #create.add_argument("--kmes", nargs="+", required=True)
+    #create.add_argument("--platform", default="qfx")
+    #create.add_argument("--topology",required=True,choices=["pair", "chain", "ring", "hub"])
+    #create.add_argument("--hub", help="Hub device (for hub topology)")
+    #create.add_argument("--mode",choices=["static", "qkd"],default="qkd",required=False,help="MACsec key mode: 'static' for locally generated keys, 'qkd' for KME-driven key retrieval")
     # ---------------------------
     # DEPLOY COMMAND
     # ---------------------------
@@ -156,36 +159,6 @@ def assign_roles(pairs, topology, hub=None):
 
     return roles
 
-# ----------------------------------------
-# LOAD INVENTORY BASE
-# ----------------------------------------
-
-def load_inventory_base():
-    base_file = BASE_DIR / CONFIG["inventory_dir"] / "inventory_base.yaml"
-
-    if not base_file.exists():
-        print(f"[WARN] inventory_base not found at {base_file}")
-        return {}
-
-    with open(base_file) as f:
-        return yaml.safe_load(f) or {} 
-    
-# ----------------------------------------
-# LOAD RUNTIME DEVICES
-# ----------------------------------------
-
-def load_runtime_devices():
-    devices_file = BASE_DIR / CONFIG["runtime_dir"] / "devices.yaml"
-
-    if not devices_file.exists():
-        raise RuntimeError("devices.yaml missing. Run create first.")
-
-    with open(devices_file) as f:
-        data = yaml.safe_load(f)
-
-    return data.get("devices", {})
-
-# ----------------------------------------
 
 def run_ssh_cmd(log, name, ip, user, cmds):
 
@@ -433,16 +406,23 @@ def reset_local_runtime_for_create():
 # CREATE HANDLER
 # ----------------------------------------
 
+
 def handle_create(args):
 
     # --------------------------
     # Validate inputs
     # --------------------------
 
-    input_devices = args.devices
-    ips = args.ips
-    interfaces = args.interfaces
-    kmes = args.kmes
+    #input_devices = args.devices
+    #ips = args.ips
+    #interfaces = args.interfaces
+    #kmes = args.kmes
+
+    inventory = load_inventory_file(resolve_inventory(args.inventory))
+    input_devices = [d["name"] for d in inventory["devices"]]
+    ips = [d["ip"] for d in inventory["devices"]]
+    kmes = [d["kme"] for d in inventory["devices"]]
+    interfaces = [d["interfaces"] for d in inventory["devices"]]
 
     if not (len(input_devices) == len(ips) == len(kmes)):
         raise ValueError("Devices/IPs/kmes must match in size")

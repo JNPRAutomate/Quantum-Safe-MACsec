@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from lib.settings import PKI
+from lib.qkd_settings import PKI
 import argparse
 import shutil
 

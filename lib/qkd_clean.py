@@ -7,30 +7,11 @@ from pathlib import Path
 
 from jnpr.junos import Device
 
-from newMACSEC39_ready_for_git.lib.settings import CONFIG, PKI, QKD
-
+from lib.qkd_settings import CONFIG, PKI, QKD
+from lib.qkd_config import load_inventory_base
 
 BASE_DIR = Path(__file__).resolve().parent
 
-
-# ----------------------------------------
-# LOAD INVENTORY BASE
-# ----------------------------------------
-def load_inventory_base():
-    """
-    Load config/inventory/inventory_base.yaml.
-
-    Used as fallback by clean when config/runtime/devices.yaml does not exist.
-    """
-
-    base_file = BASE_DIR / CONFIG["inventory_dir"] / "inventory_base.yaml"
-
-    if not base_file.exists():
-        print(f"[WARN] inventory_base not found at {base_file}")
-        return {}
-
-    with open(base_file) as f:
-        return yaml.safe_load(f) or {}
 
 # ----------------------------------------
 # CLEAN LOCAL RUNTIME

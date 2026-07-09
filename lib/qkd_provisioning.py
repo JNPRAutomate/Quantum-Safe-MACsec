@@ -9,11 +9,12 @@ from pathlib import Path
 
 import logging
 
-from newMACSEC39_ready_for_git.lib.rendering import build_device_config
-from newMACSEC39_ready_for_git.lib.settings import CONFIG
-from newMACSEC39_ready_for_git.lib.settings import PKI
-from newMACSEC39_ready_for_git.lib.pki_profile import load_runtime_pki_profile
-
+from lib.qkd_rendering import build_device_config
+from lib.qkd_settings import CONFIG
+from lib.qkd_settings import PKI
+from lib.qkd_pki_profile import load_runtime_pki_profile
+from lib.qkd_config import load_inventory, load_platform
+from lib.qkd_config import load_runtime_pki_profile
 from jinja2 import Environment, FileSystemLoader
 
 from jnpr.junos.utils.config import Config
@@ -109,22 +110,6 @@ def progress(filename, size, sent):
 # YAML LOADER
 # ----------------------------------------
 
-def load_yaml(path):
-    with open(path) as f:
-        data = yaml.safe_load(f)
-        return data if data else {}
-
-
-def load_inventory():
-    base = load_yaml(CONFIG_DIR / "inventory_base.yaml")
-    devices = load_yaml(RUNTIME_DIR / "devices.yaml")
-    topology = load_yaml(RUNTIME_DIR / "topology.yaml")
-
-    return base, devices.get("devices", {}), topology.get("qkd", {})
-
-
-def load_platform(platform_name):
-    return load_yaml(PLATFORM_DIR / f"{platform_name}.yaml")
 
 def remote_file_exists(dev, path):
     try:

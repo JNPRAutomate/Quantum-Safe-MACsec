@@ -3,7 +3,7 @@ from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime, os
-from newMACSEC39_ready_for_git.lib.settings import PKI
+from newMACSEC39_ready_for_git.lib.qkd_settings import PKI
 import ipaddress
 
 # ----------------------------------------

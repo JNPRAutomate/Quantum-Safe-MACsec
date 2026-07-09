@@ -1,6 +1,6 @@
 import os
 from jinja2 import Environment, FileSystemLoader
-from newMACSEC39_ready_for_git.lib.settings import CONFIG, QKD
+from newMACSEC39_ready_for_git.lib.qkd_settings import CONFIG, QKD
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, CONFIG["templates_dir"])

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from newMACSEC39_ready_for_git.lib.settings import QKD, PKI
+from newMACSEC39_ready_for_git.lib.qkd_settings import QKD, PKI
 from jnpr.junos import Device
 
 import subprocess

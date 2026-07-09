@@ -2,7 +2,7 @@ import yaml
 import os
 import secrets
 
-from newMACSEC39_ready_for_git.lib.settings import CONFIG
+from newMACSEC39_ready_for_git.lib.qkd_settings import CONFIG
 
 
 # ----------------------------------------

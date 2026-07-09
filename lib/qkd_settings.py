@@ -1,7 +1,20 @@
 CONFIG = {
+
+    # repo layout
     "runtime_dir": "config/runtime",
     "inventory_dir": "config/inventory",
-    "templates_dir": "config/templates"
+    "inventory_input_dir": "config/inventory/input",
+    "templates_dir": "config/templates",
+
+    # artifacts
+    "artifacts_dir": "artifacts",
+
+    # certs
+    "certs_dir": "certs",
+
+    # pki
+    "self_signed_dir": "certs/self_signed",
+    "hierarchical_dir": "certs/hierarchical_ca",
 }
 
 
@@ -10,18 +23,13 @@ CONFIG = {
 # -------------------------------------------------
 
 PKI = {
-    "C": "IT",
-    "O": "Juniper Networks",
-    "KEY_USAGE": "digitalSignature,keyEncipherment",
-    "EXT_KEY_USAGE": "clientAuth,serverAuth",
+
+    "COUNTRY": "IT",
+    "ORG": "HPE",
 
     # validity
-    "DAYS": 365,
     "KEY_SIZE": 4096,
-
-    # ✅ CA naming (IMPORTANT)
-    "CA_CERT_NAME": "offbox_rootCA.crt",
-    "CA_KEY_NAME": "offbox_rootCA.key",
+    "VALIDITY_DAYS": 365,
 
     # ✅ remote dir on devices
     "REMOTE_CERT_DIR": "/var/db/scripts/certs",
