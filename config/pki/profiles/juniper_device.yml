@@ -1,0 +1,59 @@
+profile: juniper_device
+
+certificate_type: end_entity
+
+basic_constraints:
+  ca: false
+  critical: true
+
+key_usage:
+  critical: true
+
+  digital_signature: true
+  key_encipherment: true
+
+  key_cert_sign: false
+  crl_sign: false
+
+  content_commitment: false
+  data_encipherment: false
+  key_agreement: false
+  encipher_only: false
+  decipher_only: false
+
+extended_key_usage:
+  enabled: true
+
+  client_auth: true
+  server_auth: false
+
+subject_key_identifier:
+  enabled: true
+
+authority_key_identifier:
+  enabled: true
+
+subject_alt_name:
+  enabled: true
+
+  include_dns: true
+  include_ip: true
+
+default_validity_days: 365
+
+default_key_size: 4096
+
+allowed_hash_algorithms:
+  - sha256
+  - sha384
+  - sha512
+
+certificate_outputs:
+  generate_crt: true
+  generate_key: true
+  generate_pem: true
+  generate_chain: true
+
+tls_role:
+  client: true
+  server: false

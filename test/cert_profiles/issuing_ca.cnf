@@ -1,0 +1,15 @@
+[v3_issuing_ca]
+basicConstraints=critical,CA:true,pathlen:0
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid,issuer
+
+
+# signature: 
+# openssl x509 \
+#    -req \
+#    -in issuing.csr \
+#    -CA root.crt \
+#    -CAkey root.key \
+#    -extfile issuing_ca.cnf \
+#    -extensions v3_issuing_ca

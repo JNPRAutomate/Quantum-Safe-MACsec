@@ -1,0 +1,8 @@
+platform: mx
+
+macsec:
+  cipher: gcm-aes-xpn-256
+
+interfaces:
+  default:
+    - xe-0/0/0

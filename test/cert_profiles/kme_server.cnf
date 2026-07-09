@@ -1,0 +1,9 @@
+[v3_kme_server]
+basicConstraints=CA:false
+keyUsage=digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth,clientAuth
+subjectAltName=@alt_names
+
+[alt_names]
+DNS.1=kme_001
+IP.1=100.100.100.10

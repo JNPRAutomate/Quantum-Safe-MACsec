@@ -1,0 +1,9 @@
+[v3_juniper]
+basicConstraints=CA:false
+keyUsage=digitalSignature,keyEncipherment
+extendedKeyUsage=clientAuth
+subjectAltName=@alt_names
+
+[alt_names]
+DNS.1=acx7348-p1
+IP.1=100.123.252.101

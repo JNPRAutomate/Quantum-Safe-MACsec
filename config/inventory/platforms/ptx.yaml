@@ -1,0 +1,4 @@
+platform: ptx
+
+macsec:
+  cipher: gcm-aes-xpn-256

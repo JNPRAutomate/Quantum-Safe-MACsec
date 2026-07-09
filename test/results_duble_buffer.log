@@ -1,0 +1,1353 @@
+============================================================
+ Ring MACsec/QKD ping rotation test
+ Source loopback: 10.100.255.7
+ Duration: 90s
+ Ping count per destination per round: 5
+ Start: Sun Jul  5 13:03:44 CEST 2026
+============================================================
+
+=== Initial MACsec state ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:33
+            AN: 0 Status: inuse Create time: 2d 02:01:33
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:00
+            AN: 0 Status: inuse Create time: 00:00:00
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:27
+            AN: 0 Status: inuse Create time: 00:00:27
+
+=== Initial routes from source node ===
+--- route to acx2 10.100.255.9 ---
+
+inet.0: 19 destinations, 19 routes (18 active, 0 holddown, 1 hidden)
++ = Active Route, - = Last Active, * = Both
+
+10.100.255.9/32    *[IS-IS/18] 00:00:01, metric 20
+                    >  to 10.100.0.23 via ae0.100
+                       to 10.100.0.18 via ae1.100, Push 21008
+
+inet.3: 8 destinations, 8 routes (8 active, 0 holddown, 0 hidden)
++ = Active Route, - = Last Active, * = Both
+
+10.100.255.9/32    *[L-ISIS/14] 00:00:01, metric 20
+                    >  to 10.100.0.23 via ae0.100, Push 0
+                       to 10.100.0.18 via ae1.100, Push 21009, Push 21008(top)
+--- route to acx3 10.100.255.8 ---
+
+inet.0: 18 destinations, 18 routes (17 active, 0 holddown, 1 hidden)
++ = Active Route, - = Last Active, * = Both
+
+10.100.255.8/32    *[IS-IS/18] 00:00:01, metric 30
+                    >  to 10.100.0.23 via ae0.100
+                       to 10.100.0.18 via ae1.100
+
+inet.3: 8 destinations, 8 routes (8 active, 0 holddown, 0 hidden)
++ = Active Route, - = Last Active, * = Both
+
+10.100.255.8/32    *[L-ISIS/14] 00:00:01, metric 30
+                    >  to 10.100.0.23 via ae0.100, Push 21008
+                       to 10.100.0.18 via ae1.100, Push 21008
+--- route to acx4 10.100.255.11 ---
+
+inet.0: 18 destinations, 18 routes (17 active, 0 holddown, 1 hidden)
++ = Active Route, - = Last Active, * = Both
+
+0.0.0.0/0          *[Static/5] 6w5d 20:07:13
+                    >  to 100.123.0.1 via re0:mgmt-0.0
+--- route to acx5 10.100.255.10 ---
+
+inet.0: 18 destinations, 18 routes (17 active, 0 holddown, 1 hidden)
++ = Active Route, - = Last Active, * = Both
+
+0.0.0.0/0          *[Static/5] 6w5d 20:07:13
+                    >  to 100.123.0.1 via re0:mgmt-0.0
+
+============================================================
+ Starting ping loop
+============================================================
+
+------------------------------------------------------------
+ROUND 1 at 2026-07-05 13:03:44
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.171/0.283/0.655/0.187 ms, ipg/ewma 0.333/0.461 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.207/0.334/0.752/0.209 ms, ipg/ewma 0.394/0.535 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+...!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 2 received, 60% packet loss, time 1515ms
+rtt min/avg/max/mdev = 0.669/0.809/0.950/0.140 ms, ipg/ewma 378.810/0.914 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2014ms
+
+
+=== MACsec state after round 1 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:38
+            AN: 0 Status: inuse Create time: 2d 02:01:38
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:05
+            AN: 0 Status: inuse Create time: 00:00:05
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:32
+            AN: 0 Status: inuse Create time: 00:00:32
+
+------------------------------------------------------------
+ROUND 2 at 2026-07-05 13:03:51
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.186/0.316/0.712/0.200 ms, ipg/ewma 0.373/0.505 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.277/0.608/0.167 ms, ipg/ewma 0.324/0.436 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.333/0.521/0.943/0.215 ms, ipg/ewma 0.569/0.723 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+....!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 1 received, 80% packet loss, time 2019ms
+rtt min/avg/max/mdev = 0.838/0.838/0.838/0.000 ms, ipg/ewma 504.632/0.838 ms
+
+=== MACsec state after round 2 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:43
+            AN: 0 Status: inuse Create time: 2d 02:01:43
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:10
+            AN: 0 Status: inuse Create time: 00:00:10
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:37
+            AN: 0 Status: inuse Create time: 00:00:37
+
+------------------------------------------------------------
+ROUND 3 at 2026-07-05 13:03:56
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.176/0.326/0.860/0.267 ms, ipg/ewma 0.383/0.583 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.185/0.292/0.627/0.168 ms, ipg/ewma 0.345/0.452 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.269/0.488/1.066/0.296 ms, ipg/ewma 0.573/0.764 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.254/0.497/0.921/0.224 ms, ipg/ewma 0.582/0.697 ms
+
+=== MACsec state after round 3 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:46
+            AN: 0 Status: inuse Create time: 2d 02:01:46
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:13
+            AN: 0 Status: inuse Create time: 00:00:13
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:40
+            AN: 0 Status: inuse Create time: 00:00:40
+
+------------------------------------------------------------
+ROUND 4 at 2026-07-05 13:03:58
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.175/0.298/0.729/0.216 ms, ipg/ewma 0.352/0.505 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.223/0.388/0.799/0.214 ms, ipg/ewma 0.452/0.583 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.296/0.461/0.843/0.202 ms, ipg/ewma 0.521/0.641 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.232/0.472/1.033/0.291 ms, ipg/ewma 0.559/0.737 ms
+
+=== MACsec state after round 4 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:48
+            AN: 0 Status: inuse Create time: 2d 02:01:48
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:15
+            AN: 0 Status: inuse Create time: 00:00:15
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:42
+            AN: 0 Status: inuse Create time: 00:00:42
+
+------------------------------------------------------------
+ROUND 5 at 2026-07-05 13:04:01
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.169/0.292/0.703/0.207 ms, ipg/ewma 0.344/0.489 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.304/0.695/0.198 ms, ipg/ewma 0.359/0.491 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.227/0.413/0.826/0.224 ms, ipg/ewma 0.481/0.607 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.303/0.481/1.007/0.265 ms, ipg/ewma 0.554/0.732 ms
+
+=== MACsec state after round 5 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:51
+            AN: 0 Status: inuse Create time: 2d 02:01:51
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:18
+            AN: 0 Status: inuse Create time: 00:00:18
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:45
+            AN: 0 Status: inuse Create time: 00:00:45
+
+------------------------------------------------------------
+ROUND 6 at 2026-07-05 13:04:03
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.165/0.281/0.692/0.205 ms, ipg/ewma 0.330/0.479 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.306/0.738/0.217 ms, ipg/ewma 0.359/0.513 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.371/0.512/0.891/0.192 ms, ipg/ewma 0.552/0.695 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.289/0.435/0.890/0.229 ms, ipg/ewma 0.483/0.653 ms
+
+=== MACsec state after round 6 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:53
+            AN: 0 Status: inuse Create time: 2d 02:01:53
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:20
+            AN: 0 Status: inuse Create time: 00:00:20
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:47
+            AN: 0 Status: inuse Create time: 00:00:47
+
+------------------------------------------------------------
+ROUND 7 at 2026-07-05 13:04:06
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.177/0.334/0.868/0.268 ms, ipg/ewma 0.390/0.591 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.172/0.280/0.670/0.195 ms, ipg/ewma 0.328/0.467 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.250/0.394/0.763/0.189 ms, ipg/ewma 0.420/0.574 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.224/0.430/1.089/0.333 ms, ipg/ewma 0.504/0.745 ms
+
+=== MACsec state after round 7 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:56
+            AN: 0 Status: inuse Create time: 2d 02:01:56
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:23
+            AN: 0 Status: inuse Create time: 00:00:23
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:50
+            AN: 0 Status: inuse Create time: 00:00:50
+
+------------------------------------------------------------
+ROUND 8 at 2026-07-05 13:04:08
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.162/0.252/0.583/0.165 ms, ipg/ewma 0.296/0.411 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.195/0.353/0.784/0.219 ms, ipg/ewma 0.406/0.559 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.430/0.645/0.997/0.211 ms, ipg/ewma 0.710/0.811 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.211/0.435/1.000/0.298 ms, ipg/ewma 0.513/0.702 ms
+
+=== MACsec state after round 8 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:01:58
+            AN: 0 Status: inuse Create time: 2d 02:01:58
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:25
+            AN: 0 Status: inuse Create time: 00:00:25
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:52
+            AN: 0 Status: inuse Create time: 00:00:52
+
+------------------------------------------------------------
+ROUND 9 at 2026-07-05 13:04:11
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.179/0.293/0.706/0.206 ms, ipg/ewma 0.343/0.492 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.191/0.323/0.769/0.223 ms, ipg/ewma 0.382/0.537 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.228/0.413/0.883/0.241 ms, ipg/ewma 0.480/0.636 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.234/0.445/0.932/0.252 ms, ipg/ewma 0.506/0.676 ms
+
+=== MACsec state after round 9 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:00
+            AN: 0 Status: inuse Create time: 2d 02:02:00
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:27
+            AN: 0 Status: inuse Create time: 00:00:27
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:54
+            AN: 0 Status: inuse Create time: 00:00:54
+
+------------------------------------------------------------
+ROUND 10 at 2026-07-05 13:04:13
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.181/0.321/0.829/0.254 ms, ipg/ewma 0.380/0.565 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.187/0.323/0.814/0.245 ms, ipg/ewma 0.380/0.559 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.223/0.391/0.897/0.258 ms, ipg/ewma 0.454/0.632 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.331/0.562/0.963/0.230 ms, ipg/ewma 0.646/0.753 ms
+
+=== MACsec state after round 10 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:03
+            AN: 0 Status: inuse Create time: 2d 02:02:03
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:30
+            AN: 0 Status: inuse Create time: 00:00:30
+    Interface name: et-2/0/4
+        CA name: CA1   
+            AN: 0 Status: inuse Create time: 00:00:57
+            AN: 0 Status: inuse Create time: 00:00:57
+
+------------------------------------------------------------
+ROUND 11 at 2026-07-05 13:04:16
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.245/0.399/0.801/0.205 ms, ipg/ewma 0.469/0.590 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.250/0.398/0.787/0.198 ms, ipg/ewma 0.468/0.583 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.381/0.623/1.034/0.239 ms, ipg/ewma 0.698/0.816 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.298/0.568/1.255/0.351 ms, ipg/ewma 0.668/0.895 ms
+
+=== MACsec state after round 11 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:06
+            AN: 0 Status: inuse Create time: 2d 02:02:06
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:33
+            AN: 0 Status: inuse Create time: 00:00:33
+    Interface name: et-2/0/4
+        CA name: CA2   
+
+------------------------------------------------------------
+ROUND 12 at 2026-07-05 13:04:18
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.236/0.425/1.072/0.324 ms, ipg/ewma 0.494/0.735 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.226/0.356/0.804/0.224 ms, ipg/ewma 0.412/0.571 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.394/0.565/0.950/0.200 ms, ipg/ewma 0.627/0.750 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.216/0.430/1.111/0.343 ms, ipg/ewma 0.510/0.756 ms
+
+=== MACsec state after round 12 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:08
+            AN: 0 Status: inuse Create time: 2d 02:02:08
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:35
+            AN: 0 Status: inuse Create time: 00:00:35
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:02
+            AN: 0 Status: inuse Create time: 00:00:02
+
+------------------------------------------------------------
+ROUND 13 at 2026-07-05 13:04:21
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.244/0.379/0.816/0.220 ms, ipg/ewma 0.432/0.588 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.247/0.397/0.905/0.255 ms, ipg/ewma 0.463/0.641 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.459/0.731/1.174/0.247 ms, ipg/ewma 0.810/0.946 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.320/0.503/1.000/0.258 ms, ipg/ewma 0.564/0.739 ms
+
+=== MACsec state after round 13 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:11
+            AN: 0 Status: inuse Create time: 2d 02:02:11
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:38
+            AN: 0 Status: inuse Create time: 00:00:38
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:05
+            AN: 0 Status: inuse Create time: 00:00:05
+
+------------------------------------------------------------
+ROUND 14 at 2026-07-05 13:04:23
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2012ms
+
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.322/0.492/0.981/0.247 ms, ipg/ewma 0.533/0.729 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.219/0.336/0.732/0.198 ms, ipg/ewma 0.385/0.526 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.212/0.385/0.915/0.269 ms, ipg/ewma 0.451/0.638 ms
+
+=== MACsec state after round 14 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:15
+            AN: 0 Status: inuse Create time: 2d 02:02:15
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:42
+            AN: 0 Status: inuse Create time: 00:00:42
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:09
+            AN: 0 Status: inuse Create time: 00:00:09
+
+------------------------------------------------------------
+ROUND 15 at 2026-07-05 13:04:28
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2013ms
+
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.215/0.346/0.789/0.221 ms, ipg/ewma 0.399/0.560 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.398/0.623/0.997/0.215 ms, ipg/ewma 0.625/0.808 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.229/0.464/1.149/0.353 ms, ipg/ewma 0.545/0.790 ms
+
+=== MACsec state after round 15 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:20
+            AN: 0 Status: inuse Create time: 2d 02:02:20
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:47
+            AN: 0 Status: inuse Create time: 00:00:47
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:14
+            AN: 0 Status: inuse Create time: 00:00:14
+
+------------------------------------------------------------
+ROUND 16 at 2026-07-05 13:04:33
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.184/0.299/0.687/0.194 ms, ipg/ewma 0.351/0.485 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.284/0.468/0.943/0.241 ms, ipg/ewma 0.530/0.696 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.274/0.483/1.034/0.278 ms, ipg/ewma 0.563/0.746 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.251/0.379/0.764/0.193 ms, ipg/ewma 0.435/0.563 ms
+
+=== MACsec state after round 16 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:23
+            AN: 0 Status: inuse Create time: 2d 02:02:23
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:50
+            AN: 0 Status: inuse Create time: 00:00:50
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:17
+            AN: 0 Status: inuse Create time: 00:00:17
+
+------------------------------------------------------------
+ROUND 17 at 2026-07-05 13:04:36
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.291/0.687/0.198 ms, ipg/ewma 0.342/0.481 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.228/0.361/0.731/0.187 ms, ipg/ewma 0.419/0.538 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2018ms
+
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.227/0.369/0.767/0.203 ms, ipg/ewma 0.419/0.559 ms
+
+=== MACsec state after round 17 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:28
+            AN: 0 Status: inuse Create time: 2d 02:02:28
+    Interface name: et-2/0/2
+        CA name: CA9   
+            AN: 0 Status: inuse Create time: 00:00:55
+            AN: 0 Status: inuse Create time: 00:00:55
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:22
+            AN: 0 Status: inuse Create time: 00:00:22
+
+------------------------------------------------------------
+ROUND 18 at 2026-07-05 13:04:41
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.184/0.328/0.759/0.218 ms, ipg/ewma 0.388/0.534 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.211/0.391/0.879/0.247 ms, ipg/ewma 0.466/0.624 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2014ms
+
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2013ms
+
+
+=== MACsec state after round 18 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:35
+            AN: 0 Status: inuse Create time: 2d 02:02:35
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:02
+            AN: 0 Status: inuse Create time: 00:00:02
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:29
+            AN: 0 Status: inuse Create time: 00:00:29
+
+------------------------------------------------------------
+ROUND 19 at 2026-07-05 13:04:48
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.165/0.292/0.734/0.221 ms, ipg/ewma 0.344/0.504 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.169/0.280/0.669/0.194 ms, ipg/ewma 0.331/0.467 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.309/0.531/0.946/0.238 ms, ipg/ewma 0.596/0.727 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2019ms
+
+
+=== MACsec state after round 19 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:40
+            AN: 0 Status: inuse Create time: 2d 02:02:40
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:07
+            AN: 0 Status: inuse Create time: 00:00:07
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:34
+            AN: 0 Status: inuse Create time: 00:00:34
+
+------------------------------------------------------------
+ROUND 20 at 2026-07-05 13:04:53
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.306/0.708/0.201 ms, ipg/ewma 0.364/0.499 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.187/0.334/0.851/0.259 ms, ipg/ewma 0.394/0.582 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.227/0.567/1.096/0.287 ms, ipg/ewma 0.594/0.822 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+.....
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 2012ms
+
+
+=== MACsec state after round 20 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:45
+            AN: 0 Status: inuse Create time: 2d 02:02:45
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:12
+            AN: 0 Status: inuse Create time: 00:00:12
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:39
+            AN: 0 Status: inuse Create time: 00:00:39
+
+------------------------------------------------------------
+ROUND 21 at 2026-07-05 13:04:58
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.333/0.460/0.818/0.182 ms, ipg/ewma 0.517/0.631 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.195/0.318/0.761/0.221 ms, ipg/ewma 0.369/0.531 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.232/0.449/0.932/0.251 ms, ipg/ewma 0.529/0.679 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.242/0.415/0.932/0.263 ms, ipg/ewma 0.478/0.662 ms
+
+=== MACsec state after round 21 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:48
+            AN: 0 Status: inuse Create time: 2d 02:02:48
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:15
+            AN: 0 Status: inuse Create time: 00:00:15
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:42
+            AN: 0 Status: inuse Create time: 00:00:42
+
+------------------------------------------------------------
+ROUND 22 at 2026-07-05 13:05:01
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.159/0.303/0.792/0.245 ms, ipg/ewma 0.361/0.538 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.169/0.269/0.604/0.168 ms, ipg/ewma 0.317/0.430 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.331/0.559/1.161/0.303 ms, ipg/ewma 0.613/0.849 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.238/0.432/0.906/0.243 ms, ipg/ewma 0.498/0.657 ms
+
+=== MACsec state after round 22 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:50
+            AN: 0 Status: inuse Create time: 2d 02:02:50
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:17
+            AN: 0 Status: inuse Create time: 00:00:17
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:44
+            AN: 0 Status: inuse Create time: 00:00:44
+
+------------------------------------------------------------
+ROUND 23 at 2026-07-05 13:05:03
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.167/0.295/0.728/0.216 ms, ipg/ewma 0.347/0.503 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.314/0.794/0.240 ms, ipg/ewma 0.370/0.544 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.308/0.480/0.994/0.259 ms, ipg/ewma 0.542/0.727 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.219/0.372/0.815/0.225 ms, ipg/ewma 0.430/0.583 ms
+
+=== MACsec state after round 23 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:53
+            AN: 0 Status: inuse Create time: 2d 02:02:53
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:20
+            AN: 0 Status: inuse Create time: 00:00:20
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:47
+            AN: 0 Status: inuse Create time: 00:00:47
+
+------------------------------------------------------------
+ROUND 24 at 2026-07-05 13:05:05
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.175/0.294/0.689/0.198 ms, ipg/ewma 0.348/0.483 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.182/0.303/0.690/0.194 ms, ipg/ewma 0.341/0.490 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.316/0.484/0.905/0.219 ms, ipg/ewma 0.526/0.686 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.340/0.576/1.199/0.317 ms, ipg/ewma 0.642/0.874 ms
+
+=== MACsec state after round 24 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:55
+            AN: 0 Status: inuse Create time: 2d 02:02:55
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:22
+            AN: 0 Status: inuse Create time: 00:00:22
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:49
+            AN: 0 Status: inuse Create time: 00:00:49
+
+------------------------------------------------------------
+ROUND 25 at 2026-07-05 13:05:08
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.162/0.278/0.675/0.199 ms, ipg/ewma 0.329/0.468 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.176/0.284/0.641/0.179 ms, ipg/ewma 0.334/0.455 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.229/0.349/0.722/0.189 ms, ipg/ewma 0.399/0.527 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.311/0.481/0.960/0.241 ms, ipg/ewma 0.537/0.711 ms
+
+=== MACsec state after round 25 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:02:58
+            AN: 0 Status: inuse Create time: 2d 02:02:58
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:25
+            AN: 0 Status: inuse Create time: 00:00:25
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:52
+            AN: 0 Status: inuse Create time: 00:00:52
+
+------------------------------------------------------------
+ROUND 26 at 2026-07-05 13:05:10
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.177/0.293/0.715/0.211 ms, ipg/ewma 0.343/0.496 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 1ms
+rtt min/avg/max/mdev = 0.184/0.305/0.716/0.206 ms, ipg/ewma 0.357/0.502 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.212/0.406/1.112/0.353 ms, ipg/ewma 0.478/0.745 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.260/0.399/0.812/0.207 ms, ipg/ewma 0.445/0.598 ms
+
+=== MACsec state after round 26 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:03:00
+            AN: 0 Status: inuse Create time: 2d 02:03:00
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:27
+            AN: 0 Status: inuse Create time: 00:00:27
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:54
+            AN: 0 Status: inuse Create time: 00:00:54
+
+------------------------------------------------------------
+ROUND 27 at 2026-07-05 13:05:13
+------------------------------------------------------------
+
+>>> ping acx2 10.100.255.9 source 10.100.255.7
+PING 10.100.255.9 (10.100.255.9) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.9 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.181/0.337/0.767/0.216 ms, ipg/ewma 0.386/0.545 ms
+
+>>> ping acx3 10.100.255.8 source 10.100.255.7
+PING 10.100.255.8 (10.100.255.8) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.8 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.208/0.349/0.758/0.205 ms, ipg/ewma 0.415/0.545 ms
+
+>>> ping acx4 10.100.255.11 source 10.100.255.7
+PING 10.100.255.11 (10.100.255.11) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.11 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 3ms
+rtt min/avg/max/mdev = 0.318/0.567/1.137/0.296 ms, ipg/ewma 0.626/0.841 ms
+
+>>> ping acx5 10.100.255.10 source 10.100.255.7
+PING 10.100.255.10 (10.100.255.10) from 10.100.255.7 : 56(84) bytes of data.
+!!!!!
+--- 10.100.255.10 ping statistics ---
+5 packets transmitted, 5 received, 0% packet loss, time 2ms
+rtt min/avg/max/mdev = 0.303/0.466/1.047/0.291 ms, ipg/ewma 0.525/0.745 ms
+
+=== MACsec state after round 27 ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:03:03
+            AN: 0 Status: inuse Create time: 2d 02:03:03
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:30
+            AN: 0 Status: inuse Create time: 00:00:30
+    Interface name: et-2/0/4
+        CA name: CA2   
+            AN: 0 Status: inuse Create time: 00:00:57
+            AN: 0 Status: inuse Create time: 00:00:57
+
+============================================================
+ Test completed at Sun Jul  5 13:05:15 CEST 2026
+============================================================
+
+=== Final MACsec state ===
+    Interface name: et-2/0/0
+        CA name: CA-MACSEC-CORE   
+            AN: 0 Status: inuse Create time: 2d 02:03:05
+            AN: 0 Status: inuse Create time: 2d 02:03:05
+    Interface name: et-2/0/2
+        CA name: CA10   
+            AN: 0 Status: inuse Create time: 00:00:32
+            AN: 0 Status: inuse Create time: 00:00:32
+    Interface name: et-2/0/4
+        CA name: CA1   
+
+=== Final MACsec statistics summary ===
+  Interface name: et-2/0/0
+        Encrypted packets: 6958721
+        Encrypted bytes:   388746522
+        Encrypted packets: 6958721
+        Accepted packets:  11282227
+        Decrypted bytes:   650565223
+        Accepted packets:  11282227
+        Decrypted bytes:   650565223
+  Interface name: et-2/0/2
+        Encrypted packets: 688
+        Encrypted bytes:   40477
+        Encrypted packets: 688
+        Accepted packets:  178
+        Decrypted bytes:   13265
+        Accepted packets:  178
+        Decrypted bytes:   13265
+  Interface name: et-2/0/4
+        Encrypted packets: 0
+        Encrypted bytes:   0
+        Encrypted packets: 0
+        Accepted packets:  0
+        Decrypted bytes:   0
+        Accepted packets:  0
+        Decrypted bytes:   0

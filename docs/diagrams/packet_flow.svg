@@ -1,0 +1,39 @@
+<svg width="1000" height="400" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .box { fill:#eef; stroke:#333; stroke-width:2; }
+    .text { font-size:13px; }
+    .arrow { stroke:#000; stroke-width:2; marker-end:url(#arrowhead); }
+  </style>
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" />
+    </marker>
+  </defs>
+
+  <!-- Entities -->
+  <rect x="100" y="150" width="150" height="60" class="box"/>
+  <text x="110" y="180" class="text">QFX1 (MASTER)</text>
+
+  <rect x="400" y="50" width="180" height="60" class="box"/>
+  <text x="410" y="80" class="text">KME</text>
+
+  <rect x="700" y="150" width="160" height="60" class="box"/>
+  <text x="710" y="180" class="text">QFX2 (SLAVE)</text>
+
+  <!-- Flow -->
+  <line x1="250" y1="180" x2="400" y2="80" class="arrow"/>
+  <text x="260" y="140" class="text">enc_keys</text>
+
+  <line x1="400" y1="80" x2="250" y2="180" class="arrow"/>
+  <text x="260" y="200" class="text">key_ID</text>
+
+  <line x1="700" y1="180" x2="580" y2="80" class="arrow"/>
+  <text x="610" y="140" class="text">dec_keys</text>
+
+  <line x1="580" y1="80" x2="700" y2="180" class="arrow"/>
+  <text x="610" y="200" class="text">key</text>
+
+  <!-- MACsec -->
+  <text x="400" y="300" class="text">MACsec Applied Dynamically</text>
+</svg>

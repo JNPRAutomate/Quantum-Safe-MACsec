@@ -1,0 +1,46 @@
+# config/pki/profiles/root_ca.yml
+
+profile: root_ca
+
+certificate_type: ca
+
+basic_constraints:
+  ca: true
+  path_length: 1
+  critical: true
+
+key_usage:
+  critical: true
+
+  digital_signature: false
+  key_encipherment: false
+
+  key_cert_sign: true
+  crl_sign: true
+
+  content_commitment: false
+  data_encipherment: false
+  key_agreement: false
+  encipher_only: false
+  decipher_only: false
+
+subject_key_identifier:
+  enabled: true
+
+authority_key_identifier:
+  enabled: true
+
+extended_key_usage:
+  enabled: false
+
+subject_alt_name:
+  enabled: false
+
+default_validity_days: 3650
+
+default_key_size: 4096
+
+allowed_hash_algorithms:
+  - sha256
+  - sha384
+  - sha512

@@ -1,0 +1,12 @@
+qkd:
+  pairs:
+  - - acx1
+    - acx2
+  - - acx2
+    - acx3
+  - - acx3
+    - acx4
+  - - acx4
+    - acx5
+  - - acx5
+    - acx1

@@ -1,0 +1,47 @@
+pki:
+
+  version: "3.3"
+
+  profile: "self_signed"
+
+  output_dir: "certs"
+
+  devices_source: "config/runtime/devices.yaml"
+
+  crypto:
+    key_type: "rsa"
+    key_size: 4096
+    hash_algorithm: "sha256"
+
+  subject_defaults:
+    country: "IT"
+    organization: "Juniper Networks Lab"
+    organizational_unit: "Quantum Safe MACsec"
+
+  validity:
+    root_ca_days: 3650
+    leaf_cert_days: 365
+
+  root_ca:
+    common_name: "Lab Root CA"
+    filename_prefix: "root"
+
+  leaf_certificates:
+
+    kme_profile: "kme_server"
+
+    juniper_profile: "juniper_device"
+
+    include_ip_san: true
+    include_dns_san: true
+    include_localhost_dns: true
+
+  profiles:
+    kme_server: "config/pki/profiles/kme_server.yml"
+    juniper_device: "config/pki/profiles/juniper_device.yml"
+
+  safety:
+    overwrite_existing: false
+    chmod_private_keys: "0600"
+    chmod_certificates: "0644"
+    export_ca_private_keys: false

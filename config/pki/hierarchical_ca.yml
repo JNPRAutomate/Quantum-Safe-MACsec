@@ -1,0 +1,109 @@
+pki:
+
+  version: "3.3"
+
+  output_dir: "certs/dual_pki"
+  profile: "hierarchical_ca"
+  devices_source: "config/runtime/devices.yaml"
+
+  crypto:
+    key_type: "rsa"
+    key_size: 4096
+    hash_algorithm: "sha256"
+
+  subject_defaults:
+    country: "IT"
+    organization: "Juniper Networks Lab"
+    organizational_unit: "Quantum Safe MACsec"
+
+  validity:
+    root_ca_days: 3650
+    issuing_ca_days: 1825
+    leaf_cert_days: 365
+
+  kme_domain:
+
+    name: "kme"
+
+    root_ca:
+      common_name: "KME Root CA"
+      filename_prefix: "kme-root-ca"
+      path_length: 1
+
+    issuing_ca:
+      common_name: "KME Issuing CA"
+      filename_prefix: "kme-issuing-ca"
+      path_length: 0
+
+    leaf_certificates:
+      profile: "kme_server"
+      include_ip_san: true
+      include_dns_san: true
+      include_localhost_dns: true
+
+  juniper_domain:
+
+    name: "juniper"
+
+    root_ca:
+      common_name: "Juniper Root CA"
+      filename_prefix: "juniper-root-ca"
+      path_length: 1
+
+    issuing_ca:
+      common_name: "Juniper Issuing CA"
+      filename_prefix: "juniper-issuing-ca"
+      path_length: 0
+
+    leaf_certificates:
+      profile: "juniper_device"
+      include_ip_san: true
+      include_dns_san: true
+      include_localhost_dns: false
+
+  profiles:
+    root_ca:
+      file: "config/pki/profiles/root_ca.yml"
+
+    issuing_ca:
+      file: "config/pki/profiles/issuing_ca.yml"
+
+    kme_server:
+      file: "config/pki/profiles/kme_server.yml"
+
+    juniper_device:
+      file: "config/pki/profiles/juniper_device.yml"
+
+  trust_exchange:
+
+    enabled: true
+
+    install_on_kme:
+      bundle_name: "trusted-juniper-ca-bundle.crt"
+      include_juniper_root_ca: true
+      include_juniper_issuing_ca: true
+
+    install_on_juniper:
+      bundle_name: "trusted-kme-ca-bundle.crt"
+      include_kme_root_ca: true
+      include_kme_issuing_ca: true
+
+  layout:
+
+    kme_root_ca_dir: "kme_pki/root_ca"
+    kme_issuing_ca_dir: "kme_pki/issuing_ca"
+    kme_certs_dir: "kme_pki/certs"
+
+    juniper_root_ca_dir: "juniper_pki/root_ca"
+    juniper_issuing_ca_dir: "juniper_pki/issuing_ca"
+    juniper_certs_dir: "juniper_pki/certs"
+
+    trust_exchange_dir: "trust_exchange"
+    install_on_kme_dir: "trust_exchange/install_on_kme"
+    install_on_juniper_dir: "trust_exchange/install_on_juniper"
+
+  safety:
+    overwrite_existing: false
+    chmod_private_keys: "0600"
+    chmod_certificates: "0644"
+    export_ca_private_keys: false

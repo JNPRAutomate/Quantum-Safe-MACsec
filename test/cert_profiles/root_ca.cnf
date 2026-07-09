@@ -1,0 +1,24 @@
+[req]
+distinguished_name=req_distinguished_name
+x509_extensions=v3_ca
+prompt=no
+
+[req_distinguished_name]
+C=IT
+O=Juniper Networks
+CN=Root CA
+
+[v3_ca]
+basicConstraints=critical,CA:true,pathlen:1
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+
+
+
+# openssl req \
+#     -new \
+#     -x509 \
+#     -config root_ca.cnf \
+#     -key root.key \
+#     -out root.crt
+# 
