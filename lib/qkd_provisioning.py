@@ -12,7 +12,6 @@ import logging
 from lib.qkd_rendering import build_device_config
 from lib.qkd_settings import CONFIG
 from lib.qkd_settings import PKI
-from lib.qkd_pki_profile import load_runtime_pki_profile
 from lib.qkd_config import load_inventory, load_platform
 from lib.qkd_config import load_runtime_pki_profile
 from jinja2 import Environment, FileSystemLoader
