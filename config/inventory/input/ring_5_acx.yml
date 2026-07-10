@@ -1,6 +1,7 @@
 topology: ring
 platform: acx
 mode: qkd
+pki_profile: self_signed
 
 devices:
 

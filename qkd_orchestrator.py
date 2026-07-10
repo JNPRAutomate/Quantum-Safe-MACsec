@@ -59,7 +59,7 @@ def parse_args():
     # ---------------------------
     create = subparsers.add_parser("create")
     create.add_argument("--inventory",required=True,help="Inventory YAML file")
-    create.add_argument("--pki-profile",choices=["self_signed", "hierarchical_ca"],default="self_signed",help="PKI profile to use for this runtime")
+    create.add_argument("--pki-profile",choices=["self_signed", "hierarchical_ca"],default=None,help="Optional PKI profile override. If omitted, inventory YAML or default is used.")
     create.add_argument("--rekey", action="store_true")
     create.add_argument("--interval", type=int, default=60)
     
@@ -406,57 +406,57 @@ def reset_local_runtime_for_create():
 # CREATE HANDLER
 # ----------------------------------------
 
-
 def handle_create(args):
 
     # --------------------------
-    # Validate inputs
+    # Load create inventory
     # --------------------------
 
-    #input_devices = args.devices
-    #ips = args.ips
-    #interfaces = args.interfaces
-    #kmes = args.kmes
+    inventory_path = resolve_inventory(args.inventory)
+    inventory = load_inventory_file(inventory_path)
 
-    inventory = load_inventory_file(resolve_inventory(args.inventory))
-    input_devices = [d["name"] for d in inventory["devices"]]
-    ips = [d["ip"] for d in inventory["devices"]]
-    kmes = [d["kme"] for d in inventory["devices"]]
-    interfaces = [d["interfaces"] for d in inventory["devices"]]
+    if not isinstance(inventory, dict):
+        raise ValueError(f"Invalid inventory format: {inventory_path}")
 
-    if not (len(input_devices) == len(ips) == len(kmes)):
-        raise ValueError("Devices/IPs/kmes must match in size")
+    if "devices" not in inventory:
+        raise ValueError(f"Inventory missing required 'devices' section: {inventory_path}")
 
-    if args.topology == "pair":
-        if len(input_devices) != 2:
-            raise ValueError("Pair topology requires exactly 2 devices")
+    if not isinstance(inventory["devices"], list):
+        raise ValueError(f"Inventory 'devices' section must be a list: {inventory_path}")
 
-        if len(interfaces) != 2:
-            raise ValueError("Pair topology requires exactly 2 interfaces")
+    if not inventory["devices"]:
+        raise ValueError(f"Inventory contains no devices: {inventory_path}")
 
-    elif args.topology == "chain":
-        expected_endpoint_interfaces = 2 * (len(input_devices) - 1)
-        expected_per_device_interfaces = len(input_devices)
+    required_top_level = [
+        "topology",
+        "platform",
+        "mode",
+    ]
 
-        if len(input_devices) < 2:
-            raise ValueError("Chain topology requires at least 2 devices")
+    for key in required_top_level:
+        if key not in inventory:
+            raise ValueError(f"Inventory missing required top-level key '{key}': {inventory_path}")
 
-        if len(interfaces) not in [
-            expected_endpoint_interfaces,
-            expected_per_device_interfaces
-        ]:
-            raise ValueError(
-                f"Chain topology requires either {expected_endpoint_interfaces} endpoint interfaces "
-                f"or {expected_per_device_interfaces} per-device interface arguments, "
-                f"got {len(interfaces)}"
-            )
+    # Inventory is the source of truth.
+    # No args.topology / args.platform / args.mode anymore.
+    topology = inventory["topology"]
+    default_platform = inventory["platform"]
+    mode = inventory["mode"]
+    hub = inventory.get("hub")
 
-    else:
-        if len(interfaces) != len(input_devices):
-            raise ValueError(
-                f"{args.topology} topology requires interfaces to match devices "
-                f"unless explicitly supported"
-            )
+    # CLI may override YAML/default PKI profile.
+    # Priority:
+    # 1. --pki-profile
+    # 2. inventory pki_profile
+    # 3. self_signed
+    pki_profile = (
+        args.pki_profile
+        or inventory.get("pki_profile")
+        or "self_signed"
+    )
+
+    if pki_profile not in ["self_signed", "hierarchical_ca"]:
+        raise ValueError(f"Unsupported PKI profile: {pki_profile}")
 
     # --------------------------
     # Load base config
@@ -464,24 +464,21 @@ def handle_create(args):
 
     base = load_inventory_base()
 
-  
     # --------------------------
     # Reset local runtime artifacts
     # This is local-only and does not touch remote devices.
     # --------------------------
+
     reset_local_runtime_for_create()
 
     # --------------------------
     # Runtime identity
     # --------------------------
     #
-    # IMPORTANT:
     # QKD["SCRIPT_USER"] is the single source of truth.
+    # Do not allow inventory_base.yaml / secrets to silently override it.
     #
-    # Do not allow inventory_base.yaml / secrets to silently override it,
-    # otherwise qkd_identity.py, qkd_onbox.py, event-options and peer SSH
-    # can disagree on admin/labuser/root.
-    #
+
     script_user = QKD["SCRIPT_USER"]
 
     # --------------------------
@@ -505,35 +502,59 @@ def handle_create(args):
     device_auth_map = base.get("devices", {})
 
     # --------------------------
-    # Normalize interfaces by topology
+    # Build device records directly from inventory YAML
     # --------------------------
-
-    device_interfaces = normalize_interfaces_for_topology(
-        args.topology,
-        input_devices,
-        interfaces
-    )
 
     devices = []
 
-    # --------------------------
-    # Build device records
-    # --------------------------
+    seen_names = set()
 
-    for i in range(len(input_devices)):
+    for i, inv_dev in enumerate(inventory["devices"], start=1):
 
-        name = input_devices[i]
+        required_device_keys = [
+            "name",
+            "ip",
+            "kme",
+            "interfaces",
+        ]
+
+        for key in required_device_keys:
+            if key not in inv_dev:
+                raise ValueError(
+                    f"Inventory device entry missing required key '{key}': {inv_dev}"
+                )
+
+        name = inv_dev["name"]
+
+        if name in seen_names:
+            raise ValueError(f"Duplicate device name in inventory: {name}")
+
+        seen_names.add(name)
+
+        if not isinstance(inv_dev["interfaces"], list):
+            raise ValueError(
+                f"Inventory device '{name}' interfaces must be a list"
+            )
+
+        if not inv_dev["interfaces"]:
+            raise ValueError(
+                f"Inventory device '{name}' must define at least one interface"
+            )
 
         # Priority:
-        # 1. per-device auth from inventory_base.yaml
-        # 2. global auth from secrets
-        # 3. fallback auth
+        # 1. auth directly inside inventory device
+        # 2. per-device auth from inventory_base.yaml
+        # 3. global auth from inventory_base.yaml secrets
+        # 4. fallback auth
         #
         # NOTE:
         # This auth is for orchestrator deploy/login.
         # It is NOT the qkd_onbox runtime identity.
         #
-        device_auth = device_auth_map.get(name, {}).get("auth")
+        device_auth = inv_dev.get("auth")
+
+        if not device_auth:
+            device_auth = device_auth_map.get(name, {}).get("auth")
 
         if not device_auth:
             if global_auth:
@@ -544,18 +565,16 @@ def handle_create(args):
                     "password": "admin123"
                 }
 
-        effective_script_user = script_user
-
         devices.append(
             {
                 "name": name,
-                "platform": args.platform,
-                "ip": args.ips[i],
-                "interfaces": device_interfaces[i],
-                "kme_ip": args.kmes[i],
+                "platform": inv_dev.get("platform", default_platform),
+                "ip": inv_dev["ip"],
+                "interfaces": inv_dev["interfaces"],
+                "kme_ip": inv_dev["kme"],
                 "auth": device_auth,
-                "script_user": effective_script_user,
-                "sae_id": build_sae(i + 1)
+                "script_user": script_user,
+                "sae_id": inv_dev.get("sae_id", build_sae(i)),
             }
         )
 
@@ -565,14 +584,15 @@ def handle_create(args):
 
     build_full_inventory(
         devices,
-        topology=args.topology,
-        hub=args.hub,
-        mode=args.mode,
+        topology=topology,
+        hub=hub,
+        mode=mode,
         out_dir=CONFIG["runtime_dir"],
-        pki_profile=args.pki_profile
+        pki_profile=pki_profile
     )
 
-    print(f"✅ Inventory created ({args.topology}, mode={args.mode})")
+    print(f"✅ Inventory created ({topology}, mode={mode}, pki={pki_profile})")
+    print(f"✅ Inventory source: {inventory_path}")
     print(f"✅ QKD runtime script_user fixed to: {script_user}")
 
     # --------------------------
@@ -596,11 +616,12 @@ def handle_create(args):
     profile = runtime_pki["pki"]["profile"]
 
     if profile == "self_signed":
-        marker_file = (BASE_DIR
-                        / "certs"
-                        / "offbox_rootCA.crt"
+        marker_file = (
+            BASE_DIR
+            / "certs"
+            / "offbox_rootCA.crt"
         )
-            
+
     elif profile == "hierarchical_ca":
         marker_file = (
             BASE_DIR
@@ -610,19 +631,24 @@ def handle_create(args):
             / "install_on_juniper"
             / "trusted-kme-ca-bundle.crt"
         )
-        
+
     else:
         raise ValueError(f"Unsupported PKI profile: {profile}")
-    
+
     if not marker_file.exists():
+
         if profile == "self_signed":
             build_self_signed_pki(devices)
+
         elif profile == "hierarchical_ca":
             build_hierarchical_pki(devices)
-            
+
         print("✅ PKI generated")
+
     else:
         print("✅ PKI already exists - skipping generation")
+
+
 
 # ----------------------------------------
 # DEPLOY HANDLER
