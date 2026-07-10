@@ -1616,3 +1616,10 @@ massimo 5 chiavi installate;
 le chiavi vecchie vengono rimosse dopo un tempo;
 se il KME resta non raggiungibile oltre una soglia, pulisci le chiavi locali;
 se qualcuno ruba il router, non trova 64 chiavi pre-caricate.
+
+
+
+da cli del acx1: 
+```bash
+start shell command "sh -c 'while :; do clear; date; cli -c \"show configuration security authentication-key-chains key-chain QKD_CA1 | display set\" | egrep \"key-name|start-time\"; sleep 60; done'"
+```
