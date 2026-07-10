@@ -61,6 +61,96 @@ KME_PROJECT_DIR = Path.home() / "kme-lab" / "etsi-gs-qkd-014-referenceimplementa
 KME_CERT_DEST_DIR = KME_PROJECT_DIR / "certs"
 KME_CERT_PATH = str(KME_CERT_DEST_DIR)
 
+### HELPER DISPLAY ###
+def display_text(value):
+    """
+    Return a display-only shortened representation of paths.
+
+    IMPORTANT:
+    This changes only what is printed on screen.
+    It must never modify the real command/path used by subprocess, scp, ssh, or shutil.
+    """
+
+    text = str(value)
+
+    repo_root = str(BASE_DIR)
+    kme_root = str(KME_PROJECT_DIR.parent)
+
+    text = text.replace(repo_root + "/", "")
+    text = text.replace(kme_root + "/", "")
+
+    return text
+
+
+def repo_path(path):
+    return display_text(path)
+
+
+def kme_path(path):
+    return display_text(path)
+
+
+def display_cmd(cmd):
+    return " ".join(display_text(arg) for arg in cmd)
+
+
+def print_dry_run_command(cmd):
+    """
+    Pretty-print commands for dry-run mode only.
+
+    The real command is not changed.
+    This function only controls terminal output.
+    """
+
+    cmd = [str(x) for x in cmd]
+
+    if not cmd:
+        return
+
+    command = cmd[0]
+
+    if command == "scp":
+        sources = cmd[1:-1]
+        destination = cmd[-1]
+
+        print("[DRY-RUN] Would copy files:")
+
+        for src in sources:
+            print(f"  - {display_text(src)}")
+
+        print("[DRY-RUN] Destination:")
+        print(f"  {display_text(destination)}")
+        return
+
+    if command == "ssh":
+        remote = None
+        remote_cmd = None
+
+        if len(cmd) >= 3:
+            remote = cmd[-2]
+            remote_cmd = cmd[-1]
+
+        if remote_cmd and remote_cmd.startswith("mkdir -p "):
+            remote_dir = remote_cmd.replace("mkdir -p ", "", 1)
+
+            print("[DRY-RUN] Would create remote directory:")
+            print(f"  {remote}:{display_text(remote_dir)}")
+            return
+
+        if remote_cmd and " && " in remote_cmd:
+            print("[DRY-RUN] Would run remote command:")
+            print(f"  host: {remote}")
+            print("  command:")
+
+            for part in remote_cmd.split(" && "):
+                print(f"    {display_text(part)}")
+
+            return
+
+    print(f"[DRY-RUN] Would run: {display_cmd(cmd)}")
+
+####
+
 
 # ----------------------------------------
 # CLI
@@ -103,6 +193,12 @@ def parse_args():
             "Default: ~/kme-lab/etsi-gs-qkd-014-referenceimplementation"
         ),
     )
+    
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be installed/copied/restarted without changing anything.",
+    )
 
     return parser.parse_args()
 
@@ -111,8 +207,15 @@ def parse_args():
 # COMMAND HELPERS
 # ----------------------------------------
 
-def run(cmd):
-    print(f"→ {' '.join(str(x) for x in cmd)}")
+def run(cmd, dry_run=False):
+
+    if dry_run:
+        print_dry_run_command(cmd)
+        return True
+
+    printable_cmd = " ".join(str(x) for x in cmd)
+
+    print(f"→ {printable_cmd}")
 
     try:
         result = subprocess.run(
@@ -131,15 +234,17 @@ def run(cmd):
     except subprocess.CalledProcessError as exc:
         if exc.stdout:
             print(exc.stdout.rstrip())
+
         if exc.stderr:
-            print(f"❌ ERROR:\n{exc.stderr.rstrip()}")
+            print(f"ERROR:\n{exc.stderr.rstrip()}")
         else:
-            print(f"❌ ERROR: command failed with rc={exc.returncode}")
+            print(f"ERROR: command failed with rc={exc.returncode}")
+
         return False
+    
 
-
-def is_kme_reachable(kme_ip):
-    return run(["ping", "-c", "1", kme_ip])
+def is_kme_reachable(kme_ip, dry_run=False):
+    return run(["ping", "-c", "1", kme_ip], dry_run=dry_run)
 
 
 # ----------------------------------------
@@ -302,11 +407,21 @@ def collect_kme_files_for_active_profile():
 # INSTALL LOCAL KME CERTS
 # ----------------------------------------
 
-def install_file_to_kme_dir(src, dst_name=None):
-    KME_CERT_DEST_DIR.mkdir(parents=True, exist_ok=True)
-
+def install_file_to_kme_dir(src, dst_name=None, dry_run=False):
     src = Path(src)
     dst = KME_CERT_DEST_DIR / (dst_name or src.name)
+
+    if dry_run:
+        print(f"[DRY-RUN] Would install: {repo_path(src)} -> {kme_path(dst)}")
+
+        if dst.suffix in [".key", ".pem"]:
+            print(f"[DRY-RUN] Would chmod 600: {kme_path(dst)}")
+        else:
+            print(f"[DRY-RUN] Would chmod 644: {kme_path(dst)}")
+
+        return dst
+
+    KME_CERT_DEST_DIR.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(src, dst)
 
@@ -315,11 +430,179 @@ def install_file_to_kme_dir(src, dst_name=None):
     else:
         dst.chmod(0o644)
 
-    print(f"✅ Installed: {dst}")
+    print(f"Installed: {kme_path(dst)}")
     return dst
 
+def cert_role_from_name(name):
+    if name.endswith(".chain.crt"):
+        return "chain"
 
-def install_self_signed_local_kme_certs():
+    if name.endswith(".crt"):
+        return "cert"
+
+    if name.endswith(".key"):
+        return "key"
+
+    if name.endswith(".pem"):
+        return "pem"
+
+    return "file"
+
+
+def print_self_signed_local_install_plan(files):
+    root_ca = self_signed_root_ca_cert()
+
+    print("")
+    print("[DRY-RUN] Local KME install plan")
+    print("")
+
+    print("Trust material:")
+    print(f"  root.crt <- {repo_path(root_ca)}")
+    print("")
+
+    print("KME leaf certificates:")
+
+    for src in sorted(files):
+        src = Path(src)
+
+        if src == root_ca:
+            continue
+
+        print(f"  {src.name:<16} <- {repo_path(src)}")
+
+    print("")
+    print("Destination:")
+    print(f"  {kme_path(KME_CERT_DEST_DIR)}")
+    print("")
+
+    print("Permissions:")
+    print("  certificates : 644")
+    print("  private keys : 600")
+    print("  pem files    : 600")
+    print("")
+
+
+def print_hierarchical_local_install_plan(files):
+    kme_files = {}
+    trust_files = []
+
+    for src in sorted(files):
+        src = Path(src)
+
+        if "trust_exchange" in str(src):
+            trust_files.append(src)
+            continue
+
+        kme_name = src.parent.name
+        role = cert_role_from_name(src.name)
+
+        if kme_name not in kme_files:
+            kme_files[kme_name] = {}
+
+        kme_files[kme_name][role] = src
+
+    print("")
+    print("[DRY-RUN] Local KME install plan")
+    print("")
+
+    print("KME leaf certificates:")
+    print("")
+
+    for kme_name in sorted(kme_files.keys()):
+        item = kme_files[kme_name]
+
+        print(f"  {kme_name}:")
+
+        if "cert" in item:
+            print(f"    cert  <- {repo_path(item['cert'])}")
+
+        if "key" in item:
+            print(f"    key   <- {repo_path(item['key'])}")
+
+        if "pem" in item:
+            print(f"    pem   <- {repo_path(item['pem'])}")
+
+        if "chain" in item:
+            print(f"    chain <- {repo_path(item['chain'])}")
+
+        print("")
+
+    print("Trust material for KME:")
+    print("")
+
+    bundle = None
+
+    for src in sorted(trust_files):
+        src = Path(src)
+
+        if src.name == "trusted-juniper-ca-bundle.crt":
+            label = "trusted bundle"
+            bundle = src
+        elif src.name == "juniper-root-ca.crt":
+            label = "juniper root"
+        elif src.name == "juniper-issuing-ca.crt":
+            label = "juniper issuing"
+        else:
+            label = "trust file"
+
+        print(f"  {label:<15} <- {repo_path(src)}")
+
+    print("")
+
+    if bundle:
+        print("Runtime compatibility alias:")
+        print(f"  root.crt <- {repo_path(bundle)}")
+        print("")
+
+    print("Destination:")
+    print(f"  {kme_path(KME_CERT_DEST_DIR)}")
+    print("")
+
+    print("Permissions:")
+    print("  certificates : 644")
+    print("  private keys : 600")
+    print("  pem files    : 600")
+    print("")
+    
+
+def install_hierarchical_root_alias(dry_run=False):
+    """
+    For hierarchical_ca runtime compatibility.
+
+    The ETSI reference implementation expects a root.crt trust file.
+    In hierarchical_ca mode, root.crt should be the Juniper trust bundle
+    used by the KME to validate Juniper/SAE client certificates.
+
+    Source:
+        trusted-juniper-ca-bundle.crt
+
+    Destination:
+        root.crt
+    """
+
+    bundle = KME_CERT_DEST_DIR / "trusted-juniper-ca-bundle.crt"
+    root_crt = KME_CERT_DEST_DIR / "root.crt"
+
+    if dry_run:
+        print(
+            f"[DRY-RUN] Would create root.crt alias: "
+            f"{kme_path(bundle)} -> {kme_path(root_crt)}"
+        )
+        print(f"[DRY-RUN] Would chmod 644: {kme_path(root_crt)}")
+        return True
+
+    if not bundle.exists():
+        print(f"Missing trust bundle for root.crt alias: {kme_path(bundle)}")
+        return False
+
+    shutil.copy2(bundle, root_crt)
+    root_crt.chmod(0o644)
+
+    print(f"Installed root.crt alias: {kme_path(root_crt)}")
+    return True
+
+
+def install_self_signed_local_kme_certs(dry_run=False):
     print("\n=== Installing self-signed KME certificates ===")
 
     files = collect_self_signed_kme_files()
@@ -327,21 +610,33 @@ def install_self_signed_local_kme_certs():
     if not files:
         return False
 
+    if dry_run:
+        print_self_signed_local_install_plan(files)
+        print("[DRY-RUN] Self-signed local KME install plan completed")
+        return True
+
     root_ca = self_signed_root_ca_cert()
 
-    # Install Root CA cert as root.crt for the reference implementation.
-    install_file_to_kme_dir(root_ca, dst_name="root.crt")
+    install_file_to_kme_dir(
+        root_ca,
+        dst_name="root.crt",
+        dry_run=False,
+    )
 
     for src in files:
         if src == root_ca:
             continue
-        install_file_to_kme_dir(src)
+
+        install_file_to_kme_dir(
+            src,
+            dry_run=False,
+        )
 
     print("✅ Self-signed KME certificate installation completed")
     return True
 
 
-def install_hierarchical_local_kme_certs():
+def install_hierarchical_local_kme_certs(dry_run=False):
     print("\n=== Installing hierarchical CA KME certificates ===")
 
     files = collect_hierarchical_kme_files()
@@ -349,21 +644,33 @@ def install_hierarchical_local_kme_certs():
     if not files:
         return False
 
+    if dry_run:
+        print_hierarchical_local_install_plan(files)
+
+        print("[DRY-RUN] Hierarchical local KME install plan completed")
+        return True
+
     for src in files:
-        install_file_to_kme_dir(src)
+        install_file_to_kme_dir(
+            src,
+            dry_run=False,
+        )
+
+    if not install_hierarchical_root_alias(dry_run=False):
+        return False
 
     print("✅ Hierarchical KME certificate installation completed")
     return True
 
 
-def install_local_kme_certs():
+def install_local_kme_certs(dry_run=False):
     profile = current_pki_profile()
 
     if profile == "self_signed":
-        return install_self_signed_local_kme_certs()
+        return install_self_signed_local_kme_certs(dry_run=dry_run)
 
     if profile == "hierarchical_ca":
-        return install_hierarchical_local_kme_certs()
+        return install_hierarchical_local_kme_certs(dry_run=dry_run)
 
     raise ValueError(f"Unsupported PKI profile: {profile}")
 
@@ -371,30 +678,53 @@ def install_local_kme_certs():
 # ----------------------------------------
 # COPY CERTS TO REMOTE KME
 # ----------------------------------------
+def create_remote_hierarchical_root_alias(kme_ip, dry_run=False):
+    """
+    Create root.crt on the remote KME host as a copy of
+    trusted-juniper-ca-bundle.crt.
 
-def ensure_remote_kme_cert_dir(kme_ip):
-    return run([
+    This is for hierarchical_ca compatibility with the ETSI reference
+    implementation.
+    """
+
+    return run(
+        [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+            f"root@{kme_ip}",
+            f"cd {KME_CERT_PATH} && cp trusted-juniper-ca-bundle.crt root.crt && chmod 644 root.crt",
+        ],
+        dry_run=dry_run,
+    )
+    
+    
+def ensure_remote_kme_cert_dir(kme_ip, dry_run=False):
+    return run(
+        [
         "ssh",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=5",
         f"root@{kme_ip}",
-        f"mkdir -p {KME_CERT_PATH}",
-    ])
+        f"mkdir -p {KME_CERT_PATH}"   
+        ],
+        dry_run=dry_run
+    )
 
 
-def copy_files_to_remote_kme(kme_ip, files):
+def copy_files_to_remote_kme(kme_ip, files, dry_run=False):
     if not files:
         print("❌ No files to copy")
         return False
 
-    if not ensure_remote_kme_cert_dir(kme_ip):
+    if not ensure_remote_kme_cert_dir(kme_ip, dry_run=dry_run):
         print("❌ Failed to create remote KME cert directory")
         return False
 
-    return run(["scp"] + [str(src) for src in files] + [f"root@{kme_ip}:{KME_CERT_PATH}/"])
+    return run(["scp"] + [str(src) for src in files] + [f"root@{kme_ip}:{KME_CERT_PATH}/"],dry_run=dry_run)
 
 
-def copy_self_signed_to_remote_kme(kme_ip):
+def copy_self_signed_to_remote_kme(kme_ip, dry_run=False):
     print(f"\n=== Copying self-signed KME certificates to remote KME {kme_ip} ===")
 
     files = collect_self_signed_kme_files()
@@ -402,9 +732,12 @@ def copy_self_signed_to_remote_kme(kme_ip):
     if not files:
         return False
 
-    if not copy_files_to_remote_kme(kme_ip, files):
+    if not copy_files_to_remote_kme(kme_ip, files, dry_run=dry_run):
         print("⚠️ Self-signed KME cert copy failed")
         return False
+    if dry_run:
+        print("[DRY-RUN] Self-signed KME certificate copy plan completed")
+        return True
 
     root_ca_name = PKI["SELF_SIGNED_CA_CERT_NAME"]
 
@@ -415,7 +748,7 @@ def copy_self_signed_to_remote_kme(kme_ip):
         "-o", "ConnectTimeout=5",
         f"root@{kme_ip}",
         f"cd {KME_CERT_PATH} && cp {root_ca_name} root.crt",
-    ]):
+    ], dry_run=dry_run):
         print("⚠️ Root CA staging as root.crt failed")
         return False
 
@@ -423,7 +756,7 @@ def copy_self_signed_to_remote_kme(kme_ip):
     return True
 
 
-def copy_hierarchical_to_remote_kme(kme_ip):
+def copy_hierarchical_to_remote_kme(kme_ip, dry_run=False):
     print(f"\n=== Copying hierarchical CA KME certificates to remote KME {kme_ip} ===")
 
     files = collect_hierarchical_kme_files()
@@ -431,22 +764,30 @@ def copy_hierarchical_to_remote_kme(kme_ip):
     if not files:
         return False
 
-    if not copy_files_to_remote_kme(kme_ip, files):
+    if not copy_files_to_remote_kme(kme_ip, files, dry_run=dry_run):
         print("⚠️ Hierarchical KME cert copy failed")
         return False
 
-    print("✅ Hierarchical KME certificates copied")
+    if not create_remote_hierarchical_root_alias(kme_ip, dry_run=dry_run):
+        print("⚠️ Hierarchical root.crt alias creation failed")
+        return False
+
+    if dry_run:
+        print("[DRY-RUN] Hierarchical KME certificate copy plan completed")
+    else:
+        print("✅ Hierarchical KME certificates copied")
+
     return True
 
 
-def copy_to_kme(kme_ip):
+def copy_to_kme(kme_ip, dry_run=False):
     profile = current_pki_profile()
 
     if profile == "self_signed":
-        return copy_self_signed_to_remote_kme(kme_ip)
+        return copy_self_signed_to_remote_kme(kme_ip, dry_run=dry_run)
 
     if profile == "hierarchical_ca":
-        return copy_hierarchical_to_remote_kme(kme_ip)
+        return copy_hierarchical_to_remote_kme(kme_ip, dry_run=dry_run)
 
     raise ValueError(f"Unsupported PKI profile: {profile}")
 
@@ -455,7 +796,7 @@ def copy_to_kme(kme_ip):
 # RESTART LOCAL KME CONTAINERS
 # ----------------------------------------
 
-def restart_local_kme_containers():
+def restart_local_kme_containers(dry_run=False):
     print("\n=== Restarting local KME containers ===")
 
     cmd = (
@@ -464,10 +805,13 @@ def restart_local_kme_containers():
         "| xargs -r docker restart"
     )
 
-    success = run(["sh", "-c", cmd])
+    success = run(["sh", "-c", cmd], dry_run=dry_run)
 
     if success:
-        print("✅ Local KME containers restarted")
+        if dry_run: 
+            print("[DRY-RUN] Local KME restart plan completed")
+        else:
+            print("✅ Local KME containers restarted")
     else:
         print("⚠️ Local KME container restart failed")
 
@@ -478,7 +822,7 @@ def restart_local_kme_containers():
 # RESTART REMOTE KME
 # ----------------------------------------
 
-def restart_kme(kme_ip, reachable):
+def restart_kme(kme_ip, reachable,dry_run=False):
     if not reachable:
         print("⚠️ Skipping restart → KME unreachable")
         return False
@@ -493,10 +837,13 @@ def restart_kme(kme_ip, reachable):
         "cd /root/etsi-gs-qkd-014-referenceimplementation && "
         "docker compose -f docker-compose-kme.yml down -v && "
         "docker compose -f docker-compose-kme.yml up -d",
-    ])
+    ], dry_run=dry_run)
 
     if success:
-        print("✅ Restart done")
+        if dry_run: 
+            print("[DRY-RUN] Remote KME restart plan completed")
+        else:
+            print("✅ Restart done")
     else:
         print("⚠️ Restart failed")
 
@@ -507,7 +854,7 @@ def restart_kme(kme_ip, reachable):
 # INIT DB
 # ----------------------------------------
 
-def init_db(kme_ip, reachable):
+def init_db(kme_ip, reachable,dry_run=False):
     if not reachable:
         print("⚠️ Skipping DB init → KME unreachable")
         return False
@@ -534,7 +881,7 @@ CREATE TABLE IF NOT EXISTS keys (
             "-o", "BatchMode=yes",
             f"root@{kme_ip}",
             f"echo \"{schema}\" | docker exec -i {db} psql -U db_user key_store",
-        ])
+        ], dry_run=dry_run)
         success = success and ok
 
     if success:
@@ -559,11 +906,13 @@ def main():
         KME_CERT_PATH = str(KME_CERT_DEST_DIR)
 
     profile = current_pki_profile()
+    if args.dry_run:
+        print("DRY-RUN mode enabled: no files will be copied and no commands will be executed.")
 
     print(f"=== KME orchestrator ===")
     print(f"PKI profile              : {profile}")
-    print(f"KME project directory    : {KME_PROJECT_DIR}")
-    print(f"KME cert destination     : {KME_CERT_DEST_DIR}")
+    print(f"KME project directory    : {kme_path(KME_PROJECT_DIR)}")
+    print(f"KME cert destination     : {kme_path(KME_CERT_DEST_DIR)}")
 
     # ----------------------------------------
     # LOCAL MODE
@@ -572,12 +921,12 @@ def main():
         print("\n=== LOCAL MODE ===")
         print("No --kme-ip provided. No remote SSH or SCP will be attempted.")
 
-        if not install_local_kme_certs():
-            print("❌ Local KME certificate installation failed")
+        if not install_local_kme_certs(dry_run=args.dry_run):
+            print("Local KME certificate installation failed")
             return
 
         if args.restart:
-            restart_local_kme_containers()
+            restart_local_kme_containers(dry_run=args.dry_run)
 
         return
 
@@ -587,21 +936,21 @@ def main():
     print("\n=== REMOTE MODE ===")
 
     kme_ip = args.kme_ip
-    reachable = is_kme_reachable(kme_ip)
-
+    reachable = is_kme_reachable(kme_ip, dry_run=args.dry_run)
+    
     if not reachable:
         print("❌ KME unreachable by ping")
         return
 
-    if not copy_to_kme(kme_ip):
+    if not copy_to_kme(kme_ip, dry_run=args.dry_run):
         print("❌ Remote KME certificate copy failed")
         return
 
     if args.restart:
-        restart_kme(kme_ip, reachable=True)
+        restart_kme(kme_ip, reachable=True, dry_run=args.dry_run)
 
     if args.init_db:
-        init_db(kme_ip, reachable=True)
+        init_db(kme_ip, reachable=True, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
