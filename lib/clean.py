@@ -146,7 +146,7 @@ def clean_device(name, device, full_macsec=False):
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
     remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
-    
+
     print(f"Cleaning device {name} {ip}")
 
     iface_candidates, ca_candidates, keychain_candidates = (
@@ -190,46 +190,68 @@ def clean_device(name, device, full_macsec=False):
 
     config_body = "; ".join(config_cmds)
 
-    cleanup_cmds = [
-        #
-        # Junos configuration cleanup.
-        #
-        f"cli -c 'configure; {config_body}; commit; exit'",
+    config_cleanup_cmd = (
+        f"cli -c 'configure; {config_body}; commit; exit'"
+    )
 
-        #
-        # Remove deployed scripts.
-        #
-        f"rm -f {event_script_dir}/{script_name}",
-        f"rm -f {op_script_dir}/{script_name}",
-        f"rm -f /var/tmp/{script_name}",
-        "rm -f /var/db/scripts/event/qkd.conf",
+    file_cleanup_cmd = "; ".join(
+        [
+            #
+            # Remove deployed scripts.
+            #
+            f"rm -f {event_script_dir}/{script_name}",
+            f"rm -f {op_script_dir}/{script_name}",
+            f"rm -f /var/tmp/{script_name}",
+            "rm -f /var/db/scripts/event/qkd.conf",
 
-        #
-        # Remove runtime files.
-        #
-        "rm -f /var/tmp/qkd_db_* >/dev/null 2>&1",
-        "rm -f /var/tmp/qkd_debug* >/dev/null 2>&1",
-        "rm -rf /var/tmp/qkd_onbox_* >/dev/null 2>&1",
+            #
+            # Remove runtime files.
+            #
+            # IMPORTANT:
+            # Do not use >/dev/null 2>&1 here.
+            # Junos request_shell_execute may run through csh/tcsh
+            # and can throw 'Ambiguous output redirect'.
+            #
+            "rm -f /var/tmp/qkd_db_*",
+            "rm -f /var/tmp/qkd_debug*",
+            "rm -rf /var/tmp/qkd_onbox_*",
 
-        #
-        # Remove certs.
-        #
-        f"rm -rf {remote_cert_dir}",
-        f"rm -rf {op_script_dir}/certs",
-        f"rm -rf {event_script_dir}/certs",
+            #
+            # Remove certs.
+            #
+            f"rm -rf {remote_cert_dir}",
+            f"rm -rf {script_dir}/certs",
+            f"rm -rf {op_script_dir}/certs",
+            f"rm -rf {event_script_dir}/certs",
+        ]
+    )
 
-        #
-        # Verify.
-        #
-        "echo '=== QKD CLEAN VERIFY START ==='",
-        "echo '[var/tmp]'; ls -1 /var/tmp/qkd* 2>/dev/null || true",
-        "echo '[scripts/op]'; ls -1 /var/db/scripts/op/qkd_onbox.py 2>/dev/null || true",
-        "echo '[scripts/event]'; ls -1 /var/db/scripts/event/qkd_onbox.py 2>/dev/null || true",
-        "echo '[certs]'; ls -ld /var/db/scripts/certs /var/db/scripts/op/certs /var/db/scripts/event/certs 2>/dev/null || true",
-        "echo '=== QKD CLEAN VERIFY END ==='"
-    ]
+    verify_cmd = "; ".join(
+        [
+            "echo '=== QKD CLEAN VERIFY START ==='",
 
-    shell_cmd = "; ".join(cleanup_cmds)
+            #"echo '[config qkd/macsec/auth-key-chain]'",
+            #"cli -c \"show configuration | display set | match 'qkd|QKD|macsec|authentication-key-chains'\"",
+            "echo '[config display set]'",
+            "cli -c \"show configuration | display set\"",
+            
+            "echo '[scripts]'",
+            f"ls -l {op_script_dir}/{script_name}",
+            f"ls -l {event_script_dir}/{script_name}",
+            f"ls -l /var/tmp/{script_name}",
+
+            "echo '[certs]'",
+            f"ls -ld {remote_cert_dir}",
+            f"ls -ld {script_dir}/certs",
+            f"ls -ld {op_script_dir}/certs",
+            f"ls -ld {event_script_dir}/certs",
+
+            "echo '[runtime tmp]'",
+            "ls -l /var/tmp/qkd*",
+
+            "echo '=== QKD CLEAN VERIFY END ==='",
+        ]
+    )
 
     dev = Device(
         host=ip,
@@ -238,20 +260,70 @@ def clean_device(name, device, full_macsec=False):
         port=22
     )
 
+    def rpc_text(rsp):
+        try:
+            return etree.tostring(
+                rsp,
+                encoding="unicode",
+                method="text"
+            ).strip()
+        except Exception:
+            return str(rsp).strip()
+
+    def run_step(label, command):
+        print(f"[{name}] running {label}")
+
+        rsp = dev.rpc.request_shell_execute(
+            command=command
+        )
+
+        output = rpc_text(rsp)
+
+        if output:
+            print(output)
+
+        bad_markers = [
+            "Ambiguous output redirect",
+            "syntax error",
+            "commit failed",
+            "unknown command",
+            "error:",
+        ]
+
+        low = output.lower()
+
+        if any(marker.lower() in low for marker in bad_markers):
+            raise RuntimeError(
+                f"{label} failed on {name}\n"
+                f"command={command}\n"
+                f"output={output}"
+            )
+
+        return output
+
     try:
 
         dev.open()
 
-        rsp = dev.rpc.request_shell_execute(
-            command=shell_cmd
+        run_step(
+            "config cleanup",
+            config_cleanup_cmd
         )
-        
-        try:
-            output = etree.tostring(rsp, encoding="unicode", method="text")
-            if output.strip():
-                print(output.strip())
-        except Exception:
-            pass
+
+        run_step(
+            "file/cert/runtime cleanup",
+            file_cleanup_cmd
+        )
+
+        #
+        # Verify step is informational.
+        # It may show 'No such file' for removed files, which is fine.
+        # But run_step still catches real shell/parser errors.
+        #
+        run_step(
+            "verify cleanup",
+            verify_cmd
+        )
 
         print(f"Device clean complete: {name}")
 
@@ -267,6 +339,7 @@ def clean_device(name, device, full_macsec=False):
             dev.close()
         except Exception:
             pass
+    
 
 # ----------------------------------------
 # CLEAN HANDLER

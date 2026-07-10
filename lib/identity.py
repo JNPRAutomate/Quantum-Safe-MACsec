@@ -3,10 +3,11 @@
 from lib.settings import QKD, PKI
 from lib.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
+import json
 
 import subprocess
 import shlex
-
+import re
 
 # -------------------------------------------------
 # Basic helpers
@@ -46,6 +47,12 @@ def qkd_remote_op_script():
         f"{QKD.get('OP_SCRIPT_DIR', '/var/db/scripts/op')}/{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}",
     )
 
+def qkd_remote_event_script():
+    return (
+        f"{QKD.get('EVENT_SCRIPT_DIR', '/var/db/scripts/event')}/"
+        f"{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}"
+    )
+  
 
 def qkd_remote_tmp_dir():
     return QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -179,6 +186,14 @@ class CommandResult:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+def validate_verbose():
+    return bool(QKD.get("VALIDATE_VERBOSE", False))
+
+
+def print_if_verbose(text):
+    if validate_verbose() and text:
+        print(text)
 
 
 def rpc_output_to_text(rsp):
@@ -417,7 +432,9 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30):
         f"{script_user}@127.0.0.1 "
         f"{shlex.quote(remote_payload)}"
     )
-    print("REMOTE_CMD=", remote_cmd)
+    if validate_verbose():
+        print("REMOTE_CMD=", remote_cmd)
+    
     return ssh_deploy_cmd(
         device=device,
         command=remote_cmd,
@@ -645,7 +662,57 @@ def check_runtime_cleanup_simple(device):
             f"stderr={result.stderr}"
         )
 
+def check_remote_certs(device):
+    device = normalize_device(device)
+    name = device_name(device)
 
+    sae = (
+        (device.get("qkd") or {}).get("sae_id")
+        or device.get("local_sae")
+        or device.get("sae")
+        or device.get("sae_id")
+    )
+
+    if not sae:
+        raise RuntimeError(
+            f"cannot validate remote certs on {name}: missing SAE ID"
+        )
+
+    remote_cert_dir = qkd_remote_cert_dir()
+
+    expected = [
+        f"{remote_cert_dir}/{sae}.crt",
+        f"{remote_cert_dir}/{sae}.key",
+        f"{remote_cert_dir}/offbox_rootCA.crt",
+    ]
+
+    cmd = "; ".join(
+        [
+            f"test -s {path} && echo OK:{path} || echo MISSING:{path}"
+            for path in expected
+        ]
+    )
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
+    missing = [
+        line for line in (result.stdout or "").splitlines()
+        if line.startswith("MISSING:")
+    ]
+
+    if missing:
+        raise RuntimeError(
+            f"remote cert validation failed on {name}\n"
+            + "\n".join(missing)
+        )
+
+    print(f"[OK] remote certs on {name}: {sae}.crt {sae}.key offbox_rootCA.crt")
+    
+    
 # -------------------------------------------------
 # Non-legacy / ACX stronger checks
 # -------------------------------------------------
@@ -943,7 +1010,8 @@ def check_event_script_path(device):
             f"stderr={result.stderr}"
         )
 
-    print(result.stdout)
+    print(f"[OK] event script exists on {name}: {path}")
+    print_if_verbose(result.stdout)
 
 
 def check_event_script_permissions(device):
@@ -961,19 +1029,13 @@ def check_event_script_permissions(device):
     if result.returncode != 0:
         raise RuntimeError(
             f"event qkd_onbox.py permission check failed on {name}\n"
+            f"path={path}\n"
             f"stdout={result.stdout}\n"
             f"stderr={result.stderr}"
         )
-
-    print(result.stdout)
-    
-    
-def qkd_remote_event_script():
-    return (
-        f"{QKD.get('EVENT_SCRIPT_DIR', '/var/db/scripts/event')}/"
-        f"{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}"
-    )
-    
+    print(f"[OK] event script permissions set: {path}")
+    print_if_verbose(result.stdout)
+      
     
 def check_op_script_path(device):
     device = normalize_device(device)
@@ -994,7 +1056,8 @@ def check_op_script_path(device):
             f"stderr={result.stderr}"
         )
 
-    print(result.stdout)
+    print(f"[OK] op script exists on {name}: {path}")
+    print_if_verbose(result.stdout)
 
 
 def check_op_script_permissions(device):
@@ -1005,19 +1068,19 @@ def check_op_script_permissions(device):
 
     result = ssh_deploy_cmd(
         device,
-        f"chmod 755 {path}; ls -l {path}",
+        f"chmod 755 {path}",
         timeout=30,
     )
 
     if result.returncode != 0:
         raise RuntimeError(
             f"qkd_onbox.py permission check failed on {name}\n"
+            f"path={path}\n"
             f"stdout={result.stdout}\n"
             f"stderr={result.stderr}"
         )
 
-    print(result.stdout)
-
+    print(f"[OK] op script permissions set: {path}")
 
 def check_system_scripts_python3(device):
     device = normalize_device(device)
@@ -1038,7 +1101,8 @@ def check_system_scripts_python3(device):
             f"stderr={result.stderr}"
         )
 
-    print(result.stdout)
+    print(f"[OK] system scripts python3 configured on {name}")
+    print_if_verbose(result.stdout)
 
 
 def check_event_options_script_user(device):
@@ -1064,7 +1128,9 @@ def check_event_options_script_user(device):
             f"stderr={result.stderr}"
         )
 
-    print(result.stdout)
+    print(f"[OK] event script user configured on {name}: {script_user}")
+    print_if_verbose(result.stdout)
+
 
 
 def grep_remote_literal(device, literal, path, timeout=20):
@@ -1111,7 +1177,12 @@ def check_onbox_embedded_config(device):
             f"stderr={result.stderr}"
         )
 
-    print(result.stdout)
+    print(
+        f"[OK] embedded CONFIG identity on {name}: "
+        f"script_user={script_user} ssh_key={expected_key}"
+    )
+    print_if_verbose(result.stdout)
+
 
 def check_onbox_runtime_policy_config(device):
     """
@@ -1190,9 +1261,16 @@ def check_onbox_runtime_policy_config(device):
                 )
             )
         else:
-            print(f"[OK] embedded CONFIG marker found on {name}: {label}")
-            print(result.stdout)
+            print(f"[OK] embedded runtime marker on {name}: {label}")
+            print_if_verbose(result.stdout)
 
+    print(
+        f"[OK] embedded runtime CONFIG on {name}: "
+        f"pki_profile={pki_profile} "
+        f"max_installed_keys={max_installed_keys} "
+        f"trust_bundle={'present' if trust_bundle else 'missing'}"
+    )
+    
     if failed:
         lines = []
 
@@ -1207,6 +1285,138 @@ def check_onbox_runtime_policy_config(device):
         raise RuntimeError(
             f"deployed qkd_onbox.py runtime CONFIG validation failed on {name}\n"
             f"path={path}\n"
+            + "\n".join(lines)
+        )
+
+
+def expected_max_installed_keys():
+    runtime_policy = load_runtime_qkd_policy()
+    qkd_policy = runtime_policy.get("qkd_policy", {})
+
+    value = int(qkd_policy.get("max_installed_keys", 5))
+
+    if value < 1:
+        return 1
+
+    return value
+
+
+def keychain_names_from_device(device):
+    device = normalize_device(device)
+
+    names = []
+
+    for link in device.get("links", []):
+        ca_names = []
+
+        ca_name = link.get("ca_name")
+
+        if ca_name:
+            ca_names.append(ca_name)
+
+        for ca in link.get("ca_names", []) or []:
+            if ca and ca not in ca_names:
+                ca_names.append(ca)
+
+        for ca in ca_names:
+            keychain = (
+                link.get("keychain_name")
+                or f"QKD_{ca}"
+            )
+
+            if keychain not in names:
+                names.append(keychain)
+
+    return names
+
+
+def check_keychain_slot_limit(device):
+    """
+    Validate that Junos authentication-key-chain config does not contain
+    stale legacy key slots beyond qkd_policy.max_installed_keys.
+    """
+
+    device = normalize_device(device)
+    name = device_name(device)
+
+    max_keys = expected_max_installed_keys()
+    allowed_max_index = max_keys - 1
+
+    keychains = keychain_names_from_device(device)
+
+    if not keychains:
+        print(f"[WARN] no QKD keychains found in runtime links for {name}")
+        return
+
+    cmd = (
+        'cli -c "show configuration security authentication-key-chains | display set"'
+    )
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"failed to read authentication-key-chains on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    output = result.stdout or ""
+
+    violations = []
+
+    for keychain in keychains:
+        pattern = re.compile(
+            r"set security authentication-key-chains key-chain "
+            + re.escape(keychain)
+            + r" key (\d+)\b"
+        )
+
+        indexes = sorted(
+            {
+                int(match.group(1))
+                for match in pattern.finditer(output)
+            }
+        )
+
+        overflow = [
+            idx for idx in indexes
+            if idx > allowed_max_index
+        ]
+
+        if overflow:
+            violations.append(
+                {
+                    "keychain": keychain,
+                    "configured_indexes": indexes,
+                    "overflow_indexes": overflow,
+                }
+            )
+        else:
+            print(
+                f"[OK] keychain slot limit on {name}: "
+                f"{keychain} indexes={indexes} max_allowed={allowed_max_index}"
+            )
+
+    if violations:
+        lines = []
+
+        for item in violations:
+            lines.append(
+                f"- keychain={item['keychain']} "
+                f"configured_indexes={item['configured_indexes']} "
+                f"overflow_indexes={item['overflow_indexes']}"
+            )
+
+        raise RuntimeError(
+            f"QKD keychain slot limit validation failed on {name}\n"
+            f"max_installed_keys={max_keys}\n"
+            f"allowed_indexes=0..{allowed_max_index}\n"
+            f"stale key slots found:\n"
             + "\n".join(lines)
         )
 
@@ -1239,8 +1449,42 @@ def check_qkd_status_as_script_user(device):
                 f"stderr={result.stderr}"
             )
 
-        print(f"[OK] qkd status {name} iface={iface}")
-        print(result.stdout)
+        raw = (result.stdout or "").strip()
+
+        try:
+            status = json.loads(raw)
+
+            ca_name = status.get("ca_name")
+            keychain_name = status.get("keychain_name")
+            generation = status.get("generation")
+            installed_keys = status.get("installed_keys", []) or []
+            health = status.get("health", {}) or {}
+
+            degraded = bool(health.get("degraded"))
+            declared_down = bool(health.get("declared_down"))
+            kme_fail_count = health.get("kme_fail_count", 0)
+            last_kme_error = health.get("last_kme_error")
+
+            health_state = "OK"
+
+            if degraded or declared_down or last_kme_error:
+                health_state = "DEGRADED"
+
+            print(
+                f"[OK] qkd status {name} iface={iface}: "
+                f"ca={ca_name} "
+                f"keychain={keychain_name} "
+                f"generation={generation} "
+                f"installed_keys={len(installed_keys)} "
+                f"kme_fail_count={kme_fail_count} "
+                f"health={health_state}"
+            )
+
+            print_if_verbose(raw)
+
+        except Exception:
+            print(f"[OK] qkd status {name} iface={iface}")
+            print_if_verbose(raw)
 
 
 def check_no_state_save_errors(device):
@@ -1347,6 +1591,7 @@ def validate_device_identity_postdeploy(device):
     check_event_options_script_user(device)
     check_onbox_embedded_config(device)
     check_onbox_runtime_policy_config(device)
+    check_keychain_slot_limit(device)
     check_peer_ssh_from_device(device)
     check_qkd_status_as_script_user(device)
     check_no_state_save_errors(device)

@@ -50,7 +50,7 @@ def configure_qkd_scripts(dev, name, base):
         or secrets.get("default_user")
         or "admin"
     )
-
+    rollback_candidate(dev, name)
     print(f"[{name}] Rendering event/op templates")
     print(f"[{name}] Using script_user={script_user}")
 
@@ -154,88 +154,248 @@ def build_macsec_static(device, platform_cfg):
 
     return cmds
 
-def push_certs(dev, name, device):
 
-    remote_dir = PKI["REMOTE_CERT_DIR"]
-    sae_id = device["qkd"]["sae_id"]
+def device_sae_id(device):
+    """
+    Resolve the local SAE identity for a device.
+
+    Supports both inventory/runtime styles:
+      device["qkd"]["sae_id"]
+      device["local_sae"]
+      device["sae"]
+      device["sae_id"]
+    """
+
+    qkd = device.get("qkd", {}) or {}
+
+    for value in (
+        qkd.get("sae_id"),
+        device.get("local_sae"),
+        device.get("sae"),
+        device.get("sae_id"),
+    ):
+        if value:
+            return value
+
+    raise RuntimeError(
+        f"Cannot resolve SAE ID for device {device.get('name', '<unknown>')}"
+    )
+
+
+def resolve_cert_paths_for_device(name, device):
+    """
+    Resolve local cert/key/CA files according to runtime PKI profile.
+
+    self_signed layout:
+      certs/self_signed/<sae>/<sae>.crt
+      certs/self_signed/<sae>/<sae>.key
+      certs/self_signed/offbox_rootCA.crt
+    """
+
+    sae_id = device_sae_id(device)
 
     runtime_pki = load_runtime_pki_profile()
-    profile = runtime_pki["pki"]["profile"]
+    pki = runtime_pki.get("pki", {})
+    profile = pki.get("profile", "self_signed")
+
     if profile == "self_signed":
-        local_ca = CERTS_DIR / "offbox_rootCA.crt"
-        local_dev_dir = CERTS_DIR / sae_id
-    elif profile == "hierarchical_ca":
-        local_ca = (
-            CERTS_DIR
-            / "dual_pki"
-            / "trust_exchange"
-            / "install_on_juniper"
-            / "trusted-kme-ca-bundle.crt"
+        profile_dir = CERTS_DIR / "self_signed"
+        local_dev_dir = profile_dir / sae_id
+
+        local_cert = local_dev_dir / f"{sae_id}.crt"
+        local_key = local_dev_dir / f"{sae_id}.key"
+        local_ca = profile_dir / "offbox_rootCA.crt"
+
+        return {
+            "profile": profile,
+            "sae_id": sae_id,
+            "cert": local_cert,
+            "key": local_key,
+            "ca": local_ca,
+        }
+
+    if profile == "hierarchical_ca":
+        profile_dir = CERTS_DIR / "hierarchical_ca"
+
+        candidate_device_dirs = [
+            profile_dir / "juniper" / sae_id,
+            profile_dir / "juniper_pki" / "certs" / sae_id,
+            profile_dir / "devices" / sae_id,
+            profile_dir / sae_id,
+        ]
+
+        local_dev_dir = None
+
+        for candidate in candidate_device_dirs:
+            if candidate.exists():
+                local_dev_dir = candidate
+                break
+
+        if local_dev_dir is None:
+            local_dev_dir = candidate_device_dirs[0]
+
+        local_cert = local_dev_dir / f"{sae_id}.crt"
+        local_key = local_dev_dir / f"{sae_id}.key"
+
+        juniper_pki = pki.get("juniper", {}) or {}
+
+        trust_bundle = (
+            juniper_pki.get("trust_bundle")
+            or pki.get("trust_bundle")
         )
-        local_dev_dir = (
-            CERTS_DIR
-            / "dual_pki"
-            / "juniper_pki"
-            / "certs"
-            / sae_id
+
+        if trust_bundle:
+            local_ca = Path(trust_bundle)
+
+            if not local_ca.is_absolute():
+                local_ca = BASE_DIR / local_ca
+        else:
+            local_ca = (
+                profile_dir
+                / "trust_exchange"
+                / "install_on_juniper"
+                / "trusted-kme-ca-bundle.crt"
+            )
+
+        return {
+            "profile": profile,
+            "sae_id": sae_id,
+            "cert": local_cert,
+            "key": local_key,
+            "ca": local_ca,
+        }
+
+    raise RuntimeError(
+        f"[{name}] Unsupported PKI profile for cert deployment: {profile}"
+    )
+
+
+def push_certs(dev, name, device):
+    """
+    Copy device cert/key and CA/trust bundle to the remote Junos cert dir.
+
+    Remote expected by qkd_onbox.py:
+      /var/db/scripts/certs/<sae>.crt
+      /var/db/scripts/certs/<sae>.key
+      /var/db/scripts/certs/<ca_bundle_name>
+    """
+
+    remote_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
+
+    files = resolve_cert_paths_for_device(name, device)
+
+    profile = files["profile"]
+    sae_id = files["sae_id"]
+    local_cert = files["cert"]
+    local_key = files["key"]
+    local_ca = files["ca"]
+
+    missing = [
+        str(path)
+        for path in (local_cert, local_key, local_ca)
+        if not path.exists()
+    ]
+
+    if missing:
+        raise RuntimeError(
+            f"[{name}] Missing local cert files for sae={sae_id} profile={profile}\n"
+            + "\n".join(missing)
         )
-    else:
-        raise ValueError(f"Unsupported PKI profile: {profile}")
-    
-    dbg(f"{name} → SAE ID → {sae_id}")
-    dbg(f"{name} → cert dir → {local_dev_dir}")
 
-    if not local_dev_dir.exists():
-        print(f"[WARN] No certs for {name} (expected {sae_id})")
-        return
+    print(
+        f"[{name}] Copying certs profile={profile} sae={sae_id} "
+        f"to {remote_dir}"
+    )
 
-    #dbg_block(f"{name} LOCAL FILES", "\n".join(str(f) for f in local_dev_dir.glob("*")))
-    uploaded = False  # ✅ TRACK REAL WORK
-
-    print(f"[{name}] Syncing certs via PyEZ SCP")
-
-    
-    with SCP(dev, progress=progress) as scp:
-
-        # ----------------------------
-        # DEVICE CERTS
-        # ----------------------------
-        for f in local_dev_dir.glob("*"):
-            remote_file = f"{remote_dir}/{f.name}"
-            
-            try:
-                dev.rpc.file_show(filename=remote_file)
-                dbg(f"{name}: skipping {f.name} (already exists)")
-                continue
-            except:
-                pass
-            dbg(f"{name}: uploading {f.name} ({f.stat().st_size} bytes)")
-            scp.put(str(f), remote_path=remote_dir)
-            uploaded = True
-
-        if local_ca.exists():
-            
-            remote_file = f"{remote_dir}/{local_ca.name}"
-            try:
-                dev.rpc.file_show(filename=remote_file)
-                dbg(f"{name}: skipping CA (already exists)")
-            except:
-                dbg(f"{name}: uploading rootCA.crt")
-                scp.put(str(local_ca), remote_path=remote_dir)
-                uploaded = True
-                
-                
-    
-    # ✅ VERIFY REMOTE FILES
     try:
-        resp = dev.rpc.cli("file list /var/db/scripts/certs", format="text")
-        dbg_block(f"{name} REMOTE FILES", resp.text)
-    except Exception as e:
-        dbg(f"{name}: verification failed: {e}")
-    if uploaded:
-        print(f"[{name}] Certs uploaded ✅")
-    else: 
-        print(f"[{name}] Certs already present ✅")
+        dev.rpc.request_shell_execute(
+            command=(
+                f"mkdir -p {remote_dir}; "
+                f"chmod 755 {remote_dir}; "
+                f"ls -ld {remote_dir}"
+            )
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"[{name}] Failed to prepare remote cert dir {remote_dir}: {exc}"
+        )
+
+    with SCP(dev, progress=progress) as scp:
+        for local_file in (local_cert, local_key, local_ca):
+            remote_file = f"{remote_dir}/{local_file.name}"
+
+            print(f"[{name}] SCP {local_file} -> {remote_file}")
+
+            scp.put(
+                str(local_file),
+                remote_path=remote_file
+            )
+
+    verify_cmd = (
+        f"chmod 644 {remote_dir}/{local_cert.name}; "
+        f"chmod 600 {remote_dir}/{local_key.name}; "
+        f"chmod 644 {remote_dir}/{local_ca.name}; "
+        f"test -s {remote_dir}/{local_cert.name} && echo OK:{remote_dir}/{local_cert.name}; "
+        f"test -s {remote_dir}/{local_key.name} && echo OK:{remote_dir}/{local_key.name}; "
+        f"test -s {remote_dir}/{local_ca.name} && echo OK:{remote_dir}/{local_ca.name}; "
+        f"ls -l {remote_dir}"
+    )
+
+    rsp = dev.rpc.request_shell_execute(
+        command=verify_cmd
+    )
+
+    try:
+        output = "".join(rsp.itertext()).strip()
+    except Exception:
+        output = str(rsp).strip()
+
+    if output:
+        dbg_block(f"{name} REMOTE CERTS", output)
+
+    required_markers = [
+        f"OK:{remote_dir}/{local_cert.name}",
+        f"OK:{remote_dir}/{local_key.name}",
+        f"OK:{remote_dir}/{local_ca.name}",
+    ]
+
+    missing_remote = [
+        marker
+        for marker in required_markers
+        if marker not in output
+    ]
+
+    if missing_remote:
+        raise RuntimeError(
+            f"[{name}] Remote cert verification failed\n"
+            f"expected markers={missing_remote}\n"
+            f"output={output}"
+        )
+
+    print(
+        f"[{name}] Certs copied ✅ "
+        f"{local_cert.name}, {local_key.name}, {local_ca.name}"
+    )
+
+
+# --------------------------
+# rollback candidate
+# --------------------------
+def rollback_candidate(dev, name):
+    """
+    Discard any stale candidate configuration before loading new config.
+
+    This is required because a previous failed commit can leave candidate
+    statements behind, and later commits may fail on unrelated sections.
+    """
+
+    cu = Config(dev)
+
+    try:
+        cu.rollback(rb_id=0)
+        print(f"[{name}] Candidate rollback 0 complete")
+    except Exception as exc:
+        print(f"[{name}] Candidate rollback 0 warning: {exc}")
 
 # ----------------------------------------
 # PUSH CONFIG
@@ -263,7 +423,7 @@ def push_config(device_name, device, commands, base):
         
         # ✅ CONFIGURE EVENT + OP SCRIPT HERE
         configure_qkd_scripts(dev, device_name, base)
-        
+        rollback_candidate(dev, device_name)
         with Config(dev) as cu:
 
             for cmd in commands:
@@ -349,3 +509,5 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
         # push_certs_ssh(name,device, ssh_key)
         # ✅ then push config
         push_config(name, device, commands,base)
+        
+        

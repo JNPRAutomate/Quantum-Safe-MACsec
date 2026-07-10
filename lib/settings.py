@@ -124,4 +124,5 @@ QKD = {
     # Important: action=status is NOT read-only anymore because it can
     # promote pending keys and save state.
     "REFUSE_WRONG_RUNTIME_USER": True,
+    "VALIDATE_VERBOSE": False
 }

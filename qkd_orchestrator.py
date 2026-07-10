@@ -340,6 +340,13 @@ def parse_args():
             "Default: predeploy."
         ),
     )
+    validate.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase validation output verbosity. Use -v to show raw command output.",
+    )
 
     return parser.parse_args()
 # ----------------------------------------
@@ -1028,7 +1035,8 @@ def handle_deploy(args):
 
 def handle_validate(args):
     devices = load_runtime_devices()
-
+    QKD["VALIDATE_VERBOSE"] = bool(args.verbose)
+    
     print("=== QKD validation ===")
     print(f"phase = {args.phase}")
     print("")

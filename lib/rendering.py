@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import hashlib
 from jinja2 import Environment, FileSystemLoader
 
 from lib.settings import CONFIG, QKD
@@ -40,6 +40,17 @@ def build_device_config(device_name, device, platform, base, topology):
     commands = []
     seen = set()
 
+    def bootstrap_key_name(keychain_name, key_index):
+        seed = f"{keychain_name}:bootstrap:key-name:{key_index}"
+        return hashlib.sha256(seed.encode()).hexdigest()
+
+    def bootstrap_secret(keychain_name, key_index):
+        seed = f"{keychain_name}:bootstrap:secret:{key_index}"
+        return hashlib.sha256(seed.encode()).hexdigest()
+
+    def bootstrap_start_time(key_index):
+        return f"2026-01-01.00:{key_index:02d}"
+    
     def add(cmd):
         if not cmd:
             return
@@ -121,33 +132,59 @@ def build_device_config(device_name, device, platform, base, topology):
     else:
         for link in links:
             iface = link.get("interface")
-    
+
             if not iface:
                 continue
-            
+
             for ca_name in ca_names_from_link(link):
+                
                 keychain_name = keychain_name_for_link(link, ca_name)
-    
+
+                add(
+                    f"set security authentication-key-chains "
+                    f"key-chain {keychain_name}"
+                )
+
+                for key_index in range(2):
+                    add(
+                        f"set security authentication-key-chains "
+                        f"key-chain {keychain_name} key {key_index} "
+                        f"key-name {bootstrap_key_name(keychain_name, key_index)}"
+                    )
+
+                    add(
+                        f"set security authentication-key-chains "
+                        f"key-chain {keychain_name} key {key_index} "
+                        f"secret \"{bootstrap_secret(keychain_name, key_index)}\""
+                    )
+
+                    add(
+                        f"set security authentication-key-chains "
+                        f"key-chain {keychain_name} key {key_index} "
+                        f"start-time {bootstrap_start_time(key_index)}"
+                    )
+                
+                
                 add(
                     f"set security macsec connectivity-association {ca_name} "
                     f"cipher-suite gcm-aes-xpn-256"
                 )
-    
+
                 add(
                     f"set security macsec connectivity-association {ca_name} "
                     f"security-mode static-cak"
                 )
-    
+
                 add(
                     f"set security macsec connectivity-association {ca_name} "
                     f"replay-protect"
                 )
-    
+
                 add(
                     f"set security macsec interfaces {iface} "
                     f"connectivity-association {ca_name}"
                 )
-    
+
                 add(
                     f"set security macsec connectivity-association {ca_name} "
                     f"pre-shared-key-chain {keychain_name}"

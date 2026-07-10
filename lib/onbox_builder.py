@@ -1,5 +1,5 @@
 from pathlib import Path
-import json
+from pprint import pformat
 
 from lib.settings import CONFIG, QKD
 from lib.config import load_runtime_pki_profile, load_runtime_qkd_policy
@@ -145,7 +145,12 @@ def generate_onbox_script(name, device, out_dir):
     with open(src) as f:
         content = f.read()
 
-    config_json = json.dumps(config, indent=4)
+    config_literal = pformat(
+        config,
+        indent=4,
+        width=120,
+        sort_dicts=False,
+    )
 
     if "__CONFIG_PLACEHOLDER__" not in content:
         raise RuntimeError(
@@ -154,7 +159,7 @@ def generate_onbox_script(name, device, out_dir):
 
     content = content.replace(
         "__CONFIG_PLACEHOLDER__",
-        f"CONFIG = {config_json}"
+        f"CONFIG = {config_literal}"
     )
 
     with open(dst, "w") as f:
