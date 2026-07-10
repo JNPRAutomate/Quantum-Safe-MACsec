@@ -1486,3 +1486,82 @@ find . -type d -name "__pycache__" -exec rm -rf {} +
 find . -type f -name "*.pyc" -delete
 ```
 
+Ho tre dimensioni diverse: 
+1. PKI profile:
+   - self_signed
+   - hierarchical_ca
+
+2. PKI owner / generator:
+   - qkd_orchestrator
+   - kme_orchestrator
+
+3. Action:
+   - generate
+   - install/copy
+   - export trust
+
+## Caso 1 — self_signed, generata da qkd_orchestrator
+In questo caso il kme_orchestrator deve essere solo installer.
+qkd_orchestrator:
+    genera Root CA self-signed
+    genera SAE certs
+    genera KME certs
+    scrive tutto sotto certs/self_signed/
+
+kme_orchestrator:
+    copia i cert già generati dentro la cartella certs del KME reference implementation
+    eventualmente restart containers
+    eventualmente init DB
+
+certs/self_signed/
+├── offbox_rootCA.crt
+├── offbox_rootCA.key
+└── kme/
+    ├── kme_001.crt
+    ├── kme_001.key
+    ├── kme_001.pem
+    ├── kme_002.crt
+    ├── kme_002.key
+    ├── kme_002.pem
+    └── ...
+
+
+## Caso 2 — hierarchical_ca, generata da qkd_orchestrator
+qkd_orchestrator:
+    genera KME Root CA
+    genera KME Issuing CA
+    genera KME certs
+    genera Juniper Root CA
+    genera Juniper Issuing CA
+    genera Juniper/SAE certs
+    genera trust_exchange
+
+kme_orchestrator:
+    copia i KME cert già generati
+    copia il trust material per KME
+    eventualmente restart containers
+    eventualmente init DB
+
+    certs/hierarchical_ca/
+├── kme_pki/
+│   ├── root_ca/
+│   │   ├── kme-root-ca.crt
+│   │   └── kme-root-ca.key
+│   ├── issuing_ca/
+│   │   ├── kme-issuing-ca.crt
+│   │   ├── kme-issuing-ca.key
+│   │   └── kme-ca-chain.crt
+│   └── certs/
+│       ├── kme_001/
+│       │   ├── kme_001.crt
+│       │   ├── kme_001.key
+│       │   ├── kme_001.pem
+│       │   └── kme_001.chain.crt
+│       ├── kme_002/
+│       └── ...
+└── trust_exchange/
+    └── install_on_kme/
+        ├── trusted-juniper-ca-bundle.crt
+        ├── juniper-root-ca.crt
+        └── juniper-issuing-ca.crt
+

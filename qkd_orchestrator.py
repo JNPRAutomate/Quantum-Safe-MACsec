@@ -20,20 +20,20 @@ import copy
 import shutil
 import os
 
-from lib.qkd_logger import setup_logger
-from lib.qkd_inventory_builder import build_full_inventory
-from lib.qkd_pki_self_signed import build_self_signed_pki
-from lib.qkd_pki_hierarchical import build_hierarchical_pki
-from lib.qkd_settings import CONFIG, PKI, QKD
-from lib.qkd_onbox_builder import build_onbox_artifacts
-from lib.qkd_provisioning import run_provisioning
-from lib.qkd_config import load_inventory_file, load_runtime_devices, load_inventory_base, load_yaml, resolve_inventory
-from lib.qkd_config import load_runtime_pki_profile
+from lib.logger import setup_logger
+from lib.inventory_builder import build_full_inventory
+from lib.pki_self_signed import build_self_signed_pki
+from lib.pki_hierarchical import build_hierarchical_pki
+from lib.settings import CONFIG, PKI, QKD
+from lib.onbox_builder import build_onbox_artifacts
+from lib.provisioning import run_provisioning
+from lib.config import load_inventory_file, load_runtime_devices, load_inventory_base, load_yaml, resolve_inventory
+from lib.config import load_runtime_pki_profile
 from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
-from lib.qkd_identity import preflight_all_devices
-from lib.qkd_clean import handle_clean
-
+from lib.identity import preflight_all_devices
+from lib.clean import handle_clean
+from lib.kme_instructions import print_manual_kme_copy_instructions
 
 
 
@@ -45,6 +45,14 @@ BASE_DIR = Path(__file__).resolve().parent
 # ----------------------------------------
 def build_sae(i):
     return f"{PKI['SAE_PREFIX']}_{str(i).zfill(PKI['SAE_PAD'])}"
+
+def repo_path(path):
+    path = Path(path)
+
+    try:
+        return path.relative_to(BASE_DIR)
+    except ValueError:
+        return path
 
 # ----------------------------------------
 # ARGUMENT PARSER
@@ -387,7 +395,7 @@ def reset_local_runtime_for_create():
             f"Refusing to clean unsafe runtime directory: {runtime_dir}"
         )
 
-    print(f"Cleaning local create runtime: {runtime_dir}")
+    print(f"Cleaning local create runtime: {repo_path(runtime_dir)}")
 
     for item in runtime_dir.iterdir():
 
@@ -592,7 +600,7 @@ def handle_create(args):
     )
 
     print(f"✅ Inventory created ({topology}, mode={mode}, pki={pki_profile})")
-    print(f"✅ Inventory source: {inventory_path}")
+    print(f"✅ Inventory source: {repo_path(inventory_path)}")
     print(f"✅ QKD runtime script_user fixed to: {script_user}")
 
     # --------------------------
@@ -606,8 +614,8 @@ def handle_create(args):
     print("✅ Onbox artifacts generated")
 
     for dev_name, artifact in artifacts.items():
-        print(f"  {dev_name}: {artifact['script']}")
-
+        print(f" {dev_name}: {repo_path(artifact['script'])}")
+        
     # --------------------------
     # PKI generation
     # --------------------------
@@ -618,15 +626,15 @@ def handle_create(args):
     if profile == "self_signed":
         marker_file = (
             BASE_DIR
-            / "certs"
-            / "offbox_rootCA.crt"
+            / CONFIG["self_signed_dir"]
+            / "kme"
+            / "kme_001.pem"
         )
 
     elif profile == "hierarchical_ca":
         marker_file = (
             BASE_DIR
-            / "certs"
-            / "dual_pki"
+            / CONFIG["hierarchical_dir"]
             / "trust_exchange"
             / "install_on_juniper"
             / "trusted-kme-ca-bundle.crt"
@@ -638,16 +646,17 @@ def handle_create(args):
     if not marker_file.exists():
 
         if profile == "self_signed":
-            build_self_signed_pki(devices)
+            build_self_signed_pki(devices, profile)
 
         elif profile == "hierarchical_ca":
-            build_hierarchical_pki(devices)
+            build_hierarchical_pki()
 
         print("✅ PKI generated")
+        print_manual_kme_copy_instructions(profile)
 
     else:
         print("✅ PKI already exists - skipping generation")
-
+        print_manual_kme_copy_instructions(profile)
 
 
 # ----------------------------------------

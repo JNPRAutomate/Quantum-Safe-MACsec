@@ -2,7 +2,7 @@ pki:
 
   version: "3.3"
 
-  output_dir: "certs/dual_pki"
+  output_dir: "certs/hierarchical_ca"
   profile: "hierarchical_ca"
   devices_source: "config/runtime/devices.yaml"
 
@@ -13,7 +13,7 @@ pki:
 
   subject_defaults:
     country: "IT"
-    organization: "Juniper Networks Lab"
+    organization: "HPE Lab"
     organizational_unit: "Quantum Safe MACsec"
 
   validity:

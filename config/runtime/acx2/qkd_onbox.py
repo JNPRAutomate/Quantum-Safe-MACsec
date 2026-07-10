@@ -18,7 +18,7 @@ urllib3.disable_warnings()
 CONFIG = {
     "local_sae": "sae_002",
     "kme_ip": "100.123.252.11",
-    "ca_cert": "offbox_rootCA.crt",
+    "ca_cert": "trusted-kme-ca-bundle.crt",
     "script_user": "admin",
     "script_dir": "/var/db/scripts",
     "ssh_key": "/var/home/admin/.ssh/qkd_id_rsa",
@@ -222,6 +222,33 @@ def log(msg, level="INFO", iface=None, mode=None):
 # ----------------------------
 # KEYCHAIN STATE HELPERS
 # ----------------------------
+def junos_output_has_error(stdout="", stderr=""):
+    """
+    Return True only for real Junos configuration failures.
+
+    Important:
+      - 'warning: statement not found' is expected when deleting optional
+        stale config and must NOT be treated as fatal.
+      - A command can return rc=0 while stdout contains a real Junos error,
+        so we still parse stdout/stderr for hard failure markers.
+    """
+
+    text = f"{stdout or ''}\n{stderr or ''}"
+    text_lower = text.lower()
+
+    hard_error_markers = [
+        "error:",
+        "configuration check-out failed",
+        "commit failed",
+        "syntax error",
+        "missing mandatory statement",
+        "statement creation failed",
+        "authentication-key-chains not defined",
+        "may not be configured",
+        "pre-shared key or fallback-key or pre-shared-key-chain required",
+    ]
+
+    return any(marker in text_lower for marker in hard_error_markers)
 
 # Returns the per-link JSON state file path.
 def db_state_file(peer, iface):
@@ -406,7 +433,11 @@ def save_db_state(peer, iface, state):
         tmp.write_text(
             json.dumps(state, indent=2)
         )
-
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
         tmp.replace(path)
 
         log(
@@ -530,6 +561,50 @@ def junos_start_time_from_epoch(epoch_seconds):
         time.localtime(int(epoch_seconds))
     )
 
+def epoch_from_junos_start_time(start_time):
+    """
+    Convert Junos authentication-key-chain start-time YYYY-MM-DD.HH:MM
+    back to local epoch seconds.
+
+    This matches junos_start_time_from_epoch(), which uses localtime()
+    for this lab.
+    """
+
+    if not start_time:
+        return None
+
+    try:
+        return int(time.mktime(time.strptime(start_time, "%Y-%m-%d.%H:%M")))
+    except Exception:
+        return None
+
+
+def start_time_is_future(start_time, grace_seconds=0):
+    """
+    Return True if the Junos keychain start-time is still in the future.
+
+    grace_seconds can be used to avoid racing exactly on the minute boundary.
+    """
+
+    epoch = epoch_from_junos_start_time(start_time)
+
+    if epoch is None:
+        return False
+
+    return int(time.time()) + int(grace_seconds) < epoch
+
+
+def start_time_is_due(start_time, grace_seconds=0):
+    """
+    Return True if the Junos keychain start-time has been reached.
+    """
+
+    epoch = epoch_from_junos_start_time(start_time)
+
+    if epoch is None:
+        return True
+
+    return int(time.time()) >= epoch + int(grace_seconds)
 
 def scheduled_key_start_time(link):
     """
@@ -1129,7 +1204,7 @@ def macsec_has_inuse_sa(iface, expected_ca=None):
 
     log(
         f"MACSEC OPERATIONAL STATE FAIL ca={target_ca} status=inuse not found",
-        "ERROR",
+        "INFO",
         iface,
         "MACSEC"
     )
@@ -1443,28 +1518,21 @@ def mka_confirms_key(iface, key_id, generation=None):
     """
     Confirm whether MKA is using the expected key.
 
-    Based on real Junos output:
+    ACX verification is based on:
 
-      CAK name: <hex>
-      Key number: <n>
-      Interface State: Secured - Primary
+      - Interface State = Secured
+      - CAK name matches the expected CKN derived from key_id
 
-    Matching:
-      - expected CKN is ckn_from_key_id(key_id)
-      - Junos shows it as CAK name
-      - MKA must be secured
-      - if generation is provided, Key number should match generation % 64
+    IMPORTANT:
+
+      ACX MKA "Key number" does not reliably match the
+      authentication-key-chain key index or generation number.
+
+      Therefore key promotion must NOT depend on MKA key_number.
     """
 
     expected_ckn = ckn_from_key_id(key_id)
     expected_ckn_norm = normalize_hex_string(expected_ckn)
-
-    expected_key_number = None
-    if generation is not None:
-        try:
-            expected_key_number = int(generation) % 64
-        except Exception:
-            expected_key_number = None
 
     mka_block = get_mka_session_block_for_iface(iface)
 
@@ -1479,24 +1547,24 @@ def mka_confirms_key(iface, key_id, generation=None):
     secured = mka_session_secured(fields)
     ckn_match = expected_ckn_norm == cak_name_norm
 
+    #
+    # Keep for logging only.
+    #
     key_number = fields.get("key_number")
-    key_number_match = True
 
-    if expected_key_number is not None:
-        key_number_match = key_number == expected_key_number
+    if secured and ckn_match:
 
-    if secured and ckn_match and key_number_match:
         log(
             f"MKA KEY CONFIRMED "
             f"key_id={key_id} "
             f"ckn={expected_ckn} "
             f"cak_name={cak_name} "
-            f"key_number={key_number} "
-            f"expected_key_number={expected_key_number}",
+            f"key_number={key_number}",
             "INFO",
             iface,
             "MKA"
         )
+
         return True
 
     log(
@@ -1504,11 +1572,9 @@ def mka_confirms_key(iface, key_id, generation=None):
         f"key_id={key_id} "
         f"secured={secured} "
         f"ckn_match={ckn_match} "
-        f"key_number_match={key_number_match} "
         f"expected_ckn={expected_ckn} "
         f"mka_cak_name={cak_name} "
         f"key_number={key_number} "
-        f"expected_key_number={expected_key_number} "
         f"interface_state={fields.get('interface_state')} "
         f"mka_suspended={fields.get('mka_suspended')} "
         f"mka_block={mka_block}",
@@ -1795,20 +1861,8 @@ def install_keychain_key(
 
     stdout = result.stdout.decode(errors="ignore").strip()
     stderr = result.stderr.decode(errors="ignore").strip()
-    combined = f"{stdout}\n{stderr}".lower()
-
-    fail_markers = [
-        "error:",
-        "commit failed",
-        "syntax error",
-        "may not be configured",
-        "authentication-key-chains not defined",
-        "missing mandatory statement",
-        "configuration check-out failed",
-        "statement creation failed"
-    ]
-
-    if result.returncode != 0 or any(marker in combined for marker in fail_markers):
+    
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(
             f"KEYCHAIN INSTALL FAIL "
             f"ca={ca_name} "
@@ -1869,19 +1923,15 @@ def install_keychain_key(
 
     return True
 
-
-def bind_interface_to_stable_ca(iface, ca_name):
+def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     """
     Bind the interface to the stable MACsec CA.
 
-    In keychain mode this is done only during bootstrap/recovery,
-    not during every key rotation.
-
     Important:
-      - If the interface is already bound to ca_name, do nothing.
-      - If it is bound to another CA, delete the old binding and set the new one.
-      - If it has no binding, only set the new CA. Do not delete a non-existing
-        statement, because Junos op-script batch mode may return confusing output.
+      - In static-cak mode, Junos requires the CA to have a valid key source.
+      - Therefore, if keychain_name is provided, also ensure:
+          security macsec connectivity-association <ca_name> pre-shared-key-chain <keychain_name>
+      - This function must rollback candidate config on failure.
     """
 
     configured_ca = get_configured_active_ca(iface)
@@ -1896,13 +1946,38 @@ def bind_interface_to_stable_ca(iface, ca_name):
         return True
 
     log(
-        f"INTERFACE BIND START current_ca={configured_ca} target_ca={ca_name}",
+        f"INTERFACE BIND START current_ca={configured_ca} target_ca={ca_name} keychain={keychain_name}",
         "INFO",
         iface,
         "MACSEC"
     )
 
     cli_cmds = ["configure"]
+
+    #
+    # Ensure CA is complete before binding interface.
+    # Without pre-shared-key-chain, Junos rejects static-cak commit.
+    #
+    cli_cmds.append(
+        f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256"
+    )
+    cli_cmds.append(
+        f"set security macsec connectivity-association {ca_name} security-mode static-cak"
+    )
+
+    if keychain_name:
+        cli_cmds.append(
+            f"delete security macsec connectivity-association {ca_name} pre-shared-key"
+        )
+        cli_cmds.append(
+            f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}"
+        )
+        cli_cmds.append(
+            f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}"
+        )
+        cli_cmds.append(
+            f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}"
+        )
 
     if configured_ca and configured_ca != ca_name:
         cli_cmds.append(
@@ -1923,7 +1998,7 @@ def bind_interface_to_stable_ca(iface, ca_name):
             ["cli", "-c", cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=20
+            timeout=30
         )
 
     except subprocess.TimeoutExpired:
@@ -1946,33 +2021,10 @@ def bind_interface_to_stable_ca(iface, ca_name):
 
     stdout = result.stdout.decode(errors="ignore").strip()
     stderr = result.stderr.decode(errors="ignore").strip()
-    combined = f"{stdout}\n{stderr}"
 
-    fail_markers = [
-        "error:",
-        "commit failed",
-        "syntax error",
-        "missing mandatory statement",
-        "configuration check-out failed",
-        "statement creation failed"
-    ]
-
-    if result.returncode != 0 or any(marker in combined.lower() for marker in fail_markers):
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(
-            f"INTERFACE BIND FAIL ca={ca_name} rc={result.returncode} "
-            f"stderr={stderr} stdout={stdout}",
-            "ERROR",
-            iface,
-            "MACSEC"
-        )
-        return False
-
-    configured_after = get_configured_active_ca(iface)
-
-    if configured_after != ca_name:
-        log(
-            f"INTERFACE BIND VERIFY FAIL expected_ca={ca_name} "
-            f"configured_ca={configured_after} rc={result.returncode} "
+            f"INTERFACE BIND FAIL ca={ca_name} keychain={keychain_name} rc={result.returncode} "
             f"stderr={stderr} stdout={stdout}",
             "ERROR",
             iface,
@@ -1980,19 +2032,18 @@ def bind_interface_to_stable_ca(iface, ca_name):
         )
 
         try:
-            verify_cmd = f"show configuration security macsec interfaces {iface} | display set"
-            verify = subprocess.run(
-                ["cli", "-c", verify_cmd],
+            rb = subprocess.run(
+                ["cli", "-c", "configure; rollback 0; exit"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=10
             )
 
-            verify_stdout = verify.stdout.decode(errors="ignore").strip()
-            verify_stderr = verify.stderr.decode(errors="ignore").strip()
+            rb_stdout = rb.stdout.decode(errors="ignore").strip()
+            rb_stderr = rb.stderr.decode(errors="ignore").strip()
 
             log(
-                f"INTERFACE BIND VERIFY CONFIG OUTPUT stdout={verify_stdout} stderr={verify_stderr}",
+                f"INTERFACE BIND ROLLBACK DONE ca={ca_name} stdout={rb_stdout} stderr={rb_stderr}",
                 "ERROR",
                 iface,
                 "MACSEC"
@@ -2000,12 +2051,23 @@ def bind_interface_to_stable_ca(iface, ca_name):
 
         except Exception as e:
             log(
-                f"INTERFACE BIND VERIFY CONFIG CHECK ERROR error={str(e)}",
+                f"INTERFACE BIND ROLLBACK ERROR ca={ca_name} error={str(e)}",
                 "ERROR",
                 iface,
                 "MACSEC"
             )
 
+        return False
+
+    configured_after = get_configured_active_ca(iface)
+
+    if configured_after != ca_name:
+        log(
+            f"INTERFACE BIND VERIFY FAIL expected_ca={ca_name} configured_ca={configured_after}",
+            "ERROR",
+            iface,
+            "MACSEC"
+        )
         return False
 
     log(
@@ -2016,7 +2078,6 @@ def bind_interface_to_stable_ca(iface, ca_name):
     )
 
     return True
-
 
 def macsec_down(iface):
 
@@ -2580,7 +2641,8 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
 
         if not bind_interface_to_stable_ca(
             iface,
-            ca_name
+            ca_name,
+            keychain
         ):
             print(f"ERROR INTERFACE BIND FAIL ca={ca_name}")
 
@@ -2716,14 +2778,18 @@ def run_slave_status(iface):
 
     return False
 
-
 def bootstrap_keychain_link(link, force=False):
     """
     Bootstrap a link in keychain/MKA mode.
 
-    One stable CA is created/bound to the interface.
-    One QKD key is installed into the pre-shared-key-chain on both sides.
+    Important for scheduled keychain model:
+      - install key on peer
+      - install key locally
+      - bind stable CA
+      - save local state as pending immediately
+      - do NOT wait for MACsec inuse before start_time
     """
+
     peer = link["peer"]
     iface = link["interface"]
 
@@ -2732,16 +2798,19 @@ def bootstrap_keychain_link(link, force=False):
 
     old_state = load_link_state(peer, iface, link)
     generation = next_generation(old_state)
-    
+
     start_time = junos_start_time_from_epoch(
         ceil_epoch_to_next_minute(int(time.time()) + 60)
     )
 
     state = default_keychain_state(link)
     state["generation"] = generation
+    state["ca_name"] = ca_name
+    state["keychain_name"] = keychain
 
     log(
-        f"KEYCHAIN BOOTSTRAP START force={force} ca={ca_name} keychain={keychain} generation={generation}",
+        f"KEYCHAIN BOOTSTRAP START force={force} ca={ca_name} keychain={keychain} "
+        f"generation={generation} start_time={start_time}",
         "INFO",
         iface,
         "BOOTSTRAP"
@@ -2782,7 +2851,7 @@ def bootstrap_keychain_link(link, force=False):
         key,
         ca_name,
         keychain,
-        generation=generation,    
+        generation=generation,
         start_time=start_time
     ):
         log(
@@ -2795,7 +2864,8 @@ def bootstrap_keychain_link(link, force=False):
 
     if not bind_interface_to_stable_ca(
         iface,
-        ca_name
+        ca_name,
+        keychain
     ):
         log(
             "KEYCHAIN BOOTSTRAP FAILED local bind",
@@ -2805,6 +2875,60 @@ def bootstrap_keychain_link(link, force=False):
         )
         return False
 
+    state["pending_key_id"] = key_id
+    state["last_rotation"] = int(time.time())
+    state["next_start_time"] = start_time
+
+    state["installed_keys"].append(
+        {
+            "generation": generation,
+            "key_id": key_id,
+            "installed_at": int(time.time()),
+            "start_time": start_time,
+            "status": "pending"
+        }
+    )
+
+    state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
+
+    state = clear_kme_failure(
+        peer,
+        iface,
+        state
+    )
+
+    #
+    # If start_time is still in the future, this is already success.
+    # The correct state is pending, not inuse.
+    #
+    if start_time_is_future(start_time):
+        if not save_db_state(
+            peer,
+            iface,
+            state
+        ):
+            log(
+                "KEYCHAIN BOOTSTRAP STATE SAVE FAIL",
+                "ERROR",
+                iface,
+                "BOOTSTRAP"
+            )
+            return False
+
+        log(
+            f"KEYCHAIN BOOTSTRAP SCHEDULED "
+            f"ca={ca_name} keychain={keychain} generation={generation} "
+            f"pending_key_id={key_id} start_time={start_time}",
+            "INFO",
+            iface,
+            "BOOTSTRAP"
+        )
+
+        return True
+
+    #
+    # Only if start_time is already due do we try immediate MKA/MACsec confirmation.
+    #
     if not wait_for_macsec_inuse(
         iface,
         ca_name,
@@ -2817,19 +2941,6 @@ def bootstrap_keychain_link(link, force=False):
             "BOOTSTRAP"
         )
         return False
-
-    state["pending_key_id"] = key_id
-    state["last_rotation"] = int(time.time())
-    state["next_start_time"] = start_time
-    state["installed_keys"].append(
-        {
-            "generation": generation,
-            "key_id": key_id,
-            "installed_at": int(time.time()),
-            "start_time": start_time,
-            "status": "pending"
-        }
-    )
 
     state, promoted = promote_pending_key_if_mka_confirmed(
         peer,
@@ -2853,7 +2964,8 @@ def bootstrap_keychain_link(link, force=False):
     log(
         f"KEYCHAIN READY ca={ca_name} keychain={keychain} "
         f"generation={generation} "
-        f"pending_key_id={key_id} "
+        f"pending_key_id={state.get('pending_key_id')} "
+        f"active_key_id={state.get('active_key_id')} "
         f"start_time={start_time} "
         f"promoted={promoted}",
         "INFO",
@@ -2862,7 +2974,6 @@ def bootstrap_keychain_link(link, force=False):
     )
 
     return True
-
 
 def run_master():
 
@@ -2927,22 +3038,53 @@ def run_master():
             )
 
             continue
-
+###
         if not verify_local_config_state(link, state):
 
             log(
-                "LOCAL CONFIG INVALID -> REBIND STABLE CA",
+                "LOCAL CONFIG INVALID -> CONTROLLED BOOTSTRAP",
                 "ERROR",
                 iface,
                 "MASTER"
             )
 
-            if not bind_interface_to_stable_ca(
-                iface,
-                ca_name
+            if not bootstrap_keychain_link(
+                link,
+                force=True
             ):
+                log(
+                    "CONTROLLED BOOTSTRAP FAILED AFTER LOCAL CONFIG INVALID",
+                    "ERROR",
+                    iface,
+                    "MASTER"
+                )
                 continue
+            
+            log(
+                "CONTROLLED BOOTSTRAP COMPLETE AFTER LOCAL CONFIG INVALID -> EXIT THIS LINK CYCLE",
+                "INFO",
+                iface,
+                "MASTER"
+            )
 
+            continue
+        #
+        # Scheduled keychain model:
+        # if a key is installed and start_time is still in the future,
+        # pending is the correct state. Do not check MACsec inuse yet and
+        # do not bootstrap again.
+        #
+        if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
+            log(
+                f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} "
+                f"next_start_time={state.get('next_start_time')} "
+                f"reason=PENDING_KEY_SCHEDULED_NOT_DUE",
+                "INFO",
+                iface,
+                "MASTER"
+            )
+            continue
+        
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
 
             if state["health"].get("declared_down", False):
@@ -3063,8 +3205,14 @@ def run_master():
                 f"peer_ca={peer_state.get('ca_name')} "
                 f"local_keychain={state.get('keychain_name')} "
                 f"peer_keychain={peer_state.get('keychain_name')} "
-                f"local_key={state.get('active_key_id')} "
-                f"peer_key={peer_state.get('active_key_id')}",
+                ###
+                f"local_active_key={state.get('active_key_id')} "
+                f"peer_active_key={peer_state.get('active_key_id')} "
+                f"local_pending_key={state.get('pending_key_id')} "
+                f"peer_pending_key={peer_state.get('pending_key_id')} "
+                f"local_next_start_time={state.get('next_start_time')} "
+                f"peer_next_start_time={peer_state.get('next_start_time')}",
+                ###
                 "ERROR",
                 iface,
                 "MASTER"
@@ -3195,27 +3343,41 @@ def run_master():
 
         time.sleep(POST_KEY_INSTALL_SETTLE_SECONDS)
 
-        if not wait_for_macsec_inuse(
-            iface,
-            ca_name,
-            MACSEC_INUSE_GRACE_SECONDS
-        ):
-
-            record_kme_failure(
-                peer,
+        #
+        # In scheduled keychain mode, do not require MACsec inuse before
+        # the configured start_time. The successful condition is:
+        # key installed locally + key installed on peer + state saved as pending.
+        #
+        if start_time_is_due(start_time):
+            if not wait_for_macsec_inuse(
                 iface,
-                state,
-                "MACSEC_INUSE_TIMEOUT_AFTER_KEYCHAIN_INSTALL"
-            )
+                ca_name,
+                MACSEC_INUSE_GRACE_SECONDS
+            ):
 
+                record_kme_failure(
+                    peer,
+                    iface,
+                    state,
+                    "MACSEC_INUSE_TIMEOUT_AFTER_KEYCHAIN_INSTALL"
+                )
+
+                log(
+                    "MACSEC NOT INUSE AFTER KEYCHAIN INSTALL -> MARK DEGRADED",
+                    "ERROR",
+                    iface,
+                    "MASTER"
+                )
+
+                continue
+        else:
             log(
-                "MACSEC NOT INUSE AFTER KEYCHAIN INSTALL -> MARK DEGRADED",
-                "ERROR",
+                f"MACSEC INUSE CHECK SKIPPED key scheduled in future "
+                f"ca={ca_name} start_time={start_time}",
+                "INFO",
                 iface,
                 "MASTER"
             )
-
-            continue
 
         state["generation"] = new_generation
         state["ca_name"] = ca_name

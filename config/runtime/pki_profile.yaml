@@ -1,0 +1,5 @@
+pki:
+  profile: hierarchical_ca
+  source_config: config/pki/hierarchical_ca.yml
+  certs_dir: certs/dual_pki
+  ca_cert: trusted-kme-ca-bundle.crt
