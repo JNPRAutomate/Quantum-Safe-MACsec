@@ -6,6 +6,10 @@ CONFIG = {
     "inventory_input_dir": "config/inventory/input",
     "templates_dir": "config/templates",
 
+    # qkd runtime policy
+    "qkd_policy_file": "config/inventory/qkd_policy.yaml",
+    "runtime_qkd_policy_file": "config/runtime/qkd_policy.yaml",
+
     # artifacts
     "artifacts_dir": "artifacts",
 

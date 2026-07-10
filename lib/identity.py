@@ -258,7 +258,7 @@ def pyez_shell_cmd(device, command, timeout=60):
 
     Therefore:
       - keep commands simple
-      - use this for deploy/preflight checks
+      - use this for deploy/validate checks
       - do not expect exact shell rc
     """
 
@@ -427,8 +427,8 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30):
 # Identity plan
 # -------------------------------------------------
 
-def check_identity_plan():
-    print("=== QKD identity plan ===")
+def check_validation_plan():
+    print("=== QKD validation plan ===")
     print(f"deploy_user_fallback = {qkd_deploy_user()}")
     print(f"script_user          = {qkd_script_user()}")
     print(f"ssh_home             = {qkd_ssh_home()}")
@@ -472,12 +472,12 @@ def check_deploy_user_access(device):
 
     print(result.stdout)
 
-
 def check_script_user_exists(device):
     device = normalize_device(device)
     name = device_name(device)
 
     script_user = qkd_script_user()
+    host = device_host(device)
 
     cmd = f"id {script_user}"
 
@@ -487,14 +487,41 @@ def check_script_user_exists(device):
         timeout=30,
     )
 
+    stdout = str(result.stdout or "")
+    stderr = str(result.stderr or "")
+
     if result.returncode != 0:
+        stderr_lower = stderr.lower()
+
+        if (
+            "connecttimeouterror" in stderr_lower
+            or "timed out" in stderr_lower
+            or "timeout" in stderr_lower
+            or "no route to host" in stderr_lower
+            or "connection refused" in stderr_lower
+            or "connection reset" in stderr_lower
+            or "unable to connect" in stderr_lower
+        ):
+            raise RuntimeError(
+                f"Cannot validate SCRIPT_USER on {name}: device unreachable or SSH/PyEZ timeout.\n"
+                f"device={name}\n"
+                f"host={host}\n"
+                f"script_user={script_user}\n"
+                f"hint=Check reachability, routing/VPN/helper VM, firewall, and SSH service.\n"
+                f"stdout={stdout}\n"
+                f"stderr={stderr}"
+            )
+
         raise RuntimeError(
-            f"SCRIPT_USER does not exist on {name}: {script_user}\n"
-            f"stdout={result.stdout}\n"
-            f"stderr={result.stderr}"
+            f"SCRIPT_USER validation failed on {name}: user '{script_user}' was not found or cannot be queried.\n"
+            f"device={name}\n"
+            f"host={host}\n"
+            f"script_user={script_user}\n"
+            f"stdout={stdout}\n"
+            f"stderr={stderr}"
         )
 
-    print(result.stdout)
+    print(stdout)
 
 
 def check_script_user_home_simple(device):
@@ -896,7 +923,57 @@ def check_peer_ssh_from_device(device):
 # -------------------------------------------------
 # Postdeploy checks
 # -------------------------------------------------
+def check_event_script_path(device):
+    device = normalize_device(device)
+    name = device_name(device)
 
+    path = qkd_remote_event_script()
+
+    result = ssh_deploy_cmd(
+        device,
+        f"ls -l {path}",
+        timeout=20,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"qkd_onbox.py missing on {name} at {path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(result.stdout)
+
+
+def check_event_script_permissions(device):
+    device = normalize_device(device)
+    name = device_name(device)
+
+    path = qkd_remote_event_script()
+
+    result = ssh_deploy_cmd(
+        device,
+        f"chmod 755 {path}; ls -l {path}",
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"event qkd_onbox.py permission check failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(result.stdout)
+    
+    
+def qkd_remote_event_script():
+    return (
+        f"{QKD.get('EVENT_SCRIPT_DIR', '/var/db/scripts/event')}/"
+        f"{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}"
+    )
+    
+    
 def check_op_script_path(device):
     device = normalize_device(device)
     name = device_name(device)
@@ -1096,28 +1173,27 @@ def check_no_state_save_errors(device):
     print(f"[OK] no state save errors on {name}")
 
 # -------------------------------------------------
-# Preflight entrypoints
+# Validation entrypoints
 # -------------------------------------------------
 
-def preflight_device_identity_predeploy(device):
+def validate_device_identity_predeploy(device):
     device = normalize_device(device)
     name = device_name(device)
 
     validate_device_record(device)
 
     if platform_is_legacy_qfx(device):
-        print(f"=== QKD legacy QFX pre-deploy: {name} ===")
-
+        print(f"=== QKD legacy QFX pre-deploy validation: {name} ===")
         #check_deploy_user_access(device)
         check_script_user_exists(device)
         check_script_user_home_simple(device)
         check_script_dirs_simple(device)
         check_runtime_cleanup_simple(device)
 
-        print(f"[OK] QKD legacy QFX pre-deploy passed: {name}")
+        print(f"[OK] QKD legacy QFX pre-deploy validation passed: {name}")
         return
 
-    print(f"=== QKD identity pre-deploy: {name} ===")
+    print(f"=== QKD pre-deploy validation: {name} ===")
 
     #check_deploy_user_access(device)
     check_script_user_exists(device)
@@ -1130,44 +1206,83 @@ def preflight_device_identity_predeploy(device):
     check_runtime_cleanup_simple(device)
     #check_script_user_atomic_write(device)
 
-    print(f"[OK] QKD identity pre-deploy passed: {name}")
+    print(f"[OK] QKD pre-deploy validation passed: {name}")
 
-def preflight_device_identity_postdeploy(device):
+def validate_device_identity_postdeploy(device):
     device = normalize_device(device)
     name = device_name(device)
 
     validate_device_record(device)
 
     if platform_is_legacy_qfx(device):
-        print(f"=== QKD legacy QFX post-deploy: {name} ===")
+        print(f"=== QKD legacy QFX post-deploy validation: {name} ===")
 
         #check_op_script_path(device)
         #check_op_script_permissions(device)
 
-        print(f"[OK] QKD legacy QFX post-deploy passed: {name}")
+        print(f"[OK] QKD legacy QFX post-deploy validation passed: {name}")
         return
 
-    print(f"=== QKD identity post-deploy: {name} ===")
+    print(f"=== QKD post-deploy validation: {name} ===")
 
-    #check_op_script_path(device)
-    #check_op_script_permissions(device)
+    check_op_script_path(device)
+    check_op_script_permissions(device)
+    check_event_script_path(device)
+    check_event_script_permissions(device)
     check_system_scripts_python3(device)
     check_event_options_script_user(device)
-    #check_onbox_embedded_config(device)
+    check_onbox_embedded_config(device)
     check_peer_ssh_from_device(device)
     check_qkd_status_as_script_user(device)
     check_no_state_save_errors(device)
+    
+    print(f"[OK] QKD post-deploy validation passed: {name}")
 
-    print(f"[OK] QKD identity post-deploy passed: {name}")
-
-
-def preflight_all_devices_predeploy(devices):
+def validate_all_devices_predeploy(devices):
     devices = normalize_devices(devices)
 
-    check_identity_plan()
+    check_validation_plan()
 
-    for device in devices:
-        preflight_device_identity_predeploy(device)
+    print("")
+    print("=== QKD pre-deploy validation ===")
+    print(f"Devices: {len(devices)}")
+    print("")
+
+    failed = []
+
+    for index, device in enumerate(devices, start=1):
+        name = device_name(device)
+        host = device_host(device)
+
+        print(f"[{index}/{len(devices)}] {name}")
+        print(f"  host        : {host}")
+        print(f"  script_user : {qkd_script_user()}")
+        print("")
+
+        try:
+            validate_device_identity_predeploy(device)
+            print(f"[OK] pre-deploy validation passed: {name}")
+            print("")
+
+        except Exception as exc:
+            failed.append((name, exc))
+            print(f"[FAIL] pre-deploy validation failed: {name}")
+            print(str(exc))
+            print("")
+
+    if failed:
+        print("=== QKD pre-deploy validation summary ===")
+        print(f"Result: FAILED")
+        print(f"Failed devices: {len(failed)}")
+        print("")
+
+        for name, exc in failed:
+            print(f"- {name}: {exc}")
+
+        raise RuntimeError(
+            "QKD pre-deploy validation failed for: "
+            + ", ".join(name for name, _ in failed)
+        )
 
     non_legacy = [
         device for device in devices
@@ -1182,51 +1297,90 @@ def preflight_all_devices_predeploy(devices):
     else:
         print("[WARN] skipping peer authorized_keys/self-SSH checks for legacy-only topology")
 
-    print("[OK] all QKD pre-deploy identity checks passed")
-
-
-def preflight_all_devices_postdeploy(devices):
+    print("=== QKD pre-deploy validation complete ===")
+    print("Result: OK")
+    
+def validate_all_devices_postdeploy(devices):
     devices = normalize_devices(devices)
 
-    check_identity_plan()
+    check_validation_plan()
 
-    for device in devices:
-        preflight_device_identity_postdeploy(device)
+    print("")
+    print("=== QKD post-deploy validation ===")
+    print(f"Devices: {len(devices)}")
+    print("")
 
-    print("[OK] all QKD post-deploy identity checks passed")
+    failed = []
 
+    for index, device in enumerate(devices, start=1):
+        name = device_name(device)
+        host = device_host(device)
 
-def preflight_all_devices(devices, phase="predeploy"):
+        print(f"[{index}/{len(devices)}] {name}")
+        print(f"  host        : {host}")
+        print(f"  script_user : {qkd_script_user()}")
+        print("")
+
+        try:
+            validate_device_identity_postdeploy(device)
+            print(f"[OK] post-deploy validation passed: {name}")
+            print("")
+
+        except Exception as exc:
+            failed.append((name, exc))
+            print(f"[FAIL] post-deploy validation failed: {name}")
+            print(str(exc))
+            print("")
+
+    if failed:
+        print("=== QKD post-deploy validation summary ===")
+        print(f"Result: FAILED")
+        print(f"Failed devices: {len(failed)}")
+        print("")
+
+        for name, exc in failed:
+            print(f"- {name}: {exc}")
+
+        raise RuntimeError(
+            "QKD post-deploy validation failed for: "
+            + ", ".join(name for name, _ in failed)
+        )
+
+    print("=== QKD post-deploy validation complete ===")
+    print("Result: OK")
+    
+
+def validate_all_devices(devices, phase="predeploy"):
     devices = normalize_devices(devices)
 
     if phase == "predeploy":
-        preflight_all_devices_predeploy(devices)
+        validate_all_devices_predeploy(devices)
         return
 
     if phase == "postdeploy":
-        preflight_all_devices_postdeploy(devices)
+        validate_all_devices_postdeploy(devices)
         return
 
     if phase == "full":
-        preflight_all_devices_predeploy(devices)
-        preflight_all_devices_postdeploy(devices)
+        validate_all_devices_predeploy(devices)
+        validate_all_devices_postdeploy(devices)
         return
 
-    raise ValueError(f"unknown preflight phase={phase}")
+    raise ValueError(f"unknown validate phase={phase}")
 
 
-def preflight_device_identity(device, phase="predeploy"):
+def validate_device_identity(device, phase="predeploy"):
     device = normalize_device(device)
 
     if phase == "predeploy":
-        return preflight_device_identity_predeploy(device)
+        return validate_device_identity_predeploy(device)
 
     if phase == "postdeploy":
-        return preflight_device_identity_postdeploy(device)
+        return validate_device_identity_postdeploy(device)
 
     if phase == "full":
-        preflight_device_identity_predeploy(device)
-        preflight_device_identity_postdeploy(device)
+        validate_device_identity_predeploy(device)
+        validate_device_identity_postdeploy(device)
         return
 
-    raise ValueError(f"unknown identity preflight phase={phase}")
+    raise ValueError(f"unknown validation phase={phase}")

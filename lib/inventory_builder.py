@@ -1,7 +1,7 @@
 import yaml
 import os
 import secrets
-
+from pathlib import Path
 from lib.settings import CONFIG
 
 
@@ -220,41 +220,181 @@ def build_runtime_pki_profile(profile, out_dir):
             f"Invalid PKI profile: {profile}"
         )
 
-    os.makedirs(out_dir, exist_ok=True)
-
     if profile == "self_signed":
-
         data = {
             "pki": {
                 "profile": "self_signed",
-                "source_config":
-                    "config/pki/self_signed.yml",
-                "certs_dir":
-                    "certs",
-                "ca_cert":
-                    "offbox_rootCA.crt"
+                "source_config": "config/pki/self_signed.yml",
+                "output_dir": "certs/self_signed",
+
+                "juniper": {
+                    "certs_dir": "certs/self_signed",
+                    "trust_bundle": "certs/self_signed/offbox_rootCA.crt",
+                    "ca_cert": "offbox_rootCA.crt",
+                },
+
+                "kme": {
+                    "certs_dir": "certs/self_signed/kme",
+                    "trust_bundle": "certs/self_signed/offbox_rootCA.crt",
+                    "runtime_root_crt": "root.crt",
+                },
             }
         }
 
-    else:
-
+    elif profile == "hierarchical_ca":
         data = {
             "pki": {
                 "profile": "hierarchical_ca",
-                "source_config":
-                    "config/pki/hierarchical_ca.yml",
-                "certs_dir":
-                    "certs/dual_pki",
-                "ca_cert":
-                    "trusted-kme-ca-bundle.crt"
+                "source_config": "config/pki/hierarchical_ca.yml",
+                "output_dir": "certs/hierarchical_ca",
+
+                "juniper": {
+                    "certs_dir": "certs/hierarchical_ca/juniper_pki/certs",
+                    "trust_bundle": (
+                        "certs/hierarchical_ca/trust_exchange/"
+                        "install_on_juniper/trusted-kme-ca-bundle.crt"
+                    ),
+                    "ca_cert": "trusted-kme-ca-bundle.crt",
+                },
+
+                "kme": {
+                    "certs_dir": "certs/hierarchical_ca/kme_pki/certs",
+                    "trust_bundle": (
+                        "certs/hierarchical_ca/trust_exchange/"
+                        "install_on_kme/trusted-juniper-ca-bundle.crt"
+                    ),
+                    "runtime_root_crt": "root.crt",
+                },
             }
         }
 
-    with open(f"{out_dir}/pki_profile.yaml", "w") as f:
-        yaml.dump(data, f, sort_keys=False)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_file = out_dir / "pki_profile.yaml"
+
+    with open(out_file, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            sort_keys=False
+        )
 
     print(f"✅ Runtime PKI profile generated ({profile})")
-      
+    
+def validate_qkd_policy(policy):
+    """
+    Validate runtime QKD policy values.
+    """
+
+    required_keys = [
+        "rekey_enabled",
+        "interval_seconds",
+        "key_batch_size",
+        "max_installed_keys",
+        "key_ttl_seconds",
+        "purge_on_kme_loss",
+        "purge_after_seconds",
+    ]
+
+    for key in required_keys:
+        if key not in policy:
+            raise ValueError(f"Missing qkd_policy.{key}")
+
+    if int(policy["interval_seconds"]) < 1:
+        raise ValueError("qkd_policy.interval_seconds must be >= 1")
+
+    if int(policy["key_batch_size"]) < 1:
+        raise ValueError("qkd_policy.key_batch_size must be >= 1")
+
+    if int(policy["max_installed_keys"]) < 1:
+        raise ValueError("qkd_policy.max_installed_keys must be >= 1")
+
+    if int(policy["key_batch_size"]) > int(policy["max_installed_keys"]):
+        raise ValueError(
+            "qkd_policy.key_batch_size cannot be greater than "
+            "qkd_policy.max_installed_keys"
+        )
+
+    if int(policy["key_ttl_seconds"]) < 0:
+        raise ValueError("qkd_policy.key_ttl_seconds cannot be negative")
+
+    if int(policy["purge_after_seconds"]) < 0:
+        raise ValueError("qkd_policy.purge_after_seconds cannot be negative")
+
+    if bool(policy["purge_on_kme_loss"]) and int(policy["purge_after_seconds"]) < 1:
+        raise ValueError(
+            "qkd_policy.purge_after_seconds must be >= 1 when "
+            "qkd_policy.purge_on_kme_loss is true"
+        )
+
+
+def build_runtime_qkd_policy(
+    out_dir,
+    policy_template,
+    rekey_enabled=None,
+    interval_seconds=None,
+    key_batch_size=None,
+    max_installed_keys=None,
+    key_ttl_seconds=None,
+    purge_on_kme_loss=None,
+    purge_after_seconds=None,
+):
+    """
+    Build config/runtime/qkd_policy.yaml from the default policy template.
+
+    Source:
+        config/inventory/qkd_policy.yaml
+
+    Destination:
+        config/runtime/qkd_policy.yaml
+
+    CLI values override the template only when explicitly provided.
+    """
+
+    policy = policy_template.get("qkd_policy", {}).copy()
+
+    if not policy:
+        raise ValueError(
+            "Missing qkd_policy section in config/inventory/qkd_policy.yaml"
+        )
+
+    overrides = {
+        "rekey_enabled": rekey_enabled,
+        "interval_seconds": interval_seconds,
+        "key_batch_size": key_batch_size,
+        "max_installed_keys": max_installed_keys,
+        "key_ttl_seconds": key_ttl_seconds,
+        "purge_on_kme_loss": purge_on_kme_loss,
+        "purge_after_seconds": purge_after_seconds,
+    }
+
+    for key, value in overrides.items():
+        if value is not None:
+            policy[key] = value
+
+    validate_qkd_policy(policy)
+
+    runtime_policy = {
+        "qkd_policy": policy
+    }
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_file = out_dir / "qkd_policy.yaml"
+
+    with open(out_file, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            runtime_policy,
+            f,
+            sort_keys=False
+        )
+
+    print("✅ Runtime QKD policy generated")
+
+    return runtime_policy
+
 
 # ----------------------------------------
 # Wrapper top level builder 

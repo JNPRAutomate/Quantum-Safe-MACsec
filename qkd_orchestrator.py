@@ -18,7 +18,7 @@ from pathlib import Path
 import subprocess
 import copy
 import shutil
-import os
+import os,sys
 
 from lib.logger import setup_logger
 from lib.inventory_builder import build_full_inventory
@@ -27,14 +27,21 @@ from lib.pki_hierarchical import build_hierarchical_pki
 from lib.settings import CONFIG, PKI, QKD
 from lib.onbox_builder import build_onbox_artifacts
 from lib.provisioning import run_provisioning
-from lib.config import load_inventory_file, load_runtime_devices, load_inventory_base, load_yaml, resolve_inventory
-from lib.config import load_runtime_pki_profile
+from lib.config import (
+load_inventory_file,
+load_runtime_devices,
+load_inventory_base,
+load_yaml,
+resolve_inventory,
+load_runtime_pki_profile,
+load_qkd_policy_template,
+)
 from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
-from lib.identity import preflight_all_devices
+from lib.identity import validate_all_devices
 from lib.clean import handle_clean
 from lib.kme_instructions import print_manual_kme_copy_instructions
-
+from lib.inventory_builder import build_full_inventory, build_runtime_qkd_policy
 
 
 script_name = QKD["SCRIPT_NAME"]
@@ -59,57 +66,282 @@ def repo_path(path):
 # ----------------------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command")
+    parser = argparse.ArgumentParser(
+        prog="qkd_orchestrator.py",
+        description=(
+            "Quantum-Safe MACsec orchestrator.\n\n"
+            "Commands:\n"
+            "  create     Build runtime inventory, onbox artifacts, and PKI material\n"
+            "  deploy     Deploy scripts, certificates, and Junos configuration\n"
+            "  clean      Clean local runtime and optionally remote device configuration\n"
+            "  validate  Validate device readiness before or after deploy\n"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        metavar="<command>",
+    )
 
     # ---------------------------
     # CREATE COMMAND
     # ---------------------------
-    create = subparsers.add_parser("create")
-    create.add_argument("--inventory",required=True,help="Inventory YAML file")
-    create.add_argument("--pki-profile",choices=["self_signed", "hierarchical_ca"],default=None,help="Optional PKI profile override. If omitted, inventory YAML or default is used.")
-    create.add_argument("--rekey", action="store_true")
-    create.add_argument("--interval", type=int, default=60)
-    
-    #create.add_argument("--devices", nargs="+", required=True)
-    #create.add_argument("--ips", nargs="+", required=True)
-    #create.add_argument("--interfaces", nargs="+", required=True)
-    #create.add_argument("--kmes", nargs="+", required=True)
-    #create.add_argument("--platform", default="qfx")
-    #create.add_argument("--topology",required=True,choices=["pair", "chain", "ring", "hub"])
-    #create.add_argument("--hub", help="Hub device (for hub topology)")
-    #create.add_argument("--mode",choices=["static", "qkd"],default="qkd",required=False,help="MACsec key mode: 'static' for locally generated keys, 'qkd' for KME-driven key retrieval")
+    create = subparsers.add_parser(
+        "create",
+        help="Build runtime inventory, onbox artifacts, and PKI material",
+        description=(
+            "Create runtime artifacts from an inventory YAML file.\n\n"
+            "Generated runtime files:\n"
+            "  config/runtime/devices.yaml\n"
+            "  config/runtime/topology.yaml\n"
+            "  config/runtime/pki_profile.yaml\n"
+            "  config/runtime/qkd_policy.yaml\n"
+            "  config/runtime/<device>/qkd_onbox.py\n\n"
+            "Generated PKI material:\n"
+            "  certs/self_signed/...\n"
+            "  or\n"
+            "  certs/hierarchical_ca/...\n"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    create.add_argument(
+        "--inventory",
+        required=True,
+        help=(
+            "Inventory YAML file or inventory name.\n\n"
+            "Examples:\n"
+            "  --inventory ring_5_acx\n"
+            "  --inventory config/inventory/input/ring_5_acx.yml"
+        ),
+    )
+
+    create.add_argument(
+        "--pki-profile",
+        choices=["self_signed", "hierarchical_ca"],
+        default=None,
+        help=(
+            "Optional PKI profile override.\n\n"
+            "If omitted, priority is:\n"
+            "  1. pki_profile in inventory YAML\n"
+            "  2. self_signed default\n\n"
+            "Profiles:\n"
+            "  self_signed      Single Root CA for SAE and KME certs\n"
+            "  hierarchical_ca  Dual PKI with KME CA, Juniper CA, leaf certs, and trust exchange"
+        ),
+    )
+
+    create.add_argument(
+        "--rekey",
+        action="store_true",
+        default=None,
+        help=(
+            "Override qkd_policy.rekey_enabled to true.\n\n"
+            "When enabled, qkd_onbox.py may periodically request new keys from the KME "
+            "according to the runtime QKD policy."
+        ),
+    )
+
+    create.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help=(
+            "Override qkd_policy.interval_seconds.\n\n"
+            "This controls how often the QKD event/onbox logic is expected to run.\n"
+            "If omitted, the value from config/inventory/qkd_policy.yaml is used."
+        ),
+    )
+
+    create.add_argument(
+        "--key-batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Override qkd_policy.key_batch_size.\n\n"
+            "Maximum number of new keys requested or installed per rekey cycle.\n"
+            "Useful to avoid loading too many future keys on the router."
+        ),
+    )
+
+    create.add_argument(
+        "--max-installed-keys",
+        type=int,
+        default=None,
+        help=(
+            "Override qkd_policy.max_installed_keys.\n\n"
+            "Maximum number of QKD keys allowed to remain installed on the router "
+            "per connectivity association/key-chain."
+        ),
+    )
+
+    create.add_argument(
+        "--key-ttl",
+        type=int,
+        default=None,
+        help=(
+            "Override qkd_policy.key_ttl_seconds.\n\n"
+            "Optional key lifetime in seconds for locally installed QKD keys.\n"
+            "0 disables time-based key expiry."
+        ),
+    )
+
+    create.add_argument(
+        "--purge-on-kme-loss",
+        action="store_true",
+        default=None,
+        help=(
+            "Override qkd_policy.purge_on_kme_loss to true.\n\n"
+            "Allow locally installed QKD keys to be purged after prolonged KME "
+            "unreachability."
+        ),
+    )
+
+    create.add_argument(
+        "--purge-after",
+        type=int,
+        default=None,
+        help=(
+            "Override qkd_policy.purge_after_seconds.\n\n"
+            "Seconds of continuous KME unreachability after which local QKD keys "
+            "may be purged when purge_on_kme_loss is enabled."
+        ),
+    )
+
     # ---------------------------
     # DEPLOY COMMAND
     # ---------------------------
-    deploy = subparsers.add_parser("deploy")
+    deploy = subparsers.add_parser(
+        "deploy",
+        help="Deploy generated artifacts and Junos configuration to devices",
+        description=(
+            "Deploy runtime artifacts to devices.\n\n"
+            "This command expects create to have already generated:\n"
+            "  config/runtime/devices.yaml\n"
+            "  config/runtime/<device>/qkd_onbox.py\n"
+            "  certs/...\n"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
-    deploy.add_argument("--dry-run", action="store_true")
-    deploy.add_argument("--preview", action="store_true")
-    deploy.add_argument("-v", "--verbose", action="count", default=0)
-    deploy.add_argument("--ssh-key",help="Path to SSH private key (optional)")
-    deploy.add_argument("--debug",action="store_true")
-    
+    deploy.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show intended deploy actions without applying configuration changes.",
+    )
+
+    deploy.add_argument(
+        "--preview",
+        "--show-config",
+        dest="preview",
+        action="store_true",
+        help=(
+                "Render and display the Junos configuration that would be generated, "
+                "without pushing it to the devices."
+            )
+    )
+
+    deploy.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase log verbosity. Use -v, -vv, or -vvv.",
+    )
+
+    deploy.add_argument(
+        "--ssh-key",
+        help="Optional SSH private key path for device access.",
+    )
+
+    deploy.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug output in deployment/provisioning code.",
+    )
+
     # ---------------------------
     # CLEAN COMMAND
     # ---------------------------
-    clean = subparsers.add_parser("clean")
-    clean.add_argument("--local-only", action="store_true")
-    clean.add_argument("--pki", action="store_true", help="Also remove local PKI certs")
-    clean.add_argument("--full-macsec",action="store_true",help="Delete the full security macsec hierarchy on remote devices")
-    
+    clean = subparsers.add_parser(
+        "clean",
+        help="Clean local runtime artifacts and optionally remote device configuration",
+        description=(
+            "Clean generated artifacts and optionally device-side QKD/MACsec configuration.\n\n"
+            "Examples:\n"
+            "  python3 qkd_orchestrator.py clean --local-only\n"
+            "  python3 qkd_orchestrator.py clean --local-only --pki\n"
+            "  python3 qkd_orchestrator.py clean\n"
+            "  python3 qkd_orchestrator.py clean --pki\n"
+            "  python3 qkd_orchestrator.py clean --full-macsec\n"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    clean.add_argument(
+        "--local-only",
+        action="store_true",
+        help=(
+            "Clean only local generated runtime artifacts under config/runtime.\n"
+            "Does not connect to devices."
+        ),
+    )
+
+    clean.add_argument(
+        "--pki",
+        action="store_true",
+        help=(
+            "Also remove local PKI material under certs/.\n"
+            "Without this flag, local certs are preserved."
+        ),
+    )
+
+    clean.add_argument(
+        "--full-macsec",
+        action="store_true",
+        help=(
+            "Remote clean mode only.\n"
+            "Delete the full security macsec and authentication-key-chains hierarchy.\n"
+            "Use carefully."
+        ),
+    )
+
     # ---------------------------
-    # PREFLIGHT COMMAND
+    # VALIDATE COMMAND
     # ---------------------------
-    preflight = subparsers.add_parser("preflight")
-    preflight.add_argument(
+    validate = subparsers.add_parser(
+        "validate",
+        help="Validate device readiness and QKD runtime state",
+        description=(
+            "Validate QKD runtime readiness using config/runtime/devices.yaml.\n\n"
+            "This command connects to the devices and runs validation checks.\n"
+            "It does not generate inventory, does not deploy configuration, and does not clean anything.\n\n"
+            "Phases:\n"
+            "  predeploy   Validate device access, script user, SSH identity, and runtime prerequisites before deployment\n"
+            "  postdeploy  Validate deployed scripts, event-options, QKD status, and runtime health after deployment\n"
+            "  full        Run both predeploy and postdeploy validation checks\n\n"
+            "Examples:\n"
+            "  python3 qkd_orchestrator.py validate\n"
+            "  python3 qkd_orchestrator.py validate --phase predeploy\n"
+            "  python3 qkd_orchestrator.py validate --phase postdeploy\n"
+            "  python3 qkd_orchestrator.py validate --phase full\n"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    validate.add_argument(
         "--phase",
         choices=["predeploy", "postdeploy", "full"],
-        default="predeploy"
+        default="predeploy",
+        help=(
+            "Validation phase to run.\n"
+            "Default: predeploy."
+        ),
     )
-    
-    return parser.parse_args()
 
+    return parser.parse_args()
 # ----------------------------------------
 # TOPOLOGY BUILDER
 # ----------------------------------------
@@ -427,10 +659,14 @@ def handle_create(args):
         raise ValueError(f"Invalid inventory format: {inventory_path}")
 
     if "devices" not in inventory:
-        raise ValueError(f"Inventory missing required 'devices' section: {inventory_path}")
+        raise ValueError(
+            f"Inventory missing required 'devices' section: {inventory_path}"
+        )
 
     if not isinstance(inventory["devices"], list):
-        raise ValueError(f"Inventory 'devices' section must be a list: {inventory_path}")
+        raise ValueError(
+            f"Inventory 'devices' section must be a list: {inventory_path}"
+        )
 
     if not inventory["devices"]:
         raise ValueError(f"Inventory contains no devices: {inventory_path}")
@@ -443,20 +679,25 @@ def handle_create(args):
 
     for key in required_top_level:
         if key not in inventory:
-            raise ValueError(f"Inventory missing required top-level key '{key}': {inventory_path}")
+            raise ValueError(
+                f"Inventory missing required top-level key '{key}': {inventory_path}"
+            )
 
-    # Inventory is the source of truth.
-    # No args.topology / args.platform / args.mode anymore.
     topology = inventory["topology"]
     default_platform = inventory["platform"]
     mode = inventory["mode"]
     hub = inventory.get("hub")
 
-    # CLI may override YAML/default PKI profile.
+    # --------------------------
+    # Resolve PKI profile
+    # --------------------------
+    #
     # Priority:
-    # 1. --pki-profile
-    # 2. inventory pki_profile
-    # 3. self_signed
+    #   1. CLI --pki-profile
+    #   2. inventory pki_profile
+    #   3. self_signed
+    #
+
     pki_profile = (
         args.pki_profile
         or inventory.get("pki_profile")
@@ -474,7 +715,6 @@ def handle_create(args):
 
     # --------------------------
     # Reset local runtime artifacts
-    # This is local-only and does not touch remote devices.
     # --------------------------
 
     reset_local_runtime_for_create()
@@ -482,15 +722,11 @@ def handle_create(args):
     # --------------------------
     # Runtime identity
     # --------------------------
-    #
-    # QKD["SCRIPT_USER"] is the single source of truth.
-    # Do not allow inventory_base.yaml / secrets to silently override it.
-    #
 
     script_user = QKD["SCRIPT_USER"]
 
     # --------------------------
-    # Extract deploy/login auth from secrets
+    # Extract deploy/login auth from inventory_base secrets
     # --------------------------
 
     secrets = base.get("secrets", {})
@@ -504,17 +740,16 @@ def handle_create(args):
         if user and pwd:
             global_auth = {
                 "username": user,
-                "password": pwd
+                "password": pwd,
             }
 
     device_auth_map = base.get("devices", {})
 
     # --------------------------
-    # Build device records directly from inventory YAML
+    # Build device records from inventory YAML
     # --------------------------
 
     devices = []
-
     seen_names = set()
 
     for i, inv_dev in enumerate(inventory["devices"], start=1):
@@ -550,15 +785,11 @@ def handle_create(args):
             )
 
         # Priority:
-        # 1. auth directly inside inventory device
-        # 2. per-device auth from inventory_base.yaml
-        # 3. global auth from inventory_base.yaml secrets
-        # 4. fallback auth
-        #
-        # NOTE:
-        # This auth is for orchestrator deploy/login.
-        # It is NOT the qkd_onbox runtime identity.
-        #
+        #   1. auth directly inside inventory device
+        #   2. per-device auth from inventory_base.yaml
+        #   3. global auth from inventory_base.yaml secrets
+        #   4. fallback auth
+
         device_auth = inv_dev.get("auth")
 
         if not device_auth:
@@ -570,7 +801,7 @@ def handle_create(args):
             else:
                 device_auth = {
                     "username": "admin",
-                    "password": "admin123"
+                    "password": "admin123",
                 }
 
         devices.append(
@@ -587,7 +818,7 @@ def handle_create(args):
         )
 
     # --------------------------
-    # Build topology + runtime inventory
+    # Build topology + runtime inventory + runtime PKI profile
     # --------------------------
 
     build_full_inventory(
@@ -596,7 +827,7 @@ def handle_create(args):
         hub=hub,
         mode=mode,
         out_dir=CONFIG["runtime_dir"],
-        pki_profile=pki_profile
+        pki_profile=pki_profile,
     )
 
     print(f"✅ Inventory created ({topology}, mode={mode}, pki={pki_profile})")
@@ -604,8 +835,40 @@ def handle_create(args):
     print(f"✅ QKD runtime script_user fixed to: {script_user}")
 
     # --------------------------
+    # Build runtime QKD policy
+    # --------------------------
+    #
+    # Source:
+    #   config/inventory/qkd_policy.yaml
+    #
+    # Runtime:
+    #   config/runtime/qkd_policy.yaml
+    #
+    # CLI arguments override only when provided.
+    #
+
+    policy_template = load_qkd_policy_template()
+
+    build_runtime_qkd_policy(
+        out_dir=CONFIG["runtime_dir"],
+        policy_template=policy_template,
+        rekey_enabled=args.rekey,
+        interval_seconds=args.interval,
+        key_batch_size=args.key_batch_size,
+        max_installed_keys=args.max_installed_keys,
+        key_ttl_seconds=args.key_ttl,
+        purge_on_kme_loss=args.purge_on_kme_loss,
+        purge_after_seconds=args.purge_after,
+    )
+
+    # --------------------------
     # Build per-device onbox artifacts
     # --------------------------
+    #
+    # Important:
+    # qkd_policy.yaml must already exist before build_onbox_artifacts(),
+    # because onbox_builder.py now loads runtime QKD policy.
+    #
 
     runtime_devices = load_runtime_devices()
 
@@ -614,8 +877,8 @@ def handle_create(args):
     print("✅ Onbox artifacts generated")
 
     for dev_name, artifact in artifacts.items():
-        print(f" {dev_name}: {repo_path(artifact['script'])}")
-        
+        print(f"  {dev_name}: {repo_path(artifact['script'])}")
+
     # --------------------------
     # PKI generation
     # --------------------------
@@ -658,7 +921,6 @@ def handle_create(args):
         print("✅ PKI already exists - skipping generation")
         print_manual_kme_copy_instructions(profile)
 
-
 # ----------------------------------------
 # DEPLOY HANDLER
 # ----------------------------------------
@@ -670,11 +932,45 @@ def handle_deploy(args):
     devices = load_runtime_devices()
 
     # -------------------------------------------------
-    # Identity preflight before deploying anything.
-    # This creates/checks admin SSH identity, cleans stale runtime files,
-    # distributes peer authorized_keys, and verifies admin peer SSH.
+    # Preview / dry-run mode
     # -------------------------------------------------
-    preflight_all_devices(
+    #
+    # In preview/dry-run mode we must not push scripts, copy files,
+    # or require validate connectivity.
+    #
+    # This is useful to inspect the generated Junos configuration
+    # even when devices are not reachable.
+    #
+
+    if args.preview or args.dry_run:
+
+        if args.preview:
+            print("=== DEPLOY PREVIEW MODE ===")
+            print("Rendering generated Junos configuration only.")
+            print("No device validation, SCP, script install, or commit will be attempted.")
+
+        elif args.dry_run:
+            print("=== DEPLOY DRY-RUN MODE ===")
+            print("Simulating deploy workflow without applying changes.")
+            print("No SCP, script install, or commit will be attempted.")
+
+        run_provisioning(
+            log=log,
+            dry_run=True,
+            preview=args.preview,
+            ssh_key=args.ssh_key,
+            debug=args.debug,
+        )
+
+        return
+
+    # -------------------------------------------------
+    # Real deploy mode
+    # -------------------------------------------------
+    # Validate devices before touching anything.
+    # -------------------------------------------------
+
+    validate_all_devices(
         devices,
         phase="predeploy"
     )
@@ -682,6 +978,7 @@ def handle_deploy(args):
     # -------------------------------------------------
     # Load pre-generated per-device onbox artifacts.
     # -------------------------------------------------
+
     artifacts = {}
 
     for name in devices.keys():
@@ -700,6 +997,7 @@ def handle_deploy(args):
     # -------------------------------------------------
     # Deploy qkd_onbox.py to /var/db/scripts/op and /var/db/scripts/event.
     # -------------------------------------------------
+
     deploy_onbox(
         log,
         devices,
@@ -708,35 +1006,48 @@ def handle_deploy(args):
 
     # -------------------------------------------------
     # Push PKI + Junos configuration.
-    # This must configure:
-    #   set system scripts language python3
-    #   set event-options event-script file qkd_onbox.py python-script-user admin
     # -------------------------------------------------
+
     run_provisioning(
         log=log,
-        dry_run=args.dry_run,
-        preview=args.preview,
+        dry_run=False,
+        preview=False,
         ssh_key=args.ssh_key,
-        debug=args.debug
+        debug=args.debug,
     )
 
     # -------------------------------------------------
     # Post-deploy validation.
-    # This verifies event-options, embedded onbox config, peer SSH,
-    # qkd status as admin, and absence of STATE SAVE ERROR.
     # -------------------------------------------------
-    preflight_all_devices(
+
+    validate_all_devices(
         devices,
         phase="postdeploy"
     )
 
-def handle_preflight(args):
+
+def handle_validate(args):
     devices = load_runtime_devices()
 
-    preflight_all_devices(
-        devices,
-        phase=args.phase
-    )
+    print("=== QKD validation ===")
+    print(f"phase = {args.phase}")
+    print("")
+
+    try:
+        validate_all_devices(
+            devices,
+            phase=args.phase
+        )
+
+    except Exception as exc:
+        print("")
+        print("=== QKD validation failed ===")
+        print(f"phase = {args.phase}")
+        print("")
+        print(str(exc))
+        print("")
+        sys.exit(1)
+
 
 # ----------------------------------------
 # MAIN
@@ -752,11 +1063,11 @@ def main():
         handle_deploy(args)
     elif args.command == "clean":
          handle_clean(args)
-    elif args.command == "preflight":
-        handle_preflight(args)
+    elif args.command == "validate":
+        handle_validate(args)
         
     else:
-        print("Use: create | deploy | clean | preflight")
+        print("Use: create | deploy | validate | clean")
 
 
 if __name__ == "__main__":

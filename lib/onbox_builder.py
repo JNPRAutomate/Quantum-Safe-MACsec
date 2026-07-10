@@ -2,14 +2,14 @@ from pathlib import Path
 import json
 
 from lib.settings import CONFIG, QKD
-from lib.config import load_runtime_pki_profile
+from lib.config import load_runtime_pki_profile, load_runtime_qkd_policy
 
 # ----------------------------
 # PATHS
 # ----------------------------
 
 # repo root:
-#   <repo>/newMACSEC39_ready_for_git
+#   <repo>/my_repo_folder
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Source onbox template:
@@ -40,21 +40,60 @@ def build_onbox_config(name, device):
     ssh_key_name = QKD["SSH_KEY_NAME"]
 
     runtime_pki = load_runtime_pki_profile()
-    ca_cert = runtime_pki["pki"]["ca_cert"]
-    
+    pki = runtime_pki["pki"]
+    pki_profile = pki["profile"]
+
+    # Juniper/onbox side trust material.
+    # New schema:
+    #   pki.juniper.trust_bundle
+    #   pki.juniper.ca_cert
+    #
+    # Legacy schema fallback:
+    #   pki.ca_cert
+    juniper_pki = pki.get("juniper", {})
+
+    ca_cert = (
+        juniper_pki.get("ca_cert")
+        or pki.get("ca_cert")
+    )
+
+    trust_bundle = (
+        juniper_pki.get("trust_bundle")
+        or pki.get("trust_bundle")
+    )
+
+    if not ca_cert:
+        raise ValueError(
+            "Missing Juniper CA certificate name in runtime PKI profile. "
+            "Expected pki.juniper.ca_cert or legacy pki.ca_cert."
+        )
+        
+    runtime_qkd_policy = load_runtime_qkd_policy()
+    qkd_policy = runtime_qkd_policy.get("qkd_policy", {})
+
     config = {
         "local_sae": device["qkd"]["sae_id"],
         "kme_ip": device["kme"]["ip"],
-        "ca_cert": ca_cert,
 
+        # PKI runtime profile
+        "pki_profile": pki_profile,
+        "ca_cert": ca_cert,
+        "trust_bundle": trust_bundle,
+
+        # QKD runtime policy
+        "qkd_policy": qkd_policy,
+
+        # Runtime identity
         "script_user": script_user,
         "script_dir": script_dir,
         "ssh_key": f"{ssh_home_base}/{script_user}/.ssh/{ssh_key_name}",
 
+        # Logging
         "log_file": QKD["LOG_FILE"],
         "log_max_bytes": QKD["LOG_MAX_BYTES"],
         "log_backup_count": QKD["LOG_BACKUP_COUNT"],
 
+        # Per-device links
         "links": device.get("links", [])
     }
 

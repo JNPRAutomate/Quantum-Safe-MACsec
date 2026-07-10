@@ -218,6 +218,44 @@ def junos_output_has_error(stdout="", stderr=""):
 def db_state_file(peer, iface):
     return f"{STATE_DIR}/qkd_db_{peer}_{iface.replace('/','_')}.json"
 
+
+
+
+### qkd policy for key number, key rotation, etc.. 
+def qkd_policy():
+    return CONFIG.get("qkd_policy", {})
+
+
+def max_installed_keys():
+    policy = qkd_policy()
+
+    value = int(policy.get("max_installed_keys", 5))
+
+    if value < 1:
+        return 1
+
+    return value
+
+
+def key_batch_size():
+    policy = qkd_policy()
+
+    value = int(policy.get("key_batch_size", 5))
+
+    if value < 1:
+        return 1
+
+    return min(value, max_installed_keys())
+
+
+def qkd_key_index_from_generation(generation):
+    return int(generation) % max_installed_keys()
+
+
+def qkd_key_index_from_time():
+    return int(time.time()) % max_installed_keys()
+ 
+###
 # Return the stable MACsec connectivity-association name for this link.
 # Keychain model:
 #   - one stable CA per link
@@ -1746,10 +1784,11 @@ def install_keychain_key(
     cak = k[:32].hex()
     ckn = ckn_from_key_id(key_id)
 
+    # This generates 64 keys (0...63) inside the security authentication-key-chain stanza 
     if generation is None:
-        key_index = int(time.time()) % 64
+        key_index = qkd_key_index_from_time()
     else:
-        key_index = int(generation) % 64
+        key_index = qkd_key_index_from_generation(generation)
 
     if not start_time:
         start_time = junos_start_time_from_epoch(

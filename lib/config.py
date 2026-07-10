@@ -94,3 +94,15 @@ def resolve_inventory(path):
     raise FileNotFoundError(candidate)
 
 
+def load_qkd_policy_template():
+    return load_yaml(
+        BASE_DIR
+        / CONFIG["qkd_policy_file"]
+    )
+
+
+def load_runtime_qkd_policy():
+    return load_yaml(
+        BASE_DIR
+        / CONFIG["runtime_qkd_policy_file"]
+    )

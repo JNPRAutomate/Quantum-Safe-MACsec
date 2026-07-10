@@ -1,0 +1,8 @@
+qkd_policy:
+  rekey_enabled: false
+  interval_seconds: 60
+  key_batch_size: 5
+  max_installed_keys: 5
+  key_ttl_seconds: 0
+  purge_on_kme_loss: false
+  purge_after_seconds: 0

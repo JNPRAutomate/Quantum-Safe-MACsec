@@ -1,5 +1,12 @@
 pki:
   profile: hierarchical_ca
   source_config: config/pki/hierarchical_ca.yml
-  certs_dir: certs/dual_pki
-  ca_cert: trusted-kme-ca-bundle.crt
+  output_dir: certs/hierarchical_ca
+  juniper:
+    certs_dir: certs/hierarchical_ca/juniper_pki/certs
+    trust_bundle: certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt
+    ca_cert: trusted-kme-ca-bundle.crt
+  kme:
+    certs_dir: certs/hierarchical_ca/kme_pki/certs
+    trust_bundle: certs/hierarchical_ca/trust_exchange/install_on_kme/trusted-juniper-ca-bundle.crt
+    runtime_root_crt: root.crt

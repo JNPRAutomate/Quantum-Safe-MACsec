@@ -1565,3 +1565,54 @@ kme_orchestrator:
         ├── juniper-root-ca.crt
         └── juniper-issuing-ca.crt
 
+## rekey, chiavi nel jnpr box
+allora rekey serve per il rekey e mi serve, e anche interval dovrebbe servire molto per capire su quale intervallo lévent script agisce se non mi ricordo male. Inoltre servirebbe capire quante chiavi ho nel security authentication-key stanza perche'io ne vedo 64 0 63 mentre lésigenza del cliente potrebbe essere: cliente installa chiavi per la prima volta (diciamo 5 chiavi per esempio) e poi stacca il kme per un periodo lungo tipo un anno e poi il kme torna e gli da altre 5 chiavi... oppure caso 2. una persona ruba il router con le chiavi e quindi voglio prevenire che vengano generate piu'di 5 chiavi alla volta e magari dopo un certo tempo voglio che le chiavi vengano cancellate dalla macchina se non cé'piu'connessione con il kme 
+
+
+
+--interval
+    ogni quanto l’event script viene richiamato / schedulato
+
+--rekey
+    abilita la logica di rifornimento periodico delle chiavi dal KME
+
+--key-batch-size
+    quante nuove chiavi massimo chiedo/installo per ciclo
+
+--max-installed-keys
+    quante chiavi massimo voglio lasciare configurate sul router
+
+--key-ttl
+    dopo quanto tempo una chiave locale diventa stale e può essere rimossa
+
+--purge-on-kme-loss
+    se il KME non è raggiungibile, dopo una certa soglia cancello le chiavi locali
+
+
+## Caso 1 — cliente installa poche chiavi e poi KME giù a lungo
+installo 5 chiavi
+KME offline per 1 anno
+KME torna online
+scarico altre 5 chiavi
+
+max-installed-keys = 5
+key-batch-size = 5
+rekey enabled
+purge-on-kme-loss = false
+
+il router conserva massimo 5 chiavi;
+se il KME non c’è, continua con quelle già installate;
+quando il KME torna, può rinnovare il set;
+non accumula 64 chiavi.
+
+## Caso 2 — rischio furto router
+max-installed-keys = 5
+key-batch-size = 5
+key-ttl = 86400
+purge-on-kme-loss = true
+purge-after = 86400
+
+massimo 5 chiavi installate;
+le chiavi vecchie vengono rimosse dopo un tempo;
+se il KME resta non raggiungibile oltre una soglia, pulisci le chiavi locali;
+se qualcuno ruba il router, non trova 64 chiavi pre-caricate.

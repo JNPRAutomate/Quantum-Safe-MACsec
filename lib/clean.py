@@ -56,7 +56,7 @@ def clean_certs():
     This is controlled by --pki.
     """
 
-    certs_dir = BASE_DIR / "certs"
+    certs_dir = BASE_DIR / CONFIG["certs_dir"]
 
     if not certs_dir.exists():
         return
@@ -145,7 +145,8 @@ def clean_device(name, device, full_macsec=False):
     script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
-
+    remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
+    
     print(f"Cleaning device {name} {ip}")
 
     iface_candidates, ca_candidates, keychain_candidates = (
@@ -213,17 +214,19 @@ def clean_device(name, device, full_macsec=False):
         #
         # Remove certs.
         #
-        f"rm -rf {script_dir}/certs",
-        "rm -rf /var/db/scripts/certs",
-        "rm -rf /var/db/scripts/op/certs",
-        "rm -rf /var/db/scripts/event/certs",
+        f"rm -rf {remote_cert_dir}",
+        f"rm -rf {op_script_dir}/certs",
+        f"rm -rf {event_script_dir}/certs",
 
         #
         # Verify.
         #
         "echo '=== QKD CLEAN VERIFY START ==='",
-        "ls -1 /var/tmp/qkd*",
-        "echo '=== QKD CLEAN VERIFY END ==='",
+        "echo '[var/tmp]'; ls -1 /var/tmp/qkd* 2>/dev/null || true",
+        "echo '[scripts/op]'; ls -1 /var/db/scripts/op/qkd_onbox.py 2>/dev/null || true",
+        "echo '[scripts/event]'; ls -1 /var/db/scripts/event/qkd_onbox.py 2>/dev/null || true",
+        "echo '[certs]'; ls -ld /var/db/scripts/certs /var/db/scripts/op/certs /var/db/scripts/event/certs 2>/dev/null || true",
+        "echo '=== QKD CLEAN VERIFY END ==='"
     ]
 
     shell_cmd = "; ".join(cleanup_cmds)
@@ -242,6 +245,13 @@ def clean_device(name, device, full_macsec=False):
         rsp = dev.rpc.request_shell_execute(
             command=shell_cmd
         )
+        
+        try:
+            output = etree.tostring(rsp, encoding="unicode", method="text")
+            if output.strip():
+                print(output.strip())
+        except Exception:
+            pass
 
         print(f"Device clean complete: {name}")
 
@@ -266,71 +276,91 @@ def handle_clean(args):
     Clean handler used by qkd_orchestrator.py.
 
     Behavior:
-      - if --local-only: clean local runtime/certs only
-      - otherwise:
-          1. load runtime devices.yaml
-          2. fallback to inventory_base.yaml if needed
-          3. clean each remote device
-          4. clean local runtime
-          5. optionally clean local certs with --pki
+      - --local-only:
+          clean local runtime only
+      - --local-only --pki:
+          clean local runtime and local certs
+      - no --local-only:
+          clean remote devices first, then local runtime
+      - no --local-only --pki:
+          clean remote devices, local runtime, and local certs
 
-    Flags:
-      --local-only
-      --pki
-      --full-macsec
+    Important:
+      Local certs are removed ONLY when --pki is explicitly provided.
     """
+
+    print("=== QKD clean ===")
+    print(f"local_only = {args.local_only}")
+    print(f"pki        = {args.pki}")
+    print(f"full_macsec = {args.full_macsec}")
+    print("")
 
     devices_file = BASE_DIR / CONFIG["runtime_dir"] / "devices.yaml"
 
+    # ----------------------------------------
+    # LOCAL ONLY MODE
+    # ----------------------------------------
+    if args.local_only:
+
+        clean_runtime()
+
+        if args.pki:
+            clean_certs()
+        else:
+            print("Skipping local cert cleanup. Use --pki to remove certs.")
+
+        print("Local clean complete")
+        return
+
+    # ----------------------------------------
+    # REMOTE + LOCAL MODE
+    # ----------------------------------------
     devices = {}
 
-    if not args.local_only:
+    if devices_file.exists():
 
-        if devices_file.exists():
+        with open(devices_file) as f:
+            data = yaml.safe_load(f) or {}
 
-            with open(devices_file) as f:
-                data = yaml.safe_load(f) or {}
+        devices = data.get("devices", {})
 
-            devices = data.get("devices", {})
+        print("Using runtime devices.yaml")
 
-            print("Using runtime devices.yaml")
+    else:
 
+        print("No runtime devices.yaml found -> fallback to inventory_base")
+
+        base = load_inventory_base()
+        devices = base.get("devices", {})
+
+        if devices:
+            print("Using inventory_base devices")
         else:
+            print("No devices found anywhere -> skipping remote device cleanup")
 
-            print("No runtime devices.yaml found -> fallback to inventory_base")
+    failed = []
 
-            base = load_inventory_base()
-            devices = base.get("devices", {})
+    for name, device in devices.items():
+        ok = clean_device(
+            name,
+            device,
+            full_macsec=args.full_macsec
+        )
 
-            if devices:
-                print("Using inventory_base devices")
-            else:
-                print("No devices found anywhere -> skipping remote device cleanup")
+        if not ok:
+            failed.append(name)
 
-        failed = []
-
-        for name, device in devices.items():
-            ok = clean_device(
-                name,
-                device,
-                full_macsec=args.full_macsec
-            )
-
-            if not ok:
-                failed.append(name)
-
-        if failed:
-            raise RuntimeError(
-                f"Remote clean failed for devices: {', '.join(failed)}. "
-                f"Local runtime was not removed."
-            )
+    if failed:
+        raise RuntimeError(
+            f"Remote clean failed for devices: {', '.join(failed)}. "
+            f"Local runtime was not removed."
+        )
 
     clean_runtime()
 
     if args.pki:
         clean_certs()
-
-    if args.local_only:
-        print("Local clean complete")
     else:
-        print("Full clean complete")
+        print("Skipping local cert cleanup. Use --pki to remove certs.")
+
+    print("Full clean complete")
