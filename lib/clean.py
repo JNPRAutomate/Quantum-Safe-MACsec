@@ -136,210 +136,361 @@ def collect_qkd_clean_candidates(device):
 # CLEAN ONE REMOTE DEVICE
 # ----------------------------------------
 def clean_device(name, device, full_macsec=False):
+    try:
+        ip = device["ip"]
+        user = device["auth"]["username"]
+        passwd = device["auth"]["password"]
 
-    ip = device["ip"]
-    user = device["auth"]["username"]
-    passwd = device["auth"]["password"]
+        script_name = QKD["SCRIPT_NAME"]
+        script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
+        op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
+        event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
+        remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
 
-    script_name = QKD["SCRIPT_NAME"]
-    script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
-    op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
-    event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
-    remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
+        print(f"Cleaning device {name} {ip}", flush=True)
 
-    print(f"Cleaning device {name} {ip}")
+        iface_candidates, ca_candidates, keychain_candidates = (
+            collect_qkd_clean_candidates(device)
+        )
 
-    iface_candidates, ca_candidates, keychain_candidates = (
-        collect_qkd_clean_candidates(device)
-    )
+        def safe_iface_name(iface):
+            return iface.replace("/", "_")
 
-    config_cmds = [
-        "delete event-options generate-event QKD_TIMER",
-        "delete event-options policy QKD",
-        "delete event-options policy QKD_POLICY",
-        f"delete event-options event-script file {script_name}",
-        f"delete system scripts op file {script_name}",
-    ]
+        def device_sae_id():
+            qkd = device.get("qkd", {}) or {}
 
-    if full_macsec:
+            return (
+                qkd.get("sae_id")
+                or device.get("local_sae")
+                or device.get("sae")
+                or device.get("sae_id")
+                or name
+            )
 
-        config_cmds.append("delete security macsec")
-        config_cmds.append("delete security authentication-key-chains")
+        def runtime_tmp_paths():
+            sae = device_sae_id()
 
-    else:
+            paths = [
+                f"/var/tmp/{script_name}",
+                f"/var/tmp/qkd_onbox_{sae}.lock",
+            ]
+
+            for link in device.get("links", []):
+                iface = link.get("interface")
+                peer = link.get("peer")
+
+                if not iface or not peer:
+                    continue
+
+                safe_iface = safe_iface_name(iface)
+
+                paths.extend(
+                    [
+                        f"/var/tmp/qkd_db_{peer}_{safe_iface}.json",
+                        f"/var/tmp/qkd_debug_{sae}_{safe_iface}.log",
+                        f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_install-key.lock",
+                        f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_status.lock",
+                    ]
+                )
+
+            deduped = []
+
+            for path in paths:
+                if path not in deduped:
+                    deduped.append(path)
+
+            return deduped
+
+        runtime_paths = runtime_tmp_paths()
+        soft_runtime_paths = [
+            "/var/tmp/qkd_debug.log",
+        ]
+        config_cmds = [
+            "delete event-options generate-event QKD_TIMER",
+            "delete event-options policy QKD",
+            "delete event-options policy QKD_POLICY",
+            f"delete event-options event-script file {script_name}",
+            f"delete system scripts op file {script_name}",
+        ]
+
+        if full_macsec:
+            config_cmds.append("delete security macsec")
+            config_cmds.append("delete security authentication-key-chains")
+        else:
+            for iface in iface_candidates:
+                config_cmds.append(
+                    f"delete security macsec interfaces {iface}"
+                )
+
+            for ca in ca_candidates:
+                config_cmds.append(
+                    f"delete security macsec connectivity-association {ca}"
+                )
+
+            for keychain in keychain_candidates:
+                config_cmds.append(
+                    f"delete security authentication-key-chains key-chain {keychain}"
+                )
 
         for iface in iface_candidates:
             config_cmds.append(
-                f"delete security macsec interfaces {iface}"
+                f"delete interfaces {iface} description"
             )
 
-        for ca in ca_candidates:
-            config_cmds.append(
-                f"delete security macsec connectivity-association {ca}"
-            )
+        config_body = "; ".join(config_cmds)
 
-        for keychain in keychain_candidates:
-            config_cmds.append(
-                f"delete security authentication-key-chains key-chain {keychain}"
-            )
-
-    for iface in iface_candidates:
-        config_cmds.append(
-            f"delete interfaces {iface} description"
+        config_cleanup_cmd = (
+            f"cli -c 'configure; {config_body}; commit; exit'"
         )
 
-    config_body = "; ".join(config_cmds)
-
-    config_cleanup_cmd = (
-        f"cli -c 'configure; {config_body}; commit; exit'"
-    )
-
-    file_cleanup_cmd = "; ".join(
-        [
-            #
-            # Remove deployed scripts.
-            #
+        file_cleanup_parts = [
             f"rm -f {event_script_dir}/{script_name}",
             f"rm -f {op_script_dir}/{script_name}",
             f"rm -f /var/tmp/{script_name}",
             "rm -f /var/db/scripts/event/qkd.conf",
-
-            #
-            # Remove runtime files.
-            #
-            # IMPORTANT:
-            # Do not use >/dev/null 2>&1 here.
-            # Junos request_shell_execute may run through csh/tcsh
-            # and can throw 'Ambiguous output redirect'.
-            #
-            "rm -f /var/tmp/qkd_db_*",
-            "rm -f /var/tmp/qkd_debug*",
-            "rm -rf /var/tmp/qkd_onbox_*",
-
-            #
-            # Remove certs.
-            #
             f"rm -rf {remote_cert_dir}",
             f"rm -rf {script_dir}/certs",
             f"rm -rf {op_script_dir}/certs",
             f"rm -rf {event_script_dir}/certs",
         ]
-    )
 
-    verify_cmd = "; ".join(
-        [
-            "echo '=== QKD CLEAN VERIFY START ==='",
+        for path in runtime_paths:
+            if path.endswith(".lock"):
+                file_cleanup_parts.append(f"rm -rf {path}")
+            else:
+                file_cleanup_parts.append(f"rm -f {path}")
+        for path in soft_runtime_paths:
+            file_cleanup_parts.append(f"rm -f {path}")
+        
+        file_cleanup_cmd = "; ".join(file_cleanup_parts)
 
-            #"echo '[config qkd/macsec/auth-key-chain]'",
-            #"cli -c \"show configuration | display set | match 'qkd|QKD|macsec|authentication-key-chains'\"",
-            "echo '[config display set]'",
-            "cli -c \"show configuration | display set\"",
-            
-            "echo '[scripts]'",
-            f"ls -l {op_script_dir}/{script_name}",
-            f"ls -l {event_script_dir}/{script_name}",
-            f"ls -l /var/tmp/{script_name}",
-
-            "echo '[certs]'",
-            f"ls -ld {remote_cert_dir}",
-            f"ls -ld {script_dir}/certs",
-            f"ls -ld {op_script_dir}/certs",
-            f"ls -ld {event_script_dir}/certs",
-
-            "echo '[runtime tmp]'",
-            "ls -l /var/tmp/qkd*",
-
-            "echo '=== QKD CLEAN VERIFY END ==='",
-        ]
-    )
-
-    dev = Device(
-        host=ip,
-        user=user,
-        passwd=passwd,
-        port=22
-    )
-
-    def rpc_text(rsp):
-        try:
-            return etree.tostring(
-                rsp,
-                encoding="unicode",
-                method="text"
-            ).strip()
-        except Exception:
-            return str(rsp).strip()
-
-    def run_step(label, command):
-        print(f"[{name}] running {label}")
-
-        rsp = dev.rpc.request_shell_execute(
-            command=command
+        dev = Device(
+            host=ip,
+            user=user,
+            passwd=passwd,
+            port=22,
         )
 
-        output = rpc_text(rsp)
+        def rpc_text(rsp):
+            try:
+                return etree.tostring(
+                    rsp,
+                    encoding="unicode",
+                    method="text",
+                ).strip()
+            except Exception:
+                return str(rsp).strip()
 
-        if output:
-            print(output)
+        ##
+        def run_shell(label, command, strict=True, show_output=True, show_label=True):
+            if show_label:
+                print(f"[{name}] {label}", flush=True)
 
-        bad_markers = [
-            "Ambiguous output redirect",
-            "syntax error",
-            "commit failed",
-            "unknown command",
-            "error:",
-        ]
-
-        low = output.lower()
-
-        if any(marker.lower() in low for marker in bad_markers):
-            raise RuntimeError(
-                f"{label} failed on {name}\n"
-                f"command={command}\n"
-                f"output={output}"
+            rsp = dev.rpc.request_shell_execute(
+                command=command
             )
 
-        return output
+            output = rpc_text(rsp)
 
-    try:
+            if show_output and output:
+                for line in output.splitlines():
+                    line = line.strip()
 
+                    if not line:
+                        continue
+                    
+                    if "warning: statement not found" in line:
+                        continue
+                    
+                    if "Entering configuration mode" in line:
+                        continue
+                    
+                    if "Exiting configuration mode" in line:
+                        continue
+                    
+                    if "No match" in line:
+                        continue
+                    
+                    if line == "True":
+                        continue
+                    
+                    print(f"[{name}] {line}", flush=True)
+
+            bad_markers = [
+                "Ambiguous output redirect",
+                "syntax error",
+                "commit failed",
+                "unknown command",
+                "error:",
+            ]
+
+            low = output.lower()
+
+            if strict and any(marker.lower() in low for marker in bad_markers):
+                raise RuntimeError(
+                    f"{label} failed on {name}\n"
+                    f"command={command}\n"
+                    f"output={output}"
+                )
+
+            return output
+        ##
+        def run_cli_show(command):
+            rsp = dev.rpc.cli(
+                command,
+                format="text",
+            )
+
+            return rpc_text(rsp)
+
+        ##
+        def remote_path_exists(path):
+            output = run_shell(
+                f"verify path {path}",
+                (
+                    f"test -e {path} "
+                    f"&& echo EXISTS:{path} "
+                    f"|| true"
+                ),
+                strict=False,
+                show_output=False,
+                show_label=False,
+            )
+        
+            return f"EXISTS:{path}" in output
+        ##
+        
         dev.open()
 
-        run_step(
-            "config cleanup",
-            config_cleanup_cmd
-        )
+        try:
+            run_shell(
+                "config cleanup",
+                config_cleanup_cmd,
+                strict=True,
+            )
 
-        run_step(
-            "file/cert/runtime cleanup",
-            file_cleanup_cmd
-        )
+            run_shell(
+                "file/cert/runtime cleanup",
+                file_cleanup_cmd,
+                strict=False,
+            )
 
-        #
-        # Verify step is informational.
-        # It may show 'No such file' for removed files, which is fine.
-        # But run_step still catches real shell/parser errors.
-        #
-        run_step(
-            "verify cleanup",
-            verify_cmd
-        )
+            failures = []
 
-        print(f"Device clean complete: {name}")
+            set_output = run_cli_show(
+                "show configuration | display set"
+            )
 
-        return True
+            forbidden_patterns = [
+                "set event-options generate-event QKD_TIMER",
+                "set event-options policy QKD",
+                "set event-options policy QKD_POLICY",
+                f"set event-options event-script file {script_name}",
+                f"set system scripts op file {script_name}",
+            ]
+
+            if full_macsec:
+                forbidden_patterns.extend(
+                    [
+                        "set security macsec ",
+                        "set security authentication-key-chains ",
+                    ]
+                )
+            else:
+                for iface in iface_candidates:
+                    forbidden_patterns.append(
+                        f"set security macsec interfaces {iface}"
+                    )
+
+                for ca in ca_candidates:
+                    forbidden_patterns.append(
+                        f"set security macsec connectivity-association {ca}"
+                    )
+
+                for keychain in keychain_candidates:
+                    forbidden_patterns.append(
+                        f"set security authentication-key-chains key-chain {keychain}"
+                    )
+
+            for iface in iface_candidates:
+                forbidden_patterns.append(
+                    f"set interfaces {iface} description"
+                )
+
+            config_leftovers = []
+
+            for line in set_output.splitlines():
+                line = line.strip()
+
+                for pattern in forbidden_patterns:
+                    if pattern in line:
+                        config_leftovers.append(line)
+                        break
+
+            if config_leftovers:
+                failures.append(
+                    "configuration leftovers:\n"
+                    + "\n".join(config_leftovers)
+                )
+
+            paths_should_be_absent = [
+                f"{op_script_dir}/{script_name}",
+                f"{event_script_dir}/{script_name}",
+                f"/var/tmp/{script_name}",
+                "/var/db/scripts/event/qkd.conf",
+                remote_cert_dir,
+                f"{script_dir}/certs",
+                f"{op_script_dir}/certs",
+                f"{event_script_dir}/certs",
+            ]
+
+            for path in runtime_paths:
+                if path not in paths_should_be_absent:
+                    paths_should_be_absent.append(path)
+
+            file_leftovers = []
+
+            for path in paths_should_be_absent:
+                if remote_path_exists(path):
+                    file_leftovers.append(path)
+            
+            soft_leftovers = []
+
+            for path in soft_runtime_paths:
+                if remote_path_exists(path):
+                    soft_leftovers.append(path)
+
+            if soft_leftovers:
+                print(f"[{name}] cleanup warning: soft runtime leftovers:")
+                for path in soft_leftovers:
+                    print(f"[{name}]   {path}")
+            
+            if file_leftovers:
+                failures.append(
+                    "file/runtime/cert leftovers:\n"
+                    + "\n".join(file_leftovers)
+                )
+
+            if failures:
+                print(f"[FAIL] Device clean verification failed: {name}")
+
+                for item in failures:
+                    print(item)
+
+                return False
+
+            print(f"[OK] Device clean complete: {name}")
+            return True
+
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
 
     except Exception as e:
-        print(f"Device clean failed: {name}: {e}")
-        return False
-
-    finally:
-
-        try:
-            dev.close()
-        except Exception:
-            pass
-    
+        print(f"[FAIL] Device clean failed: {name}: {e}")
+        return False        
 
 # ----------------------------------------
 # CLEAN HANDLER
@@ -437,3 +588,6 @@ def handle_clean(args):
         print("Skipping local cert cleanup. Use --pki to remove certs.")
 
     print("Full clean complete")
+
+
+

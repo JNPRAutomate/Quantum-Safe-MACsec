@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime
 from lib.settings import CONFIG,PKI
+import ipaddress
 
 # ----------------------------------------
 # Helper
@@ -74,22 +75,60 @@ def build_ca_certificate(cert_path, key_path, cn="QKD-Root"):
 # CLIENT CERT (SAE)
 # ----------------------------------------
 def build_client_certificate(cert_path, key_path, ca_cert_path, ca_key_path, cn, ip):
+    """
+    Build a leaf certificate signed by the self-signed Root CA.
 
-    ca_cert = x509.load_pem_x509_certificate(open(ca_cert_path, "rb").read())
-    ca_key = serialization.load_pem_private_key(open(ca_key_path, "rb").read(), password=None)
+    Used for:
+      - SAE/client certificates
+      - KME/server certificates
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=PKI["KEY_SIZE"])
+    Important:
+      KME certificates must include both:
+        DNS:<kme_name>
+        IP:<kme_ip>
+
+      Otherwise HTTPS verification fails when qkd_onbox.py calls:
+        https://<kme_ip>:8443
+    """
+
+    ca_cert = x509.load_pem_x509_certificate(
+        open(ca_cert_path, "rb").read()
+    )
+
+    ca_key = serialization.load_pem_private_key(
+        open(ca_key_path, "rb").read(),
+        password=None
+    )
+
+    key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=PKI["KEY_SIZE"]
+    )
 
     subject = x509.Name([
-            x509.NameAttribute(NameOID.COUNTRY_NAME, PKI["COUNTRY"]),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, PKI["ORG"]),
-            x509.NameAttribute(NameOID.COMMON_NAME, cn),
-        ])
+        x509.NameAttribute(NameOID.COUNTRY_NAME, PKI["COUNTRY"]),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, PKI["ORG"]),
+        x509.NameAttribute(NameOID.COMMON_NAME, cn),
+    ])
 
     san_list = [
-         x509.DNSName(cn)
-         #x509.IPAddress(ipaddress.ip_address(ip))
-     ]
+        x509.DNSName(str(cn))
+    ]
+
+    if ip:
+        try:
+            san_list.append(
+                x509.IPAddress(
+                    ipaddress.ip_address(str(ip))
+                )
+            )
+        except ValueError:
+            #
+            # If ip is actually a hostname/FQDN, add it as DNS SAN.
+            #
+            san_list.append(
+                x509.DNSName(str(ip))
+            )
 
     cert = (
         x509.CertificateBuilder()
@@ -97,9 +136,20 @@ def build_client_certificate(cert_path, key_path, ca_cert_path, ca_key_path, cn,
         .issuer_name(ca_cert.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=PKI["VALIDITY_DAYS"]))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .not_valid_before(
+            datetime.datetime.now(datetime.timezone.utc)
+        )
+        .not_valid_after(
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=PKI["VALIDITY_DAYS"])
+        )
+        .add_extension(
+            x509.BasicConstraints(
+                ca=False,
+                path_length=None
+            ),
+            critical=True
+        )
         .add_extension(
             x509.KeyUsage(
                 digital_signature=True,
@@ -125,10 +175,16 @@ def build_client_certificate(cert_path, key_path, ca_cert_path, ca_key_path, cn,
             x509.SubjectAlternativeName(san_list),
             critical=False
         )
-        .sign(ca_key, hashes.SHA256())
+        .sign(
+            ca_key,
+            hashes.SHA256()
+        )
     )
 
-    write_file(cert_path, cert.public_bytes(serialization.Encoding.PEM))
+    write_file(
+        cert_path,
+        cert.public_bytes(serialization.Encoding.PEM)
+    )
 
     write_file(
         key_path,
@@ -138,7 +194,7 @@ def build_client_certificate(cert_path, key_path, ca_cert_path, ca_key_path, cn,
             serialization.NoEncryption(),
         )
     )
-
+    
 
 # ----------------------------------------
 # BUILD PKI
@@ -199,6 +255,7 @@ def build_unique_kme_inventory(devices):
         ip = (
             device.get("kme_ip")
             or device.get("kme", {}).get("ip")
+            or device.get("qkd", {}).get("kme_ip")
         )
 
         if not ip:
