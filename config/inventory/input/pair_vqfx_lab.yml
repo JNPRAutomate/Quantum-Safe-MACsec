@@ -1,0 +1,18 @@
+topology: pair
+platform: vqfx
+mode: qkd
+pki_profile: hierarchical_ca
+
+devices:
+
+  - name: vqfx1
+    ip: 10.54.13.14
+    kme: 100.100.100.10
+    interfaces:
+      - xe-0/0/1
+
+  - name: vqfx2
+    ip: 10.54.12.193
+    kme: 100.100.100.11
+    interfaces:
+      - xe-0/0/1

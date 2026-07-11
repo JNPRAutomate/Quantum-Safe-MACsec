@@ -161,7 +161,7 @@ def platform_name(device):
 
 
 def platform_is_legacy_qfx(device):
-    return platform_name(device) == "qfx"
+    return platform_name(device) in ["qfx","vqfx"]
 
 def junos_cli_quote(value):
     """

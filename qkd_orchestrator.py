@@ -75,6 +75,12 @@ def parse_args():
             "  deploy     Deploy scripts, certificates, and Junos configuration\n"
             "  clean      Clean local runtime and optionally remote device configuration\n"
             "  validate  Validate device readiness before or after deploy\n"
+            
+            "Examples:\n"
+            " python3 qkd_orchestrator.py create --inventory vqfx_pair --pki-profile hierarchical_ca\n"
+            " python3 qkd_orchestrator.py deploy\n"
+            " python3 qkd_orchestrator.py validate --phase predeploy\n"
+            " python3 qkd_orchestrator.py clean --pki\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -92,17 +98,35 @@ def parse_args():
         "create",
         help="Build runtime inventory, onbox artifacts, and PKI material",
         description=(
-            "Create runtime artifacts from an inventory YAML file.\n\n"
-            "Generated runtime files:\n"
-            "  config/runtime/devices.yaml\n"
-            "  config/runtime/topology.yaml\n"
-            "  config/runtime/pki_profile.yaml\n"
-            "  config/runtime/qkd_policy.yaml\n"
-            "  config/runtime/<device>/qkd_onbox.py\n\n"
-            "Generated PKI material:\n"
-            "  certs/self_signed/...\n"
-            "  or\n"
-            "  certs/hierarchical_ca/...\n"
+                    "Create runtime artifacts from an inventory YAML file.\n\n"
+
+                    "Generated runtime files:\n"
+                    "  config/runtime/devices.yaml\n"
+                    "  config/runtime/topology.yaml\n"
+                    "  config/runtime/pki_profile.yaml\n"
+                    "  config/runtime/qkd_policy.yaml\n"
+                    "  config/runtime/<device>/qkd_onbox.py\n\n"
+
+                    "Generated PKI material:\n"
+                    "  certs/self_signed/...\n"
+                    "  or\n"
+                    "  certs/hierarchical_ca/...\n\n"
+
+                    "Examples:\n"
+                    "\n"
+                    "  Pair topology (vQFX)\n"
+                    "    python3 qkd_orchestrator.py create \\\n"
+                    "      --inventory vqfx_pair \\\n"
+                    "      --pki-profile hierarchical_ca \\\n"
+                    "      --key-batch-size 2 \\\n"
+                    "      --max-installed-keys 2\n"
+                    "\n"
+                    "  Ring topology (ACX)\n"
+                    "    python3 qkd_orchestrator.py create \\\n"
+                    "      --inventory ring_5_acx \\\n"
+                    "      --pki-profile hierarchical_ca \\\n"
+                    "      --key-batch-size 2 \\\n"
+                    "      --max-installed-keys 2\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -141,6 +165,8 @@ def parse_args():
             "Override qkd_policy.rekey_enabled to true.\n\n"
             "When enabled, qkd_onbox.py may periodically request new keys from the KME "
             "according to the runtime QKD policy."
+            "Stored in runtime policy.\n"
+            "Requires qkd_onbox.py runtime support to affect key rotation behavior."
         ),
     )
 
@@ -161,6 +187,8 @@ def parse_args():
         default=None,
         help=(
             "Override qkd_policy.key_batch_size.\n\n"
+            "Reserved for future key batching support.\n"
+            "Currently stored in runtime policy but not consumed by qkd_onbox.py."
             "Maximum number of new keys requested or installed per rekey cycle.\n"
             "Useful to avoid loading too many future keys on the router."
         ),

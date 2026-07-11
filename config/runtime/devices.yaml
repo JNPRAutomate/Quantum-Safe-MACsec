@@ -1,7 +1,7 @@
 devices:
-  acx1:
-    platform: acx
-    ip: 100.123.170.202
+  vqfx1:
+    platform: vqfx
+    ip: 10.54.13.14
     auth:
       username: admin
       password: juniper1
@@ -11,31 +11,22 @@ devices:
       ca_name: CA1
       mode: qkd
     links:
-    - peer: acx2
-      peer_ip: 100.123.170.201
-      peer_interface: et-2/0/0
+    - peer: vqfx2
+      peer_ip: 10.54.12.193
+      peer_interface: xe-0/0/1
       peer_sae: sae_002
       role: master
-      interface: et-2/0/4
+      interface: xe-0/0/1
       ca_names:
       - CA1
       - CA2
-    - peer: acx5
-      peer_ip: 100.123.182.1
-      peer_interface: et-0/0/2
-      peer_sae: sae_005
-      role: slave
-      interface: et-2/0/2
-      ca_names:
-      - CA9
-      - CA10
     qkd:
       sae_id: sae_001
     kme:
-      ip: 100.123.252.10
-  acx2:
-    platform: acx
-    ip: 100.123.170.201
+      ip: 100.100.100.10
+  vqfx2:
+    platform: vqfx
+    ip: 10.54.12.193
     auth:
       username: admin
       password: juniper1
@@ -45,127 +36,16 @@ devices:
       ca_name: CA1
       mode: qkd
     links:
-    - peer: acx1
-      peer_ip: 100.123.170.202
-      peer_interface: et-2/0/4
+    - peer: vqfx1
+      peer_ip: 10.54.13.14
+      peer_interface: xe-0/0/1
       peer_sae: sae_001
       role: slave
-      interface: et-2/0/0
+      interface: xe-0/0/1
       ca_names:
       - CA1
       - CA2
-    - peer: acx3
-      peer_ip: 100.123.170.203
-      peer_interface: et-2/0/4
-      peer_sae: sae_003
-      role: master
-      interface: et-2/0/2
-      ca_names:
-      - CA3
-      - CA4
     qkd:
       sae_id: sae_002
     kme:
-      ip: 100.123.252.11
-  acx3:
-    platform: acx
-    ip: 100.123.170.203
-    auth:
-      username: admin
-      password: juniper1
-    script_user: admin
-    ssh_trust: null
-    macsec:
-      ca_name: CA1
-      mode: qkd
-    links:
-    - peer: acx2
-      peer_ip: 100.123.170.201
-      peer_interface: et-2/0/2
-      peer_sae: sae_002
-      role: slave
-      interface: et-2/0/4
-      ca_names:
-      - CA3
-      - CA4
-    - peer: acx4
-      peer_ip: 100.123.182.2
-      peer_interface: et-0/0/2
-      peer_sae: sae_004
-      role: master
-      interface: et-2/0/2
-      ca_names:
-      - CA5
-      - CA6
-    qkd:
-      sae_id: sae_003
-    kme:
-      ip: 100.123.252.12
-  acx4:
-    platform: acx
-    ip: 100.123.182.2
-    auth:
-      username: admin
-      password: juniper1
-    script_user: admin
-    ssh_trust: null
-    macsec:
-      ca_name: CA1
-      mode: qkd
-    links:
-    - peer: acx3
-      peer_ip: 100.123.170.203
-      peer_interface: et-2/0/2
-      peer_sae: sae_003
-      role: slave
-      interface: et-0/0/2
-      ca_names:
-      - CA5
-      - CA6
-    - peer: acx5
-      peer_ip: 100.123.182.1
-      peer_interface: et-0/0/0
-      peer_sae: sae_005
-      role: master
-      interface: et-0/0/0
-      ca_names:
-      - CA7
-      - CA8
-    qkd:
-      sae_id: sae_004
-    kme:
-      ip: 100.123.252.13
-  acx5:
-    platform: acx
-    ip: 100.123.182.1
-    auth:
-      username: admin
-      password: juniper1
-    script_user: admin
-    ssh_trust: null
-    macsec:
-      ca_name: CA1
-      mode: qkd
-    links:
-    - peer: acx4
-      peer_ip: 100.123.182.2
-      peer_interface: et-0/0/0
-      peer_sae: sae_004
-      role: slave
-      interface: et-0/0/0
-      ca_names:
-      - CA7
-      - CA8
-    - peer: acx1
-      peer_ip: 100.123.170.202
-      peer_interface: et-2/0/2
-      peer_sae: sae_001
-      role: master
-      interface: et-0/0/2
-      ca_names:
-      - CA9
-      - CA10
-    qkd:
-      sae_id: sae_005
-    kme:
-      ip: 100.123.252.14
+      ip: 100.100.100.11
