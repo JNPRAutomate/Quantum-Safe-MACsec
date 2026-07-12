@@ -20,14 +20,14 @@ import copy
 import shutil
 import os,sys
 
-from lib.logger import setup_logger
-from lib.inventory_builder import build_full_inventory
-from lib.pki_self_signed import build_self_signed_pki
-from lib.pki_hierarchical import build_hierarchical_pki
-from lib.settings import CONFIG, PKI, QKD
-from lib.onbox_builder import build_onbox_artifacts
-from lib.provisioning import run_provisioning
-from lib.config import (
+from lib.common.logger import setup_logger
+from lib.qkd.inventory_builder import build_full_inventory
+from lib.qkd.pki_self_signed import build_self_signed_pki
+from lib.qkd.pki_hierarchical import build_hierarchical_pki
+from lib.common.settings import CONFIG, PKI, QKD
+from lib.qkd.onbox_builder import build_onbox_artifacts
+from lib.qkd.provisioning import run_provisioning
+from lib.common.config import (
 load_inventory_file,
 load_runtime_devices,
 load_inventory_base,
@@ -38,10 +38,10 @@ load_qkd_policy_template,
 )
 from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
-from lib.identity import validate_all_devices
-from lib.clean import handle_clean
-from lib.kme_instructions import print_manual_kme_copy_instructions
-from lib.inventory_builder import build_full_inventory, build_runtime_qkd_policy
+from lib.qkd.identity import validate_all_devices
+from lib.qkd.clean import handle_clean
+from lib.kme.instructions import print_manual_kme_copy_instructions
+from lib.qkd.inventory_builder import build_full_inventory, build_runtime_qkd_policy
 
 
 script_name = QKD["SCRIPT_NAME"]

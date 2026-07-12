@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from lib.settings import QKD, PKI
-from lib.config import load_runtime_pki_profile, load_runtime_qkd_policy
+from lib.common.settings import QKD, PKI
+from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
 import json
 

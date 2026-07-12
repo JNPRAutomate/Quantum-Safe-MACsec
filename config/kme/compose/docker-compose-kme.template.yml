@@ -1,0 +1,47 @@
+services:
+
+  qkd-postgres:
+    image: postgres:15
+    container_name: {{ owner }}-qkd-postgres
+
+    environment:
+      POSTGRES_USER: {{ database.username }}
+      POSTGRES_PASSWORD: {{ database.password }}
+      POSTGRES_DB: {{ database.db_name }}
+
+    networks:
+      {{ docker.network }}:
+        ipv4_address: {{ database.ip }}
+
+    restart: unless-stopped
+
+{% for kme in kmes %}
+  {{ kme.service_name }}:
+    image: {{ docker.image }}
+    container_name: {{ owner }}-{{ kme.service_name }}
+
+    depends_on:
+      - qkd-postgres
+
+    volumes:
+      - ./certs:/certs:ro
+
+    environment:
+      ETSI_014_REF_IMPL_DB_URL: postgres://{{ database.username }}:{{ database.password }}@{{ database.ip }}:{{ database.port }}/{{ database.db_name }}
+      ETSI_014_REF_IMPL_IP_ADDR: 0.0.0.0
+      ETSI_014_REF_IMPL_PORT_NUM: {{ kme.port }}
+      ETSI_014_REF_IMPL_NUM_WORKER_THREADS: {{ kme.worker_threads }}
+      ETSI_014_REF_IMPL_TLS_CERT: /certs/{{ kme.cert }}
+      ETSI_014_REF_IMPL_TLS_PRIVATE_KEY: /certs/{{ kme.key }}
+      ETSI_014_REF_IMPL_TLS_ROOT_CRT: /certs/root.crt
+
+    networks:
+      {{ docker.network }}:
+        ipv4_address: {{ kme.ip }}
+
+    restart: unless-stopped
+
+{% endfor %}
+networks:
+  {{ docker.network }}:
+    external: true

@@ -1,5 +1,5 @@
 from pathlib import Path
-from lib.settings import CONFIG, PKI
+from lib.common.settings import CONFIG, PKI
 
 def print_manual_kme_copy_instructions(profile):
     """

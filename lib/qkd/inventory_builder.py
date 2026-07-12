@@ -2,7 +2,7 @@ import yaml
 import os
 import secrets
 from pathlib import Path
-from lib.settings import CONFIG
+from lib.common.settings import CONFIG
 
 
 # ----------------------------------------

@@ -2,7 +2,7 @@ from pathlib import Path
 import hashlib
 from jinja2 import Environment, FileSystemLoader
 
-from lib.settings import CONFIG, QKD
+from lib.common.settings import CONFIG, QKD
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent

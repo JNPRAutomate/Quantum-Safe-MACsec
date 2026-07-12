@@ -1,0 +1,71 @@
+environment:
+  name: lab
+  os_family: ubuntu
+
+identity:
+  owner: aterren
+
+ssh:
+  host: 100.100.100.254
+  user: aterren
+  host_alias: qkd-kme-lab
+  key_name: qkd_kme_ed25519
+  strict_host_key_checking: "no"
+
+paths:
+  workspace_dir: /home/aterren/kme-lab
+  project_dir: /home/aterren/kme-lab/etsi-gs-qkd-014-referenceimplementation
+  certs_dir: /home/aterren/kme-lab/etsi-gs-qkd-014-referenceimplementation/certs
+
+git:
+  repo_url: https://github.com/cybermerqury/etsi-gs-qkd-014-referenceimplementation.git
+  repo_dir: /home/aterren/kme-lab/etsi-gs-qkd-014-referenceimplementation
+
+docker:
+  image: etsi-kme:local
+  compose_file: docker-compose-kme.yml
+  compose_template: docker-compose-kme.template.yml
+  compose_source: config/kme/compose/docker-compose-kme.template.yml
+  network: qkd_net
+  network_driver: ipvlan
+  network_subnet: 100.100.100.0/24
+  network_gateway: 100.100.100.50
+  network_parent: eth1
+  host_ip: 100.100.100.254
+
+database:
+  service_name: qkd-postgres
+  container_name: "{owner}-qkd-postgres"
+  service_ip: 100.100.100.30
+  image: postgres:15
+  username: db_user
+  password: db_password
+  db_name: key_store
+  port: 5432
+  init_host_dir: ./db-init
+  init_container_dir: /docker-entrypoint-initdb.d
+  
+kme:
+  service_prefix: kme
+  container_prefix: "{owner}-kme"
+  service_first_ip: 100.100.100.10
+  port: 8443
+  worker_threads: 2
+
+runtime:
+  derive_kme_count_from_runtime_devices: true
+  runtime_devices_file: config/runtime/devices.yaml
+
+restart:
+  mode: kme_only
+  touch_database: false
+
+features:
+  bootstrap: true
+  install_host: true
+  build_image: true
+  build_env: true
+  install_certs: true
+  restart: true
+  validate: true
+  status: true

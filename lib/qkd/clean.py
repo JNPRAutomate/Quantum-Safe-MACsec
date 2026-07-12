@@ -7,8 +7,8 @@ from pathlib import Path
 
 from jnpr.junos import Device
 
-from lib.settings import CONFIG, PKI, QKD
-from lib.config import load_inventory_base
+from lib.common.settings import CONFIG, PKI, QKD
+from lib.common.config import load_inventory_base
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 

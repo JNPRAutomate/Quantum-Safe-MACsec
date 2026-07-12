@@ -1,8 +1,8 @@
 from pathlib import Path
 from pprint import pformat
 
-from lib.settings import CONFIG, QKD
-from lib.config import load_runtime_pki_profile, load_runtime_qkd_policy
+from lib.common.settings import CONFIG, QKD
+from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 
 # ----------------------------
 # PATHS

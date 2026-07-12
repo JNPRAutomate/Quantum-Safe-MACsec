@@ -13,7 +13,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from lib.config import load_yaml
+from lib.common.config import load_yaml
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 

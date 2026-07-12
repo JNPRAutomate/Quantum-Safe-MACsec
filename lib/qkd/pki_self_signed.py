@@ -5,7 +5,7 @@ from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime
-from lib.settings import CONFIG,PKI
+from lib.common.settings import CONFIG,PKI
 import ipaddress
 
 # ----------------------------------------

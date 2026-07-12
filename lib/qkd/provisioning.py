@@ -9,11 +9,11 @@ from pathlib import Path
 
 import logging
 
-from lib.rendering import build_device_config
-from lib.settings import CONFIG
-from lib.settings import PKI
-from lib.config import load_inventory, load_platform
-from lib.config import load_runtime_pki_profile
+from lib.qkd.rendering import build_device_config
+from lib.common.settings import CONFIG
+from lib.common.settings import PKI
+from lib.common.config import load_inventory, load_platform
+from lib.common.config import load_runtime_pki_profile
 from jinja2 import Environment, FileSystemLoader
 
 from jnpr.junos.utils.config import Config

@@ -1,0 +1,4 @@
+platform: vqfx
+
+macsec:
+  cipher: gcm-aes-xpn-256

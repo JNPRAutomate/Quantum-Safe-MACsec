@@ -2,7 +2,7 @@ import yaml
 import os
 from pathlib import Path
 
-from lib.settings import CONFIG
+from lib.common.settings import CONFIG
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
