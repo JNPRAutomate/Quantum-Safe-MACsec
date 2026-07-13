@@ -1,0 +1,63 @@
+bootstrap:
+  completed: true
+  timestamp_utc: '2026-07-13T09:50:19.327173+00:00'
+environment:
+  name: lab
+identity:
+  owner: andrea
+ssh:
+  host: 192.168.2.115
+  user: andrea
+  host_alias: qkd-kme-lab
+  key_path: /Users/aterren/.ssh/qkd_kme_ed25519
+  pubkey_path: /Users/aterren/.ssh/qkd_kme_ed25519.pub
+remote:
+  workspace_dir: /home/andrea/kme-lab
+  project_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
+  os_family: ubuntu
+git:
+  repo_url: https://github.com/cybermerqury/etsi-gs-qkd-014-referenceimplementation.git
+  repo_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
+install_host:
+  completed: true
+  timestamp_utc: '2026-07-13T09:50:26.120731+00:00'
+  os_family: ubuntu
+packages:
+  git: true
+  docker: true
+  docker_compose: true
+  docker_service: true
+build_env:
+  completed: true
+  timestamp_utc: '2026-07-13T09:50:28.576384+00:00'
+  kme_count: 2
+  compose_file: docker-compose-kme.yml
+  network: qkd_net
+build_image:
+  completed: true
+  timestamp_utc: '2026-07-13T09:50:32.275916+00:00'
+  image: etsi-kme:local
+  no_cache: false
+  cargo_built_on_host: true
+cert_install:
+  completed: true
+  timestamp_utc: '2026-07-13T09:50:37.211345+00:00'
+  profile: hierarchical_ca
+  file_count: 12
+  certs_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation/certs
+validate:
+  completed: true
+  timestamp_utc: '2026-07-13T09:50:46.405337+00:00'
+  passed: true
+  checks:
+    ssh: true
+    docker: true
+    docker_compose: true
+    project_dir: true
+    compose_file: true
+    network: true
+    image: true
+    postgres_container: true
+    cert_files: true
+    container_andrea-kme01: true
+    container_andrea-kme02: true

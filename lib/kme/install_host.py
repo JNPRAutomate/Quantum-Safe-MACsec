@@ -184,6 +184,24 @@ def remote_run(
     )
 
 
+def remote_bash(
+    config: dict[str, Any],
+    script: str,
+    dry_run: bool = False,
+    check: bool = True,
+    capture: bool = False,
+) -> subprocess.CompletedProcess:
+    command = "bash -lc " + shell_quote(script)
+
+    return remote_run(
+        config=config,
+        command=command,
+        dry_run=dry_run,
+        check=check,
+        capture=capture,
+    )
+    
+
 def verify_bootstrap_ready(config: dict[str, Any]) -> dict[str, Any]:
     if not state_exists(config):
         raise RuntimeError("KME state file is missing. Run bootstrap first.")
@@ -245,47 +263,135 @@ def resolve_os_family(
 def install_host_ubuntu(config: dict[str, Any], dry_run: bool = False) -> None:
     remote_user = get_remote_user(config)
 
-    commands = [
-        "sudo apt update",
-        "sudo apt install -y ca-certificates curl gnupg git make openssl build-essential pkg-config libssl-dev libpq-dev",
-        "sudo install -m 0755 -d /etc/apt/keyrings",
-        "test -f /etc/apt/keyrings/docker.gpg || curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
-        "sudo chmod a+r /etc/apt/keyrings/docker.gpg",
-        "test -f /etc/apt/sources.list.d/docker.list || echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable\" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null",
-        "sudo apt update",
-        "sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-        "sudo systemctl enable docker",
-        "sudo systemctl start docker",
-        f"sudo usermod -aG docker {shell_quote(remote_user)}",
-    ]
+    script = f"""
+set -euo pipefail
 
-    remote_run(
+echo "[INFO] Checking passwordless sudo"
+sudo -n true
+
+echo "[INFO] Cleaning broken CDROM APT source if present"
+if [ -f /etc/apt/sources.list ]; then
+    sudo sed -i 's|^deb \\[check-date=no\\] file:///cdrom|# deb [check-date=no] file:///cdrom|' /etc/apt/sources.list
+    sudo sed -i 's|^deb cdrom:|# deb cdrom:|' /etc/apt/sources.list
+fi
+
+echo "[INFO] Removing existing Docker APT repository and keyring"
+sudo rm -f /etc/apt/sources.list.d/docker.list
+sudo rm -f /etc/apt/keyrings/docker.gpg
+
+echo "[INFO] Updating Ubuntu package index"
+sudo apt-get update
+
+echo "[INFO] Installing base packages"
+sudo apt-get install -y \\
+    ca-certificates \\
+    curl \\
+    gnupg \\
+    git \\
+    make \\
+    openssl \\
+    build-essential \\
+    pkg-config \\
+    libssl-dev \\
+    libpq-dev
+
+echo "[INFO] Installing Docker GPG key"
+sudo install -d -m 0755 /etc/apt/keyrings
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \\
+    gpg --dearmor | \\
+    sudo tee /etc/apt/keyrings/docker.gpg >/dev/null
+
+sudo chmod 644 /etc/apt/keyrings/docker.gpg
+
+echo "[INFO] Verifying Docker GPG key"
+gpg --show-keys /etc/apt/keyrings/docker.gpg >/dev/null
+
+echo "[INFO] Creating Docker APT repository"
+UBUNTU_CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $UBUNTU_CODENAME stable" | \\
+    sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+echo "[INFO] Updating package index with Docker repository"
+sudo apt-get update
+
+echo "[INFO] Installing Docker Engine and Compose plugin"
+sudo apt-get install -y \\
+    docker-ce \\
+    docker-ce-cli \\
+    containerd.io \\
+    docker-buildx-plugin \\
+    docker-compose-plugin
+
+echo "[INFO] Enabling Docker service"
+sudo systemctl enable docker
+sudo systemctl start docker
+
+echo "[INFO] Adding remote user to docker group"
+sudo usermod -aG docker {shell_quote(remote_user)}
+
+echo "[OK] Ubuntu host installation completed"
+"""
+
+    remote_bash(
         config=config,
-        command=" && ".join(commands),
+        script=script,
         dry_run=dry_run,
         check=True,
     )
-
+    
 
 def install_host_rhel(config: dict[str, Any], dry_run: bool = False) -> None:
     remote_user = get_remote_user(config)
 
-    commands = [
-        "sudo dnf install -y dnf-plugins-core git make gcc gcc-c++ openssl openssl-devel pkgconfig curl tar",
-        "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
-        "sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-        "sudo systemctl enable docker",
-        "sudo systemctl start docker",
-        f"sudo usermod -aG docker {shell_quote(remote_user)}",
-    ]
+    script = f"""
+set -euo pipefail
 
-    remote_run(
+echo "[INFO] Checking passwordless sudo"
+sudo -n true
+
+echo "[INFO] Installing base packages"
+sudo dnf install -y \\
+    dnf-plugins-core \\
+    git \\
+    make \\
+    gcc \\
+    gcc-c++ \\
+    openssl \\
+    openssl-devel \\
+    pkgconfig \\
+    curl \\
+    tar
+
+echo "[INFO] Adding Docker repository"
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+echo "[INFO] Installing Docker Engine and Compose plugin"
+sudo dnf install -y \\
+    docker-ce \\
+    docker-ce-cli \\
+    containerd.io \\
+    docker-buildx-plugin \\
+    docker-compose-plugin
+
+echo "[INFO] Enabling Docker service"
+sudo systemctl enable docker
+sudo systemctl start docker
+
+echo "[INFO] Adding remote user to docker group"
+sudo usermod -aG docker {shell_quote(remote_user)}
+
+echo "[OK] RHEL host installation completed"
+"""
+
+    remote_bash(
         config=config,
-        command=" && ".join(commands),
+        script=script,
         dry_run=dry_run,
         check=True,
     )
-
+    
 
 def verify_remote_tool(
     config: dict[str, Any],

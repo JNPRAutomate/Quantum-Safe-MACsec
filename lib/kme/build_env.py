@@ -151,6 +151,7 @@ def remote_run(
 def scp_base_cmd(config: dict[str, Any]) -> list[str]:
     cmd = [
         "scp",
+        "-O",
         "-o",
         f"StrictHostKeyChecking={get_strict_host_key_checking(config)}",
         "-o",

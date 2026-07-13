@@ -8,18 +8,17 @@ Scope:
 - verify bootstrap/install-host state for real execution
 - allow dry-run with config-only mode
 - verify ETSI repository exists on the remote host
-- install Rust toolchain if cargo is missing
-- run cargo build --release inside the ETSI repository
+- optionally run cargo build --release on the host
 - build local Docker image defined by docker.image
 - verify the Docker image exists
 - update KME state
 
-This module does not:
-- generate certificates
-- create Docker networks
-- run docker compose up
-- install KME certificates
-- restart containers
+Important behavior:
+- Rust is installed only when cargo build is actually requested.
+- If cargo is missing and DNS is broken, the script does not fail with a raw rustup error.
+  It skips host cargo build and continues with docker build, because the Dockerfile may build
+  the Rust application inside the container.
+- docker compose up is not done here.
 """
 
 from __future__ import annotations
@@ -143,6 +142,23 @@ def remote_run(
     )
 
 
+def remote_bash(
+    config: dict[str, Any],
+    script: str,
+    dry_run: bool = False,
+    check: bool = True,
+    capture: bool = False,
+) -> subprocess.CompletedProcess:
+    command = "bash -lc " + shell_quote(script)
+    return remote_run(
+        config=config,
+        command=command,
+        dry_run=dry_run,
+        check=check,
+        capture=capture,
+    )
+
+
 def load_state_for_build_image(
     config: dict[str, Any],
     dry_run: bool = False,
@@ -213,7 +229,6 @@ def get_database_url_for_build(config: dict[str, Any]) -> str:
 
 def verify_remote_repo(config: dict[str, Any], dry_run: bool = False) -> None:
     repo_dir = get_repo_dir(config)
-
     command = f"test -d {shell_quote(repo_dir)}/.git"
 
     result = remote_run(
@@ -267,84 +282,6 @@ def verify_remote_tool(
     return False
 
 
-def install_rust_if_missing(config: dict[str, Any], dry_run: bool = False) -> None:
-    command = (
-        "if command -v cargo >/dev/null 2>&1; then "
-        "cargo --version; "
-        "else "
-        "curl https://sh.rustup.rs -sSf | sh -s -- -y; "
-        "fi"
-    )
-
-    remote_run(
-        config=config,
-        command=command,
-        dry_run=dry_run,
-        check=True,
-    )
-
-
-def cargo_build_release(config: dict[str, Any], dry_run: bool = False) -> None:
-    repo_dir = get_repo_dir(config)
-    database_url = get_database_url_for_build(config)
-
-    command = (
-        f"cd {shell_quote(repo_dir)} && "
-        ". $HOME/.cargo/env 2>/dev/null || true && "
-        f"export DATABASE_URL={shell_quote(database_url)} && "
-        "export SQLX_OFFLINE=true && "
-        "cargo build --release"
-    )
-
-    remote_run(
-        config=config,
-        command=command,
-        dry_run=dry_run,
-        check=True,
-    )
-
-
-def docker_build_image(
-    config: dict[str, Any],
-    dry_run: bool = False,
-    no_cache: bool = True,
-) -> None:
-    repo_dir = get_repo_dir(config)
-    image = get_docker_image(config)
-
-    cache_option = "--no-cache " if no_cache else ""
-
-    command = (
-        f"cd {shell_quote(repo_dir)} && "
-        f"docker build {cache_option}-t {shell_quote(image)} ."
-    )
-
-    remote_run(
-        config=config,
-        command=command,
-        dry_run=dry_run,
-        check=True,
-    )
-
-
-def verify_docker_image(config: dict[str, Any], dry_run: bool = False) -> None:
-    image = get_docker_image(config)
-
-    command = f"docker image inspect {shell_quote(image)} >/dev/null"
-
-    remote_run(
-        config=config,
-        command=command,
-        dry_run=dry_run,
-        check=True,
-    )
-
-    if dry_run:
-        print(f"[DRY-RUN] Would verify Docker image: {image}")
-    else:
-        print(f"[OK] Docker image available: {image}")
-
-
 def verify_build_prerequisites(config: dict[str, Any], dry_run: bool = False) -> None:
     checks = {
         "git": "git --version",
@@ -362,10 +299,175 @@ def verify_build_prerequisites(config: dict[str, Any], dry_run: bool = False) ->
         raise RuntimeError("Missing build prerequisites: " + ", ".join(failed))
 
 
+def cargo_is_available(config: dict[str, Any], dry_run: bool = False) -> bool:
+    result = remote_bash(
+        config=config,
+        script="command -v cargo >/dev/null 2>&1 && cargo --version",
+        dry_run=dry_run,
+        check=False,
+        capture=True,
+    )
+
+    if dry_run:
+        print("[DRY-RUN] Would check cargo")
+        return True
+
+    if result.returncode == 0:
+        print("[OK] cargo")
+        if result.stdout:
+            print(result.stdout.strip())
+        return True
+
+    print("[INFO] cargo not found on remote host")
+    return False
+
+
+def dns_is_usable_for_rust(config: dict[str, Any], dry_run: bool = False) -> bool:
+    script = "getent hosts static.rust-lang.org >/dev/null 2>&1"
+
+    result = remote_bash(
+        config=config,
+        script=script,
+        dry_run=dry_run,
+        check=False,
+        capture=True,
+    )
+
+    if dry_run:
+        print("[DRY-RUN] Would check DNS for static.rust-lang.org")
+        return True
+
+    if result.returncode == 0:
+        print("[OK] DNS resolution for static.rust-lang.org")
+        return True
+
+    print("[WARN] DNS resolution failed for static.rust-lang.org")
+    print("[WARN] Skipping host cargo build and continuing with docker build")
+    return False
+
+
+def install_rust_if_missing(config: dict[str, Any], dry_run: bool = False) -> bool:
+    if cargo_is_available(config, dry_run=dry_run):
+        return True
+
+    if not dns_is_usable_for_rust(config, dry_run=dry_run):
+        return False
+
+    script = r"""
+set -euo pipefail
+curl -fsSL https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+cargo --version
+"""
+
+    result = remote_bash(
+        config=config,
+        script=script,
+        dry_run=dry_run,
+        check=False,
+        capture=True,
+    )
+
+    if dry_run:
+        print("[DRY-RUN] Would install Rust toolchain")
+        return True
+
+    if result.returncode == 0:
+        print("[OK] Rust toolchain installed")
+        if result.stdout:
+            print(result.stdout.strip())
+        return True
+
+    print("[WARN] Rust toolchain installation failed")
+    if result.stderr:
+        print(result.stderr.strip())
+    print("[WARN] Skipping host cargo build and continuing with docker build")
+    return False
+
+
+def cargo_build_release(config: dict[str, Any], dry_run: bool = False) -> bool:
+    repo_dir = get_repo_dir(config)
+    database_url = get_database_url_for_build(config)
+
+    script = f"""
+set -euo pipefail
+cd {shell_quote(repo_dir)}
+. "$HOME/.cargo/env" 2>/dev/null || true
+export DATABASE_URL={shell_quote(database_url)}
+export SQLX_OFFLINE=true
+cargo build --release
+"""
+
+    result = remote_bash(
+        config=config,
+        script=script,
+        dry_run=dry_run,
+        check=False,
+        capture=True,
+    )
+
+    if dry_run:
+        print("[DRY-RUN] Would run cargo build --release")
+        return True
+
+    if result.returncode == 0:
+        print("[OK] cargo build --release")
+        if result.stdout:
+            print(result.stdout.strip())
+        return True
+
+    print("[WARN] cargo build --release failed")
+    if result.stderr:
+        print(result.stderr.strip())
+    print("[WARN] Continuing with docker build")
+    return False
+
+
+def docker_build_image(
+    config: dict[str, Any],
+    dry_run: bool = False,
+    no_cache: bool = False,
+) -> None:
+    repo_dir = get_repo_dir(config)
+    image = get_docker_image(config)
+    cache_option = "--no-cache " if no_cache else ""
+
+    script = f"""
+set -euo pipefail
+cd {shell_quote(repo_dir)}
+docker build {cache_option}-t {shell_quote(image)} .
+"""
+
+    remote_bash(
+        config=config,
+        script=script,
+        dry_run=dry_run,
+        check=True,
+    )
+
+
+def verify_docker_image(config: dict[str, Any], dry_run: bool = False) -> None:
+    image = get_docker_image(config)
+    command = f"docker image inspect {shell_quote(image)} >/dev/null"
+
+    remote_run(
+        config=config,
+        command=command,
+        dry_run=dry_run,
+        check=True,
+    )
+
+    if dry_run:
+        print(f"[DRY-RUN] Would verify Docker image: {image}")
+    else:
+        print(f"[OK] Docker image available: {image}")
+
+
 def write_build_image_state(
     config: dict[str, Any],
     dry_run: bool = False,
-    no_cache: bool = True,
+    no_cache: bool = False,
+    cargo_built: bool = False,
 ) -> None:
     timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
     image = get_docker_image(config)
@@ -376,6 +478,7 @@ def write_build_image_state(
             "timestamp_utc": timestamp,
             "image": image,
             "no_cache": bool(no_cache),
+            "cargo_built_on_host": bool(cargo_built),
         }
     }
 
@@ -391,7 +494,7 @@ def write_build_image_state(
 def run_build_image(
     config_path: str | Path,
     dry_run: bool = False,
-    no_cache: bool = True,
+    no_cache: bool = False,
     skip_cargo: bool = False,
 ) -> dict[str, Any]:
     config = load_kme_yaml(config_path)
@@ -399,18 +502,21 @@ def run_build_image(
     verify_install_host_ready(state, dry_run=dry_run)
 
     image = get_docker_image(config)
+    cargo_built = False
 
     print("=== KME build-image ===")
     print(f"image: {image}")
 
     verify_remote_repo(config, dry_run=dry_run)
     verify_build_prerequisites(config, dry_run=dry_run)
-    install_rust_if_missing(config, dry_run=dry_run)
 
-    if not skip_cargo:
-        cargo_build_release(config, dry_run=dry_run)
+    if skip_cargo:
+        print("[SKIP] host cargo build --release")
     else:
-        print("[SKIP] cargo build --release")
+        if install_rust_if_missing(config, dry_run=dry_run):
+            cargo_built = cargo_build_release(config, dry_run=dry_run)
+        else:
+            print("[SKIP] host cargo build --release")
 
     docker_build_image(
         config=config,
@@ -424,6 +530,7 @@ def run_build_image(
         config=config,
         dry_run=dry_run,
         no_cache=no_cache,
+        cargo_built=cargo_built,
     )
 
     print("=== KME build-image complete ===")
@@ -431,6 +538,7 @@ def run_build_image(
     return {
         "image": image,
         "no_cache": no_cache,
+        "cargo_built_on_host": cargo_built,
     }
 
 
@@ -461,7 +569,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-cargo",
         action="store_true",
-        help="Skip cargo build --release",
+        help="Skip host cargo build --release",
     )
 
     return parser.parse_args()
