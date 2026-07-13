@@ -64,6 +64,24 @@ def shell_quote(value: Any) -> str:
     return shlex.quote(str(value))
 
 
+def expand_placeholders(value: Any, config: dict[str, Any]) -> str:
+    text = str(value)
+    identity = config.get("identity", {}) or {}
+    ssh = config.get("ssh", {}) or {}
+    environment = config.get("environment", {}) or {}
+
+    replacements = {
+        "owner": identity.get("owner", ""),
+        "user": ssh.get("user", ""),
+        "environment": environment.get("name", ""),
+    }
+
+    for key, replacement in replacements.items():
+        text = text.replace("{" + key + "}", str(replacement))
+
+    return text
+
+
 def run_command(
     cmd: list[str],
     dry_run: bool = False,
@@ -157,7 +175,7 @@ def load_state_for_restart(
             return state
 
         if not dry_run:
-            raise RuntimeError("Bootstrap state is not completed. Run bootstrap first.")
+            raise RuntimeError("Bootstrap state is not completed. Run create first.")
 
         print("[DRY-RUN] Bootstrap state exists but is not completed; continuing for dry-run")
         return state
@@ -166,7 +184,7 @@ def load_state_for_restart(
         print("[DRY-RUN] KME state file is missing; continuing with config-only dry-run")
         return {}
 
-    raise RuntimeError("KME state file is missing. Run bootstrap first.")
+    raise RuntimeError("KME state file is missing. Run create first.")
 
 
 def verify_cert_install_ready(state: dict[str, Any], dry_run: bool = False) -> None:
@@ -179,19 +197,20 @@ def verify_cert_install_ready(state: dict[str, Any], dry_run: bool = False) -> N
         print("[DRY-RUN] cert-install state missing or incomplete; continuing for dry-run")
         return
 
-    raise RuntimeError("cert-install is not completed. Run cert-install first.")
+    raise RuntimeError("cert-install is not completed. Run create first.")
 
 
 def extract_kme_count_from_state(state: dict[str, Any]) -> int | None:
     for section in ("build_env", "restart"):
         value = state.get(section, {}).get("kme_count")
-        if value is not None:
-            try:
-                count = int(value)
-            except ValueError:
-                continue
-            if count > 0:
-                return count
+        if value is None:
+            continue
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            return count
 
     return None
 
@@ -215,8 +234,8 @@ def resolve_restart_count(
 
 
 def get_database_container_name(config: dict[str, Any]) -> str:
-    owner = str(require(config, "identity", "owner"))
-    return str(require(config, "database", "container_name")).replace("{owner}", owner)
+    raw = require(config, "database", "container_name")
+    return expand_placeholders(raw, config)
 
 
 def get_kme_container_names(config: dict[str, Any], count: int) -> list[str]:
@@ -247,7 +266,8 @@ def verify_container_running(
     dry_run: bool = False,
 ) -> bool:
     command = (
-        f"test \"$(docker inspect -f '{{{{.State.Running}}}}' {shell_quote(container)} 2>/dev/null)\" = \"true\""
+        f"test \"$(docker inspect -f '{{{{.State.Running}}}}' "
+        f"{shell_quote(container)} 2>/dev/null)\" = \"true\""
     )
 
     result = remote_run(
@@ -381,6 +401,7 @@ def run_restart(
         "mode": "kme_only",
         "kme_count": resolved_count,
         "containers": containers,
+        "database_touched": False,
     }
 
 
