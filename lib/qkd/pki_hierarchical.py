@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from lib.common.config import load_yaml
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 DEFAULT_PKI_CONFIG = BASE_DIR / "config" / "pki" / "hierarchical_ca.yml"
 

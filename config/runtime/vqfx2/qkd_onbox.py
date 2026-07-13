@@ -16,7 +16,8 @@ import pwd
 urllib3.disable_warnings()
 
 CONFIG = {   'local_sae': 'sae_002',
-    'kme_ip': '100.100.100.11',
+    'kme_ip': '192.168.2.206',
+    'kme_port': 8443,
     'pki_profile': 'hierarchical_ca',
     'ca_cert': 'trusted-kme-ca-bundle.crt',
     'trust_bundle': 'certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt',
@@ -43,6 +44,7 @@ CONFIG = {   'local_sae': 'sae_002',
 
 DEVICE = CONFIG["local_sae"]
 KME_IP = CONFIG["kme_ip"]
+KME_PORT = int(CONFIG.get("kme_port", 443))
 CA_CERT = CONFIG["ca_cert"]
 LINKS = CONFIG["links"]
 
@@ -206,6 +208,70 @@ def log(msg, level="INFO", iface=None, mode=None):
         link_log_file = f"{STATE_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
 
         write_log_line(link_log_file)
+
+
+# ----------------------------
+# CUSTOMER DEBUG / TIMING HELPERS
+# ----------------------------
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def elapsed_ms(start_ms):
+    if not start_ms:
+        return 0
+    return now_ms() - int(start_ms)
+
+
+def pending_seconds_until(start_time):
+    """
+    Return how many seconds a key will stay pending before its Junos start-time.
+    """
+    epoch = epoch_from_junos_start_time(start_time)
+
+    if epoch is None:
+        return None
+
+    return max(0, int(epoch - time.time()))
+
+
+def rotation_id_for(iface, generation, key_id=None):
+    """
+    Deterministic readable rotation id for customer log correlation.
+    """
+    safe_iface = iface.replace("/", "_")
+
+    if key_id:
+        return f"{DEVICE}:{safe_iface}:gen{generation}:{key_id[:8]}"
+
+    return f"{DEVICE}:{safe_iface}:gen{generation}"
+
+
+def customer_event(event, iface=None, mode=None, **fields):
+    """
+    Structured customer-facing event log.
+
+    These lines are meant to be parsed later into:
+      - rotation cycle table
+      - sequence diagram
+      - timing diagram
+      - customer evidence slide
+    """
+    parts = [event]
+
+    for key, value in fields.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={value}")
+
+    log(
+        " ".join(parts),
+        "INFO",
+        iface,
+        mode
+    )
+
 
 # ----------------------------
 # KEYCHAIN STATE HELPERS
@@ -1587,16 +1653,43 @@ def mka_confirms_key(iface, key_id, generation=None):
 
     if secured and ckn_match:
 
+        latest_an = fields.get("latest_sak_an")
+        previous_an = fields.get("previous_sak_an")
+
         log(
             f"MKA KEY CONFIRMED "
             f"key_id={key_id} "
             f"ckn={expected_ckn} "
             f"cak_name={cak_name} "
-            f"key_number={key_number}",
+            f"key_number={key_number} "
+            f"latest_sak_an={latest_an} "
+            f"previous_sak_an={previous_an}",
             "INFO",
             iface,
             "MKA"
         )
+
+        customer_event(
+            "MKA_KEY_CONFIRMED",
+            iface=iface,
+            mode="MKA",
+            key_id=key_id,
+            generation=generation,
+            key_number=key_number,
+            latest_sak_an=latest_an,
+            previous_sak_an=previous_an
+        )
+
+        if latest_an is not None and previous_an is not None:
+            customer_event(
+                "SAK_ROLLOVER",
+                iface=iface,
+                mode="MKA",
+                key_id=key_id,
+                generation=generation,
+                previous_sak_an=previous_an,
+                latest_sak_an=latest_an
+            )
 
         return True
 
@@ -1648,17 +1741,42 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         )
         return state, False
 
+    promotion_time = int(time.time())
+    next_start_time = state.get("next_start_time")
+    activation_epoch = epoch_from_junos_start_time(next_start_time)
+
+    promotion_delay_ms = None
+    pending_late_by_ms = None
+
+    if activation_epoch is not None:
+        promotion_delay_ms = max(0, int((promotion_time - activation_epoch) * 1000))
+        pending_late_by_ms = int((promotion_time - activation_epoch) * 1000)
+
     state["active_key_id"] = pending_key_id
-    state["active_confirmed_at"] = int(time.time())
+    state["active_confirmed_at"] = promotion_time
     state["pending_key_id"] = None
     state["next_start_time"] = None
 
     log(
         f"PENDING KEY PROMOTED active_key_id={state.get('active_key_id')} "
-        f"generation={state.get('generation')}",
+        f"generation={state.get('generation')} "
+        f"scheduled_start_time={next_start_time} "
+        f"promotion_delay_ms={promotion_delay_ms}",
         "INFO",
         iface,
         "MKA"
+    )
+
+    customer_event(
+        "PENDING_KEY_PROMOTED",
+        iface=iface,
+        mode="MKA",
+        rotation=rotation_id_for(iface, state.get("generation"), pending_key_id),
+        generation=state.get("generation"),
+        key_id=pending_key_id,
+        scheduled_start_time=next_start_time,
+        promotion_delay_ms=promotion_delay_ms,
+        pending_late_by_ms=pending_late_by_ms
     )
 
     return state, True
@@ -2141,8 +2259,11 @@ def macsec_down(iface):
 # Returns (key_id, key_b64) on success, or (None, None) on error.
 def do_enc(peer_sae):
 
-    url = f"https://{KME_IP}:8443/api/v1/keys/{peer_sae}/enc_keys?key_size={QKD_KEY_SIZE}"
-
+    url = (
+        f"https://{KME_IP}:{KME_PORT}"
+        f"/api/v1/keys/{peer_sae}/enc_keys"
+        f"?key_size={QKD_KEY_SIZE}"
+    )
     log("ENC REQUEST", "DEBUG", mode="MASTER")
 
     try:
@@ -2198,8 +2319,12 @@ def do_dec(peer_sae, key_id):
         )
 
         try:
-            url = f"https://{KME_IP}:8443/api/v1/keys/{peer_sae}/dec_keys?key_ID={key_id}&key_size={QKD_KEY_SIZE}"
-
+            url = (
+                f"https://{KME_IP}:{KME_PORT}"
+                f"/api/v1/keys/{peer_sae}/dec_keys"
+                f"?key_ID={key_id}"
+                f"&key_size={QKD_KEY_SIZE}"
+            )
             r = requests.get(
                 url,
                 cert=(CERT, KEY),
@@ -2598,7 +2723,20 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         iface,
         "SLAVE"
     )
-    
+    ###
+    slave_cycle_start_ms = now_ms()
+    rotation = rotation_id_for(iface, generation, key_id)
+
+    customer_event(
+        "PEER_INSTALL_REQUEST",
+        iface=iface,
+        mode="SLAVE",
+        rotation=rotation,
+        generation=generation,
+        key_id=key_id,
+        start_time=start_time
+    )
+    ###
     log(
         f"INSTALL-KEY SCHEDULE key_id={key_id} generation={generation} start_time={start_time}",
         "INFO",
@@ -2620,11 +2758,25 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
             iface,
             link
         )
+###
+        dec_start_ms = now_ms()
+
+        customer_event(
+            "DEC_KEY_START",
+            iface=iface,
+            mode="SLAVE",
+            rotation=rotation,
+            generation=generation,
+            key_id=key_id
+        )
 
         key = do_dec(
             link["peer_sae"],
             key_id
         )
+
+        dec_latency_ms = elapsed_ms(dec_start_ms)
+###
 
         if not key:
             record_kme_failure(
@@ -2651,6 +2803,28 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
             iface,
             "SLAVE"
         )
+###
+        customer_event(
+            "DEC_KEY_OK",
+            iface=iface,
+            mode="SLAVE",
+            rotation=rotation,
+            generation=generation,
+            key_id=key_id,
+            latency_ms=dec_latency_ms
+        )
+        install_start_ms = now_ms()
+        customer_event(
+            "PEER_KEYCHAIN_INSTALL_START",
+            iface=iface,
+            mode="SLAVE",
+            rotation=rotation,
+            generation=generation,
+            key_id=key_id,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time
+        )
 
         if not install_keychain_key(
             iface,
@@ -2672,7 +2846,21 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
             )
 
             return False
-
+        
+        customer_event(
+            "PEER_KEYCHAIN_INSTALL_OK",
+            iface=iface,
+            mode="SLAVE",
+            rotation=rotation,
+            generation=generation,
+            key_id=key_id,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time,
+            install_latency_ms=elapsed_ms(install_start_ms),
+            pending_seconds=pending_seconds_until(start_time)
+        )
+        
         if not bind_interface_to_stable_ca(
             iface,
             ca_name,
@@ -2749,10 +2937,26 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
             f"generation={state.get('generation')} "
             f"pending_key_id={key_id} "
             f"start_time={start_time} "
+            f"pending_seconds={pending_seconds_until(start_time)} "
             f"promoted={promoted}",
             "INFO",
             iface,
             "SLAVE"
+        )
+
+        customer_event(
+            "PEER_PENDING_KEY_INSTALLED",
+            iface=iface,
+            mode="SLAVE",
+            rotation=rotation,
+            generation=state.get("generation"),
+            key_id=key_id,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time,
+            pending_seconds=pending_seconds_until(start_time),
+            promoted=promoted,
+            cycle_duration_ms=elapsed_ms(slave_cycle_start_ms)
         )
 
         print(f"OK INSTALL-KEY key_id={key_id}")
@@ -3305,25 +3509,70 @@ def run_master():
             iface,
             "MASTER"
         )
-        
+        ###
         new_generation = next_generation(state)
         start_time = scheduled_key_start_time(link)
-        
+        rotation = rotation_id_for(iface, new_generation)
+        rotation_start_ms = now_ms()
+
+        pending_seconds = pending_seconds_until(start_time)
+
         log(
             f"KEYCHAIN ROTATION START "
+            f"rotation={rotation} "
             f"ca={ca_name} "
             f"keychain={keychain} "
             f"generation={new_generation} "
             f"start_time={start_time} "
+            f"pending_seconds={pending_seconds} "
             f"stagger_minutes={link_stagger_minutes(link)}",
             "INFO",
             iface,
             "MASTER"
         )
 
+        customer_event(
+            "ROTATION_START",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time,
+            pending_seconds=pending_seconds,
+            stagger_minutes=link_stagger_minutes(link)
+        )
+###
+        enc_start_ms = now_ms()
+
+        customer_event(
+            "ENC_KEY_START",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            peer_sae=link["peer_sae"]
+        )
+
         key_id, key = do_enc(
             link["peer_sae"]
         )
+
+        enc_latency_ms = elapsed_ms(enc_start_ms)
+
+        if key_id:
+            rotation = rotation_id_for(iface, new_generation, key_id)
+
+            customer_event(
+                "ENC_KEY_OK",
+                iface=iface,
+                mode="MASTER",
+                rotation=rotation,
+                generation=new_generation,
+                key_id=key_id,
+                latency_ms=enc_latency_ms
+            )
 
         if not key_id:
 
@@ -3343,12 +3592,27 @@ def run_master():
 
             continue
 
+        peer_notify_start_ms = now_ms()
+
+        customer_event(
+            "PEER_NOTIFY_START",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            key_id=key_id,
+            peer=peer,
+            peer_ip=link.get("peer_ip"),
+            peer_iface=link.get("peer_interface"),
+            start_time=start_time
+        )
+
         if not send_command(
             link,
             "install-key",
             iface,
             key_id=key_id,
-            generation=new_generation,    
+            generation=new_generation,
             start_time=start_time
         ):
 
@@ -3368,7 +3632,32 @@ def run_master():
 
             continue
 
+        customer_event(
+            "PEER_ACK",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            key_id=key_id,
+            peer=peer,
+            peer_latency_ms=elapsed_ms(peer_notify_start_ms)
+        )
+
         time.sleep(0.5)
+
+        local_install_start_ms = now_ms()
+
+        customer_event(
+            "LOCAL_KEYCHAIN_INSTALL_START",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            key_id=key_id,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time
+        )
 
         if not install_keychain_key(
             iface,
@@ -3396,6 +3685,20 @@ def run_master():
 
             continue
 
+        customer_event(
+            "LOCAL_KEYCHAIN_INSTALL_OK",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            key_id=key_id,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time,
+            install_latency_ms=elapsed_ms(local_install_start_ms),
+            pending_seconds=pending_seconds_until(start_time)
+        )
+        
         time.sleep(POST_KEY_INSTALL_SETTLE_SECONDS)
 
         #
@@ -3524,14 +3827,36 @@ def run_master():
             continue
 ###
         log(
-            f"KEYCHAIN ROTATION DONE ca={ca_name} keychain={keychain} "
+            f"KEYCHAIN ROTATION DONE "
+            f"rotation={rotation} "
+            f"ca={ca_name} keychain={keychain} "
             f"generation={new_generation} "
             f"pending_key_id={key_id} "
             f"start_time={start_time} "
-            f"promoted={promoted}",
+            f"pending_seconds={pending_seconds_until(start_time)} "
+            f"promoted={promoted} "
+            f"cycle_duration_ms={elapsed_ms(rotation_start_ms)}",
             "INFO",
             iface,
             "MASTER"
+        )
+
+        customer_event(
+            "ROTATION_DONE",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=new_generation,
+            key_id=key_id,
+            ca=ca_name,
+            keychain=keychain,
+            start_time=start_time,
+            pending_seconds=pending_seconds_until(start_time),
+            promoted=promoted,
+            enc_latency_ms=enc_latency_ms,
+            peer_latency_ms=elapsed_ms(peer_notify_start_ms),
+            local_install_latency_ms=elapsed_ms(local_install_start_ms),
+            cycle_duration_ms=elapsed_ms(rotation_start_ms)
         )
 
 # ----------------------------

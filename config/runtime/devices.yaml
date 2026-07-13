@@ -23,7 +23,8 @@ devices:
     qkd:
       sae_id: sae_001
     kme:
-      ip: 100.100.100.10
+      ip: 192.168.2.205
+      port: 8443
   vqfx2:
     platform: vqfx
     ip: 10.54.12.193
@@ -48,4 +49,5 @@ devices:
     qkd:
       sae_id: sae_002
     kme:
-      ip: 100.100.100.11
+      ip: 192.168.2.206
+      port: 8443

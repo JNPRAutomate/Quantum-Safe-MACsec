@@ -7,12 +7,12 @@ devices:
 
   - name: vqfx1
     ip: 10.54.13.14
-    kme: 100.100.100.10
+    kme: 192.168.2.205
     interfaces:
       - xe-0/0/1
 
   - name: vqfx2
     ip: 10.54.12.193
-    kme: 100.100.100.11
+    kme: 192.168.2.206
     interfaces:
       - xe-0/0/1

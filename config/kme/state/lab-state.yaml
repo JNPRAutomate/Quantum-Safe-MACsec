@@ -1,6 +1,6 @@
 bootstrap:
   completed: true
-  timestamp_utc: '2026-07-13T09:56:56.919601+00:00'
+  timestamp_utc: '2026-07-13T17:08:04.141128+00:00'
 environment:
   name: lab
 identity:
@@ -20,7 +20,7 @@ git:
   repo_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
 install_host:
   completed: true
-  timestamp_utc: '2026-07-13T09:57:08.618313+00:00'
+  timestamp_utc: '2026-07-13T17:08:10.878826+00:00'
   os_family: ubuntu
 packages:
   git: true
@@ -29,44 +29,19 @@ packages:
   docker_service: true
 build_env:
   completed: true
-  timestamp_utc: '2026-07-13T09:57:10.964150+00:00'
+  timestamp_utc: '2026-07-13T17:08:13.315610+00:00'
   kme_count: 2
   compose_file: docker-compose-kme.yml
   network: qkd_net
 build_image:
   completed: true
-  timestamp_utc: '2026-07-13T09:57:14.608623+00:00'
+  timestamp_utc: '2026-07-13T17:08:22.160106+00:00'
   image: etsi-kme:local
   no_cache: false
   cargo_built_on_host: true
 cert_install:
   completed: true
-  timestamp_utc: '2026-07-13T09:57:19.599284+00:00'
+  timestamp_utc: '2026-07-13T17:08:27.864588+00:00'
   profile: hierarchical_ca
   file_count: 12
   certs_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation/certs
-validate:
-  completed: true
-  timestamp_utc: '2026-07-13T09:57:28.766736+00:00'
-  passed: true
-  checks:
-    ssh: true
-    docker: true
-    docker_compose: true
-    project_dir: true
-    compose_file: true
-    network: true
-    image: true
-    postgres_container: true
-    cert_files: true
-    container_andrea-kme01: true
-    container_andrea-kme02: true
-restart:
-  completed: true
-  timestamp_utc: '2026-07-13T09:58:42.638715+00:00'
-  mode: kme_only
-  kme_count: 2
-  containers:
-  - andrea-kme01
-  - andrea-kme02
-  database_touched: false

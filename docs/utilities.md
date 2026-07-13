@@ -1623,3 +1623,72 @@ da cli del acx1:
 ```bash
 start shell command "sh -c 'while :; do clear; date; cli -c \"show configuration security authentication-key-chains key-chain QKD_CA1 | display set\" | egrep \"key-name|start-time\"; sleep 60; done'"
 ```
+
+
+
+## lab from internal
+ssh -N -L 8443:192.168.2.205:8443 andrea@192.168.2.115
+sudo ssh -N -g -L 0.0.0.0:8443:192.168.2.205:8443 andrea@192.168.2.115
+
+to create a connection from local mac into the docker container inside another host with kmes
+
+the curl from laptop (.113) becomes: 
+```bash
+curl -v \
+  --cert certs/hierarchical_ca/juniper_pki/certs/sae_001/sae_001.crt \
+  --key certs/hierarchical_ca/juniper_pki/certs/sae_001/sae_001.key \
+  --cacert certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt \
+  -H "Content-Type: application/json" \
+  -d '{"number":1,"size":256}' \
+  https://192.168.2.205:8443/api/v1/keys/sae_002/enc_keys
+*   Trying 192.168.2.205:8443...
+* Connected to 192.168.2.205 (192.168.2.205) port 8443
+* ALPN: curl offers h2,http/1.1
+* (304) (OUT), TLS handshake, Client hello (1):
+*  CAfile: certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt
+*  CApath: none
+* (304) (IN), TLS handshake, Server hello (2):
+* (304) (IN), TLS handshake, Unknown (8):
+* (304) (IN), TLS handshake, Request CERT (13):
+* (304) (IN), TLS handshake, Certificate (11):
+* (304) (IN), TLS handshake, CERT verify (15):
+* (304) (IN), TLS handshake, Finished (20):
+* (304) (OUT), TLS handshake, Certificate (11):
+* (304) (OUT), TLS handshake, CERT verify (15):
+* (304) (OUT), TLS handshake, Finished (20):
+* SSL connection using TLSv1.3 / AEAD-CHACHA20-POLY1305-SHA256 / [blank] / UNDEF
+* ALPN: server accepted h2
+* Server certificate:
+*  subject: C=IT; O=HPE Lab; OU=Quantum Safe MACsec; CN=kme_001
+*  start date: Jul 13 16:52:58 2026 GMT
+*  expire date: Jul 13 16:53:58 2027 GMT
+*  subjectAltName: host "192.168.2.205" matched cert's IP address!
+*  issuer: C=IT; O=HPE Lab; OU=Quantum Safe MACsec; CN=KME Issuing CA
+*  SSL certificate verify ok.
+* using HTTP/2
+* [HTTP/2] [1] OPENED stream for https://192.168.2.205:8443/api/v1/keys/sae_002/enc_keys
+* [HTTP/2] [1] [:method: POST]
+* [HTTP/2] [1] [:scheme: https]
+* [HTTP/2] [1] [:authority: 192.168.2.205:8443]
+* [HTTP/2] [1] [:path: /api/v1/keys/sae_002/enc_keys]
+* [HTTP/2] [1] [user-agent: curl/8.7.1]
+* [HTTP/2] [1] [accept: */*]
+* [HTTP/2] [1] [content-type: application/json]
+* [HTTP/2] [1] [content-length: 23]
+> POST /api/v1/keys/sae_002/enc_keys HTTP/2
+> Host: 192.168.2.205:8443
+> User-Agent: curl/8.7.1
+> Accept: */*
+> Content-Type: application/json
+> Content-Length: 23
+> 
+* upload completely sent off: 23 bytes
+< HTTP/2 200 
+< content-length: 113
+< content-type: application/json
+< date: Mon, 13 Jul 2026 17:08:38 GMT
+< 
+* Connection #0 to host 192.168.2.205 left intact
+{"keys":[{"key_ID":"1807faa3-74c0-479e-8d5a-85d8af757d9a","key":"eI97Nyg9ATr6dhTgVs4flw2agzpq/Z8uh8nspCSbniI="}]}%
+```
+

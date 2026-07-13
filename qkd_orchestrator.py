@@ -846,6 +846,7 @@ def handle_create(args):
                 "ip": inv_dev["ip"],
                 "interfaces": inv_dev["interfaces"],
                 "kme_ip": inv_dev["kme"],
+                "kme_port": base.get("kme", {}).get("port", 443),
                 "auth": device_auth,
                 "script_user": script_user,
                 "sae_id": inv_dev.get("sae_id", build_sae(i)),

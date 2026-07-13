@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS keys (
     master_sae_id TEXT NOT NULL,
     slave_sae_id TEXT NOT NULL,
     size INT NOT NULL,
-    content BYTEA NOT NULL,
+    content TEXT NOT NULL,
     active BOOLEAN DEFAULT TRUE,
     last_modified_at TIMESTAMP DEFAULT NOW()
 );

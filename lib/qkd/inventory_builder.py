@@ -152,7 +152,8 @@ def build_inventory(devices_list, pairs, out_dir=CONFIG["runtime_dir"], mode="qk
                 "sae_id": dev.get("sae_id", dev["name"])
             }
             device_entry["kme"] = {
-                "ip": dev["kme_ip"]
+                "ip": dev["kme_ip"],
+                "port": dev["kme_port"]
             }
 
         devices_yaml["devices"][dev["name"]] = device_entry

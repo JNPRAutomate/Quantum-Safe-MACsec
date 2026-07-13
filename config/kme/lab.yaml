@@ -29,14 +29,14 @@ docker:
   network: qkd_net
   network_driver: ipvlan
   network_subnet: 192.168.2.0/24
-  network_gateway: 192.168.2.114
+  network_gateway: 192.168.2.113
   network_parent: ens33
   host_ip: 192.168.2.115
 
 database:
   service_name: qkd-postgres
   container_name: "{owner}-qkd-postgres"
-  service_ip: 192.168.2.30
+  service_ip: 192.168.2.230
   image: postgres:15
   username: db_user
   password: db_password
@@ -48,7 +48,7 @@ database:
 kme:
   service_prefix: kme
   container_prefix: "{owner}-kme"
-  service_first_ip: 192.168.2.10
+  service_first_ip: 192.168.2.205
   port: 8443
   worker_threads: 2
 

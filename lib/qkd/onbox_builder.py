@@ -10,7 +10,7 @@ from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 
 # repo root:
 #   <repo>/my_repo_folder
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 # Source onbox template:
 #   artifacts/qkd_onbox.py
@@ -74,7 +74,7 @@ def build_onbox_config(name, device):
     config = {
         "local_sae": device["qkd"]["sae_id"],
         "kme_ip": device["kme"]["ip"],
-
+        "kme_port": device["kme"]["port"],
         # PKI runtime profile
         "pki_profile": pki_profile,
         "ca_cert": ca_cert,
