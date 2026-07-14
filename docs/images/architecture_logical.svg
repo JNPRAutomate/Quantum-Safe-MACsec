@@ -1,0 +1,44 @@
+<svg width="900" height="500" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .box { fill:#f2f2f2; stroke:#333; stroke-width:2; }
+    .title { font-size:16px; font-weight:bold; }
+    .text { font-size:13px; }
+    .arrow { stroke:#333; stroke-width:2; marker-end:url(#arrowhead); }
+  </style>
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" />
+    </marker>
+  </defs>
+
+  <!-- Offbox -->
+  <rect x="50" y="200" width="180" height="100" class="box"/>
+  <text x="60" y="225" class="title">Offbox</text>
+  <text x="60" y="250" class="text">qkd_orchestrator</text>
+  <text x="60" y="270" class="text">kme_orchestrator</text>
+
+  <!-- KME -->
+  <rect x="350" y="100" width="200" height="80" class="box"/>
+  <text x="360" y="125" class="title">KME1</text>
+  <text x="360" y="145" class="text">100.100.100.10</text>
+
+  <rect x="350" y="250" width="200" height="80" class="box"/>
+  <text x="360" y="275" class="title">KME2</text>
+  <text x="360" y="295" class="text">100.100.100.11</text>
+
+  <!-- QFX -->
+  <rect x="700" y="120" width="150" height="70" class="box"/>
+  <text x="710" y="145" class="title">QFX1</text>
+  <text x="710" y="165" class="text">sae_001</text>
+
+  <rect x="700" y="260" width="150" height="70" class="box"/>
+  <text x="710" y="285" class="title">QFX2</text>
+  <text x="710" y="305" class="text">sae_002</text>
+
+  <!-- Arrows -->
+  <line x1="230" y1="250" x2="350" y2="140" class="arrow"/>
+  <line x1="230" y1="250" x2="350" y2="290" class="arrow"/>
+  <line x1="550" y1="140" x2="700" y2="155" class="arrow"/>
+  <line x1="550" y1="140" x2="700" y2="295" class="arrow"/>
+</svg>
