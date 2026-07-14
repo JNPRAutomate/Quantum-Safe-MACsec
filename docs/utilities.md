@@ -1692,3 +1692,18 @@ curl -v \
 {"keys":[{"key_ID":"1807faa3-74c0-479e-8d5a-85d8af757d9a","key":"eI97Nyg9ATr6dhTgVs4flw2agzpq/Z8uh8nspCSbniI="}]}%
 ```
 
+
+
+
+$ scp admin@100.123.113.4:/var/tmp/qkd_debug*.log /tmp/qkd_logs/
+python3 log_summ.py --logs /tmp/qkd_logs/qkd_debug*.log --output /tmp/qkd_customer_summary.log --title "Customer QKD Health Summary"
+(admin@100.123.113.4) Password:
+qkd_debug.log                                                                                                                                                                                                        100%  248KB  70.0MB/s   00:00    
+qkd_debug_sae_004_et-0_0_0.log                                                                                                                                                                                       100%   69KB  51.6MB/s   00:00    
+qkd_debug_sae_004_et-0_0_4.log                                                                                                                                                                                       100% 6006    12.7MB/s   00:00    
+qkd_debug_sae_004_et-0_0_6.log                                                                                                                                                                                       100%   69KB  53.5MB/s   00:00    
+qkd_debug_sae_004_et-0_0_8.log                                                                                                                                                                                       100%   69KB  52.5MB/s   00:00    
+[OK] summary written: /tmp/qkd_customer_summary.log
+
+
+
