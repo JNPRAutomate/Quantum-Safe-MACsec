@@ -12,71 +12,47 @@ import logging
 from lib.qkd.rendering import build_device_config
 from lib.common.settings import CONFIG
 from lib.common.settings import PKI
+from lib.common.settings import QKD
 from lib.common.config import load_inventory, load_platform
 from lib.common.config import load_runtime_pki_profile
 from jinja2 import Environment, FileSystemLoader
-
-from jnpr.junos.utils.config import Config
 
 
 # ----------------------------------------
 # PATHS
 # ----------------------------------------
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# <repo>/lib/qkd/provisioning.py
+# parents[0] = <repo>/lib/qkd
+# parents[1] = <repo>/lib
+# parents[2] = <repo>
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 CONFIG_DIR = BASE_DIR / CONFIG["inventory_dir"]
 RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 PLATFORM_DIR = CONFIG_DIR / "platforms"
-CERTS_DIR = BASE_DIR / CONFIG["certs_dir"]
+
+
+def resolve_certs_dir():
+    canonical = BASE_DIR / "certs"
+    if canonical.exists():
+        return canonical
+
+    configured = BASE_DIR / CONFIG.get("certs_dir", "certs")
+    if configured.exists():
+        return configured
+
+    return canonical
+
+
+CERTS_DIR = resolve_certs_dir()
 
 
 def render_common_template(template_name, context):
     templates_dir = BASE_DIR / "config" / "templates" / "common"
-
     env = Environment(loader=FileSystemLoader(templates_dir))
     template = env.get_template(template_name)
-
     return template.render(**context)
-
-
-def configure_qkd_scripts(dev, name, base):
-    script_name = "qkd_onbox.py"
-
-    secrets = base.get("secrets", {})
-
-    script_user = (
-        secrets.get("script_user")
-        or secrets.get("default_user")
-        or "admin"
-    )
-
-    rollback_candidate(dev, name)
-
-    print(f"[{name}] Rendering event/op templates")
-    print(f"[{name}] Using script_user={script_user}")
-
-    context = {
-        "script_name": script_name,
-        "script_user": script_user,
-    }
-
-    event_cfg = render_common_template("event.j2", context)
-    op_cfg = render_common_template("op_script.j2", context)
-
-    full_cfg = event_cfg + "\n" + op_cfg
-
-    print(f"[{name}] Applying QKD script config")
-
-    with Config(dev) as cu:
-        cu.load(full_cfg, format="set", merge=False)
-
-        try:
-            cu.commit(sync=True)
-        except Exception:
-            cu.commit()
-
-    print(f"[{name}] QKD scripts event and op configured OK")
 
 
 # --------------------------
@@ -109,17 +85,194 @@ def progress(filename, size, sent):
     print(f"{filename} -> {percent}% ({sent}/{size} bytes)")
 
 
-# ----------------------------------------
-# YAML LOADER
-# ----------------------------------------
-
-
-def remote_file_exists(dev, path):
+def rpc_text(rsp):
+    if rsp is None:
+        return ""
     try:
-        dev.rpc.cli(f"file show {path}", format="text")
-        return True
+        return "".join(rsp.itertext()).strip()
     except Exception:
-        return False
+        pass
+    try:
+        if rsp.text:
+            return rsp.text.strip()
+    except Exception:
+        pass
+    return str(rsp).strip()
+
+
+# ----------------------------------------
+# DUAL RE HELPERS
+# ----------------------------------------
+
+
+def run_cli(dev, command, name=None, strict=False):
+    """
+    Execute Junos CLI command and return text.
+    strict=False is intentional for RE sync helpers because file copy may fail
+    on single-RE platforms or when a target RE alias is not valid.
+    """
+    try:
+        rsp = dev.rpc.cli(command, format="text")
+        out = rpc_text(rsp)
+        if DEBUG and out:
+            label = name or "device"
+            print(f"[{label}] CLI {command}\n{out}")
+        return out
+    except Exception as exc:
+        if strict:
+            raise
+        if DEBUG:
+            label = name or "device"
+            print(f"[{label}] CLI warning: {command}: {exc}")
+        return str(exc)
+
+
+def run_shell(dev, command, name=None, strict=False):
+    try:
+        rsp = dev.rpc.request_shell_execute(command=command)
+        out = rpc_text(rsp)
+        if DEBUG and out:
+            label = name or "device"
+            print(f"[{label}] SHELL {command}\n{out}")
+        return out
+    except Exception as exc:
+        if strict:
+            raise
+        if DEBUG:
+            label = name or "device"
+            print(f"[{label}] SHELL warning: {command}: {exc}")
+        return str(exc)
+
+
+def has_dual_re(dev, name):
+    """
+    Detect dual RE robustly.
+
+    MX304 output may show either:
+      - Routing Engine 0 / Routing Engine 1
+      - RE0 / RE1
+      - Slot 0: / Slot 1:
+
+    The previous implementation only matched re0/re1 or routing engine 0/1,
+    so it missed actual MX304 dual-RE outputs that use Slot 0 / Slot 1.
+    """
+    out = run_cli(dev, "show chassis routing-engine", name=name, strict=False)
+    low = (out or "").lower()
+
+    return (
+        ("re0" in low and "re1" in low)
+        or ("routing engine 0" in low and "routing engine 1" in low)
+        or ("slot 0:" in low and "slot 1:" in low)
+    )
+
+
+def copy_file_to_other_re(dev, name, src_path, dst_name=None):
+    """
+    Best-effort copy of a local file to the other Routing Engine.
+
+    Tries both re0: and re1: targets because the active RE identity may vary.
+    On single-RE systems this function should not be called.
+    """
+    dst_path = str(Path(src_path).parent / (dst_name or Path(src_path).name))
+    ok = False
+
+    for re_name in ("re0", "re1"):
+        cmd = f"file copy {src_path} {re_name}:{dst_path}"
+        out = run_cli(dev, cmd, name=name, strict=False)
+        low = (out or "").lower()
+        if "error" not in low and "failed" not in low and "no such" not in low:
+            ok = True
+
+    return ok
+
+
+def sync_qkd_scripts_dual_re(dev, name, script_name):
+    """
+    Ensure qkd_onbox.py exists on both routing engines before commit synchronize.
+
+    Also creates/copies legacy onbox.py as a compatibility shim because stale
+    configurations can still reference /var/db/scripts/event/onbox.py and break
+    commit synchronize before the new candidate is fully checked out.
+    """
+    op_script_dir = "/var/db/scripts/op"
+    event_script_dir = "/var/db/scripts/event"
+
+    op_script = f"{op_script_dir}/{script_name}"
+    event_script = f"{event_script_dir}/{script_name}"
+    legacy_event_script = f"{event_script_dir}/onbox.py"
+    legacy_op_script = f"{op_script_dir}/onbox.py"
+
+    # Ensure local RE has all compatibility files before trying to copy them.
+    run_shell(
+        dev,
+        (
+            f"mkdir -p {op_script_dir} {event_script_dir}; "
+            f"test -f {event_script} && cp {event_script} {legacy_event_script} || true; "
+            f"test -f {op_script} && cp {op_script} {legacy_op_script} || true; "
+            f"chmod 755 {event_script} {op_script} {legacy_event_script} {legacy_op_script} 2>/dev/null || true"
+        ),
+        name=name,
+        strict=False,
+    )
+
+    if not has_dual_re(dev, name):
+        print(f"[{name}] Single RE detected - script sync skipped")
+        return
+
+    print(f"[{name}] Dual-RE detected - syncing QKD scripts to peer RE")
+
+    for path in (event_script, op_script, legacy_event_script, legacy_op_script):
+        copy_file_to_other_re(dev, name, path)
+
+    # Ask Junos to push scripts too. Ignore failure here; file copy above is the primary sync.
+    run_cli(dev, "commit synchronize scripts", name=name, strict=False)
+
+
+def sync_certs_dual_re(dev, name, remote_dir, filenames):
+    if not has_dual_re(dev, name):
+        return
+
+    print(f"[{name}] Dual-RE detected - syncing certs to peer RE")
+    for filename in filenames:
+        copy_file_to_other_re(dev, name, f"{remote_dir}/{filename}")
+
+
+def commit_safely(dev, cu, name, sync=True):
+    """
+    Commit helper.
+
+    Correct behavior:
+    - Single-RE devices: normal commit only.
+    - Dual-RE devices: commit synchronize.
+    - If a dual-RE commit synchronize fails because backup RE is missing event
+      scripts, sync QKD scripts to peer RE and retry once.
+    - Do not fall back to a normal commit on dual-RE after sync failure, because
+      that hides the actual RE1 problem.
+    """
+    dual_re = has_dual_re(dev, name) if sync else False
+
+    try:
+        if sync and dual_re:
+            cu.commit(sync=True)
+        else:
+            cu.commit()
+        return
+    except Exception as exc:
+        text = str(exc)
+        low = text.lower()
+
+        if sync and dual_re and (
+            "event script missing" in low
+            or "remote commit-configuration failed" in low
+        ):
+            print(f"[{name}] commit synchronize failed; syncing scripts to peer RE and retrying once")
+            sync_qkd_scripts_dual_re(dev, name, QKD.get("SCRIPT_NAME", "qkd_onbox.py"))
+            cu.commit(sync=True)
+            return
+
+        print(f"[{name}] COMMIT FAILED")
+        print(text)
+        raise
 
 
 # ----------------------------------------
@@ -167,15 +320,6 @@ def build_macsec_static(device, platform_cfg):
 
 
 def device_sae_id(device):
-    """
-    Resolve the local SAE identity for a device.
-
-    Supports both inventory/runtime styles:
-      device["qkd"]["sae_id"]
-      device["local_sae"]
-      device["sae"]
-      device["sae_id"]
-    """
     qkd = device.get("qkd", {}) or {}
 
     for value in (
@@ -193,14 +337,6 @@ def device_sae_id(device):
 
 
 def resolve_cert_paths_for_device(name, device):
-    """
-    Resolve local cert/key/CA files according to runtime PKI profile.
-
-    self_signed layout:
-      certs/self_signed/<sae>/<sae>.crt
-      certs/self_signed/<sae>/<sae>.key
-      certs/self_signed/offbox_rootCA.crt
-    """
     sae_id = device_sae_id(device)
 
     runtime_pki = load_runtime_pki_profile()
@@ -209,11 +345,33 @@ def resolve_cert_paths_for_device(name, device):
 
     if profile == "self_signed":
         profile_dir = CERTS_DIR / "self_signed"
-        local_dev_dir = profile_dir / sae_id
+        candidate_device_dirs = [
+            profile_dir / sae_id,
+            profile_dir / "certs" / sae_id,
+        ]
+
+        local_dev_dir = None
+        for candidate in candidate_device_dirs:
+            if candidate.exists():
+                local_dev_dir = candidate
+                break
+        if local_dev_dir is None:
+            local_dev_dir = candidate_device_dirs[0]
 
         local_cert = local_dev_dir / f"{sae_id}.crt"
         local_key = local_dev_dir / f"{sae_id}.key"
-        local_ca = profile_dir / "offbox_rootCA.crt"
+
+        local_ca_candidates = [
+            profile_dir / "offbox_rootCA.crt",
+            profile_dir / "trust_exchange" / "install_on_juniper" / "offbox_rootCA.crt",
+        ]
+        local_ca = None
+        for candidate in local_ca_candidates:
+            if candidate.exists():
+                local_ca = candidate
+                break
+        if local_ca is None:
+            local_ca = local_ca_candidates[0]
 
         return {
             "profile": profile,
@@ -227,19 +385,17 @@ def resolve_cert_paths_for_device(name, device):
         profile_dir = CERTS_DIR / "hierarchical_ca"
 
         candidate_device_dirs = [
-            profile_dir / "juniper" / sae_id,
             profile_dir / "juniper_pki" / "certs" / sae_id,
+            profile_dir / "juniper" / sae_id,
             profile_dir / "devices" / sae_id,
             profile_dir / sae_id,
         ]
 
         local_dev_dir = None
-
         for candidate in candidate_device_dirs:
             if candidate.exists():
                 local_dev_dir = candidate
                 break
-
         if local_dev_dir is None:
             local_dev_dir = candidate_device_dirs[0]
 
@@ -247,11 +403,7 @@ def resolve_cert_paths_for_device(name, device):
         local_key = local_dev_dir / f"{sae_id}.key"
 
         juniper_pki = pki.get("juniper", {}) or {}
-
-        trust_bundle = (
-            juniper_pki.get("trust_bundle")
-            or pki.get("trust_bundle")
-        )
+        trust_bundle = juniper_pki.get("trust_bundle") or pki.get("trust_bundle")
 
         if trust_bundle:
             local_ca = Path(trust_bundle)
@@ -279,16 +431,7 @@ def resolve_cert_paths_for_device(name, device):
 
 
 def push_certs(dev, name, device):
-    """
-    Copy device cert/key and CA/trust bundle to the remote Junos cert dir.
-
-    Remote expected by qkd_onbox.py:
-      /var/db/scripts/certs/<sae>.crt
-      /var/db/scripts/certs/<sae>.key
-      /var/db/scripts/certs/<ca_bundle_name>
-    """
     remote_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
-
     files = resolve_cert_paths_for_device(name, device)
 
     profile = files["profile"]
@@ -297,22 +440,15 @@ def push_certs(dev, name, device):
     local_key = files["key"]
     local_ca = files["ca"]
 
-    missing = [
-        str(path)
-        for path in (local_cert, local_key, local_ca)
-        if not path.exists()
-    ]
-
+    missing = [str(path) for path in (local_cert, local_key, local_ca) if not path.exists()]
     if missing:
         raise RuntimeError(
             f"[{name}] Missing local cert files for sae={sae_id} profile={profile}\n"
+            f"CERTS_DIR={CERTS_DIR}\n"
             + "\n".join(missing)
         )
 
-    print(
-        f"[{name}] Copying certs profile={profile} sae={sae_id} "
-        f"to {remote_dir}"
-    )
+    print(f"[{name}] Copying certs profile={profile} sae={sae_id} to {remote_dir}")
 
     try:
         dev.rpc.request_shell_execute(
@@ -323,9 +459,7 @@ def push_certs(dev, name, device):
             )
         )
     except Exception as exc:
-        raise RuntimeError(
-            f"[{name}] Failed to prepare remote cert dir {remote_dir}: {exc}"
-        )
+        raise RuntimeError(f"[{name}] Failed to prepare remote cert dir {remote_dir}: {exc}")
 
     with SCP(dev, progress=progress) as scp:
         for local_file in (local_cert, local_key, local_ca):
@@ -344,11 +478,7 @@ def push_certs(dev, name, device):
     )
 
     rsp = dev.rpc.request_shell_execute(command=verify_cmd)
-
-    try:
-        output = "".join(rsp.itertext()).strip()
-    except Exception:
-        output = str(rsp).strip()
+    output = rpc_text(rsp)
 
     if output:
         dbg_block(f"{name} REMOTE CERTS", output)
@@ -358,13 +488,7 @@ def push_certs(dev, name, device):
         f"OK:{remote_dir}/{local_key.name}",
         f"OK:{remote_dir}/{local_ca.name}",
     ]
-
-    missing_remote = [
-        marker
-        for marker in required_markers
-        if marker not in output
-    ]
-
+    missing_remote = [marker for marker in required_markers if marker not in output]
     if missing_remote:
         raise RuntimeError(
             f"[{name}] Remote cert verification failed\n"
@@ -372,10 +496,9 @@ def push_certs(dev, name, device):
             f"output={output}"
         )
 
-    print(
-        f"[{name}] Certs copied OK "
-        f"{local_cert.name}, {local_key.name}, {local_ca.name}"
-    )
+    sync_certs_dual_re(dev, name, remote_dir, [local_cert.name, local_key.name, local_ca.name])
+
+    print(f"[{name}] Certs copied OK {local_cert.name}, {local_key.name}, {local_ca.name}")
 
 
 # --------------------------
@@ -384,19 +507,49 @@ def push_certs(dev, name, device):
 
 
 def rollback_candidate(dev, name):
-    """
-    Discard any stale candidate configuration before loading new config.
-
-    This is required because a previous failed commit can leave candidate
-    statements behind, and later commits may fail on unrelated sections.
-    """
     cu = Config(dev)
-
     try:
         cu.rollback(rb_id=0)
         print(f"[{name}] Candidate rollback 0 complete")
     except Exception as exc:
         print(f"[{name}] Candidate rollback 0 warning: {exc}")
+
+
+# ----------------------------------------
+# QKD SCRIPT CONFIG
+# ----------------------------------------
+
+
+def configure_qkd_scripts(dev, name, base):
+    script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
+    secrets = base.get("secrets", {})
+    script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
+
+    rollback_candidate(dev, name)
+
+    print(f"[{name}] Rendering event/op templates")
+    print(f"[{name}] Using script_user={script_user}")
+
+    context = {
+        "script_name": script_name,
+        "script_user": script_user,
+    }
+
+    event_cfg = render_common_template("event.j2", context)
+    op_cfg = render_common_template("op_script.j2", context)
+    full_cfg = event_cfg + "\n" + op_cfg
+
+    print(f"[{name}] Applying QKD script config")
+
+    # Only dual-RE devices need script sync before commit synchronize.
+    if has_dual_re(dev, name):
+        sync_qkd_scripts_dual_re(dev, name, script_name)
+
+    with Config(dev) as cu:
+        cu.load(full_cfg, format="set", merge=False)
+        commit_safely(dev, cu, name, sync=True)
+
+    print(f"[{name}] QKD scripts event and op configured OK")
 
 
 # ----------------------------------------
@@ -421,22 +574,19 @@ def push_config(device_name, device, commands, base):
             pass
 
         push_certs(dev, device_name, device)
-
         configure_qkd_scripts(dev, device_name, base)
-        rollback_candidate(dev, device_name)
 
+        # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         with Config(dev) as cu:
             for cmd in commands:
                 cmd = cmd.strip()
-
                 if not cmd or cmd.startswith("#"):
                     continue
-
                 cu.load(cmd, format="set")
 
             if cu.diff():
                 print(f"[{device_name}] Applying config")
-                cu.commit()
+                commit_safely(dev, cu, device_name, sync=True)
                 print(f"[{device_name}] Commit OK")
             else:
                 print(f"[{device_name}] No changes")
@@ -453,22 +603,6 @@ def push_config(device_name, device, commands, base):
 
 
 def resolve_peers(devices, topology):
-    """
-    Compatibility helper.
-
-    Old runtime topology:
-        qkd:
-          pairs:
-            - [A, B]
-
-    New runtime topology:
-        links:
-          - node_a: A
-            node_b: B
-
-    New provisioning no longer depends on this function, but it is kept for
-    debug/compatibility with any external caller.
-    """
     peer_map = {}
 
     for a, b in topology.get("pairs", []) or []:

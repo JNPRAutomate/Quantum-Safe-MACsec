@@ -4,15 +4,14 @@ from lib.common.settings import QKD, PKI
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
 import json
+
 import subprocess
 import shlex
 import re
 
-
 # -------------------------------------------------
 # Basic helpers
 # -------------------------------------------------
-
 
 def qkd_script_user():
     return QKD.get("SCRIPT_USER", "admin")
@@ -48,13 +47,12 @@ def qkd_remote_op_script():
         f"{QKD.get('OP_SCRIPT_DIR', '/var/db/scripts/op')}/{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}",
     )
 
-
 def qkd_remote_event_script():
     return (
         f"{QKD.get('EVENT_SCRIPT_DIR', '/var/db/scripts/event')}/"
         f"{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}"
     )
-
+  
 
 def qkd_remote_tmp_dir():
     return QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -67,50 +65,95 @@ def qkd_remote_cert_dir():
 def device_host(device):
     if device.get("mgmt_ip"):
         return device["mgmt_ip"]
+
     if device.get("ip"):
         return device["ip"]
+
     if device.get("host"):
         return device["host"]
-    raise KeyError(f"Device {device.get('name', '<unknown>')} has no mgmt_ip/ip/host field")
+
+    raise KeyError(
+        f"Device {device.get('name', '<unknown>')} has no mgmt_ip/ip/host field"
+    )
 
 
 def normalize_device(device, name=None):
     if not isinstance(device, dict):
-        raise TypeError(f"Invalid device record: expected dict, got {type(device)}")
+        raise TypeError(
+            f"Invalid device record: expected dict, got {type(device)}"
+        )
+
     d = dict(device)
+
     if name and "name" not in d:
         d["name"] = name
+
     if "name" not in d:
-        raise KeyError(f"Device record missing name and no inventory key was provided: {d}")
+        raise KeyError(
+            f"Device record missing name and no inventory key was provided: {d}"
+        )
+
     return d
 
 
 def normalize_devices(devices):
     if isinstance(devices, dict):
-        return [normalize_device(device, name=name) for name, device in devices.items()]
+        return [
+            normalize_device(device, name=name)
+            for name, device in devices.items()
+        ]
+
     if isinstance(devices, list):
-        return [normalize_device(device) for device in devices]
-    raise TypeError(f"Invalid devices type: expected dict or list, got {type(devices)}")
+        return [
+            normalize_device(device)
+            for device in devices
+        ]
+
+    raise TypeError(
+        f"Invalid devices type: expected dict or list, got {type(devices)}"
+    )
 
 
 def device_name(device):
     if not isinstance(device, dict):
-        raise TypeError(f"Invalid device record: expected dict, got {type(device)}")
+        raise TypeError(
+            f"Invalid device record: expected dict, got {type(device)}"
+        )
+
     name = device.get("name")
+
     if not name:
-        raise KeyError(f"Device record missing logical name: {device}")
+        raise KeyError(
+            f"Device record missing logical name: {device}"
+        )
+
     return name
 
 
 def validate_device_record(device):
-    for key in ["name", "ip", "auth"]:
+    required = [
+        "name",
+        "ip",
+        "auth",
+    ]
+
+    for key in required:
         if key not in device:
-            raise KeyError(f"Device record missing required field '{key}': {device}")
+            raise KeyError(
+                f"Device record missing required field '{key}': {device}"
+            )
+
     auth = device.get("auth") or {}
+
     if "username" not in auth:
-        raise KeyError(f"Device {device['name']} missing auth.username")
+        raise KeyError(
+            f"Device {device['name']} missing auth.username"
+        )
+
     if "password" not in auth:
-        raise KeyError(f"Device {device['name']} missing auth.password")
+        raise KeyError(
+            f"Device {device['name']} missing auth.password"
+        )
 
 
 def platform_name(device):
@@ -118,12 +161,19 @@ def platform_name(device):
 
 
 def platform_is_legacy_qfx(device):
-    return platform_name(device) in ["qfx", "vqfx"]
-
+    return platform_name(device) in ["qfx","vqfx"]
 
 def junos_cli_quote(value):
+    """
+    Quote a command for Junos CLI:
+      start shell command "<command>"
+
+    Keep this minimal to avoid breaking legacy behavior elsewhere.
+    """
+
     value = value.replace("\\", "\\\\")
     value = value.replace('"', '\\"')
+
     return f'"{value}"'
 
 
@@ -131,13 +181,11 @@ def junos_cli_quote(value):
 # Result / PyEZ helpers
 # -------------------------------------------------
 
-
 class CommandResult:
     def __init__(self, returncode=0, stdout="", stderr=""):
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
-
 
 def validate_verbose():
     return bool(QKD.get("VALIDATE_VERBOSE", False))
@@ -149,31 +197,50 @@ def print_if_verbose(text):
 
 
 def rpc_output_to_text(rsp):
+    """
+    Convert PyEZ XML output to plain text.
+    """
+
     if rsp is None:
         return ""
+
     chunks = []
+
     try:
         for elem in rsp.iter():
             if elem.text:
                 chunks.append(elem.text)
             if elem.tail:
                 chunks.append(elem.tail)
+
         text = "".join(chunks).strip()
+
         if text:
             return text
+
     except Exception:
         pass
+
     try:
         if rsp.text:
             return rsp.text.strip()
     except Exception:
         pass
+
     return str(rsp)
 
 
 def shell_output_has_error(text):
+    """
+    Simple legacy-safe error detector.
+
+    Do not use this for perfect shell rc semantics. This only catches obvious
+    deploy blockers from request_shell_execute output.
+    """
+
     if not text:
         return False
+
     markers = [
         "Permission denied",
         "Operation not permitted",
@@ -187,30 +254,75 @@ def shell_output_has_error(text):
         "failed",
         "error:",
     ]
+
     low = text.lower()
+
     for marker in markers:
         if marker.lower() in low:
             return True
+
     return False
 
 
 def pyez_shell_cmd(device, command, timeout=60):
+    """
+    Execute a raw shell command through PyEZ using device auth.
+
+    This intentionally does NOT wrap in /bin/sh -c.
+    Legacy QFX/vQFX request_shell_execute can pass through csh/tcsh and breaks
+    both single-quote and double-quote wrappers.
+
+    Therefore:
+      - keep commands simple
+      - use this for deploy/validate checks
+      - do not expect exact shell rc
+    """
+
     device = normalize_device(device)
     name = device_name(device)
     host = device_host(device)
+
     auth = device.get("auth") or {}
     user = auth.get("username")
     passwd = auth.get("password")
+
     if not user or not passwd:
-        return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
-    dev = Device(host=host, user=user, passwd=passwd, port=22, timeout=timeout)
+        return CommandResult(
+            returncode=1,
+            stdout="",
+            stderr=f"missing auth.username/auth.password for device {name}"
+        )
+
+    dev = Device(
+        host=host,
+        user=user,
+        passwd=passwd,
+        port=22,
+        timeout=timeout,
+    )
+
     try:
         dev.open()
-        rsp = dev.rpc.request_shell_execute(command=command)
+
+        rsp = dev.rpc.request_shell_execute(
+            command=command
+        )
+
         text = rpc_output_to_text(rsp)
-        return CommandResult(1 if shell_output_has_error(text) else 0, text.strip(), "")
+
+        return CommandResult(
+            returncode=1 if shell_output_has_error(text) else 0,
+            stdout=text.strip(),
+            stderr="",
+        )
+
     except Exception as e:
-        return CommandResult(1, "", str(e))
+        return CommandResult(
+            returncode=1,
+            stdout="",
+            stderr=str(e),
+        )
+
     finally:
         try:
             dev.close()
@@ -219,31 +331,99 @@ def pyez_shell_cmd(device, command, timeout=60):
 
 
 def ssh_deploy_cmd(device, command, timeout=30):
-    return pyez_shell_cmd(device=device, command=command, timeout=timeout)
+    """
+    Deploy/setup/cleanup command using PyEZ/password.
+    """
+
+    return pyez_shell_cmd(
+        device=device,
+        command=command,
+        timeout=timeout,
+    )
 
 
 def ssh_cmd(device, command, user, timeout=30):
+    """
+    Direct OpenSSH helper. Used only for non-legacy runtime checks where needed.
+    """
+
     host = device_host(device)
-    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
-    deploy_key = device.get("orchestrator_ssh_key") or device.get("deploy_ssh_key")
+
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+    ]
+
+    deploy_key = (
+        device.get("orchestrator_ssh_key")
+        or device.get("deploy_ssh_key")
+    )
+
     if deploy_key:
-        cmd.extend(["-i", deploy_key, "-o", "IdentitiesOnly=yes"])
-    cmd.extend([f"{user}@{host}", command])
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+        cmd.extend(
+            [
+                "-i",
+                deploy_key,
+                "-o",
+                "IdentitiesOnly=yes",
+            ]
+        )
+
+    cmd.extend(
+        [
+            f"{user}@{host}",
+            command,
+        ]
+    )
+
+    return subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def ssh_script_user_onbox_cmd(device, command, timeout=30):
+    """
+    Execute command as SCRIPT_USER via on-box qkd SSH identity.
+
+    Legacy QFX skips these checks in pre/post deploy.
+
+    On ACX/EVO, SSH remote commands land in Junos CLI context, not Linux shell.
+    Therefore for non-legacy platforms we explicitly run:
+
+      start shell command "<command>"
+
+    This preserves the legacy QFX behavior because QFX does not use this path
+    in the lightweight legacy pre/post checks.
+    """
+
     device = normalize_device(device)
+
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
-
+    #
+    # Junos operational scripts
+    #
     if command.startswith("op "):
         remote_payload = command
+    #
+    # Legacy QFX
+    #   
     elif platform_is_legacy_qfx(device):
         remote_payload = command
+    #
+    # EVO/Linux shell commands
+    #
     else:
-        remote_payload = "start shell command " + junos_cli_quote(command)
-
+        remote_payload = (
+            "start shell command "
+            + junos_cli_quote(command)
+        )
+    
     remote_cmd = (
         f"ssh -i {key_path} "
         f"-o IdentitiesOnly=yes "
@@ -254,13 +434,16 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30):
     )
     if validate_verbose():
         print("REMOTE_CMD=", remote_cmd)
-    return ssh_deploy_cmd(device=device, command=remote_cmd, timeout=timeout)
-
+    
+    return ssh_deploy_cmd(
+        device=device,
+        command=remote_cmd,
+        timeout=timeout,
+    )
 
 # -------------------------------------------------
 # Identity plan
 # -------------------------------------------------
-
 
 def check_validation_plan():
     print("=== QKD validation plan ===")
@@ -281,13 +464,21 @@ def check_validation_plan():
 # Common checks
 # -------------------------------------------------
 
-
 def check_deploy_user_access(device):
     device = normalize_device(device)
     name = device_name(device)
+
     auth = device.get("auth") or {}
     deploy_user = auth.get("username", "<missing>")
-    result = ssh_deploy_cmd(device, "whoami; id; uname -a", timeout=30)
+
+    cmd = "whoami; id; uname -a"
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     if result.returncode != 0:
         raise RuntimeError(
             f"PyEZ deploy access failed on {name}\n"
@@ -296,19 +487,30 @@ def check_deploy_user_access(device):
             f"stdout={result.stdout}\n"
             f"stderr={result.stderr}"
         )
-    print(result.stdout)
 
+    print(result.stdout)
 
 def check_script_user_exists(device):
     device = normalize_device(device)
     name = device_name(device)
+
     script_user = qkd_script_user()
     host = device_host(device)
-    result = ssh_deploy_cmd(device, f"id {script_user}", timeout=30)
+
+    cmd = f"id {script_user}"
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     stdout = str(result.stdout or "")
     stderr = str(result.stderr or "")
+
     if result.returncode != 0:
         stderr_lower = stderr.lower()
+
         if (
             "connecttimeouterror" in stderr_lower
             or "timed out" in stderr_lower
@@ -327,6 +529,7 @@ def check_script_user_exists(device):
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )
+
         raise RuntimeError(
             f"SCRIPT_USER validation failed on {name}: user '{script_user}' was not found or cannot be queried.\n"
             f"device={name}\n"
@@ -335,14 +538,25 @@ def check_script_user_exists(device):
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )
+
     print(stdout)
 
 
 def check_script_user_home_simple(device):
+    """
+    Legacy-safe .ssh dir check.
+
+    Do not chown -R the whole .ssh directory.
+    Some devices may have stale files owned by root or protected files.
+    For deploy we only need the directory to exist and be usable.
+    """
+
     device = normalize_device(device)
     name = device_name(device)
+
     ssh_home = qkd_ssh_home()
     ssh_dir = qkd_ssh_dir()
+
     cmd = (
         f"echo ### home; "
         f"ls -ld {ssh_home}; "
@@ -351,19 +565,37 @@ def check_script_user_home_simple(device):
         f"chmod 700 {ssh_dir}; "
         f"ls -ld {ssh_dir}"
     )
-    result = ssh_deploy_cmd(device, cmd, timeout=30)
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"SCRIPT_USER home/.ssh check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"SCRIPT_USER home/.ssh check failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(result.stdout)
 
-
 def check_script_dirs_simple(device):
+    """
+    Legacy-safe script directory preparation.
+
+    Keep this stupid simple for QFX.
+    """
+
     device = normalize_device(device)
     name = device_name(device)
+
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
     cert_dir = qkd_remote_cert_dir()
     runtime_tmp_dir = qkd_remote_tmp_dir()
+
     cmd = (
         f"echo ### qkd-script-dirs; "
         f"mkdir -p {op_script_dir}; "
@@ -374,15 +606,33 @@ def check_script_dirs_simple(device):
         f"ls -ld {event_script_dir}; "
         f"ls -ld {cert_dir}"
     )
-    result = ssh_deploy_cmd(device, cmd, timeout=30)
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"script directory check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"script directory check failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(result.stdout)
 
 
 def check_runtime_cleanup_simple(device):
+    """
+    Legacy-safe cleanup of stale runtime files.
+
+    No shell loops. No if. No variable assignment.
+    """
+
     device = normalize_device(device)
     name = device_name(device)
+
     cmd = (
         "echo ### qkd-runtime-cleanup; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json; "
@@ -395,230 +645,371 @@ def check_runtime_cleanup_simple(device):
         "rm -rf /var/tmp/qkd_onbox_*; "
         "echo ### qkd-runtime-cleanup-done"
     )
-    result = ssh_deploy_cmd(device, cmd, timeout=60)
-    print(result.stdout)
-    if result.returncode != 0:
-        print(f"[WARN] runtime cleanup had non-fatal output on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
 
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=60,
+    )
+
+    # On legacy platforms chflags/rm may print no-match noise. Do not block deploy.
+    print(result.stdout)
+
+    if result.returncode != 0:
+        print(
+            f"[WARN] runtime cleanup had non-fatal output on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
 
 def check_remote_certs(device):
     device = normalize_device(device)
     name = device_name(device)
-    sae = (device.get("qkd") or {}).get("sae_id") or device.get("local_sae") or device.get("sae") or device.get("sae_id")
+
+    sae = (
+        (device.get("qkd") or {}).get("sae_id")
+        or device.get("local_sae")
+        or device.get("sae")
+        or device.get("sae_id")
+    )
+
     if not sae:
-        raise RuntimeError(f"cannot validate remote certs on {name}: missing SAE ID")
+        raise RuntimeError(
+            f"cannot validate remote certs on {name}: missing SAE ID"
+        )
+
     remote_cert_dir = qkd_remote_cert_dir()
-    expected = [f"{remote_cert_dir}/{sae}.crt", f"{remote_cert_dir}/{sae}.key", f"{remote_cert_dir}/offbox_rootCA.crt"]
-    cmd = "; ".join([f"test -s {path} && echo OK:{path} || echo MISSING:{path}" for path in expected])
-    result = ssh_deploy_cmd(device, cmd, timeout=30)
-    missing = [line for line in (result.stdout or "").splitlines() if line.startswith("MISSING:")]
+
+    expected = [
+        f"{remote_cert_dir}/{sae}.crt",
+        f"{remote_cert_dir}/{sae}.key",
+        f"{remote_cert_dir}/offbox_rootCA.crt",
+    ]
+
+    cmd = "; ".join(
+        [
+            f"test -s {path} && echo OK:{path} || echo MISSING:{path}"
+            for path in expected
+        ]
+    )
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
+    missing = [
+        line for line in (result.stdout or "").splitlines()
+        if line.startswith("MISSING:")
+    ]
+
     if missing:
-        raise RuntimeError(f"remote cert validation failed on {name}\n" + "\n".join(missing))
+        raise RuntimeError(
+            f"remote cert validation failed on {name}\n"
+            + "\n".join(missing)
+        )
+
     print(f"[OK] remote certs on {name}: {sae}.crt {sae}.key offbox_rootCA.crt")
-
-
+    
+    
 # -------------------------------------------------
-# Non-legacy / ACX / MX stronger checks
+# Non-legacy / ACX stronger checks
 # -------------------------------------------------
-
 
 def check_script_user_ssh_identity(device):
     device = normalize_device(device)
     name = device_name(device)
+
+    script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
     pub_path = qkd_ssh_public_key()
+
     key_bits = QKD.get("SSH_KEY_BITS", 4096)
     key_comment = QKD.get("SSH_KEY_COMMENT", "qkd-orchestrator")
+
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
+        f"chown {script_user} {key_path}; "
+        f"chown {script_user} {pub_path}; "
         f"ls -l {key_path}; "
         f"ls -l {pub_path}"
     )
-    result = ssh_deploy_cmd(device, cmd, timeout=60)
-    if result.returncode != 0:
-        raise RuntimeError(f"SSH identity check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(result.stdout)
 
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=60,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"SSH identity check failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(result.stdout)
 
 def check_script_user_authorized_keys(device):
     device = normalize_device(device)
     name = device_name(device)
+
+    script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     pub_path = qkd_ssh_public_key()
     auth_path = qkd_authorized_keys()
+
     cmd = (
         f"mkdir -p {ssh_dir}; "
-        f"test -s {pub_path}; "
         f"touch {auth_path}; "
-        f"grep -q -F -f {pub_path} {auth_path} || cat {pub_path} >> {auth_path}; "
+        f"cat {pub_path} >> {auth_path}; "
+        f"chown {script_user} {auth_path}; "
         f"chmod 600 {auth_path}; "
         f"ls -l {auth_path}"
     )
-    result = ssh_deploy_cmd(device, cmd, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(f"authorized_keys check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(result.stdout)
 
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"authorized_keys check failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(result.stdout)
 
 def check_script_user_can_read_private_key(device):
     device = normalize_device(device)
     name = device_name(device)
+
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
-    cmd = f"whoami; test -r {key_path}; ls -l {key_path}; echo PRIVATE_KEY_READABLE_OK user={script_user} key={key_path}"
-    result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
+
+    cmd = (
+        f"whoami; "
+        f"test -r {key_path}; "
+        f"ls -l {key_path}; "
+        f"echo PRIVATE_KEY_READABLE_OK user={script_user} key={key_path}"
+    )
+
+    result = ssh_script_user_onbox_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"SCRIPT_USER cannot read private key on {name} as {script_user}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"SCRIPT_USER cannot read private key on {name} as {script_user}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(result.stdout)
 
 
 def check_script_user_atomic_write(device):
     device = normalize_device(device)
     name = device_name(device)
+
     test_path = "/var/tmp/qkd_identity_write_test.json"
     tmp_path = "/var/tmp/qkd_identity_write_test.json.tmp"
-    cmd = f"echo old > {test_path}; echo new > {tmp_path}; mv {tmp_path} {test_path}; cat {test_path}; ls -l {test_path}; rm -f {test_path}"
-    result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(f"SCRIPT_USER atomic write failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(result.stdout)
 
+    cmd = (
+        f"echo old > {test_path}; "
+        f"echo new > {tmp_path}; "
+        f"mv {tmp_path} {test_path}; "
+        f"cat {test_path}; "
+        f"ls -l {test_path}; "
+        f"rm -f {test_path}"
+    )
+
+    result = ssh_script_user_onbox_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"SCRIPT_USER atomic write failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(result.stdout)
 
 def collect_script_user_public_keys(devices):
     devices = normalize_devices(devices)
+
     pub_keys = {}
     pub_path = qkd_ssh_public_key()
+
     for device in devices:
         name = device_name(device)
-        result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
+
+        result = ssh_deploy_cmd(
+            device,
+            f"cat {pub_path}",
+            timeout=20,
+        )
+
         if result.returncode != 0:
-            raise RuntimeError(f"failed to read SCRIPT_USER public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+            raise RuntimeError(
+                f"failed to read SCRIPT_USER public key on {name}\n"
+                f"stdout={result.stdout}\n"
+                f"stderr={result.stderr}"
+            )
+
         key = None
+
         for line in result.stdout.splitlines():
             line = line.strip()
-            if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
+
+            if (
+                line.startswith("ssh-rsa ")
+                or line.startswith("ssh-ed25519 ")
+                or line.startswith("ecdsa-sha2-")
+            ):
                 key = line
                 break
+
         if not key:
-            raise RuntimeError(f"invalid SCRIPT_USER public key on {name} path={pub_path}\nraw_output={result.stdout}")
+            raise RuntimeError(
+                f"invalid SCRIPT_USER public key on {name} path={pub_path}\n"
+                f"raw_output={result.stdout}"
+            )
+
         pub_keys[name] = key
+
     return pub_keys
 
 
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
+
+    script_user = qkd_script_user()
     auth_path = qkd_authorized_keys()
     pub_keys = collect_script_user_public_keys(devices)
+
     for device in devices:
         target = device_name(device)
+
         for source_name, pub_key in pub_keys.items():
-            quoted_key = shlex.quote(pub_key)
             cmd = (
                 f"touch {auth_path}; "
-                f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}; "
+                f"grep -q -F '{pub_key}' {auth_path} || echo '{pub_key}' >> {auth_path}; "
+                f"chown {script_user} {auth_path}; "
                 f"chmod 600 {auth_path}; "
                 f"echo AUTHORIZED_KEY_OK source={source_name} target={target}"
             )
-            result = ssh_deploy_cmd(device, cmd, timeout=30)
+
+            result = ssh_deploy_cmd(
+                device,
+                cmd,
+                timeout=30,
+            )
+
             if result.returncode != 0:
                 raise RuntimeError(
                     f"failed to install peer authorized key source={source_name} target={target}\n"
                     f"stdout={result.stdout}\n"
                     f"stderr={result.stderr}"
                 )
+
+            #print(result.stdout)
+            pass
         print("[OK] peer authorized_keys synchronized")
 
 
 def check_peer_ssh_from_device(device):
     device = normalize_device(device)
     name = device_name(device)
+
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
 
     for link in device.get("links", []):
         peer_ip = link.get("peer_ip")
+
         if not peer_ip:
-            print(f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip")
+            print(
+                f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip"
+            )
             continue
 
-        marker = f"QKD_PEER_SSH_OK_{name}_{str(peer_ip).replace('.', '_')}"
         if platform_is_legacy_qfx(device):
-            peer_payload = f"echo {marker}"
+            peer_payload = "whoami"
         else:
-            peer_payload = "start shell command " + junos_cli_quote(f"echo {marker}")
+            peer_payload = (
+                "start shell command "
+                + junos_cli_quote("whoami")
+            )
 
         cmd = (
             f"ssh -i {key_path} "
             f"-o IdentitiesOnly=yes "
             f"-o StrictHostKeyChecking=no "
-            f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
             f"-o BatchMode=yes "
-            f"-o ConnectTimeout=2 "
-            f"-o ServerAliveInterval=2 "
-            f"-o ServerAliveCountMax=1 "
-            f"-o LogLevel=ERROR "
             f"{script_user}@{peer_ip} "
             f"{shlex.quote(peer_payload)}"
         )
-        result = ssh_script_user_onbox_cmd(device, cmd, timeout=8)
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        combined = f"{stdout}\n{stderr}"
-        combined_low = combined.lower()
 
-        if marker in combined:
-            print(f"[OK] peer SSH {name} -> {peer_ip} as {script_user}")
-            continue
-
-        hard_fail_markers = [
-            "permission denied",
-            "publickey,password",
-            "authentication failed",
-            "no such identity",
-            "bad permissions",
-            "private key",
-        ]
-        if any(m in combined_low for m in hard_fail_markers):
-            raise RuntimeError(
-                f"peer SSH authentication failed from {name} to {peer_ip} as {script_user}\n"
-                f"stdout={stdout}\n"
-                f"stderr={stderr}"
-            )
-
-        if "rpctimeouterror" in combined_low or "timeout" in combined_low:
-            print(
-                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {script_user}; "
-                "manual SSH may still be valid"
-            )
-            print_if_verbose(stdout)
-            print_if_verbose(stderr)
-            continue
-
-        raise RuntimeError(
-            f"peer SSH marker not observed from {name} to {peer_ip} as {script_user}\n"
-            f"expected_marker={marker}\n"
-            f"stdout={stdout}\n"
-            f"stderr={stderr}"
+        result = ssh_script_user_onbox_cmd(
+            device,
+            cmd,
+            timeout=30,
         )
 
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"peer SSH failed from {name} to {peer_ip} as {script_user}\n"
+                f"stdout={result.stdout}\n"
+                f"stderr={result.stderr}"
+            )
+
+        got = result.stdout.strip().splitlines()[-1]
+
+        if got != script_user:
+            raise RuntimeError(
+                f"peer SSH user mismatch from {name} to {peer_ip}: expected={script_user} got={got}"
+            )
+
+        print(f"[OK] peer SSH {name} -> {peer_ip} as {script_user}")
 
 # -------------------------------------------------
 # Postdeploy checks
 # -------------------------------------------------
-
-
 def check_event_script_path(device):
     device = normalize_device(device)
     name = device_name(device)
+
     path = qkd_remote_event_script()
-    result = ssh_deploy_cmd(device, f"ls -l {path}", timeout=20)
+
+    result = ssh_deploy_cmd(
+        device,
+        f"ls -l {path}",
+        timeout=20,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"qkd_onbox.py missing on {name} at {path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"qkd_onbox.py missing on {name} at {path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(f"[OK] event script exists on {name}: {path}")
     print_if_verbose(result.stdout)
 
@@ -626,21 +1017,45 @@ def check_event_script_path(device):
 def check_event_script_permissions(device):
     device = normalize_device(device)
     name = device_name(device)
+
     path = qkd_remote_event_script()
-    result = ssh_deploy_cmd(device, f"chmod 755 {path}; ls -l {path}", timeout=30)
+
+    result = ssh_deploy_cmd(
+        device,
+        f"chmod 755 {path}; ls -l {path}",
+        timeout=30,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"event qkd_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"event qkd_onbox.py permission check failed on {name}\n"
+            f"path={path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
     print(f"[OK] event script permissions set: {path}")
     print_if_verbose(result.stdout)
-
-
+      
+    
 def check_op_script_path(device):
     device = normalize_device(device)
     name = device_name(device)
+
     path = qkd_remote_op_script()
-    result = ssh_deploy_cmd(device, f"ls -l {path}", timeout=20)
+
+    result = ssh_deploy_cmd(
+        device,
+        f"ls -l {path}",
+        timeout=20,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"qkd_onbox.py missing on {name} at {path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"qkd_onbox.py missing on {name} at {path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(f"[OK] op script exists on {name}: {path}")
     print_if_verbose(result.stdout)
 
@@ -648,20 +1063,44 @@ def check_op_script_path(device):
 def check_op_script_permissions(device):
     device = normalize_device(device)
     name = device_name(device)
-    path = qkd_remote_op_script()
-    result = ssh_deploy_cmd(device, f"chmod 755 {path}", timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(f"qkd_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(f"[OK] op script permissions set: {path}")
 
+    path = qkd_remote_op_script()
+
+    result = ssh_deploy_cmd(
+        device,
+        f"chmod 755 {path}",
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"qkd_onbox.py permission check failed on {name}\n"
+            f"path={path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(f"[OK] op script permissions set: {path}")
 
 def check_system_scripts_python3(device):
     device = normalize_device(device)
     name = device_name(device)
+
     cmd = 'cli -c "show configuration system scripts | display set"'
-    result = ssh_deploy_cmd(device, cmd, timeout=20)
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=20,
+    )
+
     if "set system scripts language python3" not in result.stdout:
-        raise RuntimeError(f"system scripts python3 not configured on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"system scripts python3 not configured on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(f"[OK] system scripts python3 configured on {name}")
     print_if_verbose(result.stdout)
 
@@ -669,28 +1108,60 @@ def check_system_scripts_python3(device):
 def check_event_options_script_user(device):
     device = normalize_device(device)
     name = device_name(device)
+
     script_user = qkd_script_user()
     script_name = QKD["SCRIPT_NAME"]
+
     cmd = 'cli -c "show configuration event-options event-script | display set"'
-    result = ssh_deploy_cmd(device, cmd, timeout=30)
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     if script_name not in result.stdout or f"python-script-user {script_user}" not in result.stdout:
-        raise RuntimeError(f"event-options python-script-user mismatch on {name}\nexpected script_user={script_user}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"event-options python-script-user mismatch on {name}\n"
+            f"expected script_user={script_user}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     print(f"[OK] event script user configured on {name}: {script_user}")
     print_if_verbose(result.stdout)
 
 
-def grep_remote_literal(device, literal, path, timeout=20):
-    cmd = f"grep -n -F {shlex.quote(str(literal))} {path}"
-    return ssh_deploy_cmd(device, cmd, timeout=timeout)
 
+def grep_remote_literal(device, literal, path, timeout=20):
+    """
+    Search for an exact literal string inside a remote file.
+
+    This is used only for validation. It does not modify the device.
+    """
+
+    cmd = f"grep -n -F {shlex.quote(str(literal))} {path}"
+
+    return ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=timeout,
+    )
 
 def check_onbox_embedded_config(device):
     device = normalize_device(device)
     name = device_name(device)
+
     script_user = qkd_script_user()
     expected_key = qkd_ssh_private_key()
     path = qkd_remote_op_script()
-    result = ssh_deploy_cmd(device, f"grep -n 'script_user\\|ssh_key' {path}", timeout=30)
+
+    result = ssh_deploy_cmd(
+        device,
+        f"grep -n 'script_user\\|ssh_key' {path}",
+        timeout=30,
+    )
+
     if (
         result.returncode != 0
         or "script_user" not in result.stdout
@@ -698,133 +1169,319 @@ def check_onbox_embedded_config(device):
         or "ssh_key" not in result.stdout
         or expected_key not in result.stdout
     ):
-        raise RuntimeError(f"embedded qkd_onbox CONFIG mismatch on {name}\nexpected script_user={script_user}\nexpected ssh_key={expected_key}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(f"[OK] embedded CONFIG identity on {name}: script_user={script_user} ssh_key={expected_key}")
+        raise RuntimeError(
+            f"embedded qkd_onbox CONFIG mismatch on {name}\n"
+            f"expected script_user={script_user}\n"
+            f"expected ssh_key={expected_key}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(
+        f"[OK] embedded CONFIG identity on {name}: "
+        f"script_user={script_user} ssh_key={expected_key}"
+    )
     print_if_verbose(result.stdout)
 
 
 def check_onbox_runtime_policy_config(device):
+    """
+    Validate that the deployed qkd_onbox.py contains the expected runtime
+    PKI profile and QKD policy generated by qkd_orchestrator create.
+
+    Checks:
+      - qkd_policy
+      - pki_profile
+      - trust_bundle
+      - max_installed_keys
+    """
+
     device = normalize_device(device)
     name = device_name(device)
+
     path = qkd_remote_op_script()
+
     runtime_pki = load_runtime_pki_profile()
     runtime_policy = load_runtime_qkd_policy()
+
     pki = runtime_pki.get("pki", {})
     qkd_policy = runtime_policy.get("qkd_policy", {})
+
     pki_profile = pki.get("profile")
+
     juniper_pki = pki.get("juniper", {})
-    trust_bundle = juniper_pki.get("trust_bundle") or pki.get("trust_bundle")
+
+    trust_bundle = (
+        juniper_pki.get("trust_bundle")
+        or pki.get("trust_bundle")
+    )
+
     max_installed_keys = qkd_policy.get("max_installed_keys")
+
     required_markers = [
-        ("qkd_policy", '"qkd_policy"'),
-        ("pki_profile", f'"pki_profile": "{pki_profile}"'),
-        ("max_installed_keys", f'"max_installed_keys": {int(max_installed_keys)}'),
+        (
+            "qkd_policy",
+            '"qkd_policy"',
+        ),
+        (
+            "pki_profile",
+            f'"pki_profile": "{pki_profile}"',
+        ),
+        (
+            "max_installed_keys",
+            f'"max_installed_keys": {int(max_installed_keys)}',
+        ),
     ]
+
     if trust_bundle:
-        required_markers.append(("trust_bundle", f'"trust_bundle": "{trust_bundle}"'))
+        required_markers.append(
+            (
+                "trust_bundle",
+                f'"trust_bundle": "{trust_bundle}"',
+            )
+        )
+
     failed = []
+
     for label, marker in required_markers:
-        result = grep_remote_literal(device=device, literal=marker, path=path, timeout=20)
+        result = grep_remote_literal(
+            device=device,
+            literal=marker,
+            path=path,
+            timeout=20,
+        )
+
         if result.returncode != 0:
-            failed.append((label, marker, result.stdout, result.stderr))
+            failed.append(
+                (
+                    label,
+                    marker,
+                    result.stdout,
+                    result.stderr,
+                )
+            )
         else:
             print(f"[OK] embedded runtime marker on {name}: {label}")
             print_if_verbose(result.stdout)
-    print(f"[OK] embedded runtime CONFIG on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
+
+    print(
+        f"[OK] embedded runtime CONFIG on {name}: "
+        f"pki_profile={pki_profile} "
+        f"max_installed_keys={max_installed_keys} "
+        f"trust_bundle={'present' if trust_bundle else 'missing'}"
+    )
+    
     if failed:
         lines = []
+
         for label, marker, stdout, stderr in failed:
-            lines.append(f"- missing marker={label}\n  expected={marker}\n  stdout={stdout}\n  stderr={stderr}")
-        raise RuntimeError(f"deployed qkd_onbox.py runtime CONFIG validation failed on {name}\npath={path}\n" + "\n".join(lines))
+            lines.append(
+                f"- missing marker={label}\n"
+                f"  expected={marker}\n"
+                f"  stdout={stdout}\n"
+                f"  stderr={stderr}"
+            )
+
+        raise RuntimeError(
+            f"deployed qkd_onbox.py runtime CONFIG validation failed on {name}\n"
+            f"path={path}\n"
+            + "\n".join(lines)
+        )
 
 
 def expected_max_installed_keys():
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {})
+
     value = int(qkd_policy.get("max_installed_keys", 5))
-    return 1 if value < 1 else value
+
+    if value < 1:
+        return 1
+
+    return value
 
 
 def keychain_names_from_device(device):
     device = normalize_device(device)
+
     names = []
+
     for link in device.get("links", []):
         ca_names = []
+
         ca_name = link.get("ca_name")
+
         if ca_name:
             ca_names.append(ca_name)
+
         for ca in link.get("ca_names", []) or []:
             if ca and ca not in ca_names:
                 ca_names.append(ca)
+
         for ca in ca_names:
-            keychain = link.get("keychain_name") or f"QKD_{ca}"
+            keychain = (
+                link.get("keychain_name")
+                or f"QKD_{ca}"
+            )
+
             if keychain not in names:
                 names.append(keychain)
+
     return names
 
 
 def check_keychain_slot_limit(device):
+    """
+    Validate that Junos authentication-key-chain config does not contain
+    stale legacy key slots beyond qkd_policy.max_installed_keys.
+    """
+
     device = normalize_device(device)
     name = device_name(device)
+
     max_keys = expected_max_installed_keys()
     allowed_max_index = max_keys - 1
+
     keychains = keychain_names_from_device(device)
+
     if not keychains:
         print(f"[WARN] no QKD keychains found in runtime links for {name}")
         return
-    cmd = 'cli -c "show configuration security authentication-key-chains | display set"'
-    result = ssh_deploy_cmd(device, cmd, timeout=30)
+
+    cmd = (
+        'cli -c "show configuration security authentication-key-chains | display set"'
+    )
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=30,
+    )
+
     if result.returncode != 0:
-        raise RuntimeError(f"failed to read authentication-key-chains on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"failed to read authentication-key-chains on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
     output = result.stdout or ""
+
     violations = []
+
     for keychain in keychains:
-        pattern = re.compile(r"set security authentication-key-chains key-chain " + re.escape(keychain) + r" key (\d+)\b")
-        indexes = sorted({int(match.group(1)) for match in pattern.finditer(output)})
-        overflow = [idx for idx in indexes if idx > allowed_max_index]
+        pattern = re.compile(
+            r"set security authentication-key-chains key-chain "
+            + re.escape(keychain)
+            + r" key (\d+)\b"
+        )
+
+        indexes = sorted(
+            {
+                int(match.group(1))
+                for match in pattern.finditer(output)
+            }
+        )
+
+        overflow = [
+            idx for idx in indexes
+            if idx > allowed_max_index
+        ]
+
         if overflow:
-            violations.append({"keychain": keychain, "configured_indexes": indexes, "overflow_indexes": overflow})
-        else:
-            #print(f"[OK] keychain slot limit on {name}: {keychain} indexes={indexes} max_allowed={allowed_max_index}")
-            print(
-                    f"[OK] keychain entries on {name}: "
-                    f"{keychain} used_slots={indexes} "
-                    f"capacity={allowed_max_index + 1}"
+            violations.append(
+                {
+                    "keychain": keychain,
+                    "configured_indexes": indexes,
+                    "overflow_indexes": overflow,
+                }
             )
+        else:
+            print(
+                f"[OK] keychain slot limit on {name}: "
+                f"{keychain} indexes={indexes} max_allowed={allowed_max_index}"
+            )
+
     if violations:
         lines = []
+
         for item in violations:
-            lines.append(f"- keychain={item['keychain']} configured_indexes={item['configured_indexes']} overflow_indexes={item['overflow_indexes']}")
-        raise RuntimeError(f"QKD keychain slot limit validation failed on {name}\nmax_installed_keys={max_keys}\nallowed_indexes=0..{allowed_max_index}\nstale key slots found:\n" + "\n".join(lines))
+            lines.append(
+                f"- keychain={item['keychain']} "
+                f"configured_indexes={item['configured_indexes']} "
+                f"overflow_indexes={item['overflow_indexes']}"
+            )
+
+        raise RuntimeError(
+            f"QKD keychain slot limit validation failed on {name}\n"
+            f"max_installed_keys={max_keys}\n"
+            f"allowed_indexes=0..{allowed_max_index}\n"
+            f"stale key slots found:\n"
+            + "\n".join(lines)
+        )
+
 
 
 def check_qkd_status_as_script_user(device):
     device = normalize_device(device)
     name = device_name(device)
+
     script_user = qkd_script_user()
+
     for link in device.get("links", []):
         iface = link.get("interface")
+
         if not iface:
             continue
+
         cmd = f"op qkd_onbox.py action status iface {iface}"
-        result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
+
+        result = ssh_script_user_onbox_cmd(
+            device,
+            cmd,
+            timeout=30,
+        )
+
         if result.returncode != 0:
-            raise RuntimeError(f"QKD status failed on {name} iface={iface} as {script_user}\nstdout={result.stdout}\nstderr={result.stderr}")
+            raise RuntimeError(
+                f"QKD status failed on {name} iface={iface} as {script_user}\n"
+                f"stdout={result.stdout}\n"
+                f"stderr={result.stderr}"
+            )
+
         raw = (result.stdout or "").strip()
+
         try:
             status = json.loads(raw)
+
             ca_name = status.get("ca_name")
             keychain_name = status.get("keychain_name")
             generation = status.get("generation")
             installed_keys = status.get("installed_keys", []) or []
             health = status.get("health", {}) or {}
+
             degraded = bool(health.get("degraded"))
             declared_down = bool(health.get("declared_down"))
             kme_fail_count = health.get("kme_fail_count", 0)
             last_kme_error = health.get("last_kme_error")
-            health_state = "DEGRADED" if degraded or declared_down or last_kme_error else "OK"
-            print(f"[OK] qkd status {name} iface={iface}: ca={ca_name} keychain={keychain_name} generation={generation} installed_keys={len(installed_keys)} kme_fail_count={kme_fail_count} health={health_state}")
+
+            health_state = "OK"
+
+            if degraded or declared_down or last_kme_error:
+                health_state = "DEGRADED"
+
+            print(
+                f"[OK] qkd status {name} iface={iface}: "
+                f"ca={ca_name} "
+                f"keychain={keychain_name} "
+                f"generation={generation} "
+                f"installed_keys={len(installed_keys)} "
+                f"kme_fail_count={kme_fail_count} "
+                f"health={health_state}"
+            )
+
             print_if_verbose(raw)
+
         except Exception:
             print(f"[OK] qkd status {name} iface={iface}")
             print_if_verbose(raw)
@@ -833,60 +1490,99 @@ def check_qkd_status_as_script_user(device):
 def check_no_state_save_errors(device):
     device = normalize_device(device)
     name = device_name(device)
-    cmd = "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' /var/tmp/qkd_debug*.log 2>/dev/null || true"
-    result = ssh_deploy_cmd(device, cmd, timeout=20)
+
+    cmd = (
+        "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' "
+        "/var/tmp/qkd_debug*.log 2>/dev/null || true"
+    )
+
+    result = ssh_deploy_cmd(
+        device,
+        cmd,
+        timeout=20,
+    )
+
     output = (result.stdout or "").strip()
-    real_error_markers = ["STATE SAVE ERROR", "KEYCHAIN BOOTSTRAP STATE SAVE FAIL", "Operation not permitted"]
+
+    real_error_markers = [
+        "STATE SAVE ERROR",
+        "KEYCHAIN BOOTSTRAP STATE SAVE FAIL",
+        "Operation not permitted",
+    ]
+
     matched_lines = []
+
     for line in output.splitlines():
         line = line.strip()
-        if line and any(marker in line for marker in real_error_markers):
-            matched_lines.append(line)
-    if matched_lines:
-        raise RuntimeError(f"STATE SAVE ERROR detected on {name}\nstdout={chr(10).join(matched_lines)}\nstderr={result.stderr}")
-    print(f"[OK] no state save errors on {name}")
 
+        if not line:
+            continue
+
+        if any(marker in line for marker in real_error_markers):
+            matched_lines.append(line)
+
+    if matched_lines:
+        raise RuntimeError(
+            f"STATE SAVE ERROR detected on {name}\n"
+            f"stdout={chr(10).join(matched_lines)}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(f"[OK] no state save errors on {name}")
 
 # -------------------------------------------------
 # Validation entrypoints
 # -------------------------------------------------
 
-
 def validate_device_identity_predeploy(device):
     device = normalize_device(device)
     name = device_name(device)
+
     validate_device_record(device)
 
     if platform_is_legacy_qfx(device):
         print(f"=== QKD legacy QFX pre-deploy validation: {name} ===")
+        #check_deploy_user_access(device)
         check_script_user_exists(device)
         check_script_user_home_simple(device)
         check_script_dirs_simple(device)
         check_runtime_cleanup_simple(device)
+
         print(f"[OK] QKD legacy QFX pre-deploy validation passed: {name}")
         return
 
     print(f"=== QKD pre-deploy validation: {name} ===")
+
+    #check_deploy_user_access(device)
     check_script_user_exists(device)
     check_script_user_home_simple(device)
     check_script_dirs_simple(device)
-    check_script_user_ssh_identity(device)
-    check_script_user_authorized_keys(device)
-    check_runtime_cleanup_simple(device)
-    print(f"[OK] QKD pre-deploy validation passed: {name}")
 
+    #check_script_user_ssh_identity(device)
+    check_script_user_authorized_keys(device)
+    #check_script_user_can_read_private_key(device)
+    check_runtime_cleanup_simple(device)
+    #check_script_user_atomic_write(device)
+
+    print(f"[OK] QKD pre-deploy validation passed: {name}")
 
 def validate_device_identity_postdeploy(device):
     device = normalize_device(device)
     name = device_name(device)
+
     validate_device_record(device)
 
     if platform_is_legacy_qfx(device):
         print(f"=== QKD legacy QFX post-deploy validation: {name} ===")
+
+        #check_op_script_path(device)
+        #check_op_script_permissions(device)
+
         print(f"[OK] QKD legacy QFX post-deploy validation passed: {name}")
         return
 
     print(f"=== QKD post-deploy validation: {name} ===")
+
     check_op_script_path(device)
     check_op_script_permissions(device)
     check_event_script_path(device)
@@ -899,109 +1595,152 @@ def validate_device_identity_postdeploy(device):
     check_peer_ssh_from_device(device)
     check_qkd_status_as_script_user(device)
     check_no_state_save_errors(device)
-    print(f"[OK] QKD post-deploy validation passed: {name}")
 
+    print(f"[OK] QKD post-deploy validation passed: {name}")
 
 def validate_all_devices_predeploy(devices):
     devices = normalize_devices(devices)
+
     check_validation_plan()
+
     print("")
     print("=== QKD pre-deploy validation ===")
     print(f"Devices: {len(devices)}")
     print("")
+
     failed = []
+
     for index, device in enumerate(devices, start=1):
         name = device_name(device)
         host = device_host(device)
+
         print(f"[{index}/{len(devices)}] {name}")
         print(f"  host        : {host}")
         print(f"  script_user : {qkd_script_user()}")
         print("")
+
         try:
             validate_device_identity_predeploy(device)
             print(f"[OK] pre-deploy validation passed: {name}")
             print("")
+
         except Exception as exc:
             failed.append((name, exc))
             print(f"[FAIL] pre-deploy validation failed: {name}")
             print(str(exc))
             print("")
+
     if failed:
         print("=== QKD pre-deploy validation summary ===")
-        print("Result: FAILED")
+        print(f"Result: FAILED")
         print(f"Failed devices: {len(failed)}")
         print("")
+
         for name, exc in failed:
             print(f"- {name}: {exc}")
-        raise RuntimeError("QKD pre-deploy validation failed for: " + ", ".join(name for name, _ in failed))
 
-    # Fast predeploy: do not synchronize peer authorized_keys and do not run peer SSH matrix.
-    # Those checks are expensive and can be blocked by Junos banner / PyEZ shell-wrapper behavior.
-    # Peer SSH can still be validated in postdeploy or manually if needed.
-    print("[OK] fast predeploy complete: peer SSH matrix skipped")
+        raise RuntimeError(
+            "QKD pre-deploy validation failed for: "
+            + ", ".join(name for name, _ in failed)
+        )
+
+    non_legacy = [
+        device for device in devices
+        if not platform_is_legacy_qfx(device)
+    ]
+
+    if non_legacy:
+        install_peer_authorized_keys(non_legacy)
+
+        for device in non_legacy:
+            check_peer_ssh_from_device(device)
+    else:
+        print("[WARN] skipping peer authorized_keys/self-SSH checks for legacy-only topology")
+
     print("=== QKD pre-deploy validation complete ===")
     print("Result: OK")
-
-
+    
 def validate_all_devices_postdeploy(devices):
     devices = normalize_devices(devices)
+
     check_validation_plan()
+
     print("")
     print("=== QKD post-deploy validation ===")
     print(f"Devices: {len(devices)}")
     print("")
+
     failed = []
+
     for index, device in enumerate(devices, start=1):
         name = device_name(device)
         host = device_host(device)
+
         print(f"[{index}/{len(devices)}] {name}")
         print(f"  host        : {host}")
         print(f"  script_user : {qkd_script_user()}")
         print("")
+
         try:
             validate_device_identity_postdeploy(device)
             print(f"[OK] post-deploy validation passed: {name}")
             print("")
+
         except Exception as exc:
             failed.append((name, exc))
             print(f"[FAIL] post-deploy validation failed: {name}")
             print(str(exc))
             print("")
+
     if failed:
         print("=== QKD post-deploy validation summary ===")
-        print("Result: FAILED")
+        print(f"Result: FAILED")
         print(f"Failed devices: {len(failed)}")
         print("")
+
         for name, exc in failed:
             print(f"- {name}: {exc}")
-        raise RuntimeError("QKD post-deploy validation failed for: " + ", ".join(name for name, _ in failed))
+
+        raise RuntimeError(
+            "QKD post-deploy validation failed for: "
+            + ", ".join(name for name, _ in failed)
+        )
+
     print("=== QKD post-deploy validation complete ===")
     print("Result: OK")
-
+    
 
 def validate_all_devices(devices, phase="predeploy"):
     devices = normalize_devices(devices)
+
     if phase == "predeploy":
         validate_all_devices_predeploy(devices)
         return
+
     if phase == "postdeploy":
         validate_all_devices_postdeploy(devices)
         return
+
     if phase == "full":
         validate_all_devices_predeploy(devices)
         validate_all_devices_postdeploy(devices)
         return
+
     raise ValueError(f"unknown validate phase={phase}")
 
 
 def validate_device_identity(device, phase="predeploy"):
     device = normalize_device(device)
+
     if phase == "predeploy":
         return validate_device_identity_predeploy(device)
+
     if phase == "postdeploy":
         return validate_device_identity_postdeploy(device)
+
     if phase == "full":
         validate_device_identity_predeploy(device)
         validate_device_identity_postdeploy(device)
         return
+
     raise ValueError(f"unknown validation phase={phase}")

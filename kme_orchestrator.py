@@ -4,24 +4,31 @@ kme_orchestrator.py
 
 Top-level CLI orchestrator for the QKD/KME lab.
 
-Public commands are intentionally simple:
-    create      full lifecycle workflow
-    deploy      docker compose up -d
-    status      show runtime status
-    restart     restart KME containers
-    validate    validate deployed KME lab
-    stop        stop KME lab
-    destroy     destroy KME lab, requires --force
+Public commands:
+    create          full lifecycle workflow
+    bootstrap       bootstrap remote KME host SSH/access
+    install-host    install remote host dependencies
+    build-env       clone/update repo, copy compose, create folders/network only
+    build-image     build local etsi-kme:local image
+    install-certs   install generated KME PKI material into the remote ETSI certs directory
+    cert-install    alias for install-certs
+    db-init         initialize PostgreSQL schema used by the ETSI KME app
+    deploy          docker compose up -d
+    status          show runtime status
+    restart         restart KME containers
+    validate        validate deployed KME lab
+    stop            stop KME lab
+    destroy         destroy KME lab, requires --force
 
 Internal workflow used by create:
     bootstrap
-    install-host
-    build-env      clone/update repo, copy compose, create folders/network only
-    build-image    build local etsi-kme:local image
-    install-certs  install generated KME PKI material into the remote ETSI certs directory
-    db-init        initialize PostgreSQL schema used by the ETSI KME app
-    deploy         docker compose up -d
-    validate       optional, if requested
+    install-host       skipped if --skip-install-host is provided
+    build-env          clone/update repo, copy compose, create folders/network only
+    build-image        build local etsi-kme:local image
+    install-certs      install generated KME PKI material into remote ETSI certs directory
+    db-init            initialize PostgreSQL schema used by the ETSI KME app
+    deploy             docker compose up -d
+    validate           optional, if requested
 
 Important:
 - build-env is executed before build-image.
@@ -37,7 +44,7 @@ import argparse
 import importlib
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -53,7 +60,7 @@ def banner(title: str) -> None:
     print("=" * 60)
 
 
-def load_symbol(module_name: str, symbol_name: str, required: bool = True) -> StepFunc | None:
+def load_symbol(module_name: str, symbol_name: str, required: bool = True) -> Optional[StepFunc]:
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
@@ -71,7 +78,7 @@ def load_symbol(module_name: str, symbol_name: str, required: bool = True) -> St
 
 
 def call_step(step_name: str, func: StepFunc, **kwargs: Any) -> Any:
-    banner(f"KME CREATE: {step_name}")
+    banner(f"KME: {step_name}")
     return func(**kwargs)
 
 
@@ -81,8 +88,13 @@ def call_optional_step(step_name: str, module_name: str, symbol_name: str, **kwa
         print(f"[SKIP] {step_name}: {module_name}.{symbol_name} not found")
         return None
 
-    banner(f"KME CREATE: {step_name}")
+    banner(f"KME: {step_name}")
     return func(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
 
 
 def cmd_create(args: argparse.Namespace) -> None:
@@ -95,39 +107,51 @@ def cmd_create(args: argparse.Namespace) -> None:
     run_cert_install = load_symbol("lib.kme.cert_install", "run_cert_install")
     run_db_init = load_symbol("lib.kme.db_init", "run_db_init")
 
-    results["bootstrap"] = call_step(
-        "bootstrap",
-        run_bootstrap,
-        config_path=args.config,
-        dry_run=args.dry_run,
-    )
+    if not args.skip_bootstrap:
+        results["bootstrap"] = call_step(
+            "bootstrap",
+            run_bootstrap,
+            config_path=args.config,
+            dry_run=args.dry_run,
+        )
+    else:
+        print("[SKIP] bootstrap")
 
-    results["install_host"] = call_step(
-        "install-host",
-        run_install_host,
-        config_path=args.config,
-        os_family=args.os_family,
-        dry_run=args.dry_run,
-    )
+    if not args.skip_install_host:
+        results["install_host"] = call_step(
+            "install-host",
+            run_install_host,
+            config_path=args.config,
+            os_family=args.os_family,
+            dry_run=args.dry_run,
+        )
+    else:
+        print("[SKIP] install-host")
 
-    results["build_env"] = call_step(
-        "build-env",
-        run_build_env,
-        config_path=args.config,
-        count=args.count,
-        dry_run=args.dry_run,
-        only_db=False,
-        no_up=True,
-    )
+    if not args.skip_build_env:
+        results["build_env"] = call_step(
+            "build-env",
+            run_build_env,
+            config_path=args.config,
+            count=args.count,
+            dry_run=args.dry_run,
+            only_db=False,
+            no_up=True,
+        )
+    else:
+        print("[SKIP] build-env")
 
-    results["build_image"] = call_step(
-        "build-image",
-        run_build_image,
-        config_path=args.config,
-        dry_run=args.dry_run,
-        no_cache=args.no_cache,
-        skip_cargo=args.skip_cargo,
-    )
+    if not args.skip_build_image:
+        results["build_image"] = call_step(
+            "build-image",
+            run_build_image,
+            config_path=args.config,
+            dry_run=args.dry_run,
+            no_cache=args.no_cache,
+            skip_cargo=args.skip_cargo,
+        )
+    else:
+        print("[SKIP] build-image")
 
     if not args.skip_cert_install:
         results["cert_install"] = call_step(
@@ -137,6 +161,8 @@ def cmd_create(args: argparse.Namespace) -> None:
             dry_run=args.dry_run,
             skip_san_validation=args.skip_cert_san_validation,
         )
+    else:
+        print("[SKIP] install-certs")
 
     if not args.skip_db_init:
         results["db_init"] = call_step(
@@ -147,6 +173,8 @@ def cmd_create(args: argparse.Namespace) -> None:
             recreate=args.recreate_db,
             content_type=args.content_type,
         )
+    else:
+        print("[SKIP] db-init")
 
     if not args.no_deploy:
         results["deploy"] = call_optional_step(
@@ -157,6 +185,8 @@ def cmd_create(args: argparse.Namespace) -> None:
             count=args.count,
             dry_run=args.dry_run,
         )
+    else:
+        print("[SKIP] deploy")
 
     if args.validate:
         results["validate"] = call_optional_step(
@@ -169,6 +199,62 @@ def cmd_create(args: argparse.Namespace) -> None:
 
     banner("KME CREATE: complete")
     print("[OK] create workflow completed")
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> None:
+    run_bootstrap = load_symbol("lib.kme.bootstrap", "run_bootstrap")
+    banner("KME: bootstrap")
+    run_bootstrap(config_path=args.config, dry_run=args.dry_run)
+
+
+def cmd_install_host(args: argparse.Namespace) -> None:
+    run_install_host = load_symbol("lib.kme.install_host", "run_install_host")
+    banner("KME: install-host")
+    run_install_host(config_path=args.config, os_family=args.os_family, dry_run=args.dry_run)
+
+
+def cmd_build_env(args: argparse.Namespace) -> None:
+    run_build_env = load_symbol("lib.kme.build_env", "run_build_env")
+    banner("KME: build-env")
+    run_build_env(
+        config_path=args.config,
+        count=args.count,
+        dry_run=args.dry_run,
+        only_db=args.only_db,
+        no_up=args.no_up,
+    )
+
+
+def cmd_build_image(args: argparse.Namespace) -> None:
+    run_build_image = load_symbol("lib.kme.build_image", "run_build_image")
+    banner("KME: build-image")
+    run_build_image(
+        config_path=args.config,
+        dry_run=args.dry_run,
+        no_cache=args.no_cache,
+        skip_cargo=args.skip_cargo,
+    )
+
+
+def cmd_install_certs(args: argparse.Namespace) -> None:
+    run_cert_install = load_symbol("lib.kme.cert_install", "run_cert_install")
+    banner("KME: install-certs")
+    run_cert_install(
+        config_path=args.config,
+        dry_run=args.dry_run,
+        skip_san_validation=args.skip_cert_san_validation,
+    )
+
+
+def cmd_db_init(args: argparse.Namespace) -> None:
+    run_db_init = load_symbol("lib.kme.db_init", "run_db_init")
+    banner("KME: db-init")
+    run_db_init(
+        config_path=args.config,
+        dry_run=args.dry_run,
+        recreate=args.recreate_db,
+        content_type=args.content_type,
+    )
 
 
 def cmd_deploy(args: argparse.Namespace) -> None:
@@ -215,9 +301,37 @@ def cmd_destroy(args: argparse.Namespace) -> None:
     run_destroy(config_path=args.config, dry_run=args.dry_run, force=args.force)
 
 
+# ---------------------------------------------------------------------------
+# Parser helpers
+# ---------------------------------------------------------------------------
+
+
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="KME config YAML")
     parser.add_argument("--dry-run", action="store_true", help="Show intended actions without changing anything")
+
+
+def add_count_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--count", type=int, default=2, help="Number of KME services")
+
+
+def add_build_image_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--no-cache", action="store_true", help="Build Docker image without cache")
+    parser.add_argument("--skip-cargo", action="store_true", help="Skip cargo build step where supported")
+
+
+def add_cert_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--skip-cert-san-validation", action="store_true", help="Skip SAN IP validation during certificate installation")
+
+
+def add_db_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--recreate-db", action="store_true", help="Drop and recreate DB schema objects where supported")
+    parser.add_argument("--content-type", choices=["BYTEA", "TEXT"], default="BYTEA", help="keys.content column type")
+
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -226,22 +340,60 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_create = subparsers.add_parser("create", help="Create complete KME lab")
     add_common_args(p_create)
-    p_create.add_argument("--count", type=int, default=2, help="Number of KME services")
+    add_count_arg(p_create)
     p_create.add_argument("--os-family", choices=["ubuntu", "rhel"], default=None, help="Override remote OS family")
-    p_create.add_argument("--no-cache", action="store_true", help="Build Docker image without cache")
-    p_create.add_argument("--skip-cargo", action="store_true", help="Skip cargo build step where supported")
+    add_build_image_args(p_create)
+    add_cert_args(p_create)
+    add_db_args(p_create)
+    p_create.add_argument("--skip-bootstrap", action="store_true", help="Skip SSH bootstrap")
+    p_create.add_argument("--skip-install-host", action="store_true", help="Skip remote host OS/Docker dependency installation")
+    p_create.add_argument("--skip-build-env", action="store_true", help="Skip build-env step")
+    p_create.add_argument("--skip-build-image", action="store_true", help="Skip build-image step")
     p_create.add_argument("--skip-cert-install", action="store_true", help="Skip KME certificate installation")
-    p_create.add_argument("--skip-cert-san-validation", action="store_true", help="Skip SAN IP validation during certificate installation")
     p_create.add_argument("--skip-db-init", action="store_true", help="Skip PostgreSQL schema initialization")
-    p_create.add_argument("--recreate-db", action="store_true", help="Drop and recreate DB schema objects where supported")
-    p_create.add_argument("--content-type", choices=["BYTEA", "TEXT"], default="BYTEA", help="keys.content column type")
-    p_create.add_argument("--no-deploy", action="store_true", help="Stop after build-image/cert-install/db-init")
+    p_create.add_argument("--no-deploy", action="store_true", help="Stop after selected pre-deploy steps")
     p_create.add_argument("--validate", action="store_true", help="Run validate after deploy")
     p_create.set_defaults(func=cmd_create)
 
+    p_bootstrap = subparsers.add_parser("bootstrap", help="Bootstrap remote KME host SSH/access")
+    add_common_args(p_bootstrap)
+    p_bootstrap.set_defaults(func=cmd_bootstrap)
+
+    p_install_host = subparsers.add_parser("install-host", help="Install remote KME host dependencies")
+    add_common_args(p_install_host)
+    p_install_host.add_argument("--os-family", choices=["ubuntu", "rhel"], default=None, help="Override remote OS family")
+    p_install_host.set_defaults(func=cmd_install_host)
+
+    p_build_env = subparsers.add_parser("build-env", help="Prepare remote repo, compose, folders and network")
+    add_common_args(p_build_env)
+    add_count_arg(p_build_env)
+    p_build_env.add_argument("--only-db", action="store_true", help="Prepare only DB environment where supported")
+    p_build_env.add_argument("--no-up", action="store_true", help="Do not run docker compose up")
+    p_build_env.set_defaults(func=cmd_build_env)
+
+    p_build_image = subparsers.add_parser("build-image", help="Build etsi-kme:local image")
+    add_common_args(p_build_image)
+    add_build_image_args(p_build_image)
+    p_build_image.set_defaults(func=cmd_build_image)
+
+    p_install_certs = subparsers.add_parser("install-certs", help="Install generated KME certificates")
+    add_common_args(p_install_certs)
+    add_cert_args(p_install_certs)
+    p_install_certs.set_defaults(func=cmd_install_certs)
+
+    p_cert_install = subparsers.add_parser("cert-install", help="Alias for install-certs")
+    add_common_args(p_cert_install)
+    add_cert_args(p_cert_install)
+    p_cert_install.set_defaults(func=cmd_install_certs)
+
+    p_db_init = subparsers.add_parser("db-init", help="Initialize PostgreSQL schema")
+    add_common_args(p_db_init)
+    add_db_args(p_db_init)
+    p_db_init.set_defaults(func=cmd_db_init)
+
     p_deploy = subparsers.add_parser("deploy", help="Deploy KME containers")
     add_common_args(p_deploy)
-    p_deploy.add_argument("--count", type=int, default=2)
+    add_count_arg(p_deploy)
     p_deploy.set_defaults(func=cmd_deploy)
 
     p_status = subparsers.add_parser("status", help="Show KME lab status")

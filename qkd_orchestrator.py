@@ -2,7 +2,7 @@
 
 # qkd_orchestrator
 #  - create   (runtime inventory + PKI + onbox artifacts)
-#  - deploy   (push scripts, certs, and Junos configuration)
+#  - deploy   (bootstrap script user, push scripts/certs, and Junos configuration)
 #  - validate (pre/post deploy checks)
 #  - clean    (local/runtime and optional remote cleanup)
 
@@ -35,6 +35,7 @@ from lib.common.config import (
     load_runtime_pki_profile,
     load_qkd_policy_template,
 )
+from lib.common.script_user_bootstrap import bootstrap_script_users
 from lib.qkd.inventory_builder import (
     build_full_inventory,
     build_runtime_qkd_policy,
@@ -70,9 +71,7 @@ def repo_path(path: Any) -> Path:
 
 
 def as_device_list(devices_section: Any) -> List[Dict[str, Any]]:
-    """
-    Accept both list-style devices and dict-style devices.
-    """
+    """Accept both list-style devices and dict-style devices."""
     if isinstance(devices_section, list):
         return copy.deepcopy(devices_section)
 
@@ -163,7 +162,7 @@ def parse_args():
             "Quantum-Safe MACsec orchestrator.\n\n"
             "Commands:\n"
             "  create     Build runtime inventory, onbox artifacts, and PKI material\n"
-            "  deploy     Deploy scripts, certificates, and Junos configuration\n"
+            "  deploy     Bootstrap script user, deploy scripts/certs, and push Junos configuration\n"
             "  clean      Clean local runtime and optionally remote device configuration\n"
             "  validate   Validate device readiness before or after deploy\n\n"
             "Examples:\n"
@@ -182,7 +181,7 @@ def parse_args():
         help="Build runtime inventory, onbox artifacts, and PKI material",
         description=(
             "Create runtime artifacts from an inventory YAML file.\n\n"
-            "The inventory is now pure link-driven. Use:\n"
+            "The inventory is pure link-driven. Use:\n"
             "  topology: links\n"
             "  links:\n"
             "    - id: MX1-MX2\n"
@@ -240,10 +239,13 @@ def parse_args():
         help="Deploy generated artifacts and Junos configuration to devices",
         description=(
             "Deploy runtime artifacts to devices.\n\n"
-            "This command expects create to have already generated:\n"
-            "  config/runtime/devices.yaml\n"
-            "  config/runtime/<device>/qkd_onbox.py\n"
-            "  certs/..."
+            "Normal deploy order:\n"
+            "  1. bootstrap SCRIPT_USER on managed devices\n"
+            "  2. predeploy validation\n"
+            "  3. deploy qkd_onbox.py\n"
+            "  4. render/push/commit Junos configuration\n"
+            "  5. postdeploy validation\n\n"
+            "Preview and dry-run do not bootstrap users or push config."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -259,6 +261,16 @@ def parse_args():
     deploy.add_argument("-v", "--verbose", action="count", default=0)
     deploy.add_argument("--ssh-key")
     deploy.add_argument("--debug", action="store_true")
+    deploy.add_argument(
+        "--skip-script-user-bootstrap",
+        action="store_true",
+        help="Skip SCRIPT_USER bootstrap before predeploy validation.",
+    )
+    deploy.add_argument(
+        "--script-user-bootstrap-dry-run",
+        action="store_true",
+        help="Run SCRIPT_USER bootstrap in dry-run mode, then stop before validation/deploy.",
+    )
 
     clean = subparsers.add_parser(
         "clean",
@@ -352,8 +364,194 @@ def run_scp(log, name, src, dst):
 # Onbox deploy
 # ---------------------------------------------------------------------------
 
-
 def deploy_onbox(log, devices, artifacts):
+    """
+    Deploy qkd_onbox.py to Junos devices using SCRIPT_USER/admin as source of truth.
+
+    Critical behavior:
+      - Do NOT use device["auth"]["username"] for ONBOX deployment.
+      - Use QKD["SCRIPT_USER"] / admin for SCP, install, and dual-RE file sync.
+      - On dual-RE MX, copy qkd_onbox.py to re1:/var/db/scripts/op and event.
+      - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
+    """
+
+    script_user = QKD.get("SCRIPT_USER", "admin")
+    script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
+
+    tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
+    op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
+    event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
+
+    remote_tmp = f"{tmp_dir}/{script_name}"
+    remote_op = f"{op_script_dir}/{script_name}"
+    remote_event = f"{event_script_dir}/{script_name}"
+
+    # Legacy shim kept intentionally: old configs/groups may still reference onbox.py.
+    legacy_op = f"{op_script_dir}/onbox.py"
+    legacy_event = f"{event_script_dir}/onbox.py"
+
+    inventory_base = load_inventory_base()
+    secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    script_password = (
+        secrets.get("script_password")
+        or secrets.get("admin_password")
+        or secrets.get("default_password")
+    )
+
+    if not script_password:
+        raise RuntimeError(
+            "Cannot deploy ONBOX as SCRIPT_USER/admin because no password was found. "
+            "Expected one of secrets.script_password, secrets.admin_password, "
+            "or secrets.default_password in inventory_base.yaml."
+        )
+
+    def rpc_text(rsp):
+        if rsp is None:
+            return ""
+
+        try:
+            return "".join(rsp.itertext()).strip()
+        except Exception:
+            pass
+
+        try:
+            if rsp.text:
+                return rsp.text.strip()
+        except Exception:
+            pass
+
+        return str(rsp).strip()
+
+    def run_cli(dev, command, strict=False):
+        try:
+            rsp = dev.rpc.cli(command, format="text")
+            return rpc_text(rsp)
+        except Exception as exc:
+            if strict:
+                raise
+            return str(exc)
+
+    def run_shell(dev, command, strict=False):
+        try:
+            rsp = dev.rpc.request_shell_execute(command=command)
+            return rpc_text(rsp)
+        except Exception as exc:
+            if strict:
+                raise
+            return str(exc)
+
+    def is_dual_re(dev):
+        """
+        Detect dual-RE from chassis hardware.
+
+        On MX304 this is reliable because output contains:
+          Routing Engine 0
+          Routing Engine 1
+        """
+        output = run_cli(dev, "show chassis hardware", strict=False)
+        low = (output or "").lower()
+        return low.count("routing engine") >= 2
+
+    def open_device_as_script_user(host):
+        """
+        Open PyEZ session as SCRIPT_USER/admin.
+        Try NETCONF 830 first, then fallback to SSH/netconf over 22.
+        """
+        last_error = None
+
+        for port in (830, 22):
+            dev = Device(
+                host=host,
+                user=script_user,
+                passwd=str(script_password),
+                port=port,
+                gather_facts=False,
+            )
+
+            try:
+                dev.open()
+                return dev
+            except Exception as exc:
+                last_error = exc
+
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+
+        raise RuntimeError(
+            f"Unable to open device {host} as {script_user}: {last_error}"
+        )
+
+    def install_on_active_re(dev):
+        """
+        Install script on the active/master RE.
+        """
+        install_cmd = (
+            f"mkdir -p {op_script_dir} {event_script_dir}; "
+            f"cp {remote_tmp} {remote_op}; "
+            f"cp {remote_tmp} {remote_event}; "
+            f"cp {remote_tmp} {legacy_op}; "
+            f"cp {remote_tmp} {legacy_event}; "
+            f"chmod 755 {remote_op} {remote_event} {legacy_op} {legacy_event}; "
+            f"ls -l {remote_op}; "
+            f"ls -l {remote_event}; "
+            f"rm -f {remote_tmp}"
+        )
+
+        return run_shell(dev, install_cmd, strict=True)
+
+    def sync_to_re1_if_needed(dev, name):
+        """
+        Copy op/event scripts to RE1 on dual-RE systems.
+
+        This MUST run as admin/SCRIPT_USER.
+        """
+
+        if not is_dual_re(dev):
+            log.info(f"[{name}] Single RE detected - skipping RE1 script sync")
+            return
+
+        log.info(
+            f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {script_user}"
+        )
+
+        copy_commands = [
+            f"cli -c 'file copy {remote_op} re1:{remote_op}'",
+            f"cli -c 'file copy {remote_event} re1:{remote_event}'",
+            f"cli -c 'file copy {legacy_op} re1:{legacy_op}'",
+            f"cli -c 'file copy {legacy_event} re1:{legacy_event}'",
+        ]
+
+        for cmd in copy_commands:
+
+            output = run_shell(
+                dev,
+                cmd,
+                strict=False,
+            )
+
+            low = (output or "").lower()
+
+            if (
+                "permission denied" in low
+                or "put-file failed" in low
+                or "could not send local copy" in low
+                or "error:" in low
+                or "operation-failed" in low
+            ):
+                raise RuntimeError(
+                    f"[{name}] RE1 ONBOX sync failed as {script_user}\n"
+                    f"command={cmd}\n"
+                    f"output={output}"
+                )
+
+        log.info(f"[{name}] RE1 ONBOX sync completed")
+
     for name, device in devices.items():
         if device.get("managed") is False:
             log.info(f"[{name}] Skipping unmanaged device")
@@ -364,33 +562,29 @@ def deploy_onbox(log, devices, artifacts):
             continue
 
         ip = device["ip"]
-        user = device["auth"]["username"]
-        passwd = device["auth"]["password"]
-        script = artifacts[name]["script"]
-        script_name = script.name
-        remote_tmp = f"/var/tmp/{script_name}"
+        hostname = device.get("hostname", name)
 
-        log.info(f"[{name}] ===== Deploy ONBOX to {ip} =====")
-        dev = Device(host=ip, user=user, passwd=passwd, port=22)
+        script = Path(artifacts[name]["script"])
+        if not script.exists():
+            raise FileNotFoundError(f"[{name}] Missing onbox script artifact: {script}")
+
+        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {script_user} =====")
+
+        dev = open_device_as_script_user(ip)
 
         try:
-            dev.open()
-            op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
-            event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
-
             with SCP(dev) as scp:
                 log.info(f"[{name}] SCP script to {remote_tmp}")
-                scp.put(str(script), remote_path="/var/tmp/")
+                scp.put(str(script), remote_path=remote_tmp)
 
-            install_cmd = (
-                f"mkdir -p {op_script_dir} {event_script_dir}; "
-                f"cp {remote_tmp} {op_script_dir}/{script_name}; "
-                f"cp {remote_tmp} {event_script_dir}/{script_name}; "
-                f"chmod 755 {op_script_dir}/{script_name} {event_script_dir}/{script_name}; "
-                f"rm -f {remote_tmp}"
-            )
             log.info(f"[{name}] Installing onbox script into op/event directories")
-            dev.rpc.request_shell_execute(command=install_cmd)
+            output = install_on_active_re(dev)
+
+            if output:
+                log.debug(f"[{name}] ONBOX install output:\n{output}")
+
+            sync_to_re1_if_needed(dev, name)
+
             log.info(f"[{name}] ONBOX deploy OK")
 
         except Exception as exc:
@@ -459,7 +653,6 @@ def handle_create(args):
     links = normalize_links_for_runtime(inventory.get("links"))
     extra_links = normalize_extra_links_for_runtime(inventory.get("extra_links"))
 
-    # Compatibility guard: fail fast if both fields are populated with duplicate ids.
     if links and extra_links:
         link_ids = [str(link.get("id")) for link in links if isinstance(link, dict) and link.get("id")]
         extra_ids = [str(link.get("id")) for link in extra_links if isinstance(link, dict) and link.get("id")]
@@ -631,11 +824,11 @@ def handle_deploy(args):
         if args.preview:
             print("=== DEPLOY PREVIEW MODE ===")
             print("Rendering generated Junos configuration only.")
-            print("No device validation, SCP, script install, or commit will be attempted.")
+            print("No script-user bootstrap, device validation, SCP, script install, or commit will be attempted.")
         elif args.dry_run:
             print("=== DEPLOY DRY-RUN MODE ===")
             print("Simulating deploy workflow without applying changes.")
-            print("No SCP, script install, or commit will be attempted.")
+            print("No script-user bootstrap, SCP, script install, or commit will be attempted.")
 
         run_provisioning(
             log=log,
@@ -645,6 +838,25 @@ def handle_deploy(args):
             debug=args.debug,
         )
         return
+
+    if args.script_user_bootstrap_dry_run:
+        bootstrap_script_users(
+            devices=devices,
+            repo_root=BASE_DIR,
+            dry_run=True,
+        )
+        return
+
+    if not args.skip_script_user_bootstrap:
+        ok, failed = bootstrap_script_users(
+            devices=devices,
+            repo_root=BASE_DIR,
+            dry_run=False,
+        )
+        if failed:
+            raise RuntimeError(
+                "SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
+            )
 
     validate_all_devices(devices, phase="predeploy")
 

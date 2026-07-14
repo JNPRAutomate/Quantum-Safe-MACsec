@@ -1,0 +1,254 @@
+topology: links
+platform: mixed
+mode: qkd
+pki_profile: hierarchical_ca
+devices:
+- name: MX1
+  hostname: mx301-p1
+  platform: mx
+  ip: 100.123.113.151
+  kme:
+    ip: 100.123.252.15
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/2
+- name: MX2
+  hostname: mx301-p2
+  platform: mx
+  ip: 100.123.113.152
+  kme:
+    ip: 100.123.252.16
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/2
+- name: MX3
+  hostname: mx304-p2
+  platform: mx
+  ip: 100.123.113.2
+  kme:
+    ip: 100.123.252.17
+    port: 8443
+  interfaces:
+  - et-0/0/7
+  - et-0/0/4
+  - et-0/0/6
+  - et-0/0/8
+- name: MX4
+  hostname: mx304-p4
+  platform: mx
+  ip: 100.123.113.4
+  kme:
+    ip: 100.123.252.18
+    port: 8443
+  interfaces:
+  - et-0/0/4
+  - et-0/0/0
+  - et-0/0/6
+  - et-0/0/8
+- name: MX5
+  hostname: mx304-p3
+  platform: mx
+  ip: 100.123.113.3
+  kme:
+    ip: 100.123.252.19
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/4
+  - et-0/0/6
+  - et-0/0/8
+- name: MX6
+  hostname: mx304-p1
+  platform: mx
+  ip: 100.123.113.1
+  kme:
+    ip: 100.123.252.20
+    port: 8443
+  interfaces:
+  - et-0/0/4
+  - et-0/0/7
+  - et-0/0/6
+  - et-0/0/8
+- name: ACX1
+  hostname: acx1
+  platform: acx
+  ip: 100.123.170.202
+  kme:
+    ip: 100.123.252.10
+    port: 8443
+  interfaces:
+  - et-2/0/0
+  - et-2/0/2
+  - et-2/0/4
+- name: ACX2
+  hostname: acx2
+  platform: acx
+  ip: 100.123.170.201
+  kme:
+    ip: 100.123.252.11
+    port: 8443
+  interfaces:
+  - et-2/0/0
+  - et-2/0/2
+- name: ACX3
+  hostname: acx3
+  platform: acx
+  ip: 100.123.170.203
+  kme:
+    ip: 100.123.252.12
+    port: 8443
+  interfaces:
+  - et-2/0/0
+  - et-2/0/2
+  - et-2/0/4
+- name: ACX4
+  hostname: acx4
+  platform: acx
+  ip: 100.123.182.2
+  kme:
+    ip: 100.123.252.13
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/2
+- name: ACX5
+  hostname: acx5
+  platform: acx
+  ip: 100.123.182.1
+  kme:
+    ip: 100.123.252.14
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/2
+links:
+- id: MX1-MX2
+  type: ring
+  node_a: MX1
+  interface_a: et-0/0/0
+  node_b: MX2
+  interface_b: et-0/0/0
+  ca_name: CA_MX1_MX2
+  keychain_name: QKD_CA_MX1_MX2
+- id: MX2-MX3
+  type: ring
+  node_a: MX2
+  interface_a: et-0/0/2
+  node_b: MX3
+  interface_b: et-0/0/7
+  ca_name: CA_MX2_MX3
+  keychain_name: QKD_CA_MX2_MX3
+- id: MX3-MX4
+  type: ring
+  node_a: MX3
+  interface_a: et-0/0/4
+  node_b: MX4
+  interface_b: et-0/0/4
+  ca_name: CA_MX3_MX4
+  keychain_name: QKD_CA_MX3_MX4
+- id: MX4-MX5
+  type: ring
+  node_a: MX4
+  interface_a: et-0/0/0
+  node_b: MX5
+  interface_b: et-0/0/0
+  ca_name: CA_MX4_MX5
+  keychain_name: QKD_CA_MX4_MX5
+- id: MX5-MX6
+  type: ring
+  node_a: MX5
+  interface_a: et-0/0/4
+  node_b: MX6
+  interface_b: et-0/0/4
+  ca_name: CA_MX5_MX6
+  keychain_name: QKD_CA_MX5_MX6
+- id: MX6-MX1
+  type: ring
+  node_a: MX6
+  interface_a: et-0/0/7
+  node_b: MX1
+  interface_b: et-0/0/2
+  ca_name: CA_MX6_MX1
+  keychain_name: QKD_CA_MX6_MX1
+- id: MX3-MX5
+  type: extra
+  node_a: MX3
+  interface_a: et-0/0/6
+  node_b: MX5
+  interface_b: et-0/0/6
+  ca_name: CA_MX3_MX5
+  keychain_name: QKD_CA_MX3_MX5
+- id: MX3-MX6
+  type: extra
+  node_a: MX3
+  interface_a: et-0/0/8
+  node_b: MX6
+  interface_b: et-0/0/8
+  ca_name: CA_MX3_MX6
+  keychain_name: QKD_CA_MX3_MX6
+- id: MX4-MX6
+  type: extra
+  node_a: MX4
+  interface_a: et-0/0/6
+  node_b: MX6
+  interface_b: et-0/0/6
+  ca_name: CA_MX4_MX6
+  keychain_name: QKD_CA_MX4_MX6
+- id: MX5-ACX1
+  type: interworking
+  node_a: MX5
+  interface_a: et-0/0/8
+  node_b: ACX1
+  interface_b: et-2/0/0
+  ca_name: CA_MX5_ACX1
+  keychain_name: QKD_CA_MX5_ACX1
+- id: MX4-ACX3
+  type: interworking
+  node_a: MX4
+  interface_a: et-0/0/8
+  node_b: ACX3
+  interface_b: et-2/0/0
+  ca_name: CA_MX4_ACX3
+  keychain_name: QKD_CA_MX4_ACX3
+- id: ACX1-ACX2
+  type: ring
+  node_a: ACX1
+  interface_a: et-2/0/4
+  node_b: ACX2
+  interface_b: et-2/0/0
+  ca_name: CA_ACX1_ACX2
+  keychain_name: QKD_CA_ACX1_ACX2
+- id: ACX2-ACX3
+  type: ring
+  node_a: ACX2
+  interface_a: et-2/0/2
+  node_b: ACX3
+  interface_b: et-2/0/4
+  ca_name: CA_ACX2_ACX3
+  keychain_name: QKD_CA_ACX2_ACX3
+- id: ACX3-ACX4
+  type: ring
+  node_a: ACX3
+  interface_a: et-2/0/2
+  node_b: ACX4
+  interface_b: et-0/0/2
+  ca_name: CA_ACX3_ACX4
+  keychain_name: QKD_CA_ACX3_ACX4
+- id: ACX4-ACX5
+  type: ring
+  node_a: ACX4
+  interface_a: et-0/0/0
+  node_b: ACX5
+  interface_b: et-0/0/0
+  ca_name: CA_ACX4_ACX5
+  keychain_name: QKD_CA_ACX4_ACX5
+- id: ACX5-ACX1
+  type: ring
+  node_a: ACX5
+  interface_a: et-0/0/2
+  node_b: ACX1
+  interface_b: et-2/0/2
+  ca_name: CA_ACX5_ACX1
+  keychain_name: QKD_CA_ACX5_ACX1

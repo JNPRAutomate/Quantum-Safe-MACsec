@@ -6,6 +6,7 @@ pki_profile: hierarchical_ca
 devices:
 
   - name: MX1
+    hostname: mx301-p1
     platform: mx
     ip: 100.123.113.151
     kme:
@@ -16,6 +17,7 @@ devices:
       - et-0/0/2
 
   - name: MX2
+    hostname: mx301-p2
     platform: mx
     ip: 100.123.113.152
     kme:
@@ -26,6 +28,7 @@ devices:
       - et-0/0/2
 
   - name: MX3
+    hostname: mx304-p2
     platform: mx
     ip: 100.123.113.2
     kme:
@@ -38,6 +41,7 @@ devices:
       - et-0/0/8
 
   - name: MX4
+    hostname: mx304-p4
     platform: mx
     ip: 100.123.113.4
     kme:
@@ -50,6 +54,7 @@ devices:
       - et-0/0/8
 
   - name: MX5
+    hostname: mx304-p3
     platform: mx
     ip: 100.123.113.3
     kme:
@@ -62,6 +67,7 @@ devices:
       - et-0/0/8
 
   - name: MX6
+    hostname: mx304-p1
     platform: mx
     ip: 100.123.113.1
     kme:
@@ -74,6 +80,7 @@ devices:
       - et-0/0/8
 
   - name: ACX1
+    hostname: acx1
     platform: acx
     ip: 100.123.170.202
     kme:
@@ -85,6 +92,7 @@ devices:
       - et-2/0/4
 
   - name: ACX2
+    hostname: acx2
     platform: acx
     ip: 100.123.170.201
     kme:
@@ -96,6 +104,7 @@ devices:
       - et-2/0/2
 
   - name: ACX3
+    hostname: acx3
     platform: acx
     ip: 100.123.170.203
     kme:
@@ -107,6 +116,7 @@ devices:
       - et-2/0/4
 
   - name: ACX4
+    hostname: acx4
     platform: acx
     ip: 100.123.170.204
     kme:
@@ -117,6 +127,7 @@ devices:
       - et-0/0/2
 
   - name: ACX5
+    hostname: acx5
     platform: acx
     ip: 100.123.170.205
     kme:

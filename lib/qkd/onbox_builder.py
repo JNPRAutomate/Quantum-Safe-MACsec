@@ -12,6 +12,8 @@ from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 
 # repo root:
 #   <repo>/my_repo_folder
+# this file is expected under:
+#   <repo>/lib/qkd/<this_file>.py
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 # Source onbox template:
@@ -53,6 +55,16 @@ def _device_sae_id(name, device):
     raise ValueError(f"Cannot resolve local SAE for device {name}")
 
 
+def _device_hostname(name, device):
+    """
+    Optional physical hostname used for logging/debugging only.
+
+    This is intentionally not used as transport target. The transport target
+    remains device['ip'] / management IP from runtime inventory.
+    """
+    return str(device.get("hostname") or device.get("host_name") or name)
+
+
 def _device_kme_ip(name, device):
     kme = device.get("kme", {})
 
@@ -80,6 +92,8 @@ def _device_kme_port(device):
     if device.get("kme_port") is not None:
         return int(device["kme_port"])
 
+    # Keep 443 as the fallback because real/live QKD KME deployments may expose
+    # only native HTTPS/443 rather than a lab-mapped port such as 8443.
     return 443
 
 
@@ -237,6 +251,9 @@ def build_onbox_config(name, device):
     if device.get("managed") is False:
         raise ValueError(f"Refusing to build onbox config for unmanaged device {name}")
 
+    # Deploy/runtime source of truth must be the QKD SCRIPT_USER, normally admin.
+    # Do not derive this from labuser/device auth. labuser may not have enough
+    # privileges for dual-RE file synchronization.
     script_user = device.get("script_user") or QKD["SCRIPT_USER"]
 
     script_dir = QKD["SCRIPT_DIR"]
@@ -251,6 +268,10 @@ def build_onbox_config(name, device):
     links = normalize_onbox_links(name, device)
 
     config = {
+        # Device identity / debug metadata
+        "device_name": name,
+        "hostname": _device_hostname(name, device),
+
         "local_sae": _device_sae_id(name, device),
         "kme_ip": _device_kme_ip(name, device),
         "kme_port": _device_kme_port(device),
@@ -376,7 +397,8 @@ def build_onbox_artifacts(devices):
 
         mode = device.get("macsec", {}).get("mode", "qkd")
 
-        print(f"Building onbox artifacts for {name} (mode={mode})")
+        hostname = _device_hostname(name, device)
+        print(f"Building onbox artifacts for {name}/{hostname} (mode={mode})")
 
         outputs[name] = {}
 

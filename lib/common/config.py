@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Tuple, Union
 
 import yaml
 
@@ -19,7 +19,14 @@ RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 PLATFORM_DIR = CONFIG_DIR / "platforms"
 
 
-def load_yaml(path: str | Path) -> dict[str, Any]:
+def load_yaml(path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Load a YAML file and return a dictionary.
+
+    Python 3.8/3.9 compatible version:
+      - no str | Path syntax
+      - no dict[str, Any] runtime annotations
+    """
     path = Path(path).expanduser()
 
     if not path.is_absolute():
@@ -40,7 +47,7 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def load_inventory_base() -> dict[str, Any]:
+def load_inventory_base() -> Dict[str, Any]:
     base_file = CONFIG_DIR / "inventory_base.yaml"
 
     if not base_file.exists():
@@ -50,24 +57,24 @@ def load_inventory_base() -> dict[str, Any]:
     return load_yaml(base_file)
 
 
-def load_runtime_devices() -> dict[str, Any]:
+def load_runtime_devices() -> Dict[str, Any]:
     data = load_yaml(RUNTIME_DIR / "devices.yaml")
     return data.get("devices", {})
 
 
-def load_runtime_topology() -> dict[str, Any]:
+def load_runtime_topology() -> Dict[str, Any]:
     return load_yaml(RUNTIME_DIR / "topology.yaml")
 
 
-def load_runtime_pki_profile() -> dict[str, Any]:
+def load_runtime_pki_profile() -> Dict[str, Any]:
     return load_yaml(RUNTIME_DIR / "pki_profile.yaml")
 
 
-def load_inventory_file(path: str | Path) -> dict[str, Any]:
+def load_inventory_file(path: Union[str, Path]) -> Dict[str, Any]:
     return load_yaml(path)
 
 
-def load_inventory() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def load_inventory() -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     base = load_yaml(CONFIG_DIR / "inventory_base.yaml")
     devices = load_yaml(RUNTIME_DIR / "devices.yaml")
     topology = load_yaml(RUNTIME_DIR / "topology.yaml")
@@ -75,27 +82,47 @@ def load_inventory() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     return base, devices.get("devices", {}), topology.get("qkd", {})
 
 
-def load_platform(platform_name: str) -> dict[str, Any]:
+def load_platform(platform_name: str) -> Dict[str, Any]:
     return load_yaml(PLATFORM_DIR / f"{platform_name}.yaml")
 
 
-def resolve_inventory(path: str | Path) -> str:
-    path = str(path)
+def resolve_inventory(path: Union[str, Path]) -> str:
+    """
+    Resolve an inventory argument to an inventory file path.
 
-    if os.path.isfile(path):
-        return path
+    Supports:
+      - explicit paths
+      - inventory names under config/inventory/input/
+      - .yml and .yaml extensions
+    """
+    path_str = str(path)
 
-    candidate = CONFIG_DIR / "input" / f"{path}.yml"
+    if os.path.isfile(path_str):
+        return path_str
 
-    if candidate.exists():
-        return str(candidate)
+    # If caller passed a relative file path that does not exist from cwd,
+    # also try relative to repo root.
+    repo_relative = BASE_DIR / path_str
+    if repo_relative.is_file():
+        return str(repo_relative)
 
-    raise FileNotFoundError(candidate)
+    # Inventory name lookup. Prefer .yml for backward compatibility, then .yaml.
+    candidates = [
+        CONFIG_DIR / "input" / f"{path_str}.yml",
+        CONFIG_DIR / "input" / f"{path_str}.yaml",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    # Preserve the previous style of error message using the .yml candidate.
+    raise FileNotFoundError(candidates[0])
 
 
-def load_qkd_policy_template() -> dict[str, Any]:
+def load_qkd_policy_template() -> Dict[str, Any]:
     return load_yaml(BASE_DIR / CONFIG["qkd_policy_file"])
 
 
-def load_runtime_qkd_policy() -> dict[str, Any]:
+def load_runtime_qkd_policy() -> Dict[str, Any]:
     return load_yaml(BASE_DIR / CONFIG["runtime_qkd_policy_file"])

@@ -752,7 +752,7 @@ def rotation_too_soon(state, min_interval=50):
 def get_configured_active_ca(iface):
     cmd = f"show configuration security macsec interfaces {iface} | display set"
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
         log("CONFIG CHECK TIMEOUT", "ERROR", iface, "CONFIG")
         return None
@@ -787,7 +787,7 @@ def get_configured_active_ca(iface):
 def macsec_has_inuse_sa(iface, expected_ca=None):
     cmd = "show security macsec connections"
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
         log("MACSEC CONNECTION CHECK TIMEOUT", "ERROR", iface, "MACSEC")
         return False
@@ -850,7 +850,7 @@ def normalize_hex_string(value):
 def get_mka_session_block_for_iface(iface):
     cmd = "show security mka sessions"
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     except subprocess.TimeoutExpired:
         log("MKA SESSION CHECK TIMEOUT", "ERROR", iface, "MKA")
         return None
@@ -1139,7 +1139,7 @@ def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, generat
     )
 
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     except subprocess.TimeoutExpired:
         log(f"KEYCHAIN INSTALL TIMEOUT ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}", "ERROR", iface, "MACSEC")
         return False
@@ -1158,7 +1158,7 @@ def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, generat
             "MACSEC",
         )
         try:
-            rb = subprocess.run(["cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            rb = subprocess.run(["/usr/sbin/cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             rb_stdout = rb.stdout.decode(errors="ignore").strip()
             rb_stderr = rb.stderr.decode(errors="ignore").strip()
             log(f"KEYCHAIN INSTALL ROLLBACK DONE ca={ca_name} keychain={keychain_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
@@ -1197,7 +1197,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     cmd = "; ".join(cli_cmds)
 
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     except subprocess.TimeoutExpired:
         log(f"INTERFACE BIND TIMEOUT ca={ca_name}", "ERROR", iface, "MACSEC")
         return False
@@ -1210,7 +1210,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(f"INTERFACE BIND FAIL ca={ca_name} keychain={keychain_name} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, "MACSEC")
         try:
-            rb = subprocess.run(["cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            rb = subprocess.run(["/usr/sbin/cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             rb_stdout = rb.stdout.decode(errors="ignore").strip()
             rb_stderr = rb.stderr.decode(errors="ignore").strip()
             log(f"INTERFACE BIND ROLLBACK DONE ca={ca_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
@@ -1230,7 +1230,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
 def macsec_down(iface):
     log("MACSEC DOWN", "ERROR", iface, "FAILSAFE")
     try:
-        subprocess.run(["cli", "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        subprocess.run(["/usr/sbin/cli", "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except Exception as e:
         log(f"MACSEC DOWN ERROR error={str(e)}", "ERROR", iface, "FAILSAFE")
 
