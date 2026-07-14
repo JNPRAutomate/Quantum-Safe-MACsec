@@ -18,6 +18,7 @@ Use this as the starting point for GitHub readers:
 4. `docs/qkd/CLI_REFERENCE.md`
 5. `docs/kme/CLI_REFERENCE.md`
 6. `docs/pqc/GLOSSARY.md`
+7. `docs/qkd/qkd_onbox_runtime_lld.md`
 
 Customer-downloadable PDF bundle:
 
