@@ -1,0 +1,125 @@
+topology: ring
+platform: mx
+mode: qkd
+pki_profile: hierarchical_ca
+
+devices:
+
+  - name: MX1
+    platform: mx
+    ip: 100.123.113.151
+    kme: 100.123.252.15
+    topology_member: true
+    interfaces:
+      - et-0/0/0
+      - et-0/0/2
+
+  - name: MX2
+    platform: mx
+    ip: 100.123.113.152
+    kme: 100.123.252.16
+    topology_member: true
+    interfaces:
+      - et-0/0/0
+      - et-0/0/2
+
+  - name: MX3
+    platform: mx
+    ip: 100.123.113.2
+    kme: 100.123.252.17
+    topology_member: true
+    interfaces:
+      - et-0/0/7
+      - et-0/0/4
+      - et-0/0/6
+      - et-0/0/8
+
+  - name: MX4
+    platform: mx
+    ip: 100.123.113.4
+    kme: 100.123.252.18
+    topology_member: true
+    interfaces:
+      - et-0/0/4
+      - et-0/0/0
+      - et-0/0/6
+      - et-0/0/8
+
+  - name: MX5
+    platform: mx
+    ip: 100.123.113.3
+    kme: 100.123.252.19
+    topology_member: true
+    interfaces:
+      - et-0/0/0
+      - et-0/0/4
+      - et-0/0/6
+      - et-0/0/8
+
+  - name: MX6
+    platform: mx
+    ip: 100.123.113.1
+    kme: 100.123.252.20
+    topology_member: true
+    interfaces:
+      - et-0/0/4
+      - et-0/0/7
+      - et-0/0/6
+      - et-0/0/8
+
+  - name: ACX1
+    platform: acx
+    ip: 100.123.170.202
+    kme: 100.123.252.10
+    topology_member: false
+    interfaces:
+      - et-2/0/0
+
+  - name: ACX3
+    platform: acx
+    ip: 100.123.170.203
+    kme: 100.123.252.12
+    topology_member: false
+    interfaces:
+      - et-2/0/0
+
+extra_links:
+
+  # MX internal mesh/chord links
+
+  - id: MX3-MX5
+    type: macsec
+    node_a: MX3
+    interface_a: et-0/0/6
+    node_b: MX5
+    interface_b: et-0/0/6
+
+  - id: MX3-MX6
+    type: macsec
+    node_a: MX3
+    interface_a: et-0/0/8
+    node_b: MX6
+    interface_b: et-0/0/8
+
+  - id: MX4-MX6
+    type: macsec
+    node_a: MX4
+    interface_a: et-0/0/6
+    node_b: MX6
+    interface_b: et-0/0/6
+
+  # MX -> ACX interworking links
+
+  - id: MX5-ACX1
+    type: macsec
+    node_a: MX5
+    interface_a: et-0/0/8
+    node_b: ACX1
+    interface_b: et-2/0/0
+
+  - id: MX4-ACX3
+    type: macsec
+    node_a: MX4
+    interface_a: et-0/0/8
+    node_b: ACX3
+    interface_b: et-2/0/0

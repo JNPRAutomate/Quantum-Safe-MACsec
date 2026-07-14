@@ -1,0 +1,96 @@
+inventory_builder
+orchestrator
+provisioning
+clean
+########################
+### TOPOLOGY BUILDER ###
+########################
+lib/qkd/topology_builder.py
+  normalize_devices()
+  normalize_inventory()
+  normalize_extra_links()
+  keychain_name_for_link()
+  ca_name_for_link()
+  build_ring_links()
+  merge_extra_links()
+  validate_links()
+  validate_topology()
+  build_runtime_devices()
+  build_runtime_topology()
+  write_runtime_topology()
+  write_runtime_devices()
+
+
+input inventory
+-> normalize inventory
+-> build ring links
+-> merge extra_links
+-> validate duplicate interfaces / missing nodes
+-> generate CA names
+-> generate keychain names
+-> build runtime topology
+-> build runtime devices
+
+#########################
+### INVENTORY BUILDER ###
+#########################
+lib/qkd/inventory_builder.py
+  thin wrapper / compatibility layer
+
+
+################
+
+qkd_orchestrator.py
+  create
+    -> load input inventory
+    -> topology_builder.build_runtime_from_inventory()
+    -> build runtime pki profile
+    -> build runtime qkd policy
+    -> build PKI
+    -> build onbox artifacts
+
+mantenuto le parti esistenti per non rompere il flusso:
+
+create
+deploy
+clean
+validate
+deploy_onbox
+run_provisioning
+PKI self-signed / hierarchical
+QKD policy runtime
+onbox artifact generation
+funzioni legacy build_pairs() e assign_roles() ancora presenti per compatibilità/debug
+
+Fix principali inseriti:
+
+create ora passa extra_links a build_full_inventory()
+create genera runtime link-driven tramite inventory_builder.py + topology_builder.py
+supporta devices sia come lista sia come dizionario
+supporta kme sia stringa sia dizionario
+preserva kme_port da inventory_base.yaml, fallback 443
+preserva campi opzionali tipo ssh_trust, mgmt_ip, qkd, metadata
+evita deploy onbox su device managed: false
+non ricostruisce più la topologia nel file orchestrator
+continua a generare pki_profile.yaml, qkd_policy.yaml, onbox scripts e PKI come prima
+
+usa extra_links dal file inventory
+chiama build_full_inventory() link-driven
+supporta devices come lista o dizionario
+supporta kme come stringa o dizionario
+preserva fallback kme_port da inventory_base.yaml, default 443
+non rompe il flusso create -> qkd_policy -> onbox -> PKI
+stampa correttamente anche device senza qkd_onbox.py in static mode
+deploy_onbox() salta device unmanaged o senza artifact
+deploy ignora artifact onbox per mode diverso da qkd
+mantiene helper legacy build_pairs(), assign_roles(), normalize_interfaces_for_topology() per compatibilità/debug
+nessuna dipendenza da topology["pairs"] nel nuovo flusso
+
+
+#################
+lib/qkd/rendering.py
+  unchanged
+
+lib/qkd/provisioning.py
+  reads runtime devices only
+

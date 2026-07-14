@@ -1,4 +1,414 @@
-qkd:
-  pairs:
-  - - vqfx1
-    - vqfx2
+topology:
+  name: ring_6_mx_link_driven_with_acx
+  source: config/inventory/input/ring_6_mx_link_driven_with_acx.yml
+  input_type: links
+  mode: qkd
+  pki_profile: hierarchical_ca
+  link_count: 15
+nodes:
+  MX1:
+    name: MX1
+    platform: mx
+    ip: 100.123.113.151
+    interfaces:
+    - et-0/0/0
+    - et-0/0/2
+    kme_ip: 100.123.252.15
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_001
+    managed: true
+    kme:
+      ip: 100.123.252.15
+      port: 8443
+    qkd:
+      sae_id: sae_001
+    topology_member: true
+  MX2:
+    name: MX2
+    platform: mx
+    ip: 100.123.113.152
+    interfaces:
+    - et-0/0/0
+    - et-0/0/2
+    kme_ip: 100.123.252.16
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_002
+    managed: true
+    kme:
+      ip: 100.123.252.16
+      port: 8443
+    qkd:
+      sae_id: sae_002
+    topology_member: true
+  MX3:
+    name: MX3
+    platform: mx
+    ip: 100.123.113.2
+    interfaces:
+    - et-0/0/7
+    - et-0/0/4
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.17
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_003
+    managed: true
+    kme:
+      ip: 100.123.252.17
+      port: 8443
+    qkd:
+      sae_id: sae_003
+    topology_member: true
+  MX4:
+    name: MX4
+    platform: mx
+    ip: 100.123.113.4
+    interfaces:
+    - et-0/0/4
+    - et-0/0/0
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.18
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_004
+    managed: true
+    kme:
+      ip: 100.123.252.18
+      port: 8443
+    qkd:
+      sae_id: sae_004
+    topology_member: true
+  MX5:
+    name: MX5
+    platform: mx
+    ip: 100.123.113.3
+    interfaces:
+    - et-0/0/0
+    - et-0/0/4
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.19
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_005
+    managed: true
+    kme:
+      ip: 100.123.252.19
+      port: 8443
+    qkd:
+      sae_id: sae_005
+    topology_member: true
+  MX6:
+    name: MX6
+    platform: mx
+    ip: 100.123.113.1
+    interfaces:
+    - et-0/0/4
+    - et-0/0/7
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.20
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_006
+    managed: true
+    kme:
+      ip: 100.123.252.20
+      port: 8443
+    qkd:
+      sae_id: sae_006
+    topology_member: true
+  ACX1:
+    name: ACX1
+    platform: acx
+    ip: 100.123.170.202
+    interfaces:
+    - et-2/0/0
+    - et-2/0/2
+    - et-2/0/4
+    kme_ip: 100.123.252.10
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_007
+    managed: true
+    kme:
+      ip: 100.123.252.10
+      port: 8443
+    qkd:
+      sae_id: sae_007
+    topology_member: true
+  ACX2:
+    name: ACX2
+    platform: acx
+    ip: 100.123.170.201
+    interfaces:
+    - et-2/0/0
+    - et-2/0/2
+    kme_ip: 100.123.252.11
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_008
+    managed: false
+    kme:
+      ip: 100.123.252.11
+      port: 8443
+    qkd:
+      sae_id: sae_008
+    topology_member: true
+  ACX3:
+    name: ACX3
+    platform: acx
+    ip: 100.123.170.203
+    interfaces:
+    - et-2/0/0
+    - et-2/0/2
+    - et-2/0/4
+    kme_ip: 100.123.252.12
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_009
+    managed: true
+    kme:
+      ip: 100.123.252.12
+      port: 8443
+    qkd:
+      sae_id: sae_009
+    topology_member: true
+  ACX4:
+    name: ACX4
+    platform: acx
+    ip: 100.123.170.204
+    interfaces:
+    - et-0/0/2
+    kme_ip: 100.123.252.13
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_010
+    managed: false
+    kme:
+      ip: 100.123.252.13
+      port: 8443
+    qkd:
+      sae_id: sae_010
+    topology_member: true
+  ACX5:
+    name: ACX5
+    platform: acx
+    ip: 100.123.170.205
+    interfaces:
+    - et-0/0/2
+    kme_ip: 100.123.252.14
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_011
+    managed: false
+    kme:
+      ip: 100.123.252.14
+      port: 8443
+    qkd:
+      sae_id: sae_011
+    topology_member: true
+external_nodes: {}
+links:
+- id: MX1-MX2
+  type: ring
+  node_a: MX1
+  interface_a: et-0/0/0
+  node_b: MX2
+  interface_b: et-0/0/0
+  ca_name: CA_MX1_MX2
+  keychain_name: QKD_CA_MX1_MX2
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX2-MX3
+  type: ring
+  node_a: MX2
+  interface_a: et-0/0/2
+  node_b: MX3
+  interface_b: et-0/0/7
+  ca_name: CA_MX2_MX3
+  keychain_name: QKD_CA_MX2_MX3
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX3-MX4
+  type: ring
+  node_a: MX3
+  interface_a: et-0/0/4
+  node_b: MX4
+  interface_b: et-0/0/4
+  ca_name: CA_MX3_MX4
+  keychain_name: QKD_CA_MX3_MX4
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX4-MX5
+  type: ring
+  node_a: MX4
+  interface_a: et-0/0/0
+  node_b: MX5
+  interface_b: et-0/0/0
+  ca_name: CA_MX4_MX5
+  keychain_name: QKD_CA_MX4_MX5
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX5-MX6
+  type: ring
+  node_a: MX5
+  interface_a: et-0/0/4
+  node_b: MX6
+  interface_b: et-0/0/4
+  ca_name: CA_MX5_MX6
+  keychain_name: QKD_CA_MX5_MX6
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX6-MX1
+  type: ring
+  node_a: MX6
+  interface_a: et-0/0/7
+  node_b: MX1
+  interface_b: et-0/0/2
+  ca_name: CA_MX6_MX1
+  keychain_name: QKD_CA_MX6_MX1
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX3-MX5
+  type: extra
+  node_a: MX3
+  interface_a: et-0/0/6
+  node_b: MX5
+  interface_b: et-0/0/6
+  ca_name: CA_MX3_MX5
+  keychain_name: QKD_CA_MX3_MX5
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX3-MX6
+  type: extra
+  node_a: MX3
+  interface_a: et-0/0/8
+  node_b: MX6
+  interface_b: et-0/0/8
+  ca_name: CA_MX3_MX6
+  keychain_name: QKD_CA_MX3_MX6
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX4-MX6
+  type: extra
+  node_a: MX4
+  interface_a: et-0/0/6
+  node_b: MX6
+  interface_b: et-0/0/6
+  ca_name: CA_MX4_MX6
+  keychain_name: QKD_CA_MX4_MX6
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX5-ACX1
+  type: extra
+  node_a: MX5
+  interface_a: et-0/0/8
+  node_b: ACX1
+  interface_b: et-2/0/0
+  ca_name: CA_MX5_ACX1
+  keychain_name: QKD_CA_MX5_ACX1
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: MX4-ACX3
+  type: extra
+  node_a: MX4
+  interface_a: et-0/0/8
+  node_b: ACX3
+  interface_b: et-2/0/0
+  ca_name: CA_MX4_ACX3
+  keychain_name: QKD_CA_MX4_ACX3
+  macsec: true
+  managed_a: true
+  managed_b: true
+- id: ACX1-ACX2
+  type: existing
+  node_a: ACX1
+  interface_a: et-2/0/4
+  node_b: ACX2
+  interface_b: et-2/0/0
+  managed_b: false
+  ca_name: CA1
+  keychain_name: QKD_CA1
+  macsec: true
+  managed_a: true
+- id: ACX1-ACX5
+  type: existing
+  node_a: ACX1
+  interface_a: et-2/0/2
+  node_b: ACX5
+  interface_b: et-0/0/2
+  managed_b: false
+  ca_name: CA9
+  keychain_name: QKD_CA9
+  macsec: true
+  managed_a: true
+- id: ACX3-ACX2
+  type: existing
+  node_a: ACX3
+  interface_a: et-2/0/4
+  node_b: ACX2
+  interface_b: et-2/0/2
+  managed_b: false
+  ca_name: CA3
+  keychain_name: QKD_CA3
+  macsec: true
+  managed_a: true
+- id: ACX3-ACX4
+  type: existing
+  node_a: ACX3
+  interface_a: et-2/0/2
+  node_b: ACX4
+  interface_b: et-0/0/2
+  managed_b: false
+  ca_name: CA5
+  keychain_name: QKD_CA5
+  macsec: true
+  managed_a: true

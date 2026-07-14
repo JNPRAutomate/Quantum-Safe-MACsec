@@ -1,53 +1,577 @@
 devices:
-  vqfx1:
-    platform: vqfx
-    ip: 10.54.13.14
+  MX1:
+    name: MX1
+    platform: mx
+    ip: 100.123.113.151
+    interfaces:
+    - et-0/0/0
+    - et-0/0/2
+    kme_ip: 100.123.252.15
+    kme_port: 8443
     auth:
       username: admin
       password: juniper1
     script_user: admin
-    ssh_trust: null
-    macsec:
-      ca_name: CA1
-      mode: qkd
-    links:
-    - peer: vqfx2
-      peer_ip: 10.54.12.193
-      peer_interface: xe-0/0/1
-      peer_sae: sae_002
-      role: master
-      interface: xe-0/0/1
-      ca_names:
-      - CA1
-      - CA2
+    sae_id: sae_001
+    managed: true
+    kme:
+      ip: 100.123.252.15
+      port: 8443
     qkd:
       sae_id: sae_001
-    kme:
-      ip: 192.168.2.205
-      port: 8443
-  vqfx2:
-    platform: vqfx
-    ip: 10.54.12.193
+    topology_member: true
+    links:
+    - id: MX1-MX2
+      type: ring
+      macsec: true
+      role: master
+      peer: MX2
+      peer_ip: 100.123.113.152
+      peer_sae: sae_002
+      peer_interface: et-0/0/0
+      peer_kme_ip: 100.123.252.16
+      peer_kme_port: 8443
+      interface: et-0/0/0
+      ca_name: CA_MX1_MX2
+      ca_names:
+      - CA_MX1_MX2
+      keychain_name: QKD_CA_MX1_MX2
+    - id: MX6-MX1
+      type: ring
+      macsec: true
+      role: slave
+      peer: MX6
+      peer_ip: 100.123.113.1
+      peer_sae: sae_006
+      peer_interface: et-0/0/7
+      peer_kme_ip: 100.123.252.20
+      peer_kme_port: 8443
+      interface: et-0/0/2
+      ca_name: CA_MX6_MX1
+      ca_names:
+      - CA_MX6_MX1
+      keychain_name: QKD_CA_MX6_MX1
+  MX2:
+    name: MX2
+    platform: mx
+    ip: 100.123.113.152
+    interfaces:
+    - et-0/0/0
+    - et-0/0/2
+    kme_ip: 100.123.252.16
+    kme_port: 8443
     auth:
       username: admin
       password: juniper1
     script_user: admin
-    ssh_trust: null
-    macsec:
-      ca_name: CA1
-      mode: qkd
-    links:
-    - peer: vqfx1
-      peer_ip: 10.54.13.14
-      peer_interface: xe-0/0/1
-      peer_sae: sae_001
-      role: slave
-      interface: xe-0/0/1
-      ca_names:
-      - CA1
-      - CA2
+    sae_id: sae_002
+    managed: true
+    kme:
+      ip: 100.123.252.16
+      port: 8443
     qkd:
       sae_id: sae_002
+    topology_member: true
+    links:
+    - id: MX1-MX2
+      type: ring
+      macsec: true
+      role: slave
+      peer: MX1
+      peer_ip: 100.123.113.151
+      peer_sae: sae_001
+      peer_interface: et-0/0/0
+      peer_kme_ip: 100.123.252.15
+      peer_kme_port: 8443
+      interface: et-0/0/0
+      ca_name: CA_MX1_MX2
+      ca_names:
+      - CA_MX1_MX2
+      keychain_name: QKD_CA_MX1_MX2
+    - id: MX2-MX3
+      type: ring
+      macsec: true
+      role: master
+      peer: MX3
+      peer_ip: 100.123.113.2
+      peer_sae: sae_003
+      peer_interface: et-0/0/7
+      peer_kme_ip: 100.123.252.17
+      peer_kme_port: 8443
+      interface: et-0/0/2
+      ca_name: CA_MX2_MX3
+      ca_names:
+      - CA_MX2_MX3
+      keychain_name: QKD_CA_MX2_MX3
+  MX3:
+    name: MX3
+    platform: mx
+    ip: 100.123.113.2
+    interfaces:
+    - et-0/0/7
+    - et-0/0/4
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.17
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_003
+    managed: true
     kme:
-      ip: 192.168.2.206
+      ip: 100.123.252.17
       port: 8443
+    qkd:
+      sae_id: sae_003
+    topology_member: true
+    links:
+    - id: MX2-MX3
+      type: ring
+      macsec: true
+      role: slave
+      peer: MX2
+      peer_ip: 100.123.113.152
+      peer_sae: sae_002
+      peer_interface: et-0/0/2
+      peer_kme_ip: 100.123.252.16
+      peer_kme_port: 8443
+      interface: et-0/0/7
+      ca_name: CA_MX2_MX3
+      ca_names:
+      - CA_MX2_MX3
+      keychain_name: QKD_CA_MX2_MX3
+    - id: MX3-MX4
+      type: ring
+      macsec: true
+      role: master
+      peer: MX4
+      peer_ip: 100.123.113.4
+      peer_sae: sae_004
+      peer_interface: et-0/0/4
+      peer_kme_ip: 100.123.252.18
+      peer_kme_port: 8443
+      interface: et-0/0/4
+      ca_name: CA_MX3_MX4
+      ca_names:
+      - CA_MX3_MX4
+      keychain_name: QKD_CA_MX3_MX4
+    - id: MX3-MX5
+      type: extra
+      macsec: true
+      role: master
+      peer: MX5
+      peer_ip: 100.123.113.3
+      peer_sae: sae_005
+      peer_interface: et-0/0/6
+      peer_kme_ip: 100.123.252.19
+      peer_kme_port: 8443
+      interface: et-0/0/6
+      ca_name: CA_MX3_MX5
+      ca_names:
+      - CA_MX3_MX5
+      keychain_name: QKD_CA_MX3_MX5
+    - id: MX3-MX6
+      type: extra
+      macsec: true
+      role: master
+      peer: MX6
+      peer_ip: 100.123.113.1
+      peer_sae: sae_006
+      peer_interface: et-0/0/8
+      peer_kme_ip: 100.123.252.20
+      peer_kme_port: 8443
+      interface: et-0/0/8
+      ca_name: CA_MX3_MX6
+      ca_names:
+      - CA_MX3_MX6
+      keychain_name: QKD_CA_MX3_MX6
+  MX4:
+    name: MX4
+    platform: mx
+    ip: 100.123.113.4
+    interfaces:
+    - et-0/0/4
+    - et-0/0/0
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.18
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_004
+    managed: true
+    kme:
+      ip: 100.123.252.18
+      port: 8443
+    qkd:
+      sae_id: sae_004
+    topology_member: true
+    links:
+    - id: MX3-MX4
+      type: ring
+      macsec: true
+      role: slave
+      peer: MX3
+      peer_ip: 100.123.113.2
+      peer_sae: sae_003
+      peer_interface: et-0/0/4
+      peer_kme_ip: 100.123.252.17
+      peer_kme_port: 8443
+      interface: et-0/0/4
+      ca_name: CA_MX3_MX4
+      ca_names:
+      - CA_MX3_MX4
+      keychain_name: QKD_CA_MX3_MX4
+    - id: MX4-MX5
+      type: ring
+      macsec: true
+      role: master
+      peer: MX5
+      peer_ip: 100.123.113.3
+      peer_sae: sae_005
+      peer_interface: et-0/0/0
+      peer_kme_ip: 100.123.252.19
+      peer_kme_port: 8443
+      interface: et-0/0/0
+      ca_name: CA_MX4_MX5
+      ca_names:
+      - CA_MX4_MX5
+      keychain_name: QKD_CA_MX4_MX5
+    - id: MX4-MX6
+      type: extra
+      macsec: true
+      role: master
+      peer: MX6
+      peer_ip: 100.123.113.1
+      peer_sae: sae_006
+      peer_interface: et-0/0/6
+      peer_kme_ip: 100.123.252.20
+      peer_kme_port: 8443
+      interface: et-0/0/6
+      ca_name: CA_MX4_MX6
+      ca_names:
+      - CA_MX4_MX6
+      keychain_name: QKD_CA_MX4_MX6
+    - id: MX4-ACX3
+      type: extra
+      macsec: true
+      role: master
+      peer: ACX3
+      peer_ip: 100.123.170.203
+      peer_sae: sae_009
+      peer_interface: et-2/0/0
+      peer_kme_ip: 100.123.252.12
+      peer_kme_port: 8443
+      interface: et-0/0/8
+      ca_name: CA_MX4_ACX3
+      ca_names:
+      - CA_MX4_ACX3
+      keychain_name: QKD_CA_MX4_ACX3
+  MX5:
+    name: MX5
+    platform: mx
+    ip: 100.123.113.3
+    interfaces:
+    - et-0/0/0
+    - et-0/0/4
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.19
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_005
+    managed: true
+    kme:
+      ip: 100.123.252.19
+      port: 8443
+    qkd:
+      sae_id: sae_005
+    topology_member: true
+    links:
+    - id: MX4-MX5
+      type: ring
+      macsec: true
+      role: slave
+      peer: MX4
+      peer_ip: 100.123.113.4
+      peer_sae: sae_004
+      peer_interface: et-0/0/0
+      peer_kme_ip: 100.123.252.18
+      peer_kme_port: 8443
+      interface: et-0/0/0
+      ca_name: CA_MX4_MX5
+      ca_names:
+      - CA_MX4_MX5
+      keychain_name: QKD_CA_MX4_MX5
+    - id: MX5-MX6
+      type: ring
+      macsec: true
+      role: master
+      peer: MX6
+      peer_ip: 100.123.113.1
+      peer_sae: sae_006
+      peer_interface: et-0/0/4
+      peer_kme_ip: 100.123.252.20
+      peer_kme_port: 8443
+      interface: et-0/0/4
+      ca_name: CA_MX5_MX6
+      ca_names:
+      - CA_MX5_MX6
+      keychain_name: QKD_CA_MX5_MX6
+    - id: MX3-MX5
+      type: extra
+      macsec: true
+      role: slave
+      peer: MX3
+      peer_ip: 100.123.113.2
+      peer_sae: sae_003
+      peer_interface: et-0/0/6
+      peer_kme_ip: 100.123.252.17
+      peer_kme_port: 8443
+      interface: et-0/0/6
+      ca_name: CA_MX3_MX5
+      ca_names:
+      - CA_MX3_MX5
+      keychain_name: QKD_CA_MX3_MX5
+    - id: MX5-ACX1
+      type: extra
+      macsec: true
+      role: master
+      peer: ACX1
+      peer_ip: 100.123.170.202
+      peer_sae: sae_007
+      peer_interface: et-2/0/0
+      peer_kme_ip: 100.123.252.10
+      peer_kme_port: 8443
+      interface: et-0/0/8
+      ca_name: CA_MX5_ACX1
+      ca_names:
+      - CA_MX5_ACX1
+      keychain_name: QKD_CA_MX5_ACX1
+  MX6:
+    name: MX6
+    platform: mx
+    ip: 100.123.113.1
+    interfaces:
+    - et-0/0/4
+    - et-0/0/7
+    - et-0/0/6
+    - et-0/0/8
+    kme_ip: 100.123.252.20
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_006
+    managed: true
+    kme:
+      ip: 100.123.252.20
+      port: 8443
+    qkd:
+      sae_id: sae_006
+    topology_member: true
+    links:
+    - id: MX5-MX6
+      type: ring
+      macsec: true
+      role: slave
+      peer: MX5
+      peer_ip: 100.123.113.3
+      peer_sae: sae_005
+      peer_interface: et-0/0/4
+      peer_kme_ip: 100.123.252.19
+      peer_kme_port: 8443
+      interface: et-0/0/4
+      ca_name: CA_MX5_MX6
+      ca_names:
+      - CA_MX5_MX6
+      keychain_name: QKD_CA_MX5_MX6
+    - id: MX6-MX1
+      type: ring
+      macsec: true
+      role: master
+      peer: MX1
+      peer_ip: 100.123.113.151
+      peer_sae: sae_001
+      peer_interface: et-0/0/2
+      peer_kme_ip: 100.123.252.15
+      peer_kme_port: 8443
+      interface: et-0/0/7
+      ca_name: CA_MX6_MX1
+      ca_names:
+      - CA_MX6_MX1
+      keychain_name: QKD_CA_MX6_MX1
+    - id: MX3-MX6
+      type: extra
+      macsec: true
+      role: slave
+      peer: MX3
+      peer_ip: 100.123.113.2
+      peer_sae: sae_003
+      peer_interface: et-0/0/8
+      peer_kme_ip: 100.123.252.17
+      peer_kme_port: 8443
+      interface: et-0/0/8
+      ca_name: CA_MX3_MX6
+      ca_names:
+      - CA_MX3_MX6
+      keychain_name: QKD_CA_MX3_MX6
+    - id: MX4-MX6
+      type: extra
+      macsec: true
+      role: slave
+      peer: MX4
+      peer_ip: 100.123.113.4
+      peer_sae: sae_004
+      peer_interface: et-0/0/6
+      peer_kme_ip: 100.123.252.18
+      peer_kme_port: 8443
+      interface: et-0/0/6
+      ca_name: CA_MX4_MX6
+      ca_names:
+      - CA_MX4_MX6
+      keychain_name: QKD_CA_MX4_MX6
+  ACX1:
+    name: ACX1
+    platform: acx
+    ip: 100.123.170.202
+    interfaces:
+    - et-2/0/0
+    - et-2/0/2
+    - et-2/0/4
+    kme_ip: 100.123.252.10
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_007
+    managed: true
+    kme:
+      ip: 100.123.252.10
+      port: 8443
+    qkd:
+      sae_id: sae_007
+    topology_member: true
+    links:
+    - id: MX5-ACX1
+      type: extra
+      macsec: true
+      role: slave
+      peer: MX5
+      peer_ip: 100.123.113.3
+      peer_sae: sae_005
+      peer_interface: et-0/0/8
+      peer_kme_ip: 100.123.252.19
+      peer_kme_port: 8443
+      interface: et-2/0/0
+      ca_name: CA_MX5_ACX1
+      ca_names:
+      - CA_MX5_ACX1
+      keychain_name: QKD_CA_MX5_ACX1
+    - id: ACX1-ACX2
+      type: existing
+      macsec: true
+      role: master
+      peer: ACX2
+      peer_ip: 100.123.170.201
+      peer_sae: sae_008
+      peer_interface: et-2/0/0
+      peer_kme_ip: 100.123.252.11
+      peer_kme_port: 8443
+      interface: et-2/0/4
+      ca_name: CA1
+      ca_names:
+      - CA1
+      keychain_name: QKD_CA1
+    - id: ACX1-ACX5
+      type: existing
+      macsec: true
+      role: master
+      peer: ACX5
+      peer_ip: 100.123.170.205
+      peer_sae: sae_011
+      peer_interface: et-0/0/2
+      peer_kme_ip: 100.123.252.14
+      peer_kme_port: 8443
+      interface: et-2/0/2
+      ca_name: CA9
+      ca_names:
+      - CA9
+      keychain_name: QKD_CA9
+  ACX3:
+    name: ACX3
+    platform: acx
+    ip: 100.123.170.203
+    interfaces:
+    - et-2/0/0
+    - et-2/0/2
+    - et-2/0/4
+    kme_ip: 100.123.252.12
+    kme_port: 8443
+    auth:
+      username: admin
+      password: juniper1
+    script_user: admin
+    sae_id: sae_009
+    managed: true
+    kme:
+      ip: 100.123.252.12
+      port: 8443
+    qkd:
+      sae_id: sae_009
+    topology_member: true
+    links:
+    - id: MX4-ACX3
+      type: extra
+      macsec: true
+      role: slave
+      peer: MX4
+      peer_ip: 100.123.113.4
+      peer_sae: sae_004
+      peer_interface: et-0/0/8
+      peer_kme_ip: 100.123.252.18
+      peer_kme_port: 8443
+      interface: et-2/0/0
+      ca_name: CA_MX4_ACX3
+      ca_names:
+      - CA_MX4_ACX3
+      keychain_name: QKD_CA_MX4_ACX3
+    - id: ACX3-ACX2
+      type: existing
+      macsec: true
+      role: master
+      peer: ACX2
+      peer_ip: 100.123.170.201
+      peer_sae: sae_008
+      peer_interface: et-2/0/2
+      peer_kme_ip: 100.123.252.11
+      peer_kme_port: 8443
+      interface: et-2/0/4
+      ca_name: CA3
+      ca_names:
+      - CA3
+      keychain_name: QKD_CA3
+    - id: ACX3-ACX4
+      type: existing
+      macsec: true
+      role: master
+      peer: ACX4
+      peer_ip: 100.123.170.204
+      peer_sae: sae_010
+      peer_interface: et-0/0/2
+      peer_kme_ip: 100.123.252.13
+      peer_kme_port: 8443
+      interface: et-2/0/2
+      ca_name: CA5
+      ca_names:
+      - CA5
+      keychain_name: QKD_CA5

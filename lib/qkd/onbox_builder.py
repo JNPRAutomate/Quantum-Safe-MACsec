@@ -1,8 +1,10 @@
 from pathlib import Path
 from pprint import pformat
+import copy
 
 from lib.common.settings import CONFIG, QKD
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
+
 
 # ----------------------------
 # PATHS
@@ -22,23 +24,157 @@ RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 
 
 # ----------------------------
-# BUILD ONBOX CONFIG
+# SMALL HELPERS
 # ----------------------------
 
-def build_onbox_config(name, device):
+def _as_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off")
+    return bool(value)
+
+
+def _device_sae_id(name, device):
+    qkd = device.get("qkd", {}) or {}
+
+    for value in (
+        qkd.get("sae_id"),
+        device.get("local_sae"),
+        device.get("sae"),
+        device.get("sae_id"),
+        name,
+    ):
+        if value:
+            return str(value)
+
+    raise ValueError(f"Cannot resolve local SAE for device {name}")
+
+
+def _device_kme_ip(name, device):
+    kme = device.get("kme", {})
+
+    if isinstance(kme, str):
+        return kme
+
+    if isinstance(kme, dict):
+        value = kme.get("ip") or kme.get("address")
+        if value:
+            return str(value)
+
+    value = device.get("kme_ip")
+    if value:
+        return str(value)
+
+    raise ValueError(f"Cannot resolve KME IP for device {name}")
+
+
+def _device_kme_port(device):
+    kme = device.get("kme", {})
+
+    if isinstance(kme, dict) and kme.get("port") is not None:
+        return int(kme["port"])
+
+    if device.get("kme_port") is not None:
+        return int(device["kme_port"])
+
+    return 443
+
+
+def _ca_names_from_link(link):
+    names = []
+
+    ca_name = link.get("ca_name")
+    if ca_name:
+        names.append(str(ca_name))
+
+    for ca in link.get("ca_names", []) or []:
+        if ca and str(ca) not in names:
+            names.append(str(ca))
+
+    if not names:
+        raise ValueError(f"Link has no ca_name/ca_names: {link}")
+
+    return names
+
+
+def _keychain_name_for_link(link, ca_name):
+    return str(link.get("keychain_name") or f"QKD_{ca_name}")
+
+
+def normalize_onbox_link(link):
     """
-    Build the CONFIG dictionary embedded into qkd_onbox.py for one device.
+    Normalize one runtime link for embedding into qkd_onbox.py.
 
-    Each device gets its own embedded CONFIG, so the generated qkd_onbox.py
-    must be unique per device.
+    The on-box script should not need to know whether the link came from:
+      - generated ring link
+      - explicit extra link
+      - mixed MX/ACX link
+
+    It gets a stable per-link structure with both legacy and new fields.
     """
+    if not isinstance(link, dict):
+        raise ValueError(f"Invalid link record: expected dict, got {type(link)}")
 
-    script_user = device.get("script_user") or QKD["SCRIPT_USER"]
+    interface = link.get("interface")
+    peer = link.get("peer")
 
-    script_dir = QKD["SCRIPT_DIR"]
-    ssh_home_base = QKD["SSH_HOME_BASE"]
-    ssh_key_name = QKD["SSH_KEY_NAME"]
+    if not interface:
+        raise ValueError(f"Runtime link missing local interface: {link}")
 
+    if not peer:
+        raise ValueError(f"Runtime link missing peer: {link}")
+
+    ca_names = _ca_names_from_link(link)
+    primary_ca = ca_names[0]
+    keychain_name = _keychain_name_for_link(link, primary_ca)
+
+    normalized = {
+        "id": link.get("id"),
+        "type": link.get("type"),
+        "macsec": _as_bool(link.get("macsec"), default=True),
+        "role": link.get("role"),
+        "interface": interface,
+        "peer": peer,
+        "peer_ip": link.get("peer_ip"),
+        "peer_interface": link.get("peer_interface"),
+        "peer_sae": link.get("peer_sae"),
+        "ca_name": primary_ca,
+        "ca_names": ca_names,
+        "keychain_name": keychain_name,
+    }
+
+    # Preserve optional operational metadata if present.
+    for optional_key in (
+        "peer_kme_ip",
+        "peer_kme_port",
+        "direction",
+        "description",
+        "metadata",
+    ):
+        if optional_key in link:
+            normalized[optional_key] = copy.deepcopy(link[optional_key])
+
+    return normalized
+
+
+def normalize_onbox_links(name, device):
+    links = device.get("links", []) or []
+
+    if not isinstance(links, list):
+        raise ValueError(f"Device {name} links must be a list")
+
+    normalized = []
+
+    for link in links:
+        normalized.append(normalize_onbox_link(link))
+
+    return normalized
+
+
+def resolve_pki_runtime():
     runtime_pki = load_runtime_pki_profile()
     pki = runtime_pki["pki"]
     pki_profile = pki["profile"]
@@ -47,10 +183,9 @@ def build_onbox_config(name, device):
     # New schema:
     #   pki.juniper.trust_bundle
     #   pki.juniper.ca_cert
-    #
     # Legacy schema fallback:
     #   pki.ca_cert
-    juniper_pki = pki.get("juniper", {})
+    juniper_pki = pki.get("juniper", {}) or {}
 
     ca_cert = (
         juniper_pki.get("ca_cert")
@@ -67,18 +202,63 @@ def build_onbox_config(name, device):
             "Missing Juniper CA certificate name in runtime PKI profile. "
             "Expected pki.juniper.ca_cert or legacy pki.ca_cert."
         )
-        
-    runtime_qkd_policy = load_runtime_qkd_policy()
-    qkd_policy = runtime_qkd_policy.get("qkd_policy", {})
 
-    config = {
-        "local_sae": device["qkd"]["sae_id"],
-        "kme_ip": device["kme"]["ip"],
-        "kme_port": device["kme"]["port"],
-        # PKI runtime profile
+    return {
         "pki_profile": pki_profile,
         "ca_cert": ca_cert,
         "trust_bundle": trust_bundle,
+    }
+
+
+# ----------------------------
+# BUILD ONBOX CONFIG
+# ----------------------------
+
+def build_onbox_config(name, device):
+    """
+    Build the CONFIG dictionary embedded into qkd_onbox.py for one device.
+
+    Link-driven runtime contract:
+      device["links"] is the source of truth.
+
+    Each embedded link includes:
+      - id
+      - role
+      - interface
+      - peer
+      - peer_interface
+      - ca_name
+      - ca_names
+      - keychain_name
+
+    ca_names is intentionally preserved for compatibility with qkd_onbox.py
+    implementations that still iterate over a list of CAs per link.
+    """
+    if device.get("managed") is False:
+        raise ValueError(f"Refusing to build onbox config for unmanaged device {name}")
+
+    script_user = device.get("script_user") or QKD["SCRIPT_USER"]
+
+    script_dir = QKD["SCRIPT_DIR"]
+    ssh_home_base = QKD["SSH_HOME_BASE"]
+    ssh_key_name = QKD["SSH_KEY_NAME"]
+
+    pki_runtime = resolve_pki_runtime()
+
+    runtime_qkd_policy = load_runtime_qkd_policy()
+    qkd_policy = runtime_qkd_policy.get("qkd_policy", {})
+
+    links = normalize_onbox_links(name, device)
+
+    config = {
+        "local_sae": _device_sae_id(name, device),
+        "kme_ip": _device_kme_ip(name, device),
+        "kme_port": _device_kme_port(device),
+
+        # PKI runtime profile
+        "pki_profile": pki_runtime["pki_profile"],
+        "ca_cert": pki_runtime["ca_cert"],
+        "trust_bundle": pki_runtime["trust_bundle"],
 
         # QKD runtime policy
         "qkd_policy": qkd_policy,
@@ -93,26 +273,23 @@ def build_onbox_config(name, device):
         "log_max_bytes": QKD["LOG_MAX_BYTES"],
         "log_backup_count": QKD["LOG_BACKUP_COUNT"],
 
-        # Per-device links
-        "links": device.get("links", [])
+        # Link-driven runtime topology for this device
+        "links": links,
     }
 
     # Optional runtime knobs, only embedded if present in QKD/settings.
     # This keeps backward compatibility if they are not defined.
-    if "DEC_RETRY" in QKD:
-        config["dec_retry"] = QKD["DEC_RETRY"]
+    optional_qkd_keys = {
+        "DEC_RETRY": "dec_retry",
+        "MIN_ROTATION_INTERVAL": "min_rotation_interval",
+        "KME_FAIL_THRESHOLD": "kme_fail_threshold",
+        "KME_HOLD_DOWN_SECONDS": "kme_hold_down_seconds",
+        "MACSEC_INUSE_GRACE_SECONDS": "macsec_inuse_grace_seconds",
+    }
 
-    if "MIN_ROTATION_INTERVAL" in QKD:
-        config["min_rotation_interval"] = QKD["MIN_ROTATION_INTERVAL"]
-
-    if "KME_FAIL_THRESHOLD" in QKD:
-        config["kme_fail_threshold"] = QKD["KME_FAIL_THRESHOLD"]
-
-    if "KME_HOLD_DOWN_SECONDS" in QKD:
-        config["kme_hold_down_seconds"] = QKD["KME_HOLD_DOWN_SECONDS"]
-
-    if "MACSEC_INUSE_GRACE_SECONDS" in QKD:
-        config["macsec_inuse_grace_seconds"] = QKD["MACSEC_INUSE_GRACE_SECONDS"]
+    for settings_key, config_key in optional_qkd_keys.items():
+        if settings_key in QKD:
+            config[config_key] = QKD[settings_key]
 
     return config
 
@@ -131,7 +308,6 @@ def generate_onbox_script(name, device, out_dir):
     Destination:
         config/runtime/<device>/qkd_onbox.py
     """
-
     out_dir.mkdir(parents=True, exist_ok=True)
 
     src = ARTIFACTS_DIR / QKD["SCRIPT_NAME"]
@@ -142,8 +318,8 @@ def generate_onbox_script(name, device, out_dir):
 
     config = build_onbox_config(name, device)
 
-    with open(src) as f:
-        content = f.read()
+    with open(src, "r", encoding="utf-8") as handle:
+        content = handle.read()
 
     config_literal = pformat(
         config,
@@ -159,11 +335,11 @@ def generate_onbox_script(name, device, out_dir):
 
     content = content.replace(
         "__CONFIG_PLACEHOLDER__",
-        f"CONFIG = {config_literal}"
+        f"CONFIG = {config_literal}",
     )
 
-    with open(dst, "w") as f:
-        f.write(content)
+    with open(dst, "w", encoding="utf-8") as handle:
+        handle.write(content)
 
     dst.chmod(0o755)
 
@@ -178,28 +354,29 @@ def build_onbox_artifacts(devices):
     """
     Build per-device onbox scripts.
 
-    Output structure:
+    Input:
+        runtime devices dictionary from config/runtime/devices.yaml
 
-        config/runtime/acx1/qkd_onbox.py
-        config/runtime/acx2/qkd_onbox.py
-        config/runtime/acx3/qkd_onbox.py
+    Output structure:
+        config/runtime/<device>/qkd_onbox.py
 
     Returns:
-
         {
-            "acx1": {"script": Path(...)},
-            "acx2": {"script": Path(...)},
+            "MX1": {"script": Path(...)},
+            "MX2": {"script": Path(...)},
             ...
         }
     """
-
     outputs = {}
 
     for name, device in devices.items():
+        if device.get("managed") is False:
+            print(f"Skipping onbox artifacts for {name} (managed=false)")
+            continue
 
         mode = device.get("macsec", {}).get("mode", "qkd")
 
-        print(f"▶ Building onbox artifacts for {name} (mode={mode})")
+        print(f"Building onbox artifacts for {name} (mode={mode})")
 
         outputs[name] = {}
 
@@ -207,19 +384,17 @@ def build_onbox_artifacts(devices):
         device_runtime_dir.mkdir(parents=True, exist_ok=True)
 
         if mode == "qkd":
-
             script = generate_onbox_script(
                 name,
                 device,
-                out_dir=device_runtime_dir
+                out_dir=device_runtime_dir,
             )
 
             outputs[name]["script"] = script
 
         elif mode == "static":
-
-            # Static mode is intentionally left as placeholder.
-            # Add static onbox artifact rendering here if/when needed.
+            # Static mode does not need qkd_onbox.py.
+            # Keep empty output entry for backward compatibility.
             pass
 
         else:

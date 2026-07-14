@@ -1,0 +1,25 @@
+{# -------------------------------------- #}
+{# MACsec QKD dynamic configuration        #}
+{# -------------------------------------- #}
+
+{% set cipher = platform.macsec.cipher | default("gcm-aes-xpn-256") %}
+
+# --------------------------------------
+# Connectivity Associations
+# --------------------------------------
+
+{% for link in device.links | default([]) %}
+{% set iface = link.interface %}
+{% set ca_list = link.ca_names | default([]) %}
+
+{% for ca in ca_list %}
+{% set keychain = link.keychain_name | default("QKD_" ~ ca) %}
+
+set security macsec connectivity-association {{ ca }} cipher-suite {{ cipher }}
+set security macsec connectivity-association {{ ca }} security-mode static-cak
+set security macsec connectivity-association {{ ca }} replay-protect
+set security macsec interfaces {{ iface }} connectivity-association {{ ca }}
+set security macsec connectivity-association {{ ca }} pre-shared-key-chain {{ keychain }}
+
+{% endfor %}
+{% endfor %}

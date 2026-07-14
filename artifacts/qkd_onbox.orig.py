@@ -15,32 +15,7 @@ import pwd
 
 urllib3.disable_warnings()
 
-CONFIG = {   'local_sae': 'sae_001',
-    'kme_ip': '192.168.2.205',
-    'kme_port': 8443,
-    'pki_profile': 'hierarchical_ca',
-    'ca_cert': 'trusted-kme-ca-bundle.crt',
-    'trust_bundle': 'certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt',
-    'qkd_policy': {   'rekey_enabled': False,
-                      'interval_seconds': 60,
-                      'key_batch_size': 5,
-                      'max_installed_keys': 5,
-                      'key_ttl_seconds': 0,
-                      'purge_on_kme_loss': False,
-                      'purge_after_seconds': 0},
-    'script_user': 'admin',
-    'script_dir': '/var/db/scripts',
-    'ssh_key': '/var/home/admin/.ssh/qkd_id_rsa',
-    'log_file': '/var/tmp/qkd_debug.log',
-    'log_max_bytes': 10485760,
-    'log_backup_count': 5,
-    'links': [   {   'peer': 'vqfx2',
-                     'peer_ip': '10.54.12.193',
-                     'peer_interface': 'xe-0/0/1',
-                     'peer_sae': 'sae_002',
-                     'role': 'master',
-                     'interface': 'xe-0/0/1',
-                     'ca_names': ['CA1', 'CA2']}]}
+__CONFIG_PLACEHOLDER__
 
 DEVICE = CONFIG["local_sae"]
 KME_IP = CONFIG["kme_ip"]

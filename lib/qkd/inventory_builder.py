@@ -1,225 +1,316 @@
-import yaml
-import os
+#!/usr/bin/env python3
+"""
+Runtime inventory helpers for the QKD/MACsec orchestrator.
+
+Pure link-driven version.
+
+Responsibilities
+----------------
+This module writes the runtime artifacts consumed by the rest of the QKD stack:
+
+    config/runtime/topology.yaml
+    config/runtime/devices.yaml
+    config/runtime/pki_profile.yaml
+    config/runtime/qkd_policy.yaml
+
+Topology policy
+---------------
+The source of truth is now an explicit link list only:
+
+    topology: links
+    links:
+      - id: MX1-MX2
+        node_a: MX1
+        interface_a: et-0/0/0
+        node_b: MX2
+        interface_b: et-0/0/0
+        ca_name: CA_MX1_MX2
+        keychain_name: QKD_CA_MX1_MX2
+
+No ring/chain/pair/hub links are generated here.
+
+Compatibility
+-------------
+- build_full_inventory() remains the public entrypoint used by qkd_orchestrator.py.
+- It now accepts links=... as the preferred argument.
+- extra_links=... remains accepted as a compatibility alias.
+- If an older qkd_orchestrator.py does not pass links but does pass source_path,
+  this module reads links directly from that source YAML to avoid producing a
+  zero-link runtime silently.
+"""
+
+from __future__ import annotations
+
+import copy
 import secrets
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+import yaml
+
 from lib.common.settings import CONFIG
+from lib.qkd.topology_builder import (
+    build_runtime_devices,
+    build_runtime_topology,
+    write_runtime_devices,
+    write_runtime_topology,
+)
 
 
-# ----------------------------------------
-# GENERATE MACSEC KEYS (STATIC MODE)
-# ----------------------------------------
-
-def generate_macsec_keys():
-    return {
-        "ckn": secrets.token_hex(8),   # 64-bit
-        "cak": secrets.token_hex(16)   # 128-bit
-    }
-
-# ----------------------------------------
-# ASSIGN LINKS TOPOLOGY
-# ----------------------------------------
-         
-def assign_links(devices, pairs, topology, hub=None):
-    
-    # index devices by name (fast lookup)
-    dev_map = {d["name"]: d for d in devices}
-
-    # initialize links
-    for d in devices:
-        d["links"] = []
-        d["_if_idx"] = 0  # internal pointer
-    
-    # connectivity association per link, not per device, this guarantees correct key rotation for multiple links in macsec environment
-    ca_counter = 1 # global CA allocator per link
-    
-    for a, b in pairs:
-
-        if topology == "hub":
-            if a == hub:
-                master, slave = a, b
-            else:
-                master, slave = b, a
-        else:
-            # default rule: first element = master
-            master, slave = a, b
+# ---------------------------------------------------------------------------
+# YAML helpers
+# ---------------------------------------------------------------------------
 
 
-        # assign interface sequentially
-        
-        # ----------------------------
-        # MASTER interface assignment (SAFE)
-        # ----------------------------
-        if dev_map[master]["_if_idx"] >= len(dev_map[master]["interfaces"]):   
-            raise ValueError(
-                            f"{master} has not enough interfaces for its links "
-                            f"(needed={dev_map[master]['_if_idx'] + 1}, "
-                            f"available={len(dev_map[master]['interfaces'])})"
-            )
-
-        m_if = dev_map[master]["interfaces"][dev_map[master]["_if_idx"]]
-        dev_map[master]["_if_idx"] += 1
-        
-        # ----------------------------
-        # SLAVE interface assignment (SAFE)
-        # ----------------------------
-
-        if dev_map[slave]["_if_idx"] >= len(dev_map[slave]["interfaces"]):
-            raise ValueError(
-                f"{slave} has not enough interfaces for its links "
-                f"(needed={dev_map[slave]['_if_idx'] + 1}, "
-                f"available={len(dev_map[slave]['interfaces'])})"
-            )
-
-        s_if = dev_map[slave]["interfaces"][dev_map[slave]["_if_idx"]]
-        dev_map[slave]["_if_idx"] += 1
-        
-        # ----------------------------
-        # Assign links
-        # ----------------------------
-        
-        # ✅ CA allocation PER LINK
-        ca_a = f"CA{ca_counter}"
-        ca_b = f"CA{ca_counter + 1}"
-        ca_counter += 2
-
-        # master side
-        dev_map[master]["links"].append({
-            "peer": slave,
-            "peer_ip": dev_map[slave]["ip"],    
-            "peer_interface": s_if,
-            "peer_sae": dev_map[slave]["sae_id"],
-            "role": "master",
-            "interface": m_if,
-            "ca_names": [ca_a, ca_b]
-        })
-
-        # slave side
-        dev_map[slave]["links"].append({
-            "peer": master,
-            "peer_ip": dev_map[master]["ip"],    
-            "peer_interface": m_if,
-            "peer_sae": dev_map[master]["sae_id"],
-            "role": "slave",
-            "interface": s_if,
-            "ca_names": [ca_a, ca_b] # same CA this is critical! 
-        })
-
-# ----------------------------------------
-# BUILD INVENTORY
-# ----------------------------------------
-
-def build_inventory(devices_list, pairs, out_dir=CONFIG["runtime_dir"], mode="qkd"):
-
-    devices_yaml = {"devices": {}}
-
-    if mode not in ["static", "qkd"]:
-            raise ValueError(f"Invalid mode: {mode}")
-
-    # ✅ generate ONE shared key for all devices (important!) only for static mode
-    keys = generate_macsec_keys() if mode == "static" else None
-
-    for dev in devices_list:
-
-        macsec_block = {
-            "ca_name": dev.get("ca_name", "CA1"),
-            "mode": mode
-        }
-
-        # ✅ static only
-        if mode == "static":
-            macsec_block["ckn"] = keys["ckn"]
-            macsec_block["cak"] = keys["cak"]
-
-        ###
-        device_entry = {
-            "platform": dev["platform"],
-            "ip": dev["ip"],
-            "auth": dev["auth"],
-            "script_user": dev.get("script_user"),
-            "ssh_trust": dev.get("ssh_trust"),
-            "macsec": macsec_block
-        }
-        ###
-
-        # ✅ links (core of your new design)
-        # this automatically exports also ca_names
-        if "links" in dev:
-            device_entry["links"] = dev["links"]
-
-        # ✅ qkd mode only
-        if mode == "qkd":
-            device_entry["qkd"] = {
-                "sae_id": dev.get("sae_id", dev["name"])
-            }
-            device_entry["kme"] = {
-                "ip": dev["kme_ip"],
-                "port": dev["kme_port"]
-            }
-
-        devices_yaml["devices"][dev["name"]] = device_entry
-
-    topology_yaml = {
-        "qkd": {
-            "pairs": pairs
-        }
-    }
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    with open(f"{out_dir}/devices.yaml", "w") as f:
-        yaml.dump(devices_yaml, f, sort_keys=False)
-
-    with open(f"{out_dir}/topology.yaml", "w") as f:
-        yaml.dump(topology_yaml, f, sort_keys=False)
-
-    print(f"✅ Inventory generated ({mode})")
-
-# ----------------------------------------
-# BUILD TOPOLOGY
-# ----------------------------------------
-
-def build_pairs(devices, topology_type, hub=None):
-
-    names = [d["name"] for d in devices]
-    pairs = []
-
-    if topology_type == "pair":
-        if len(names) != 2:
-            raise ValueError("Pair topology requires exactly 2 devices")
-        pairs.append([names[0], names[1]])
-
-    elif topology_type == "chain":
-        for i in range(len(names) - 1):
-            pairs.append([names[i], names[i+1]])
-
-    elif topology_type == "ring":
-        for i in range(len(names)):
-            pairs.append([names[i], names[(i+1) % len(names)]])
-
-    elif topology_type == "hub":
-        if not hub:
-            raise ValueError("Hub topology requires --hub")
-
-        for n in names:
-            if n != hub:
-                pairs.append([hub, n])
-
-    else:
-        raise ValueError("Invalid topology")
-
-    return pairs
+def _runtime_dir(out_dir: Optional[Any] = None) -> Path:
+    if out_dir is None:
+        out_dir = CONFIG.get("runtime_dir", "config/runtime")
+    return Path(out_dir)
 
 
-# ----------------------------------------
-# BUILD RUNTIME PKI PROFILE
-# ----------------------------------------
-
-def build_runtime_pki_profile(profile, out_dir):
-
-    if profile not in ["self_signed", "hierarchical_ca"]:
-        raise ValueError(
-            f"Invalid PKI profile: {profile}"
+def _write_yaml(path: Path, data: Dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            data,
+            handle,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
         )
+    return path
+
+
+def _read_yaml_if_exists(path: Any) -> Dict[str, Any]:
+    if path is None:
+        return {}
+
+    p = Path(path)
+    if not p.exists():
+        return {}
+
+    with p.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Static MACsec compatibility
+# ---------------------------------------------------------------------------
+
+
+def generate_macsec_keys() -> Dict[str, str]:
+    """
+    Generate shared static MACsec keys for legacy static mode.
+
+    QKD mode does not use this because qkd_onbox.py installs and rotates
+    authentication-key-chain entries at runtime.
+    """
+    return {
+        "ckn": secrets.token_hex(8),
+        "cak": secrets.token_hex(16),
+    }
+
+
+def _add_static_macsec_if_needed(runtime_devices: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    if mode != "static":
+        return runtime_devices
+
+    keys = generate_macsec_keys()
+    for device in runtime_devices.get("devices", {}).values():
+        device["macsec"] = {
+            "mode": "static",
+            "ckn": keys["ckn"],
+            "cak": keys["cak"],
+        }
+
+    return runtime_devices
+
+
+# ---------------------------------------------------------------------------
+# Device compatibility normalization
+# ---------------------------------------------------------------------------
+
+
+def _normalize_legacy_device_fields(devices: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Normalize in-memory device records before passing them to topology_builder.
+
+    qkd_orchestrator.py enriches devices with auth, kme_ip, kme_port,
+    script_user, managed, topology_member, etc. This function preserves those
+    fields and converts legacy kme_ip/kme_port into the canonical kme: dict.
+    """
+    normalized: List[Dict[str, Any]] = []
+
+    for raw in devices:
+        device = copy.deepcopy(raw)
+
+        if "mgmt_ip" in device and "ip" not in device:
+            device["ip"] = device["mgmt_ip"]
+
+        if "kme" not in device:
+            kme_ip = device.get("kme_ip")
+            if kme_ip:
+                device["kme"] = {"ip": kme_ip}
+        elif isinstance(device["kme"], str):
+            device["kme"] = {"ip": device["kme"]}
+
+        if isinstance(device.get("kme"), dict):
+            if "kme_ip" in device and "ip" not in device["kme"]:
+                device["kme"]["ip"] = device["kme_ip"]
+            if "kme_port" in device and "port" not in device["kme"]:
+                device["kme"]["port"] = device["kme_port"]
+
+        if "sae_id" in device:
+            qkd = device.get("qkd") or {}
+            if not isinstance(qkd, dict):
+                qkd = {}
+            qkd.setdefault("sae_id", device["sae_id"])
+            device["qkd"] = qkd
+
+        normalized.append(device)
+
+    return normalized
+
+
+# ---------------------------------------------------------------------------
+# Link compatibility normalization
+# ---------------------------------------------------------------------------
+
+
+def _normalize_links_argument(
+    links: Optional[List[Dict[str, Any]]] = None,
+    extra_links: Optional[List[Dict[str, Any]]] = None,
+    source_path: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Return the explicit link list for the runtime builder.
+
+    Priority:
+      1. links argument
+      2. extra_links argument, for compatibility
+      3. source YAML links / extra_links, for compatibility with older
+         qkd_orchestrator.py versions that do not pass links yet
+    """
+    if links is not None:
+        if not isinstance(links, list):
+            raise ValueError("build_full_inventory links must be a list")
+        return copy.deepcopy(links)
+
+    if extra_links is not None and len(extra_links) > 0:
+        if not isinstance(extra_links, list):
+            raise ValueError("build_full_inventory extra_links must be a list")
+        return copy.deepcopy(extra_links)
+
+    source_inventory = _read_yaml_if_exists(source_path)
+
+    source_links = source_inventory.get("links")
+    if source_links is not None:
+        if not isinstance(source_links, list):
+            raise ValueError("Inventory 'links' section must be a list")
+        return copy.deepcopy(source_links)
+
+    source_extra_links = source_inventory.get("extra_links")
+    if source_extra_links is not None:
+        if not isinstance(source_extra_links, list):
+            raise ValueError("Inventory 'extra_links' section must be a list")
+        return copy.deepcopy(source_extra_links)
+
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Link-driven runtime inventory builder
+# ---------------------------------------------------------------------------
+
+
+def build_inventory(
+    inventory: Dict[str, Any],
+    out_dir: Optional[Any] = None,
+    source_path: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Build link-driven runtime topology and runtime devices.
+
+    Input inventory must contain:
+      topology: links
+      devices: [...]
+      links: [...]
+
+    Output files:
+      config/runtime/topology.yaml
+      config/runtime/devices.yaml
+    """
+    out_dir = _runtime_dir(out_dir)
+    mode = str(inventory.get("mode") or "qkd").lower()
+
+    if mode not in ("static", "qkd"):
+        raise ValueError(f"Invalid mode: {mode}")
+
+    runtime_topology = build_runtime_topology(
+        inventory,
+        source_path=source_path,
+    )
+
+    runtime_devices = build_runtime_devices(runtime_topology)
+    runtime_devices = _add_static_macsec_if_needed(runtime_devices, mode)
+
+    topology_file = write_runtime_topology(runtime_topology, out_dir=out_dir)
+    devices_file = write_runtime_devices(runtime_devices, out_dir=out_dir)
+
+    print(f"OK runtime topology generated: {topology_file}")
+    print(f"OK runtime devices generated : {devices_file}")
+
+    return {
+        "topology": runtime_topology,
+        "devices": runtime_devices,
+        "topology_file": topology_file,
+        "devices_file": devices_file,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Deprecated legacy topology helpers
+# ---------------------------------------------------------------------------
+
+
+def build_pairs(*args: Any, **kwargs: Any) -> List[List[str]]:
+    """
+    Deprecated.
+
+    Topology-driven pair generation has been removed. Runtime topology is now
+    based only on explicit links in topology.yaml.
+    """
+    raise RuntimeError(
+        "build_pairs() is deprecated. Use topology: links and declare every link explicitly."
+    )
+
+
+def assign_links(*args: Any, **kwargs: Any) -> None:
+    """
+    Deprecated.
+
+    Topology-driven link assignment has been removed. Runtime topology is now
+    based only on explicit links in topology.yaml.
+    """
+    raise RuntimeError(
+        "assign_links() is deprecated. Use build_inventory() / build_full_inventory() "
+        "with explicit links."
+    )
+
+
+# ---------------------------------------------------------------------------
+# BUILD RUNTIME PKI PROFILE
+# ---------------------------------------------------------------------------
+
+
+def build_runtime_pki_profile(profile: str, out_dir: Any) -> Dict[str, Any]:
+    if profile not in ["self_signed", "hierarchical_ca"]:
+        raise ValueError(f"Invalid PKI profile: {profile}")
 
     if profile == "self_signed":
         data = {
@@ -227,13 +318,11 @@ def build_runtime_pki_profile(profile, out_dir):
                 "profile": "self_signed",
                 "source_config": "config/pki/self_signed.yml",
                 "output_dir": "certs/self_signed",
-
                 "juniper": {
                     "certs_dir": "certs/self_signed",
                     "trust_bundle": "certs/self_signed/offbox_rootCA.crt",
                     "ca_cert": "offbox_rootCA.crt",
                 },
-
                 "kme": {
                     "certs_dir": "certs/self_signed/kme",
                     "trust_bundle": "certs/self_signed/offbox_rootCA.crt",
@@ -241,14 +330,12 @@ def build_runtime_pki_profile(profile, out_dir):
                 },
             }
         }
-
-    elif profile == "hierarchical_ca":
+    else:
         data = {
             "pki": {
                 "profile": "hierarchical_ca",
                 "source_config": "config/pki/hierarchical_ca.yml",
                 "output_dir": "certs/hierarchical_ca",
-
                 "juniper": {
                     "certs_dir": "certs/hierarchical_ca/juniper_pki/certs",
                     "trust_bundle": (
@@ -257,7 +344,6 @@ def build_runtime_pki_profile(profile, out_dir):
                     ),
                     "ca_cert": "trusted-kme-ca-bundle.crt",
                 },
-
                 "kme": {
                     "certs_dir": "certs/hierarchical_ca/kme_pki/certs",
                     "trust_bundle": (
@@ -269,25 +355,20 @@ def build_runtime_pki_profile(profile, out_dir):
             }
         }
 
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    out_dir = _runtime_dir(out_dir)
     out_file = out_dir / "pki_profile.yaml"
+    _write_yaml(out_file, data)
 
-    with open(out_file, "w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            data,
-            f,
-            sort_keys=False
-        )
+    print(f"OK runtime PKI profile generated: {profile}")
+    return data
 
-    print(f"✅ Runtime PKI profile generated ({profile})")
-    
-def validate_qkd_policy(policy):
-    """
-    Validate runtime QKD policy values.
-    """
 
+# ---------------------------------------------------------------------------
+# BUILD RUNTIME QKD POLICY
+# ---------------------------------------------------------------------------
+
+
+def validate_qkd_policy(policy: Dict[str, Any]) -> None:
     required_keys = [
         "rekey_enabled",
         "interval_seconds",
@@ -313,8 +394,7 @@ def validate_qkd_policy(policy):
 
     if int(policy["key_batch_size"]) > int(policy["max_installed_keys"]):
         raise ValueError(
-            "qkd_policy.key_batch_size cannot be greater than "
-            "qkd_policy.max_installed_keys"
+            "qkd_policy.key_batch_size cannot be greater than qkd_policy.max_installed_keys"
         )
 
     if int(policy["key_ttl_seconds"]) < 0:
@@ -325,40 +405,25 @@ def validate_qkd_policy(policy):
 
     if bool(policy["purge_on_kme_loss"]) and int(policy["purge_after_seconds"]) < 1:
         raise ValueError(
-            "qkd_policy.purge_after_seconds must be >= 1 when "
-            "qkd_policy.purge_on_kme_loss is true"
+            "qkd_policy.purge_after_seconds must be >= 1 when qkd_policy.purge_on_kme_loss is true"
         )
 
 
 def build_runtime_qkd_policy(
-    out_dir,
-    policy_template,
-    rekey_enabled=None,
-    interval_seconds=None,
-    key_batch_size=None,
-    max_installed_keys=None,
-    key_ttl_seconds=None,
-    purge_on_kme_loss=None,
-    purge_after_seconds=None,
-):
-    """
-    Build config/runtime/qkd_policy.yaml from the default policy template.
-
-    Source:
-        config/inventory/qkd_policy.yaml
-
-    Destination:
-        config/runtime/qkd_policy.yaml
-
-    CLI values override the template only when explicitly provided.
-    """
-
-    policy = policy_template.get("qkd_policy", {}).copy()
+    out_dir: Any,
+    policy_template: Dict[str, Any],
+    rekey_enabled: Optional[bool] = None,
+    interval_seconds: Optional[int] = None,
+    key_batch_size: Optional[int] = None,
+    max_installed_keys: Optional[int] = None,
+    key_ttl_seconds: Optional[int] = None,
+    purge_on_kme_loss: Optional[bool] = None,
+    purge_after_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    policy = copy.deepcopy(policy_template.get("qkd_policy", {}))
 
     if not policy:
-        raise ValueError(
-            "Missing qkd_policy section in config/inventory/qkd_policy.yaml"
-        )
+        raise ValueError("Missing qkd_policy section in policy template")
 
     overrides = {
         "rekey_enabled": rekey_enabled,
@@ -376,39 +441,103 @@ def build_runtime_qkd_policy(
 
     validate_qkd_policy(policy)
 
-    runtime_policy = {
-        "qkd_policy": policy
-    }
-
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    runtime_policy = {"qkd_policy": policy}
+    out_dir = _runtime_dir(out_dir)
     out_file = out_dir / "qkd_policy.yaml"
+    _write_yaml(out_file, runtime_policy)
 
-    with open(out_file, "w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            runtime_policy,
-            f,
-            sort_keys=False
-        )
-
-    print("✅ Runtime QKD policy generated")
-
+    print("OK runtime QKD policy generated")
     return runtime_policy
 
 
-# ----------------------------------------
-# Wrapper top level builder 
-# ----------------------------------------
+# ---------------------------------------------------------------------------
+# Top-level compatibility builder
+# ---------------------------------------------------------------------------
 
-def build_full_inventory(devices, topology, hub, mode, out_dir, pki_profile="self_signed"):
 
-    pairs = build_pairs(devices, topology, hub)
+def build_full_inventory(
+    devices: List[Dict[str, Any]],
+    topology: str,
+    hub: Optional[str],
+    mode: str,
+    out_dir: Any,
+    pki_profile: str = "self_signed",
+    extra_links: Optional[List[Dict[str, Any]]] = None,
+    links: Optional[List[Dict[str, Any]]] = None,
+    inventory_name: Optional[str] = None,
+    source_path: Optional[Any] = None,
+) -> List[List[str]]:
+    """
+    Public compatibility entrypoint used by qkd_orchestrator.py.
 
-    assign_links(devices, pairs, topology, hub)
+    New behavior:
+        devices + explicit links -> topology_builder -> runtime files
 
-    build_inventory(devices, pairs, out_dir=out_dir, mode=mode)
-    
+    If an older qkd_orchestrator.py does not pass links, this function reads
+    links from source_path as a bridge.
+    """
+    normalized_devices = _normalize_legacy_device_fields(devices)
+    runtime_links = _normalize_links_argument(
+        links=links,
+        extra_links=extra_links,
+        source_path=source_path,
+    )
+
+    topology_type = str(topology or "links").lower()
+    if topology_type in ("ring", "chain", "pair", "hub"):
+        raise ValueError(
+            f"topology: {topology_type} is no longer supported. "
+            "Use topology: links and declare every link explicitly under links:."
+        )
+
+    if not runtime_links and topology_type in ("links", "explicit"):
+        raise ValueError(
+            "No runtime links found. Use topology: links with a non-empty links: section."
+        )
+
+    inventory = {
+        "name": inventory_name or "runtime_topology",
+        "topology": topology_type,
+        "mode": mode,
+        "pki_profile": pki_profile,
+        "devices": normalized_devices,
+        "links": runtime_links,
+    }
+
+    # Preserve a default platform if all devices share one. Mixed platform
+    # inventories intentionally do not get a single platform value.
+    platforms = {
+        str(device.get("platform", "")).lower()
+        for device in normalized_devices
+        if device.get("platform")
+    }
+    if len(platforms) == 1:
+        inventory["platform"] = next(iter(platforms))
+
+    result = build_inventory(
+        inventory,
+        out_dir=out_dir,
+        source_path=source_path,
+    )
+
     build_runtime_pki_profile(pki_profile, out_dir)
 
+    final_links = result["topology"].get("links", [])
+    pairs = [[link["node_a"], link["node_b"]] for link in final_links]
+
+    print(f"OK link-driven inventory generated ({mode})")
+    print(f"OK total runtime links: {len(final_links)}")
+
     return pairs
+
+
+__all__ = [
+    "generate_macsec_keys",
+    "build_inventory",
+    "build_pairs",
+    "assign_links",
+    "build_runtime_pki_profile",
+    "validate_qkd_policy",
+    "build_runtime_qkd_policy",
+    "build_full_inventory",
+]
