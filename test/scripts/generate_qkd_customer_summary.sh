@@ -7,7 +7,7 @@ OUT_DIR="${2:-$LOG_DIR}"
 TITLE="${3:-Customer QKD Health Summary}"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 PY_TOOL="$REPO_ROOT/lib/qkd/log_summary.py"
 
 if [ ! -f "$PY_TOOL" ]; then
