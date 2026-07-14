@@ -1,31 +1,35 @@
 #!/bin/sh
 
-SRC="10.100.255.7"
-DURATION="${1:-720}"
-COUNT_PER_ROUND="${2:-5}"
-SLEEP_BETWEEN_ROUNDS="${3:-2}"
+set -eu
+
+SRC="${SRC:-10.100.255.7}"
+DURATION="${1:-${DURATION:-720}}"
+COUNT_PER_ROUND="${2:-${COUNT_PER_ROUND:-5}}"
+SLEEP_BETWEEN_ROUNDS="${3:-${SLEEP_BETWEEN_ROUNDS:-2}}"
+OUT_DIR="${OUT_DIR:-/var/tmp}"
+LOG_PREFIX="${LOG_PREFIX:-ring_mka_rotation_test}"
 
 TEST_TS=$(date '+%Y%m%d_%H%M%S')
-OUT="/var/tmp/ring_mka_rotation_test_${TEST_TS}.log"
+OUT="${OUT_DIR}/${LOG_PREFIX}_${TEST_TS}.log"
 
-DESTS="
+DESTS="${DESTS:-
 acx2:10.100.255.9
 acx3:10.100.255.8
 acx4:10.100.255.11
 acx5:10.100.255.10
-"
+}"
 
-QKD_IFACES="
+QKD_IFACES="${QKD_IFACES:-
 et-2/0/4
 et-2/0/2
-"
+}"
 
-QKD_CAS="
+QKD_CAS="${QKD_CAS:-
 CA1:QKD_CA1
 CA9:QKD_CA9
-"
+}"
 
-QKD_LOG_GLOB="/var/tmp/qkd_debug*.log"
+QKD_LOG_GLOB="${QKD_LOG_GLOB:-/var/tmp/qkd_debug*.log}"
 
 START=$(date +%s)
 END=$((START + DURATION))
@@ -93,7 +97,7 @@ capture_qkd_timeline()
     section "$LABEL - QKD rotation timeline"
 
     run_shell "qkd scheduled/pending/promoted timeline" \
-        'for f in /var/tmp/qkd_debug*.log; do [ -f "$f" ] || continue; echo "### $f"; grep -E "KEYCHAIN ROTATION START|INSTALL-KEY SCHEDULE|STATE SAVED|pending_key_id|next_start_time|MKA KEY CONFIRMED|PENDING KEY PROMOTED|PENDING_KEY_NOT_CONFIRMED|KEYCHAIN ROTATION DONE|KEYCHAIN INSTALL FAIL|INSTALL-KEY ABORTED|MACSEC NOT INUSE|UNKNOWN_CAK|DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR" "$f" | tail -120; done'
+        "for f in $QKD_LOG_GLOB; do [ -f \"\$f\" ] || continue; echo \"### \$f\"; grep -E \"KEYCHAIN ROTATION START|INSTALL-KEY SCHEDULE|STATE SAVED|pending_key_id|next_start_time|MKA KEY CONFIRMED|PENDING KEY PROMOTED|PENDING_KEY_NOT_CONFIRMED|KEYCHAIN ROTATION DONE|KEYCHAIN INSTALL FAIL|INSTALL-KEY ABORTED|MACSEC NOT INUSE|UNKNOWN_CAK|DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR\" \"\$f\" | tail -120; done"
 }
 
 capture_keychain_config()
@@ -158,10 +162,10 @@ capture_recent_events()
     'show log messages | match "DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR|MACSEC_SC_CAK_ACTIVATED|MACSEC_SC_PRIMARY_CAK_IN_USE|LACP.*Detached|LACP.*Expired|LACP.*Defaulted|ADJDOWN|RPD_ISIS.*DOWN|link down|commit failed|authentication-key-chains not defined|May not be configured" | last 160'
 
     run_shell "qkd debug recent errors" \
-        'for f in /var/tmp/qkd_debug*.log; do [ -f "$f" ] || continue; echo "### $f"; grep -E "ERROR|FAIL|FAILED|KEYCHAIN|MKA|PENDING|PROMOTED|ROTATION|BOOTSTRAP|INSTALL-KEY|MACSEC|SSH|DEC|ENC|KME" "$f" | tail -80; done'
+        "for f in $QKD_LOG_GLOB; do [ -f \"\$f\" ] || continue; echo \"### \$f\"; grep -E \"ERROR|FAIL|FAILED|KEYCHAIN|MKA|PENDING|PROMOTED|ROTATION|BOOTSTRAP|INSTALL-KEY|MACSEC|SSH|DEC|ENC|KME\" \"\$f\" | tail -80; done"
 
     run_shell "qkd debug recent tail" \
-        'for f in /var/tmp/qkd_debug*.log; do [ -f "$f" ] || continue; echo "### $f"; tail -40 "$f"; done'
+        "for f in $QKD_LOG_GLOB; do [ -f \"\$f\" ] || continue; echo \"### \$f\"; tail -40 \"\$f\"; done"
 }
 
 ping_round()
