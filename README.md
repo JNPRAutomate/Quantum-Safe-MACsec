@@ -32,7 +32,7 @@ The system is split into network encryption, key management, and orchestration/c
 
 ### 3.1 What this view shows
 
-- **Data plane**: MACsec-secured ACX links.
+- **Data plane**: MACsec-secured Juniper devices links.
 - **Key service plane**: one KME/QKD service context per participating node/link set.
 - **Control plane**: orchestrators generate artifacts, install certs, deploy scripts/config, and validate runtime.
 

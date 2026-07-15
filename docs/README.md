@@ -20,6 +20,3 @@ Use this as the starting point for GitHub readers:
 6. `docs/pqc/GLOSSARY.md`
 7. `docs/qkd/qkd_onbox_runtime_lld.md`
 
-Customer-downloadable PDF bundle:
-
-- `docs/Quantum-Safe-MACsec_Documentation.pdf`

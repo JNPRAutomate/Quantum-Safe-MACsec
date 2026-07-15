@@ -2,16 +2,16 @@
 
 ## Purpose
 
-`kme_orchestrator.py` manages the KME infrastructure lifecycle on the remote host:
+After cloning [github etsi014 test-suite](https://github.com/cybermerqury/etsi-gs-qkd-014-testsuite) which provides the basic test environment infrastructure as per [ETSI GS QKD 014 v1.1.1](https://www.etsi.org/deliver/etsi_gs/QKD/001_099/014/01.01.01_60/gs_QKD014v010101p.pdf) standard, this repository `kme_orchestrator.py` manages the KME infrastructure lifecycle on the remote host:
 
-- host bootstrap and SSH access
-- remote dependency installation
+- host bootstrap and SSH access (Linux setup)
+- remote dependencies installation (docker, rust,etc.)
 - ETSI repository preparation
-- compose generation/deployment
+- docker compose generation/deployment
 - certificate installation (consuming QKD PKI output)
 - KME restart/validate/status/destroy workflows
 
-It does **not** generate PKI.
+It does **not** generate PKI, since this is driven by the `qkd_orchestrator.py`  script.
 
 ## Scope owned by KME orchestrator
 
