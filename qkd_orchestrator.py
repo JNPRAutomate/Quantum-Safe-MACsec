@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 
 import argparse
 import copy
+import json
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,65 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def build_sae(i: int) -> str:
     return f"{PKI['SAE_PREFIX']}_{str(i).zfill(PKI['SAE_PAD'])}"
+
+
+def _device_kme_ip(device: Dict[str, Any]) -> Optional[str]:
+    value = device.get("kme_ip")
+    if value:
+        return str(value)
+    kme = device.get("kme")
+    if isinstance(kme, dict):
+        ip = kme.get("ip") or kme.get("address")
+        return str(ip) if ip else None
+    if isinstance(kme, str):
+        return str(kme)
+    return None
+
+
+def build_pki_runtime_signature(runtime_devices: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    devices = []
+    kme_ips = []
+
+    for name in sorted(runtime_devices.keys()):
+        device = runtime_devices.get(name) or {}
+        sae_id = (
+            device.get("sae_id")
+            or (device.get("qkd") or {}).get("sae_id")
+            or ""
+        )
+        kme_ip = _device_kme_ip(device) or ""
+        kme_port = (
+            (device.get("kme") or {}).get("port")
+            if isinstance(device.get("kme"), dict)
+            else device.get("kme_port")
+        )
+        devices.append(
+            {
+                "name": str(name),
+                "sae_id": str(sae_id),
+                "kme_ip": str(kme_ip),
+                "kme_port": int(kme_port) if kme_port is not None else None,
+            }
+        )
+        if kme_ip:
+            kme_ips.append(str(kme_ip))
+
+    unique_kme_ips = sorted(set(kme_ips))
+
+    return {
+        "version": 1,
+        "devices": devices,
+        "unique_kme_ips": unique_kme_ips,
+        "kme_count": len(unique_kme_ips),
+    }
+
+
+def pki_signature_file(profile: str) -> Path:
+    if profile == "self_signed":
+        return BASE_DIR / CONFIG["self_signed_dir"] / ".runtime_signature.json"
+    if profile == "hierarchical_ca":
+        return BASE_DIR / CONFIG["hierarchical_dir"] / ".runtime_signature.json"
+    raise ValueError(f"Unsupported PKI profile for signature file: {profile}")
 
 
 def repo_path(path: Any) -> Path:
@@ -233,6 +293,20 @@ def parse_args():
     create.add_argument("--key-ttl", type=int, default=None)
     create.add_argument("--purge-on-kme-loss", action="store_true", default=None)
     create.add_argument("--purge-after", type=int, default=None)
+
+    create.add_argument(
+        "--batch-mode",
+        dest="batch_enabled",
+        action="store_true",
+        default=None,
+        help="Enable key-batch rotation mode (multiple keys staged per commit).",
+    )
+    create.add_argument(
+        "--no-batch-mode",
+        dest="batch_enabled",
+        action="store_false",
+        help="Disable key-batch rotation mode and use single-key commit cadence.",
+    )
 
     deploy = subparsers.add_parser(
         "deploy",
@@ -771,6 +845,7 @@ def handle_create(args):
         key_ttl_seconds=args.key_ttl,
         purge_on_kme_loss=args.purge_on_kme_loss,
         purge_after_seconds=args.purge_after,
+        batch_enabled=args.batch_enabled,
     )
 
     runtime_devices = load_runtime_devices()
@@ -785,6 +860,8 @@ def handle_create(args):
 
     runtime_pki = load_runtime_pki_profile()
     profile = runtime_pki["pki"]["profile"]
+    signature_file = pki_signature_file(profile)
+    expected_signature = build_pki_runtime_signature(runtime_devices)
 
     if profile == "self_signed":
         marker_file = BASE_DIR / CONFIG["self_signed_dir"] / "kme" / "kme_001.pem"
@@ -799,11 +876,28 @@ def handle_create(args):
     else:
         raise ValueError(f"Unsupported PKI profile: {profile}")
 
-    if not marker_file.exists():
+    current_signature = None
+    if signature_file.exists():
+        try:
+            current_signature = json.loads(signature_file.read_text(encoding="utf-8"))
+        except Exception:
+            current_signature = None
+
+    signature_matches = current_signature == expected_signature
+    should_regenerate_pki = (not marker_file.exists()) or (not signature_matches)
+
+    if should_regenerate_pki:
+        if marker_file.exists() and not signature_matches:
+            print("PKI runtime signature changed - regenerating PKI material")
         if profile == "self_signed":
             build_self_signed_pki(devices, profile)
         elif profile == "hierarchical_ca":
             build_hierarchical_pki()
+        signature_file.parent.mkdir(parents=True, exist_ok=True)
+        signature_file.write_text(
+            json.dumps(expected_signature, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         print("OK PKI generated")
         print_manual_kme_copy_instructions(profile)
     else:
