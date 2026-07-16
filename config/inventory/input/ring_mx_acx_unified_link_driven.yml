@@ -8,7 +8,7 @@ devices:
   platform: mx
   ip: 100.123.113.151
   kme:
-    ip: 100.123.252.15
+    ip: 100.123.252.10
     port: 8443
   interfaces:
   - et-0/0/0
@@ -18,7 +18,7 @@ devices:
   platform: mx
   ip: 100.123.113.152
   kme:
-    ip: 100.123.252.16
+    ip: 100.123.252.11
     port: 8443
   interfaces:
   - et-0/0/0
@@ -28,7 +28,7 @@ devices:
   platform: mx
   ip: 100.123.113.2
   kme:
-    ip: 100.123.252.17
+    ip: 100.123.252.12
     port: 8443
   interfaces:
   - et-0/0/7
@@ -40,7 +40,7 @@ devices:
   platform: mx
   ip: 100.123.113.4
   kme:
-    ip: 100.123.252.18
+    ip: 100.123.252.13
     port: 8443
   interfaces:
   - et-0/0/4
@@ -52,7 +52,7 @@ devices:
   platform: mx
   ip: 100.123.113.3
   kme:
-    ip: 100.123.252.19
+    ip: 100.123.252.14
     port: 8443
   interfaces:
   - et-0/0/0
@@ -64,7 +64,7 @@ devices:
   platform: mx
   ip: 100.123.113.1
   kme:
-    ip: 100.123.252.20
+    ip: 100.123.252.15
     port: 8443
   interfaces:
   - et-0/0/4
@@ -76,7 +76,7 @@ devices:
   platform: acx
   ip: 100.123.170.202
   kme:
-    ip: 100.123.252.10
+    ip: 100.123.252.16
     port: 8443
   interfaces:
   - et-2/0/0
@@ -87,7 +87,7 @@ devices:
   platform: acx
   ip: 100.123.170.201
   kme:
-    ip: 100.123.252.11
+    ip: 100.123.252.17
     port: 8443
   interfaces:
   - et-2/0/0
@@ -97,7 +97,7 @@ devices:
   platform: acx
   ip: 100.123.170.203
   kme:
-    ip: 100.123.252.12
+    ip: 100.123.252.18
     port: 8443
   interfaces:
   - et-2/0/0
@@ -108,7 +108,7 @@ devices:
   platform: acx
   ip: 100.123.182.2
   kme:
-    ip: 100.123.252.13
+    ip: 100.123.252.19
     port: 8443
   interfaces:
   - et-0/0/0
@@ -118,7 +118,7 @@ devices:
   platform: acx
   ip: 100.123.182.1
   kme:
-    ip: 100.123.252.14
+    ip: 100.123.252.20
     port: 8443
   interfaces:
   - et-0/0/0

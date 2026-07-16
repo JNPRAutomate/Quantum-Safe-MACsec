@@ -1,5 +1,6 @@
 qkd_policy:
-  rekey_enabled: false
+  rekey_enabled: true
+  batch_enabled: true
   interval_seconds: 60
 
   key_batch_size: 5

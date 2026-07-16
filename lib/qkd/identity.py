@@ -171,7 +171,7 @@ def rpc_output_to_text(rsp):
     return str(rsp)
 
 
-def shell_output_has_error(text):
+def shell_output_has_error(text, include_failed_marker=True):
     if not text:
         return False
     markers = [
@@ -184,9 +184,11 @@ def shell_output_has_error(text):
         "Syntax error",
         "No such file or directory",
         "cannot",
-        "failed",
         "error:",
     ]
+    if include_failed_marker:
+        # Some valid JSON status payloads include values like "ENC_FAILED".
+        markers.append("failed")
     low = text.lower()
     for marker in markers:
         if marker.lower() in low:
@@ -194,7 +196,7 @@ def shell_output_has_error(text):
     return False
 
 
-def pyez_shell_cmd(device, command, timeout=60):
+def pyez_shell_cmd(device, command, timeout=60, include_failed_marker=True):
     device = normalize_device(device)
     name = device_name(device)
     host = device_host(device)
@@ -208,7 +210,8 @@ def pyez_shell_cmd(device, command, timeout=60):
         dev.open()
         rsp = dev.rpc.request_shell_execute(command=command)
         text = rpc_output_to_text(rsp)
-        return CommandResult(1 if shell_output_has_error(text) else 0, text.strip(), "")
+        has_error = shell_output_has_error(text, include_failed_marker=include_failed_marker)
+        return CommandResult(1 if has_error else 0, text.strip(), "")
     except Exception as e:
         return CommandResult(1, "", str(e))
     finally:
@@ -218,8 +221,13 @@ def pyez_shell_cmd(device, command, timeout=60):
             pass
 
 
-def ssh_deploy_cmd(device, command, timeout=30):
-    return pyez_shell_cmd(device=device, command=command, timeout=timeout)
+def ssh_deploy_cmd(device, command, timeout=30, include_failed_marker=True):
+    return pyez_shell_cmd(
+        device=device,
+        command=command,
+        timeout=timeout,
+        include_failed_marker=include_failed_marker,
+    )
 
 
 def ssh_cmd(device, command, user, timeout=30):
@@ -232,7 +240,7 @@ def ssh_cmd(device, command, user, timeout=30):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
 
 
-def ssh_script_user_onbox_cmd(device, command, timeout=30):
+def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker=True):
     device = normalize_device(device)
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
@@ -254,7 +262,12 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30):
     )
     if validate_verbose():
         print("REMOTE_CMD=", remote_cmd)
-    return ssh_deploy_cmd(device=device, command=remote_cmd, timeout=timeout)
+    return ssh_deploy_cmd(
+        device=device,
+        command=remote_cmd,
+        timeout=timeout,
+        include_failed_marker=include_failed_marker,
+    )
 
 
 # -------------------------------------------------
@@ -807,10 +820,32 @@ def check_qkd_status_as_script_user(device):
         if not iface:
             continue
         cmd = f"op qkd_onbox.py action status iface {iface}"
-        result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
-        if result.returncode != 0:
-            raise RuntimeError(f"QKD status failed on {name} iface={iface} as {script_user}\nstdout={result.stdout}\nstderr={result.stderr}")
-        raw = (result.stdout or "").strip()
+        result = None
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            timeout = 30 if attempt == 1 else 45
+            result = ssh_script_user_onbox_cmd(
+                device,
+                cmd,
+                timeout=timeout,
+                include_failed_marker=False,
+            )
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            combined = f"{stdout}\n{stderr}".lower()
+            is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
+            if result.returncode == 0:
+                break
+            if is_timeout and attempt < max_attempts:
+                print(f"[WARN] qkd status timeout on {name} iface={iface} attempt={attempt}/{max_attempts}; retrying")
+                continue
+            raise RuntimeError(
+                f"QKD status failed on {name} iface={iface} as {script_user}\n"
+                f"stdout={stdout}\n"
+                f"stderr={stderr}"
+            )
+
+        raw = ((result.stdout if result else "") or "").strip()
         try:
             status = json.loads(raw)
             ca_name = status.get("ca_name")

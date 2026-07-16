@@ -408,6 +408,9 @@ def validate_qkd_policy(policy: Dict[str, Any]) -> None:
             "qkd_policy.purge_after_seconds must be >= 1 when qkd_policy.purge_on_kme_loss is true"
         )
 
+    if "batch_enabled" in policy and not isinstance(policy["batch_enabled"], bool):
+        raise ValueError("qkd_policy.batch_enabled must be true or false")
+
 
 def build_runtime_qkd_policy(
     out_dir: Any,
@@ -419,6 +422,7 @@ def build_runtime_qkd_policy(
     key_ttl_seconds: Optional[int] = None,
     purge_on_kme_loss: Optional[bool] = None,
     purge_after_seconds: Optional[int] = None,
+    batch_enabled: Optional[bool] = None,
 ) -> Dict[str, Any]:
     policy = copy.deepcopy(policy_template.get("qkd_policy", {}))
 
@@ -433,11 +437,15 @@ def build_runtime_qkd_policy(
         "key_ttl_seconds": key_ttl_seconds,
         "purge_on_kme_loss": purge_on_kme_loss,
         "purge_after_seconds": purge_after_seconds,
+        "batch_enabled": batch_enabled,
     }
 
     for key, value in overrides.items():
         if value is not None:
             policy[key] = value
+
+    # Default to enabled to preserve the new batch-first runtime behavior.
+    policy.setdefault("batch_enabled", True)
 
     validate_qkd_policy(policy)
 
