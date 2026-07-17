@@ -285,9 +285,7 @@ def clean_device(
 
         config_body = "; ".join(config_cmds)
 
-        config_cleanup_cmd = (
-            f"cli -c 'configure; {config_body}; commit no-synchronize; exit'"
-        )
+        config_cleanup_body = f"configure; {config_body}; {{commit_cmd}}; exit"
 
         file_cleanup_parts = [
             f"rm -f {event_script_dir}/{script_name}",
@@ -529,6 +527,13 @@ def clean_device(
 
         try:
             dual_re = has_dual_re()
+            commit_cmd = "commit no-synchronize"
+            config_cleanup_cmd = (
+                "cli -c '"
+                + config_cleanup_body.format(commit_cmd=commit_cmd)
+                + "'"
+            )
+            peer_cleanup_failures = []
 
             run_shell(
                 "config cleanup",
@@ -537,11 +542,13 @@ def clean_device(
             )
 
             if dual_re:
-                re1_cfg_shell = f"cli -c 'configure; {config_body}; commit; exit'"
-                run_re1_cli(
+                re1_cfg_shell = f"cli -c 'configure; {config_body}; commit no-synchronize; exit'"
+                ok_re1_cfg = run_re1_cli(
                     "re1 config cleanup",
                     re1_cfg_shell,
                 )
+                if not ok_re1_cfg:
+                    peer_cleanup_failures.append("re1 config cleanup")
 
             run_shell(
                 "file/cert/runtime cleanup",
@@ -550,10 +557,12 @@ def clean_device(
             )
 
             if dual_re:
-                run_re1_cli(
+                ok_re1_files = run_re1_cli(
                     "re1 file/cert/runtime cleanup",
                     file_cleanup_cmd,
                 )
+                if not ok_re1_files:
+                    peer_cleanup_failures.append("re1 file/cert/runtime cleanup")
 
             failures = []
 
@@ -668,6 +677,12 @@ def clean_device(
                     + "\n".join(file_leftovers)
                 )
 
+            if peer_cleanup_failures:
+                failures.append(
+                    "peer RE cleanup incomplete:\n"
+                    + "\n".join(peer_cleanup_failures)
+                )
+
             if failures:
                 print(f"[FAIL] Device clean verification failed: {name}")
 
@@ -679,7 +694,7 @@ def clean_device(
             if user_cleanup_cmds:
                 user_cleanup_body = "; ".join(user_cleanup_cmds)
                 user_cleanup_cmd = (
-                    f"cli -c 'configure; {user_cleanup_body}; commit no-synchronize; exit'"
+                    f"cli -c 'configure; {user_cleanup_body}; {commit_cmd}; exit'"
                 )
 
                 run_shell(
@@ -689,11 +704,15 @@ def clean_device(
                 )
 
                 if dual_re:
-                    re1_user_shell = f"cli -c 'configure; {user_cleanup_body}; commit; exit'"
-                    run_re1_cli(
+                    re1_user_shell = f"cli -c 'configure; {user_cleanup_body}; commit no-synchronize; exit'"
+                    ok_re1_users = run_re1_cli(
                         "re1 login users cleanup",
                         re1_user_shell,
                     )
+                    if not ok_re1_users:
+                        print(f"[FAIL] Device clean verification failed: {name}")
+                        print("peer RE cleanup incomplete:\nre1 login users cleanup")
+                        return False
 
                 removed_users = []
                 if remove_script_user:
@@ -707,6 +726,13 @@ def clean_device(
                         "post-user verification skipped",
                         flush=True,
                     )
+
+            if dual_re:
+                run_shell(
+                    "final commit synchronize",
+                    "cli -c 'configure; commit synchronize; exit'",
+                    strict=True,
+                )
 
             print(f"[OK] Device clean complete: {name}")
             return True
