@@ -1,27 +1,27 @@
 # README_AGGIORNAMENTO_FINALE.md
 
-# KME Orchestrator - Aggiornamento finale architettura e stato operativo
+# KME Orchestrator - Final architecture and operational status update
 
-Questo documento aggiorna lo stato del `kme_orchestrator.py` e dei moduli `lib/kme/*` dopo il refactor, il troubleshooting completo e la validazione del ciclo operativo `destroy -> create -> status -> restart -> status`.
+This document updates the status of `kme_orchestrator.py` and `lib/kme/*` modules after refactor, complete troubleshooting, and validation of the operational cycle `destroy -> create -> status -> restart -> status`.
 
-Lo scopo del documento è mantenere traccia dell'architettura corrente, delle decisioni tecniche prese, dei bug risolti e dei comandi da usare per ricostruire e validare l'ambiente KME/QKD.
+The purpose of this document is to track the current architecture, technical decisions made, resolved bugs, and the commands to rebuild and validate the KME/QKD environment.
 
 ---
 
-## 1. Obiettivo dell'orchestrator
+## 1. Orchestrator objective
 
-Il `kme_orchestrator.py` è il punto di ingresso CLI per gestire il ciclo di vita dell'ambiente KME basato su ETSI GS QKD 014 Reference Implementation.
+`kme_orchestrator.py` is the CLI entry point for managing the lifecycle of the KME environment based on ETSI GS QKD 014 Reference Implementation.
 
-La direzione architetturale è chiara:
+The architectural direction is clear:
 
-- CLI pubblico semplice
-- logica tecnica separata nei moduli `lib/kme/`
-- workflow completo automatizzato
-- nessuna copia manuale di certificati
-- nessuna inizializzazione manuale del database
-- nessun comando Docker manuale richiesto durante il normale ciclo operativo
+- simple public CLI
+- technical logic separated into `lib/kme/` modules
+- fully automated complete workflow
+- no manual certificate copy
+- no manual database initialization
+- no manual Docker commands required during normal operational cycle
 
-L'orchestrator deve poter gestire:
+The orchestrator must be able to manage:
 
 ```text
 create
@@ -33,13 +33,13 @@ stop
 destroy
 ```
 
-I dettagli interni come `bootstrap`, `install-host`, `build-env`, `build-image`, `install-certs` e `db-init` sono moduli Python interni e vengono richiamati dal workflow `create`.
+Internal details such as `bootstrap`, `install-host`, `build-env`, `build-image`, `install-certs`, and `db-init` are internal Python modules and are invoked by the `create` workflow.
 
 ---
 
-## 2. CLI pubblico semplificato
+## 2. Simplified public CLI
 
-La CLI finale espone solo i comandi operativi realmente utili.
+The final CLI exposes only the operational commands that are truly useful.
 
 ```bash
 python3 kme_orchestrator.py create
@@ -51,7 +51,7 @@ python3 kme_orchestrator.py stop
 python3 kme_orchestrator.py destroy --force
 ```
 
-Comandi interni non esposti come workflow utente principale:
+Internal commands not exposed as the main user workflow:
 
 ```text
 bootstrap
@@ -63,13 +63,13 @@ db-init
 start
 ```
 
-Questi step restano implementati nei moduli `lib/kme/`, ma sono orchestrati direttamente da `create`.
+These steps remain implemented in `lib/kme/` modules, but are orchestrated directly by `create`.
 
 ---
 
-## 3. Workflow completo di create
+## 3. Complete create workflow
 
-Il workflow finale di `create` è:
+The final `create` workflow is:
 
 ```text
 create
@@ -80,27 +80,27 @@ create
   install-certs
   db-init
   deploy
-  validate opzionale
+  validate optional
 ```
 
-Tabella dei moduli coinvolti:
+Table of involved modules:
 
-| Step | Modulo | Responsabilità |
+| Step | Module | Responsibility |
 |---|---|---|
-| bootstrap | `lib/kme/bootstrap.py` | prepara SSH, chiave, alias e workspace remoto |
-| install-host | `lib/kme/install_host.py` | installa prerequisiti OS, Docker, Compose, Rust/toolchain |
-| build-env | `lib/kme/build_env.py` | clona/aggiorna repo ETSI, copia compose, crea directory e network |
+| bootstrap | `lib/kme/bootstrap.py` | prepares SSH, key, alias, and remote workspace |
+| install-host | `lib/kme/install_host.py` | installs OS prerequisites, Docker, Compose, Rust/toolchain |
+| build-env | `lib/kme/build_env.py` | clones/updates ETSI repo, copies compose, creates directories and network |
 | build-image | `lib/kme/build_image.py` | esegue `cargo build --release` e `docker build -t etsi-kme:local` |
-| install-certs | `lib/kme/cert_install.py` | installa certificati KME e trust bundle in `/certs` remoto |
-| db-init | `lib/kme/db_init.py` | crea la tabella PostgreSQL `keys` |
-| deploy | `lib/kme/deploy.py` | avvia container con `docker compose up -d` |
-| validate | `lib/kme/validate.py` | verifica runtime, container, immagine, rete, certificati |
+| install-certs | `lib/kme/cert_install.py` | installs KME certificates and trust bundle in remote `/certs` |
+| db-init | `lib/kme/db_init.py` | creates PostgreSQL table `keys` |
+| deploy | `lib/kme/deploy.py` | starts containers with `docker compose up -d` |
+| validate | `lib/kme/validate.py` | verifies runtime, containers, image, network, certificates |
 
 ---
 
-## 4. Stato operativo validato
+## 4. Validated operational status
 
-Lo stato corrente validato è:
+The currently validated state is:
 
 ```text
 bootstrap       OK
@@ -114,7 +114,7 @@ restart         OK
 validate        OK
 ```
 
-Container attesi dopo `create`:
+Expected containers after `create`:
 
 ```text
 andrea-qkd-postgres
@@ -122,13 +122,13 @@ andrea-kme01
 andrea-kme02
 ```
 
-Rete Docker attesa:
+Expected Docker network:
 
 ```text
 qkd_net
 ```
 
-Indirizzi nel lab corrente:
+Addresses in current lab:
 
 ```text
 andrea-kme01          192.168.2.10/24
@@ -138,15 +138,15 @@ andrea-qkd-postgres   192.168.2.30/24
 
 ---
 
-## 5. Configurazione lab.yaml
+## 5. lab.yaml configuration
 
-File principale:
+Main file:
 
 ```text
 config/kme/lab.yaml
 ```
 
-Sezioni principali:
+Main sections:
 
 ```yaml
 environment:
@@ -200,20 +200,20 @@ kme:
 
 ### Placeholder support
 
-Il placeholder:
+The placeholder:
 
 ```text
 {owner}
 ```
 
-viene espanso usando:
+is expanded using:
 
 ```yaml
 identity:
   owner: andrea
 ```
 
-Esempi:
+Examples:
 
 ```text
 {owner}-qkd-postgres -> andrea-qkd-postgres
@@ -221,7 +221,7 @@ Esempi:
 {owner}-kme02        -> andrea-kme02
 ```
 
-Questo è importante per evitare errori tipo:
+This is important to avoid errors such as:
 
 ```text
 no such service: {owner}-qkd-postgres
@@ -231,7 +231,7 @@ no such service: {owner}-qkd-postgres
 
 ## 6. Docker compose: service_name vs container_name
 
-È stata corretta una distinzione importante.
+An important distinction has been corrected.
 
 Nel file `lab.yaml`:
 
@@ -241,7 +241,7 @@ database:
   container_name: "{owner}-qkd-postgres"
 ```
 
-Regola corretta:
+Correct rule:
 
 ```text
 docker compose up -d usa service_name
@@ -260,7 +260,7 @@ ma:
 docker exec -i andrea-qkd-postgres psql -U db_user -d key_store
 ```
 
-Il modulo che implementa questa logica è:
+The module that implements this logic is:
 
 ```text
 lib/kme/db_init.py
@@ -268,7 +268,7 @@ lib/kme/db_init.py
 
 ---
 
-## 7. Database PostgreSQL
+## 7. PostgreSQL database
 
 Database:
 
@@ -276,7 +276,7 @@ Database:
 key_store
 ```
 
-Utente:
+User:
 
 ```text
 db_user
@@ -288,7 +288,7 @@ Container:
 andrea-qkd-postgres
 ```
 
-Tabella creata automaticamente da `db-init`:
+Table automatically created by `db-init`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS keys (
@@ -302,13 +302,13 @@ CREATE TABLE IF NOT EXISTS keys (
 );
 ```
 
-Il tipo `BYTEA` è il default corretto per `content` perché contiene materiale chiave binario.
+Type `BYTEA` is the correct default for `content` because it contains binary key material.
 
-### Race condition PostgreSQL risolta
+### PostgreSQL race condition resolved
 
-Durante il rebuild completo è emerso che il container PostgreSQL poteva risultare `Started`, ma il processo interno Postgres non era ancora pronto ad accettare connessioni su socket.
+During full rebuild, it emerged that the PostgreSQL container could appear as `Started`, but the internal Postgres process was not yet ready to accept socket connections.
 
-Errore osservato:
+Observed error:
 
 ```text
 psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed
@@ -316,19 +316,19 @@ No such file or directory
 Is the server running locally and accepting connections on that socket?
 ```
 
-Fix introdotto in `db_init.py`:
+Fix introduced in `db_init.py`:
 
 ```bash
 until docker exec andrea-qkd-postgres pg_isready -U db_user -d key_store >/dev/null 2>&1; do sleep 2; done
 ```
 
-Il wait avviene dopo:
+The wait happens after:
 
 ```bash
 docker compose up -d qkd-postgres
 ```
 
-e prima di:
+and before:
 
 ```bash
 psql -v ON_ERROR_STOP=1 -U db_user -d key_store
@@ -336,21 +336,21 @@ psql -v ON_ERROR_STOP=1 -U db_user -d key_store
 
 ---
 
-## 8. Certificati KME
+## 8. KME certificates
 
-La directory remota montata nei container KME è:
+The remote directory mounted in KME containers is:
 
 ```text
 /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation/certs
 ```
 
-Montata dentro il container come:
+Mounted inside container as:
 
 ```text
 /certs
 ```
 
-File minimi richiesti dai container:
+Minimum files required by containers:
 
 ```text
 root.crt
@@ -360,20 +360,20 @@ kme_002.crt
 kme_002.key
 ```
 
-Nel profilo `hierarchical_ca`, il trust bundle Juniper viene copiato come:
+In profile `hierarchical_ca`, the Juniper trust bundle is copied as:
 
 ```text
 trusted-juniper-ca-bundle.crt
 root.crt
 ```
 
-Questo è necessario perché il container ETSI si aspetta:
+This is necessary because ETSI container expects:
 
 ```text
 ETSI_014_REF_IMPL_TLS_ROOT_CRT=/certs/root.crt
 ```
 
-Bug risolto:
+Resolved bug:
 
 ```text
 Failed to build the tls configuration
@@ -381,23 +381,23 @@ calling fopen(/certs/root.crt, r)
 no such file
 ```
 
-Causa:
+Cause:
 
 ```text
-certificati non ancora copiati nel certs dir remoto
+certificates not yet copied into remote certs dir
 ```
 
 Fix:
 
 ```text
-lib/kme/cert_install.py integrato nel workflow create
+lib/kme/cert_install.py integrated into create workflow
 ```
 
 ---
 
 ## 9. Docker network lifecycle
 
-Rete usata:
+Network used:
 
 ```text
 qkd_net
@@ -409,7 +409,7 @@ Driver:
 ipvlan
 ```
 
-Config corrente:
+Current config:
 
 ```text
 subnet  : 192.168.2.0/24
@@ -418,29 +418,29 @@ parent  : ens33
 mode    : l2
 ```
 
-### Destroy aggiornato
+### Updated destroy
 
-`destroy.py` ora non deve limitarsi a:
+`destroy.py` must no longer be limited to:
 
 ```bash
 docker compose down -v
 ```
 
-ma deve rimuovere anche la rete esterna:
+but must also remove the external network:
 
 ```bash
 docker network inspect qkd_net >/dev/null 2>&1 && docker network rm qkd_net || true
 ```
 
-Fix importante: rimuovere escape HTML errati.
+Important fix: remove incorrect HTML escapes.
 
-Corretto:
+Correct:
 
 ```text
 >/dev/null 2>&1
 ```
 
-Errato:
+Incorrect:
 
 ```text
 &gt;/dev/null 2&gt;&1
@@ -448,28 +448,28 @@ Errato:
 
 ---
 
-## 10. Restart KME-only
+## 10. KME-only restart
 
-`restart.py` riavvia solo i container KME:
+`restart.py` restarts KME containers only:
 
 ```text
 andrea-kme01
 andrea-kme02
 ```
 
-Non tocca PostgreSQL:
+It does not touch PostgreSQL:
 
 ```text
 andrea-qkd-postgres
 ```
 
-Comando:
+Command:
 
 ```bash
 python3 kme_orchestrator.py restart --config config/kme/lab.yaml
 ```
 
-Comportamento validato:
+Validated behavior:
 
 ```text
 [OK] PostgreSQL container left untouched: andrea-qkd-postgres
@@ -479,7 +479,7 @@ docker restart andrea-kme01 andrea-kme02
 [OK] restart state updated
 ```
 
-Lo state file viene aggiornato con:
+State file is updated with:
 
 ```yaml
 restart:
@@ -493,7 +493,7 @@ restart:
   database_touched: false
 ```
 
-Dopo restart e status:
+After restart and status:
 
 ```text
 restart : OK
@@ -501,7 +501,7 @@ restart : OK
 
 ---
 
-## 11. Stato file lab-state.yaml
+## 11. lab-state.yaml status file
 
 File:
 
@@ -509,7 +509,7 @@ File:
 config/kme/state/lab-state.yaml
 ```
 
-Sezioni attese dopo ciclo completo:
+Expected sections after complete cycle:
 
 ```text
 bootstrap
@@ -523,15 +523,15 @@ restart
 validate
 ```
 
-Nota: dopo un semplice `destroy -> create -> status`, `restart` può risultare `MISSING` se il comando `restart` non è mai stato eseguito. Questo è normale.
+Note: after a simple `destroy -> create -> status`, `restart` may appear as `MISSING` if the `restart` command has never been executed. This is normal.
 
-Dopo:
+After:
 
 ```bash
 python3 kme_orchestrator.py restart --config config/kme/lab.yaml
 ```
 
-lo stato diventa:
+status becomes:
 
 ```text
 restart : OK
@@ -539,9 +539,9 @@ restart : OK
 
 ---
 
-## 12. Comandi validati
+## 12. Validated commands
 
-### Destroy completo
+### Full destroy
 
 ```bash
 python3 kme_orchestrator.py destroy \
@@ -549,14 +549,14 @@ python3 kme_orchestrator.py destroy \
   --force
 ```
 
-Atteso:
+Expected:
 
 ```text
 docker compose down -v
 docker network rm qkd_net
 ```
 
-### Create completo
+### Full create
 
 ```bash
 python3 kme_orchestrator.py create \
@@ -565,7 +565,7 @@ python3 kme_orchestrator.py create \
   --validate
 ```
 
-Atteso:
+Expected:
 
 ```text
 bootstrap OK
@@ -585,7 +585,7 @@ python3 kme_orchestrator.py status \
   --config config/kme/lab.yaml
 ```
 
-Atteso:
+Expected:
 
 ```text
 bootstrap       OK
@@ -593,7 +593,7 @@ install_host    OK
 build_env       OK
 build_image     OK
 cert_install    OK
-restart         OK, se restart è stato eseguito
+restart         OK, if restart has been executed
 validate        OK
 ```
 
@@ -604,7 +604,7 @@ python3 kme_orchestrator.py restart \
   --config config/kme/lab.yaml
 ```
 
-Atteso:
+Expected:
 
 ```text
 PostgreSQL container left untouched
@@ -615,21 +615,21 @@ restart state updated
 
 ---
 
-## 13. Validazione runtime corrente
+## 13. Current runtime validation
 
-Dopo `create` e `status`, sono stati verificati questi elementi:
+After `create` and `status`, these elements were verified:
 
 ```text
-SSH remoto OK
+Remote SSH OK
 Docker OK
 Docker Compose OK
 qkd_net OK
 etsi-kme:local OK
-docker-compose-kme.yml presente
-cert directory presente
-root.crt presente
-kme_001.crt/key presenti
-kme_002.crt/key presenti
+docker-compose-kme.yml present
+cert directory present
+root.crt present
+kme_001.crt/key present
+kme_002.crt/key present
 andrea-qkd-postgres Up
 andrea-kme01 Up
 andrea-kme02 Up
@@ -637,9 +637,9 @@ andrea-kme02 Up
 
 ---
 
-## 14. Controlli pre-commit consigliati
+## 14. Recommended pre-commit checks
 
-Prima del commit finale:
+Before final commit:
 
 ```bash
 grep -R "&gt;" lib/kme
@@ -648,12 +648,12 @@ grep -R "scp -O" lib/kme
 python3 -m py_compile kme_orchestrator.py lib/kme/*.py
 ```
 
-Atteso:
+Expected:
 
 ```text
-nessun escape HTML residuo
-nessun scp -O residuo
-nessun errore py_compile
+no residual HTML escapes
+no residual scp -O
+no py_compile errors
 ```
 
 Poi:
@@ -666,31 +666,31 @@ git commit -m "KME orchestrator v1 stable"
 
 ---
 
-## 15. Prossima fase: test funzionale QKD
+## 15. Next phase: functional QKD test
 
-L'orchestrator KME è ora stabile abbastanza per passare alla fase QKD funzionale.
+KME orchestrator is now stable enough to move to the functional QKD phase.
 
-La prossima validazione non è più infrastrutturale, ma applicativa:
+The next validation is no longer infrastructural, but application-level:
 
 ```text
 SAE/client -> KME -> enc_keys
 SAE/client -> KME -> dec_keys
 PostgreSQL keys populated
-key_ID coerente
-key coerente
-mTLS funzionante
+key_ID consistent
+key consistent
+mTLS working
 ```
 
-Sequenza logica:
+Logical sequence:
 
-1. verificare log KME
-2. testare `/enc_keys`
-3. verificare record nella tabella `keys`
-4. testare `/dec_keys` usando `key_ID`
-5. verificare che la chiave restituita sia la stessa
-6. solo dopo passare a integrazione ACX/MACsec
+1. verify KME logs
+2. test `/enc_keys`
+3. verify records in `keys` table
+4. test `/dec_keys` using `key_ID`
+5. verify the returned key is the same
+6. only then proceed to ACX/MACsec integration
 
-Comandi DB utili:
+Useful DB commands:
 
 ```bash
 docker exec -it andrea-qkd-postgres \
@@ -707,21 +707,21 @@ psql -U db_user -d key_store -c "SELECT id, master_sae_id, slave_sae_id, size, a
 
 ---
 
-## 16. Stato finale
+## 16. Final state
 
-Lo stato finale raggiunto è:
+Final state reached is:
 
 ```text
-KME orchestrator v1 stabile
-CLI pubblico semplificato
-workflow create end-to-end funzionante
-destroy pulisce container e rete
-cert_install automatico funzionante
-db_init automatico funzionante con wait PostgreSQL
-restart KME-only funzionante e tracciato nello state
-status coerente
+KME orchestrator v1 stable
+Simplified public CLI
+Working end-to-end create workflow
+destroy cleans containers and network
+cert_install automatic and working
+db_init automatic and working with PostgreSQL wait
+KME-only restart working and tracked in state
+status consistent
 validate OK
 container KME e PostgreSQL running
 ```
 
-Da qui in avanti il focus passa dal lifecycle KME al test QKD applicativo e poi all'integrazione MACsec.
+From this point forward, focus moves from KME lifecycle to application-level QKD testing, then to MACsec integration.

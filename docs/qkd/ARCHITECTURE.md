@@ -60,6 +60,75 @@ PKI outputs are generated in:
 - `certs/self_signed/` or
 - `certs/hierarchical_ca/`
 
+## Secrets and credential handling
+
+Runtime login credentials must not be committed in cleartext in repository YAML files.
+
+Current architecture supports secret injection through environment placeholders in `config/inventory/inventory_base.yaml`:
+
+```yaml
+secrets:
+  default_user: admin
+  default_password: ${ENV:QKD_SCRIPT_PASSWORD}
+  script_user: admin
+```
+
+Resolution behavior:
+
+- placeholder format: `${ENV:VARIABLE_NAME}`
+- value is resolved at runtime by config loaders
+- if the environment variable is missing, orchestration fails fast with an explicit error
+
+This model is designed for external secret systems (for example HashiCorp Vault) where the secret is fetched just-in-time and injected into environment before running orchestrator commands.
+
+Example runtime workflow:
+
+```bash
+export QKD_SCRIPT_PASSWORD="$(vault kv get -field=default_password secret/qkd/orchestrator)"
+python3 qkd_orchestrator.py create --inventory ring_mx_acx_unified_link_driven --pki-profile hierarchical_ca
+python3 qkd_orchestrator.py deploy
+unset QKD_SCRIPT_PASSWORD
+```
+
+Validation tests:
+
+1. ENV variable present (must resolve password):
+
+```bash
+cd "/Users/aterren/Lavoro 2026/quantum 2026/newMACSEC39_ready_for_git"
+source venv/bin/activate
+export QKD_SCRIPT_PASSWORD='test123'
+
+python3 - <<'PY'
+from lib.common.config import load_inventory_base
+base = load_inventory_base()
+pw = base.get("secrets", {}).get("default_password")
+print("Password resolved:", bool(pw))
+print("Length:", len(pw) if pw else 0)
+PY
+```
+
+1. ENV variable missing (must fail fast):
+
+```bash
+unset QKD_SCRIPT_PASSWORD
+
+python3 - <<'PY'
+from lib.common.config import load_inventory_base
+try:
+  load_inventory_base()
+  print("ERROR: expected failure")
+except Exception as e:
+  print("OK, expected failure:")
+  print(e)
+PY
+```
+
+Local hardening recommendation:
+
+- restrict `config/inventory/inventory_base.yaml` to owner-only access (`chmod 600`)
+- keep secrets out of git history and pull from vault/secret manager at execution time
+
 ## Certificate identity naming policy
 
 For certificate identity values that may be interpreted as DNS-style host labels (notably SAN `dNSName` and legacy CN-based hostname checks), this project follows an LDH-safe convention:

@@ -3,7 +3,9 @@ system:
 
 secrets:
   default_user: admin
-  default_password: juniper1
+  # Avoid cleartext in git: resolve from environment at runtime.
+  # Example: export QKD_SCRIPT_PASSWORD='your-password'
+  default_password: ${ENV:QKD_SCRIPT_PASSWORD}
   script_user: admin
 kme:
   port: 8443

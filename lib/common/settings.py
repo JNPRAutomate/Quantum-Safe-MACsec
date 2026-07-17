@@ -98,7 +98,9 @@ QKD = {
 
     # SSH runtime identity
     "SSH_HOME_BASE": "/var/home",
-    "SSH_KEY_NAME": "qkd_id_rsa",
+    "SSH_KEY_NAME": "qkd_id_ed25519",
+    "SSH_KEY_TYPE": "ed25519",
+    # Used only when SSH_KEY_TYPE is rsa.
     "SSH_KEY_BITS": 4096,
     "SSH_KEY_COMMENT": "qkd-orchestrator-andrea.terren@hpe.com",
 

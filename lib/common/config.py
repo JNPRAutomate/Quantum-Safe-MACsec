@@ -19,6 +19,46 @@ RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 PLATFORM_DIR = CONFIG_DIR / "platforms"
 
 
+def _resolve_env_placeholder(value: Any, path: str) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    token = value.strip()
+    prefix = "${ENV:"
+    suffix = "}"
+
+    if not (token.startswith(prefix) and token.endswith(suffix)):
+        return value
+
+    env_name = token[len(prefix):-len(suffix)].strip()
+    if not env_name:
+        raise ValueError(f"Invalid empty ENV placeholder at {path}")
+
+    resolved = os.getenv(env_name)
+    if resolved is None:
+        raise ValueError(
+            f"Missing required environment variable '{env_name}' referenced at {path}"
+        )
+    return resolved
+
+
+def _resolve_env_placeholders(obj: Any, path: str = "root") -> Any:
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            child_path = f"{path}.{key}"
+            out[key] = _resolve_env_placeholders(value, child_path)
+        return out
+
+    if isinstance(obj, list):
+        out = []
+        for idx, item in enumerate(obj):
+            out.append(_resolve_env_placeholders(item, f"{path}[{idx}]"))
+        return out
+
+    return _resolve_env_placeholder(obj, path)
+
+
 def load_yaml(path: Union[str, Path]) -> Dict[str, Any]:
     """
     Load a YAML file and return a dictionary.
@@ -54,7 +94,8 @@ def load_inventory_base() -> Dict[str, Any]:
         print(f"[WARN] inventory_base not found at {base_file}")
         return {}
 
-    return load_yaml(base_file)
+    base = load_yaml(base_file)
+    return _resolve_env_placeholders(base, path="inventory_base")
 
 
 def load_runtime_devices() -> Dict[str, Any]:

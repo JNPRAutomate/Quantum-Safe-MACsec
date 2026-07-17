@@ -101,7 +101,7 @@ qkd-postgres
 Container name pattern:
 
 ```text
-<utente>-qkd-postgres
+<user>-qkd-postgres
 ```
 
 Example:
@@ -131,13 +131,13 @@ Normal restart must restart KME containers only.
 Allowed:
 
 ```bash
-docker restart <utente>-kme01 <utente>-kme02 ... <utente>-kmeNN
+docker restart <user>-kme01 <user>-kme02 ... <user>-kmeNN
 ```
 
 Forbidden during normal restart:
 
 ```bash
-docker restart <utente>-qkd-postgres
+docker restart <user>-qkd-postgres
 ```
 
 Forbidden during normal restart:
@@ -236,11 +236,11 @@ kme11
 Container names include the user prefix to avoid collisions on shared hosts:
 
 ```text
-<utente>-qkd-postgres
-<utente>-kme01
-<utente>-kme02
+<user>-qkd-postgres
+<user>-kme01
+<user>-kme02
 ...
-<utente>-kme11
+<user>-kme11
 ```
 
 Example:
@@ -514,7 +514,7 @@ validate
 `db-init` targets only the shared DB container:
 
 ```text
-<utente>-qkd-postgres
+<user>-qkd-postgres
 ```
 
 It must not initialize multiple DB containers.
@@ -530,9 +530,9 @@ These are frozen as of this baseline:
 - 1 Juniper device maps to 1 KME container.
 - One shared DB container is used for all KME containers.
 - Shared DB service name is `qkd-postgres`.
-- Shared DB container name is `<utente>-qkd-postgres`.
+- Shared DB container name is `<user>-qkd-postgres`.
 - KME services are `kme01..kme11`.
-- KME containers are `<utente>-kme01..kme11`.
+- KME containers are `<user>-kme01..kme11`.
 - Docker image is `etsi-kme:local`.
 - Compose file is `docker-compose-kme.yml`.
 - Compose file lives under `config/kme/compose/`.

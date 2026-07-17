@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import subprocess
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -98,6 +99,45 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _resolve_env_placeholder(value: Any, path: str) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    token = value.strip()
+    prefix = "${ENV:"
+    suffix = "}"
+
+    if not (token.startswith(prefix) and token.endswith(suffix)):
+        return value
+
+    env_name = token[len(prefix):-len(suffix)].strip()
+    if not env_name:
+        raise ValueError("Invalid empty ENV placeholder at %s" % path)
+
+    resolved = os.getenv(env_name)
+    if resolved is None:
+        raise ValueError(
+            "Missing required environment variable '%s' referenced at %s" % (env_name, path)
+        )
+    return resolved
+
+
+def _resolve_env_placeholders(obj: Any, path: str = "root") -> Any:
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            out[key] = _resolve_env_placeholders(value, "%s.%s" % (path, key))
+        return out
+
+    if isinstance(obj, list):
+        out = []
+        for idx, item in enumerate(obj):
+            out.append(_resolve_env_placeholders(item, "%s[%d]" % (path, idx)))
+        return out
+
+    return _resolve_env_placeholder(obj, path)
+
+
 def _inventory_base_path(repo_root: Path) -> Path:
     return repo_root / CONFIG.get("inventory_dir", "config/inventory") / "inventory_base.yaml"
 
@@ -110,7 +150,7 @@ def load_inventory_base(repo_root: Path) -> Dict[str, Any]:
     path = _inventory_base_path(repo_root)
     if not path.exists():
         return {}
-    return _load_yaml(path)
+    return _resolve_env_placeholders(_load_yaml(path), path="inventory_base")
 
 
 def load_runtime_devices(repo_root: Path) -> Dict[str, Dict[str, Any]]:
