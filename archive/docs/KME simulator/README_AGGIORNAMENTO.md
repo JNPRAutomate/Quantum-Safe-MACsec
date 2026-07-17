@@ -1,20 +1,20 @@
 # README_AGGIORNAMENTO.md
 
-# KME Orchestrator - Architettura aggiornata
+# KME Orchestrator - Updated Architecture
 
-Documento di aggiornamento dello stato corrente del KME orchestrator per il lab QKD/KME basato su ETSI GS QKD 014 Reference Implementation.
+Status update document for the current KME orchestrator state in the QKD/KME lab based on ETSI GS QKD 014 Reference Implementation.
 
-Questo documento descrive l'architettura aggiornata, il workflow operativo, i moduli Python coinvolti, le correzioni introdotte durante il troubleshooting e lo stato finale raggiunto.
+This document describes the updated architecture, the operational workflow, the Python modules involved, the fixes introduced during troubleshooting, and the final state reached.
 
 ---
 
-## 1. Obiettivo dell'orchestrator
+## 1. Orchestrator objective
 
-`kme_orchestrator.py` è il punto di ingresso CLI per gestire il ciclo di vita dell'ambiente KME.
+`kme_orchestrator.py` is the CLI entry point for managing the KME environment lifecycle.
 
-L'obiettivo finale è avere un comando semplice per l'utente, mantenendo la complessità dentro i moduli in `lib/kme/`.
+The final objective is to provide a simple user command while keeping complexity inside the modules in `lib/kme/`.
 
-Il CLI pubblico deve restare semplice:
+The public CLI should stay simple:
 
 ```bash
 python3 kme_orchestrator.py create
@@ -26,24 +26,24 @@ python3 kme_orchestrator.py stop
 python3 kme_orchestrator.py destroy --force
 ```
 
-I comandi tecnici intermedi come `bootstrap`, `install-host`, `build-env`, `build-image`, `install-certs` e `db-init` restano implementati nei moduli Python, ma non devono necessariamente essere esposti al cliente finale come comandi principali.
+Intermediate technical commands such as `bootstrap`, `install-host`, `build-env`, `build-image`, `install-certs`, and `db-init` remain implemented in Python modules, but they do not need to be exposed to end users as primary commands.
 
 ---
 
-## 2. Separazione delle responsabilità
+## 2. Separation of responsibilities
 
 ### qkd_orchestrator.py
 
 `qkd_orchestrator.py` rimane responsabile della parte QKD/Junos/MACsec:
 
-- creazione inventario runtime
-- generazione PKI
-- gestione profili PKI self-signed e hierarchical CA
-- generazione certificati SAE e KME
-- generazione materiale Juniper/on-box
-- deploy e validazione lato device Juniper
+- runtime inventory creation
+- PKI generation
+- management of self-signed and hierarchical CA PKI profiles
+- SAE and KME certificate generation
+- Juniper/on-box material generation
+- deployment and validation on Juniper devices
 
-Produce gli artefatti locali sotto:
+It produces local artifacts under:
 
 ```text
 certs/
@@ -54,20 +54,20 @@ config/runtime/
 
 `kme_orchestrator.py` consuma gli artefatti generati e gestisce l'ambiente KME remoto:
 
-- bootstrap SSH
-- installazione prerequisiti host Ubuntu/RHEL
-- clone/update repository ETSI
-- preparazione directory remote
-- preparazione docker compose
-- creazione network Docker
-- build immagine locale `etsi-kme:local`
-- installazione certificati KME nel repository remoto
-- inizializzazione schema PostgreSQL
-- avvio container KME/PostgreSQL
-- restart e status
-- validazione runtime
+- SSH bootstrap
+- Ubuntu/RHEL host prerequisite installation
+- ETSI repository clone/update
+- remote directory preparation
+- docker compose preparation
+- Docker network creation
+- local image build `etsi-kme:local`
+- KME certificate installation into remote repository
+- PostgreSQL schema initialization
+- KME/PostgreSQL container startup
+- restart and status
+- runtime validation
 
-Punto di integrazione principale:
+Main integration point:
 
 ```text
 qkd_orchestrator.py -> certs/* -> kme_orchestrator.py
@@ -75,9 +75,9 @@ qkd_orchestrator.py -> certs/* -> kme_orchestrator.py
 
 ---
 
-## 3. Workflow aggiornato di create
+## 3. Updated create workflow
 
-Il workflow corretto di `create` è:
+The correct `create` workflow is:
 
 ```text
 create
@@ -88,43 +88,43 @@ create
   install-certs
   db-init
   deploy
-  validate opzionale
+  validate optional
 ```
 
-Nel dettaglio:
+In detail:
 
-| Step | Modulo | Responsabilità |
+| Step | Module | Responsibility |
 |---|---|---|
-| bootstrap | `lib/kme/bootstrap.py` | crea/verifica accesso SSH e workspace remoto |
-| install-host | `lib/kme/install_host.py` | installa prerequisiti Ubuntu/RHEL: Docker, compose, toolchain |
-| build-env | `lib/kme/build_env.py` | clona/aggiorna repo ETSI, copia compose, crea directory/network, senza avviare i container |
-| build-image | `lib/kme/build_image.py` | esegue cargo build e docker build dell'immagine `etsi-kme:local` |
-| install-certs | `lib/kme/cert_install.py` | copia certificati KME e trust bundle nella directory remota `certs/` |
-| db-init | `lib/kme/db_init.py` | crea la tabella PostgreSQL `keys` |
-| deploy | `lib/kme/deploy.py` | esegue `docker compose up -d` |
-| validate | `lib/kme/validate.py` | verifica ambiente deployed |
+| bootstrap | `lib/kme/bootstrap.py` | creates/verifies SSH access and remote workspace |
+| install-host | `lib/kme/install_host.py` | installs Ubuntu/RHEL prerequisites: Docker, compose, toolchain |
+| build-env | `lib/kme/build_env.py` | clones/updates ETSI repo, copies compose, creates directories/network, without starting containers |
+| build-image | `lib/kme/build_image.py` | runs cargo build and docker build for image `etsi-kme:local` |
+| install-certs | `lib/kme/cert_install.py` | copies KME certificates and trust bundle into remote `certs/` directory |
+| db-init | `lib/kme/db_init.py` | creates PostgreSQL table `keys` |
+| deploy | `lib/kme/deploy.py` | runs `docker compose up -d` |
+| validate | `lib/kme/validate.py` | verifies deployed environment |
 
 ---
 
-## 4. CLI pubblico semplificato
+## 4. Simplified public CLI
 
-La versione semplificata di `kme_orchestrator.py` espone solo i comandi operativi principali.
+The simplified version of `kme_orchestrator.py` exposes only the main operational commands.
 
 ### create
 
-Esegue il workflow completo:
+Executes the full workflow:
 
 ```bash
 python3 kme_orchestrator.py create --config config/kme/lab.yaml --count 2
 ```
 
-Con validazione finale:
+With final validation:
 
 ```bash
 python3 kme_orchestrator.py create --config config/kme/lab.yaml --count 2 --validate
 ```
 
-Opzioni utili:
+Useful options:
 
 ```bash
 --skip-cert-install
@@ -138,7 +138,7 @@ Opzioni utili:
 
 ### deploy
 
-Avvia i container con docker compose:
+Starts containers with docker compose:
 
 ```bash
 python3 kme_orchestrator.py deploy --config config/kme/lab.yaml --count 2
@@ -146,7 +146,7 @@ python3 kme_orchestrator.py deploy --config config/kme/lab.yaml --count 2
 
 ### status
 
-Mostra lo stato dell'ambiente:
+Shows environment status:
 
 ```bash
 python3 kme_orchestrator.py status --config config/kme/lab.yaml
@@ -154,7 +154,7 @@ python3 kme_orchestrator.py status --config config/kme/lab.yaml
 
 ### restart
 
-Riavvia i container KME senza toccare PostgreSQL:
+Restarts KME containers without touching PostgreSQL:
 
 ```bash
 python3 kme_orchestrator.py restart --config config/kme/lab.yaml
@@ -162,7 +162,7 @@ python3 kme_orchestrator.py restart --config config/kme/lab.yaml
 
 ### validate
 
-Valida l'ambiente:
+Validates environment:
 
 ```bash
 python3 kme_orchestrator.py validate --config config/kme/lab.yaml
@@ -170,7 +170,7 @@ python3 kme_orchestrator.py validate --config config/kme/lab.yaml
 
 ### stop
 
-Ferma l'ambiente:
+Stops environment:
 
 ```bash
 python3 kme_orchestrator.py stop --config config/kme/lab.yaml
@@ -178,7 +178,7 @@ python3 kme_orchestrator.py stop --config config/kme/lab.yaml
 
 ### destroy
 
-Distrugge l'ambiente. Richiede `--force`:
+Destroys environment. Requires `--force`:
 
 ```bash
 python3 kme_orchestrator.py destroy --config config/kme/lab.yaml --force
@@ -186,15 +186,15 @@ python3 kme_orchestrator.py destroy --config config/kme/lab.yaml --force
 
 ---
 
-## 5. Configurazione lab.yaml
+## 5. lab.yaml configuration
 
-La configurazione KME vive in:
+KME configuration is in:
 
 ```text
 config/kme/lab.yaml
 ```
 
-Esempio di struttura rilevante:
+Relevant structure example:
 
 ```yaml
 environment:
@@ -252,7 +252,7 @@ Il valore:
 {owner}
 ```
 
-viene espanso usando:
+is expanded using:
 
 ```yaml
 identity:
@@ -265,19 +265,19 @@ Quindi:
 container_name: "{owner}-qkd-postgres"
 ```
 
-diventa:
+becomes:
 
 ```text
 andrea-qkd-postgres
 ```
 
-Questo fix è stato introdotto in `lib/kme/db_init.py`.
+This fix was introduced in `lib/kme/db_init.py`.
 
 ---
 
 ## 6. Docker compose: service_name vs container_name
 
-Una correzione importante è stata separare correttamente:
+An important fix was to correctly separate:
 
 ```yaml
 database:
@@ -285,7 +285,7 @@ database:
   container_name: "{owner}-qkd-postgres"
 ```
 
-### Regola corretta
+### Correct rule
 
 `docker compose up -d` usa il nome del servizio:
 
@@ -299,31 +299,31 @@ docker compose -f docker-compose-kme.yml up -d qkd-postgres
 docker exec -i andrea-qkd-postgres psql -U db_user -d key_store
 ```
 
-Il bug iniziale era che `db_init.py` usava il container name anche per `docker compose up`, generando errori del tipo:
+The initial bug was that `db_init.py` used container_name also for `docker compose up`, producing errors such as:
 
 ```text
 no such service: {owner}-qkd-postgres
 ```
 
-Il fix è ora presente nel modulo `lib/kme/db_init.py`.
+The fix is now in module `lib/kme/db_init.py`.
 
 ---
 
-## 7. Certificati KME
+## 7. KME certificates
 
-La directory remota montata nei container è:
+The remote directory mounted in containers is:
 
 ```text
 /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation/certs
 ```
 
-ed è montata nel container come:
+and it is mounted in the container as:
 
 ```text
 /certs
 ```
 
-I container KME richiedono almeno:
+KME containers require at least:
 
 ```text
 /certs/root.crt
@@ -333,7 +333,7 @@ I container KME richiedono almeno:
 /certs/kme_002.key
 ```
 
-Durante il troubleshooting i container andavano in crash con:
+During troubleshooting containers crashed with:
 
 ```text
 Failed to build the tls configuration
@@ -341,10 +341,10 @@ calling fopen(/certs/root.crt, r)
 no such file
 ```
 
-Causa:
+Cause:
 
 ```text
-la directory certs remota conteneva solo Makefile
+the remote certs directory contained only Makefile
 ```
 
 Fix:
@@ -353,7 +353,7 @@ Fix:
 lib/kme/cert_install.py
 ```
 
-ora installa il materiale PKI generato localmente sotto:
+now installs PKI material generated locally under:
 
 ```text
 certs/hierarchical_ca/kme_pki/certs/
@@ -372,7 +372,7 @@ viene copiato anche come:
 root.crt
 ```
 
-per essere compatibile con:
+to be compatible with:
 
 ```text
 ETSI_014_REF_IMPL_TLS_ROOT_CRT=/certs/root.crt
@@ -380,7 +380,7 @@ ETSI_014_REF_IMPL_TLS_ROOT_CRT=/certs/root.crt
 
 ---
 
-## 8. Database PostgreSQL
+## 8. PostgreSQL database
 
 Il KME usa il database:
 
@@ -388,13 +388,13 @@ Il KME usa il database:
 key_store
 ```
 
-con utente:
+with user:
 
 ```text
 db_user
 ```
 
-La tabella richiesta è:
+The required table is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS keys (
@@ -408,31 +408,31 @@ CREATE TABLE IF NOT EXISTS keys (
 );
 ```
 
-Il tipo corretto per `content` è `BYTEA`, perché contiene materiale chiave binario.
+The correct type for `content` is `BYTEA`, because it contains binary key material.
 
-Il modulo aggiornato:
+The updated module:
 
 ```text
 lib/kme/db_init.py
 ```
 
-fa:
+does:
 
-1. legge `lab.yaml`
+1. reads `lab.yaml`
 2. espande `{owner}`
-3. avvia il servizio PostgreSQL con docker compose usando `service_name`
-4. entra nel container usando `container_name`
-5. crea la tabella `keys`
-6. verifica con `\d keys`
-7. verifica con `SELECT COUNT(*) FROM keys;`
+3. starts PostgreSQL service with docker compose using `service_name`
+4. enters container using `container_name`
+5. creates table `keys`
+6. verifies with `\d keys`
+7. verifies with `SELECT COUNT(*) FROM keys;`
 
-Comando diretto, se necessario:
+Direct command, if needed:
 
 ```bash
 python3 kme_orchestrator.py create --skip-cert-install --no-deploy
 ```
 
-oppure con il modulo diretto:
+or with the direct module:
 
 ```bash
 python3 -m lib.kme.db_init --config config/kme/lab.yaml
@@ -440,9 +440,9 @@ python3 -m lib.kme.db_init --config config/kme/lab.yaml
 
 ---
 
-## 9. Moduli correnti in lib/kme
+## 9. Current modules in lib/kme
 
-La struttura logica aggiornata è:
+The updated logical structure is:
 
 ```text
 lib/kme/
@@ -463,42 +463,42 @@ lib/kme/
 └── instructions.py
 ```
 
-Ruolo dei moduli principali:
+Role of main modules:
 
-| Modulo | Ruolo |
+| Module | Role |
 |---|---|
-| `bootstrap.py` | prepara accesso SSH e workspace |
-| `install_host.py` | installa prerequisiti OS |
-| `build_env.py` | prepara repo, compose, directory e network |
-| `build_image.py` | compila Rust e costruisce immagine Docker |
-| `cert_install.py` | installa PKI KME remota |
-| `db_init.py` | inizializza schema PostgreSQL |
-| `deploy.py` | avvia container |
-| `restart.py` | riavvia solo KME container |
-| `status.py` | mostra stato runtime |
-| `validate.py` | valida ambiente |
-| `stop.py` | ferma container |
-| `destroy.py` | distrugge ambiente con `--force` |
+| `bootstrap.py` | prepares SSH access and workspace |
+| `install_host.py` | installs OS prerequisites |
+| `build_env.py` | prepares repository, compose, directories, and network |
+| `build_image.py` | compiles Rust and builds Docker image |
+| `cert_install.py` | installs remote KME PKI |
+| `db_init.py` | initializes PostgreSQL schema |
+| `deploy.py` | starts containers |
+| `restart.py` | restarts KME containers only |
+| `status.py` | shows runtime status |
+| `validate.py` | validates environment |
+| `stop.py` | stops containers |
+| `destroy.py` | destroys environment with `--force` |
 
 ---
 
-## 10. Stato raggiunto
+## 10. State reached
 
-Durante la sessione sono stati risolti questi problemi:
+During this session, these issues were resolved:
 
 ### SSH
 
-Problema iniziale:
+Initial issue:
 
 ```text
 Connection reset by peer
 ```
 
-Risolto lato host/SSH prima di completare `build-env`.
+Resolved on host/SSH side before completing `build-env`.
 
 ### Rust
 
-Problema:
+Issue:
 
 ```text
 Missing manifest in toolchain 'stable-x86_64-unknown-linux-gnu'
@@ -514,23 +514,23 @@ rustup default stable
 
 ### Docker image
 
-Problema iniziale:
+Initial issue:
 
 ```text
 COPY target/release/etsi_gs_qkd_014_referenceimplementation: not found
 ```
 
-Causa:
+Cause:
 
 ```text
-cargo build --release non aveva prodotto il binario
+cargo build --release had not produced the binary
 ```
 
-Dopo fix Rust, `build-image` è andato a buon fine.
+After Rust fix, `build-image` completed successfully.
 
 ### KME container restart loop
 
-Problema:
+Issue:
 
 ```text
 Restarting (101)
@@ -538,10 +538,10 @@ Failed to build tls configuration
 /certs/root.crt no such file
 ```
 
-Causa:
+Cause:
 
 ```text
-certificati non installati nella directory remota montata come /certs
+certificates were not installed in the remote directory mounted as /certs
 ```
 
 Fix:
@@ -552,13 +552,13 @@ cert_install.py integrato nel workflow create
 
 ### SCP/SSH option bug
 
-Problema:
+Issue:
 
 ```text
 Invalid multiplex command
 ```
 
-Causa:
+Cause:
 
 ```text
 ssh -O usato erroneamente in cert_install.py
@@ -567,34 +567,34 @@ ssh -O usato erroneamente in cert_install.py
 Fix:
 
 ```text
-rimosso -O da ssh_base_cmd
-rimosso -O da scp_base_cmd
+removed -O from ssh_base_cmd
+removed -O from scp_base_cmd
 ```
 
-### DB schema mancante
+### Missing DB schema
 
-Problema:
+Issue:
 
 ```sql
 select * from keys;
 ERROR: relation "keys" does not exist
 ```
 
-Causa:
+Cause:
 
 ```text
-PostgreSQL container era avviato, ma la tabella keys non era stata creata
+PostgreSQL container was running, but table keys had not been created
 ```
 
 Fix:
 
 ```text
-db_init.py aggiunto e integrato nel workflow create
+db_init.py added and integrated into create workflow
 ```
 
 ### Placeholder owner
 
-Problema:
+Issue:
 
 ```text
 container: {owner}-qkd-postgres
@@ -604,41 +604,41 @@ no such service: {owner}-qkd-postgres
 Fix:
 
 ```text
-db_init.py espande {owner} usando identity.owner
+db_init.py expands {owner} using identity.owner
 ```
 
 ### service_name vs container_name
 
-Problema:
+Issue:
 
 ```text
-docker compose up usava container_name invece di service_name
+docker compose up used container_name instead of service_name
 ```
 
 Fix:
 
 ```text
-docker compose up usa database.service_name
-docker exec usa database.container_name
+docker compose up uses database.service_name
+docker exec uses database.container_name
 ```
 
 ---
 
-## 11. Validazione consigliata
+## 11. Recommended validation
 
-Dopo modifiche:
+After modifications:
 
 ```bash
 python3 -m py_compile   kme_orchestrator.py   lib/kme/db_init.py   lib/kme/cert_install.py   lib/kme/deploy.py   lib/kme/restart.py   lib/kme/status.py
 ```
 
-Help atteso:
+Expected help:
 
 ```bash
 python3 kme_orchestrator.py --help
 ```
 
-Comandi pubblici attesi:
+Expected public commands:
 
 ```text
 create
@@ -650,7 +650,7 @@ stop
 destroy
 ```
 
-Verifica DB:
+DB verification:
 
 ```bash
 ssh qkd-kme-lab
@@ -658,13 +658,13 @@ ssh qkd-kme-lab
 docker exec -it andrea-qkd-postgres psql -U db_user -d key_store -c "\d keys"
 ```
 
-Verifica container:
+Container verification:
 
 ```bash
 docker ps
 ```
 
-Attesi:
+Expected:
 
 ```text
 andrea-qkd-postgres
@@ -674,33 +674,33 @@ andrea-kme02
 
 ---
 
-## 12. Comando operativo finale
+## 12. Final operational command
 
-Per creare tutto da zero:
+To create everything from scratch:
 
 ```bash
 python3 kme_orchestrator.py create   --config config/kme/lab.yaml   --count 2   --validate
 ```
 
-Per controllare lo stato:
+To check status:
 
 ```bash
 python3 kme_orchestrator.py status   --config config/kme/lab.yaml
 ```
 
-Per riavviare solo i KME:
+To restart only KME:
 
 ```bash
 python3 kme_orchestrator.py restart   --config config/kme/lab.yaml
 ```
 
-Per ridistribuire i container:
+To redeploy containers:
 
 ```bash
 python3 kme_orchestrator.py deploy   --config config/kme/lab.yaml   --count 2
 ```
 
-Per distruggere l'ambiente:
+To destroy environment:
 
 ```bash
 python3 kme_orchestrator.py destroy   --config config/kme/lab.yaml   --force
@@ -708,19 +708,19 @@ python3 kme_orchestrator.py destroy   --config config/kme/lab.yaml   --force
 
 ---
 
-## 13. Stato finale
+## 13. Final state
 
-Lo stato finale dell'orchestrator è:
+The final state of the orchestrator is:
 
 ```text
-CLI pubblico semplificato
-moduli interni separati
-PKI installata automaticamente
-DB inizializzato automaticamente
-Docker image build funzionante
-KME containers avviabili
-PostgreSQL con tabella keys creata
-workflow create completo
+Simplified public CLI
+Separated internal modules
+PKI installed automatically
+DB initialized automatically
+Working Docker image build
+KME containers startable
+PostgreSQL with keys table created
+Complete create workflow
 ```
 
-Questo rende il KME orchestrator sufficientemente pulito per essere usato come base customer-facing o come base per documentazione architetturale finale.
+This makes the KME orchestrator clean enough to be used as a customer-facing baseline or as a baseline for final architectural documentation.

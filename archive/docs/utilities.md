@@ -1,20 +1,33 @@
+# Utilities
+
+```bash
 ssh admin@10.54.12.193 "cat /var/db/scripts/op/qkd_qfx2.py" > qkd_qfx2.py
 sha256sum qkd_qfx2.py 
 cb1ad25249c12f0ba4dd8a112646a2ca2065c816cc4ded684fccb8ac054bda06  qkd_qfx2.py
 admin@vqfx-2# set system scripts op file qkd_qfx2 checksum sha-256 cb1ad25249c12f0ba4dd8a112646a2ca2065c816cc4ded684fccb8ac054bda06 
+```
 
 
 
+```bash
 % echo "Mq00wV8BIMhTuLTc5cjySbwEotGdDBVezxufQ6Q3WjbOoojFHuCfeZkbNq2m7uKSLkj6DKrQJK1Ox6VK7O8qqqh3fzMGM+BQhMGhy3Sk95O361NtE5ev2bvv009B4Tu5HNKcMJlRpGCu+LuPtCYzCwLZITx/sipISFGbNaUV7UY="| base64 -d | wc -c 
      128
+```
+
     This. means the key is 1024 bits. Instead we should enc/dec with 256 key lenght. 
 
 
 
+```bash
 % curl -s "https://100.100.100.10:8443/api/v1/keys/sae_002/enc_keys?key_size=256" --cert /var/db/scripts/certs/sae_001.crt --key /var/db/scripts/certs/sae_001.key --cacert /var/db/scripts/certs/offbox_rootCA.crt
+```
+```json
 {"keys":[{"key_ID":"2cfed7bf-8f2a-497c-83d3-1d934fb11dfb","key":"IfPJiWIPmS1U6lYmXaY9o+eyqOwfl7gR/xamO1iaUGHmRm0vFdGvCy5UpnBtQuBphjXR1o/NMlejWGP63QAnRRfXrMPokw4bdHMcTSwv4IqMvZbm9thHJCN0Winij82yNfOVx9kxa0WGcuSEdrnJznqdgSiLT4cHSsuxKNnyLQw="}]}% 
+```
 
+```bash
 echo "IfPJiWIPmS1U6lYmXaY9o+eyqOwfl7gR/xamO1iaUGHmRm0vFdGvCy5UpnBtQuBphjXR1o/NMlejWGP63QAnRRfXrMPokw4bdHMcTSwv4IqMvZbm9thHJCN0Winij82yNfOVx9kxa0WGcuSEdrnJznqdgSiLT4cHSsuxKNnyLQw=" | base64 -d | wc -c
+```
 
 
 # System
@@ -45,6 +58,7 @@ No live session rekey without config push
 you need roles must be per link not per device 
 
 ## PAIR OF TWO NODES
+```bash
 python3 qkd_orchestrator.py create \
   --mode qkd \
   --topology pair \
@@ -54,8 +68,10 @@ python3 qkd_orchestrator.py create \
     xe-0/0/0 \
     xe-0/0/0 \
   --kmes 100.0.0.1 100.0.0.2
+```
 
 ## CHAIN
+```bash
 % python3 qkd_orchestrator.py create \
   --mode qkd \
   --topology chain \
@@ -63,11 +79,15 @@ python3 qkd_orchestrator.py create \
   --ips 10.0.0.1 10.0.0.2 10.0.0.3 10.0.0.4 \
   --interfaces xe-0/0/0 xe-0/0/0,xe-0/0/1 xe-0/0/0,xe-0/0/1 xe-0/0/0  \
   --kmes 100.0.0.1 100.0.0.2 100.0.0.3 100.0.0.4
+```
+```text
 ✅ Inventory generated (qkd)
 ✅ Inventory created (chain, mode=qkd)
 ✅ PKI already exists - skipping generation
+```
 
 ## HUB SPOKE
+```bash
 % python3 qkd_orchestrator.py create \
   --mode qkd \
   --topology hub \
@@ -80,8 +100,10 @@ python3 qkd_orchestrator.py create \
     xe-0/0/0 \
     xe-0/0/0 \
   --kmes 100.0.0.1 100.0.0.2 100.0.0.3 100.0.0.4
+```
 
 ## RING
+```bash
 python3 qkd_orchestrator.py create \
   --mode qkd \
   --topology ring \
@@ -93,6 +115,7 @@ python3 qkd_orchestrator.py create \
     xe-0/0/0,xe-0/0/1 \
     xe-0/0/0,xe-0/0/1 \
   --kmes 100.0.0.1 100.0.0.2 100.0.0.3 100.0.0.4
+```
 
 
 ##  Another issue: CONNECTIVITY ASSOCIATION
@@ -270,6 +293,7 @@ ENC -> key4
 program CA2 = key4
 
 
+```tcsh
 set CMD='curl -s --cert /var/db/scripts/certs/sae_001.crt --key /var/db/scripts/certs/sae_001.key --cacert /var/db/scripts/certs/offbox_rootCA.crt https://100.100.100.10:8443/api/v1/keys/sae_002/enc_keys?key_size=256'
 
 foreach i (1 2 3 4 5)
@@ -277,13 +301,16 @@ foreach i (1 2 3 4 5)
     eval "$CMD"
     echo
 end
+```
 
 
-
+```bash
 docker network inspect qkd_net | grep -E 'kme|IPv4Address'
+```
 
 
 
+```text
 deploy
  ├─ generate ssh key (if missing)
  ├─ copy private/public key to all devices
@@ -292,6 +319,7 @@ deploy
  ├─ copy qkd_onbox.py
  ├─ copy certs
  └─ enable event/op scripts
+```
 
 ## deploy on devices
   - legge config/runtime/devices.yaml
@@ -302,6 +330,7 @@ deploy
   - sistema i permessi
 
 
+```text
 %python3 qkd_orchestrator.py create \ 
   --devices qfx1 qfx2 \
   --ips 10.54.13.14 10.54.12.193 \                         
@@ -333,13 +362,16 @@ The key's randomart image is:
 ✅ Inventory generated (qkd)
 ✅ Inventory created (pair, mode=qkd)
 ✅ PKI already exists - skipping generation
+```
 
 
 
 
+```bash
 %cli -c "configure; delete security macsec interfaces xe-0/0/1; commit; exit"
 
 %cli -c "show configuration security macsec interfaces | display set"
+```
 
 
 
@@ -536,16 +568,16 @@ Fix principale:
     il log include anche generation
     niente cambio alla logica peer/interface
 
-Python
+**Snippet Type: Python**
 
 Poi fai:
-Shell
+**Snippet Type: Shell**
 
 Se vuoi resettare lo stato sporco attuale sui device:
-Shell
+**Snippet Type: Shell**
 
 Oppure lascia che il prossimo forced bootstrap lo riallinei. Con questa fix, dopo bootstrap dovrebbe smettere di ripetere:
-Plain Text
+**Snippet Type: Plain Text**
 You said:
 with the clean option what do i clean exactly ?
 Copilot said:
@@ -555,99 +587,99 @@ With the clean option, ideally you clean three different scopes:
 1. Local runtime cleanup
 
 This removes generated runtime artifacts on your Mac:
-Plain Text
+**Snippet Type: Plain Text**
 
 That includes things like:
-Plain Text
+**Snippet Type: Plain Text**
 
 So after local clean, you need to run create again.
 2. Remote device cleanup
 
 On each QFX, clean should remove/reset:
 MACsec config
-Shell
+**Snippet Type: Shell**
 
 This removes:
-Plain Text
+**Snippet Type: Plain Text**
 
 This is important because otherwise stale interfaces like:
-Plain Text
+**Snippet Type: Plain Text**
 
 can remain configured on the wrong box.
 Onbox scripts
 
 Remove:
-Plain Text
+**Snippet Type: Plain Text**
 
 Commands:
-Shell
+**Snippet Type: Shell**
 Temporary QKD runtime state
 
 Remove:
-Plain Text
+**Snippet Type: Plain Text**
 
 Commands:
-Shell
+**Snippet Type: Shell**
 
 This resets the double-buffer state.
 Temporary deploy copy
 
 If you SCP qkd_onbox.py temporarily to /var/tmp, clean should also remove it:
-Shell
+**Snippet Type: Shell**
 
 But better: deploy_onbox() should already remove it after installing:
-Shell
+**Snippet Type: Shell**
 SSH trust keys
 
 If you deploy QKD SSH keys under:
-Plain Text
+**Snippet Type: Plain Text**
 
 then clean should remove:
-Plain Text
+**Snippet Type: Plain Text**
 
 and ideally remove the corresponding public key from:
-Plain Text
+**Snippet Type: Plain Text**
 
 So remote clean should use ssh_trust from devices.yaml:
-YAML
+**Snippet Type: YAML**
 3. Optional PKI cleanup
 
 Only if you run:
-Shell
+**Snippet Type: Shell**
 
 then you also remove local PKI material:
-Plain Text
+**Snippet Type: Plain Text**
 
 That means root CA, SAE certs, keys, etc.
 
 Without --pki, I would not delete certs.
 What clean should do in your flow
 Normal clean
-Shell
+**Snippet Type: Shell**
 
 Should do:
-Plain Text
+**Snippet Type: Plain Text**
 Local only clean
-Shell
+**Snippet Type: Shell**
 
 Should do only:
-Plain Text
+**Snippet Type: Plain Text**
 
 No device access.
 Full local + remote + PKI clean
-Shell
+**Snippet Type: Shell**
 
 Should do:
-Plain Text
+**Snippet Type: Plain Text**
 Important ordering
 
 The clean order must be:
-Plain Text
+**Snippet Type: Plain Text**
 
 Not the opposite.
 
 Because if you delete config/runtime/devices.yaml first, then the orchestrator no longer knows:
-Plain Text
+**Snippet Type: Plain Text**
 
 and remote clean cannot work.
 
@@ -655,13 +687,13 @@ So your handle_clean() should not call clean_runtime() before reading devices.ya
 In your current case
 
 Given your issue with wrong MACsec interface config, you want clean to remove at least:
-Shell
+**Snippet Type: Shell**
 
 That ensures:
-Plain Text
+**Snippet Type: Plain Text**
 
 Then you rerun:
-Shell
+**Snippet Type: Shell**
 
 Then trigger the script again.
 You said:
@@ -679,10 +711,10 @@ Copilot
 Sì, adesso il problema è chiaro: il tuo clean attuale pulisce MACsec e file runtime, ma non pulisce tutta la config Junos che l’orchestrator/provisioning ha creato.
 
 In particolare ti mancano almeno:
-Plain Text
+**Snippet Type: Plain Text**
 
 Quindi il clean dice:
-Plain Text
+**Snippet Type: Plain Text**
 
 ma in realtà sta lasciando roba configurata.
 1. Prima: fix deploy_onbox() per rimuovere /var/tmp/qkd_onbox.py
@@ -690,7 +722,7 @@ ma in realtà sta lasciando roba configurata.
 Nel tuo deploy_onbox(), nel comando install_cmd, aggiungi il rm.
 
 Deve essere così:
-Python
+**Snippet Type: Python**
 
 Così /var/tmp/qkd_onbox.py viene usato solo come staging temporaneo e poi rimosso.
 2. Sostituisci clean_device() con questa versione completa
@@ -706,19 +738,19 @@ Questa versione:
     cancella /var/tmp/qkd_onbox.py
     cancella le descrizioni sulle interfacce coinvolte, sia local che peer, per rimuovere eventuale sporco lasciato da run precedenti
 
-Python
+**Snippet Type: Python**
 3. Nota sulla description
 
 Se su qfx1 vedi una description tipo:
-Plain Text
+**Snippet Type: Plain Text**
 
 sotto:
-Plain Text
+**Snippet Type: Plain Text**
 
 allora non è necessariamente sbagliata: può voler dire “questa interfaccia locale va verso qfx2 peer interface xe-0/0/1”.
 
 È sbagliata se su qfx1 vedi configuration sotto:
-Plain Text
+**Snippet Type: Plain Text**
 
 perché xe-0/0/1 è la peer interface, non la local interface di qfx1.
 
@@ -726,34 +758,34 @@ Comunque la versione di clean_device() sopra rimuove description sia da interfac
 4. Ora attenzione: hai appena cancellato config/runtime
 
 Il tuo clean ha finito con:
-Plain Text
+**Snippet Type: Plain Text**
 
 Quindi ora per rilanciare clean remoto con la nuova funzione devi prima rigenerare runtime:
-Shell
+**Snippet Type: Shell**
 
 Poi:
-Shell
+**Snippet Type: Shell**
 5. Verifica dopo clean su qfx1
 
 Su qfx1:
-Shell
+**Snippet Type: Shell**
 
 Dopo clean non dovresti più vedere:
-Plain Text
+**Snippet Type: Plain Text**
 6. Poi redeploy pulito
 
 Dopo che il clean è veramente pulito:
-Shell
-Shell
+**Snippet Type: Shell**
+**Snippet Type: Shell**
 
 Poi su qfx1 controlla:
-Shell
+**Snippet Type: Shell**
 
 Expected:
-Plain Text
+**Snippet Type: Plain Text**
 
 Non deve esserci:
-Plain Text
+**Snippet Type: Plain Text**
 You said:
 inoltre qui ho diverse opzioni ma quando le uso ? clean = subparsers.add_parser("clean")
     clean.add_argument("--local-only", action="store_true")
@@ -764,11 +796,11 @@ Copilot
 Sì, quelle opzioni hanno senso, ma vanno chiarite bene perché oggi il comportamento può confondere.
 
 Hai:
-Python
+**Snippet Type: Python**
 
 Quindi ad oggi devi pensarle così.
 1. clean senza opzioni
-Shell
+**Snippet Type: Shell**
 
 Questo dovrebbe essere il full lab reset standard, cioè:
 
@@ -1192,6 +1224,7 @@ sh -c 'while true; do clear; date; echo "=== STATE ==="; cat /var/tmp/qkd_db_acx
 
 ## testing di hub/spoke: 
 
+```bash
 python3 qkd_orchestrator.py create \
   --mode qkd \
   --topology hub \
@@ -1201,8 +1234,10 @@ python3 qkd_orchestrator.py create \
   --interfaces et-2/0/4,et-2/0/2 et-2/0/0 et-0/0/2 \
   --kmes 100.123.252.10 100.123.252.11 100.123.252.14 \
   --platform acx
+```
 
   
+```bash
 (venv) root@qkd-01:~/new_qkd_dist# python3 - << 'EOF'
 import yaml
 
@@ -1234,11 +1269,13 @@ sae: sae_003
 interfaces: None
 {'peer': 'acx1', 'peer_ip': '100.123.170.202', 'peer_interface': 'et-2/0/2', 'peer_sae': 'sae_001', 'role': 'slave', 'interface': 'et-0/0/2', 'ca_names': ['CA3', 'CA4']}
 (venv) root@qkd-01:~/new_qkd_dist# 
+```
 
 
 
 
 da shell (type sh in the start shell ...) 
+```bash
 cat > /var/tmp/ring_ping_rotation_test.sh << 'EOF'
 #!/bin/sh
 
@@ -1329,6 +1366,7 @@ echo
 echo "=== Final MACsec statistics summary ==="
 cli -c 'show security macsec statistics | match "Interface name|Encrypted packets|Encrypted bytes|Accepted packets|Decrypted bytes"'
 EOF
+```
 
 
 ## problema con macsec ad LACP nel ring topology! 
@@ -1407,10 +1445,14 @@ We reached the point where we understand if we get CAx and CAy and we apply at s
 5. keychain/MKA handles rollover
 6. script verifies new key/MKA/MACsec state
 7. old key is cleaned later
-`
+```text
+old key is cleaned later
+```
 
 pair example deploy: 
+```bash
 python3 qkd_orchestrator.py create --mode qkd --topology pair --devices  acx1 acx2 --ips 100.123.170.202 100.123.170.201 --interfaces et-2/0/4 et-2/0/0 --kmes 100.123.252.10 100.123.252.11
+```
 
 
 
@@ -1443,6 +1485,7 @@ Importante: non scambiare mai le private key delle CA. Solo .crt.
 
 
 When i have dual PKI: on acx1: 
+```text
 [vrf:none] admin@acx7348-p1-re0:/var/db/scripts/certs_dual_pki$ ls -lart 
 total 44
 drwxrwx--x  14 root  root  4096 Jul  9 08:11 ..
@@ -1453,6 +1496,7 @@ drwxrwx--x  14 root  root  4096 Jul  9 08:11 ..
 drwxr-xr-x.  2 admin admin 4096 Jul  9 08:27 .
 [vrf:none] admin@acx7348-p1-re0:/var/db/scripts/certs_dual_pki$ openssl verify -CAfile trusted-kme-ca-bundle.crt kme_001.crt
 kme_001.crt: OK
+```
 
 I can remove kme_001.crt from acx1, it was only for testing. 
 
@@ -1627,8 +1671,10 @@ start shell command "sh -c 'while :; do clear; date; cli -c \"show configuration
 
 
 ## lab from internal
+```bash
 ssh -N -L 8443:192.168.2.205:8443 andrea@192.168.2.115
 sudo ssh -N -g -L 0.0.0.0:8443:192.168.2.205:8443 andrea@192.168.2.115
+```
 
 to create a connection from local mac into the docker container inside another host with kmes
 
@@ -1695,6 +1741,7 @@ curl -v \
 
 
 
+```bash
 $ scp admin@100.123.113.4:/var/tmp/qkd_debug*.log /tmp/qkd_logs/
 python3 log_summ.py --logs /tmp/qkd_logs/qkd_debug*.log --output /tmp/qkd_customer_summary.log --title "Customer QKD Health Summary"
 (admin@100.123.113.4) Password:
@@ -1704,6 +1751,210 @@ qkd_debug_sae_004_et-0_0_4.log                                                  
 qkd_debug_sae_004_et-0_0_6.log                                                                                                                                                                                       100%   69KB  53.5MB/s   00:00    
 qkd_debug_sae_004_et-0_0_8.log                                                                                                                                                                                       100%   69KB  52.5MB/s   00:00    
 [OK] summary written: /tmp/qkd_customer_summary.log
+```
+
+
+## SSH cryptography baselines (RSA migration and PQ-hybrid)
+
+### Why move away from RSA-only
+
+- RSA is still common but no longer the strongest default choice for new SSH deployments.
+- For user and automation keys, Ed25519 is the preferred modern default.
+- For key exchange (KEX), prefer curve25519 and hybrid post-quantum algorithms when supported.
+
+### Inspect locally supported KEX
+
+```bash
+ssh -Q kex
+```
+
+Example output:
+
+```text
+diffie-hellman-group1-sha1
+diffie-hellman-group14-sha1
+diffie-hellman-group14-sha256
+diffie-hellman-group16-sha512
+diffie-hellman-group18-sha512
+diffie-hellman-group-exchange-sha1
+diffie-hellman-group-exchange-sha256
+ecdh-sha2-nistp256
+ecdh-sha2-nistp384
+ecdh-sha2-nistp521
+curve25519-sha256
+curve25519-sha256@libssh.org
+sntrup761x25519-sha512
+sntrup761x25519-sha512@openssh.com
+mlkem768x25519-sha256
+```
+
+### Junos-compatible baseline (safe compatibility first)
+
+Use this profile first when interoperability is the priority.
+
+```text
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256,sntrup761x25519-sha512@openssh.com
+```
+
+If an old Junos release still fails, temporary fallback can include:
+
+```text
+diffie-hellman-group14-sha1
+```
+
+Do not use these except as emergency legacy fallback:
+
+```text
+diffie-hellman-group1-sha1
+diffie-hellman-group-exchange-sha1
+```
+
+### Hardening baseline (reduce legacy surface)
+
+Use this when all peers are modern enough.
+
+```text
+KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+```
+
+### PQ-hybrid priority baseline
+
+Use this when you want post-quantum hybrid first, with classical fallback.
+
+```text
+KexAlgorithms mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+```
+
+Note:
+
+- Some endpoints expose only `sntrup761x25519-sha512@openssh.com` and not the non-suffixed variant.
+- `mlkem768x25519-sha256` is newer; verify peer support before enforcing it.
+
+### Suggested client-side SSH config pattern
+
+```sshconfig
+Host qfx-* acx-* mx-*
+    KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group14-sha256
+    HostKeyAlgorithms ssh-ed25519,rsa-sha2-512,rsa-sha2-256
+    PubkeyAcceptedAlgorithms ssh-ed25519,rsa-sha2-512,rsa-sha2-256
+```
+
+### Per-peer validation commands
+
+1) Show local support:
+
+```bash
+ssh -Q kex
+```
+
+2) Test a specific baseline against one peer (replace user and host):
+
+```bash
+ssh -vv \
+    -oBatchMode=yes \
+    -oStrictHostKeyChecking=accept-new \
+    -oConnectTimeout=8 \
+    -oKexAlgorithms=sntrup761x25519-sha512@openssh.com,curve25519-sha256,diffie-hellman-group14-sha256 \
+    admin@HOST "exit"
+```
+
+3) Validate all peers with Junos-compatible baseline:
+
+```bash
+for h in HOST1 HOST2 HOST3; do
+    echo "=== $h ==="
+    ssh -oBatchMode=yes -oConnectTimeout=8 \
+        -oKexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group14-sha256,sntrup761x25519-sha512@openssh.com \
+        admin@"$h" "exit" && echo "OK" || echo "FAIL"
+done
+```
+
+4) Validate PQ-hybrid priority baseline on one peer:
+
+```bash
+ssh -vv \
+    -oBatchMode=yes \
+    -oConnectTimeout=8 \
+    -oKexAlgorithms=mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256 \
+    admin@HOST "exit"
+```
+
+5) Confirm negotiated KEX from debug output:
+
+```bash
+ssh -vv admin@HOST "exit" 2>&1 | grep -Ei "kex: algorithm|kex_parse_kexinit"
+```
+
+### Recommended rollout order
+
+1. Start with Junos-compatible baseline and verify all peers.
+2. Move to hardening baseline where peers pass tests.
+3. Enable PQ-hybrid priority baseline peer-by-peer.
+4. Keep a controlled fallback baseline for legacy nodes until upgraded.
+
+### Junos decision matrix (old/mid/new)
+
+Use this practical grouping when exact platform/release parity is mixed in the lab.
+
+| Group | Typical condition | Recommended KEX baseline | Notes |
+|---|---|---|---|
+| Old | Legacy or unknown Junos behavior | Junos-compatible baseline + temporary `diffie-hellman-group14-sha1` fallback | Keep fallback only during migration window |
+| Mid | Stable modern Junos, no PQ mandate yet | Hardening baseline | Remove SHA-1 families completely |
+| New | Latest OpenSSH/Junos path with PQ goals | PQ-hybrid priority baseline | Keep classical fallback at tail for interoperability |
+
+Suggested per-group profile snippets:
+
+```text
+# OLD (compatibility-first)
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group14-sha256,sntrup761x25519-sha512@openssh.com,diffie-hellman-group14-sha1
+
+# MID (hardened)
+KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+
+# NEW (PQ-hybrid priority)
+KexAlgorithms mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+```
+
+Quick validation per peer group:
+
+```bash
+# OLD group
+ssh -vv -oBatchMode=yes -oConnectTimeout=8 \
+    -oKexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group14-sha256,sntrup761x25519-sha512@openssh.com,diffie-hellman-group14-sha1 \
+    admin@OLD_HOST "exit"
+
+# MID group
+ssh -vv -oBatchMode=yes -oConnectTimeout=8 \
+    -oKexAlgorithms=sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256 \
+    admin@MID_HOST "exit"
+
+# NEW group
+ssh -vv -oBatchMode=yes -oConnectTimeout=8 \
+    -oKexAlgorithms=mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256 \
+    admin@NEW_HOST "exit"
+```
+
+Batch validation template (group-aware):
+
+```bash
+for h in OLD_HOST1 OLD_HOST2; do
+    ssh -oBatchMode=yes -oConnectTimeout=8 \
+        -oKexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group14-sha256,sntrup761x25519-sha512@openssh.com,diffie-hellman-group14-sha1 \
+        admin@"$h" "exit" && echo "OLD:$h OK" || echo "OLD:$h FAIL"
+done
+
+for h in MID_HOST1 MID_HOST2; do
+    ssh -oBatchMode=yes -oConnectTimeout=8 \
+        -oKexAlgorithms=sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256 \
+        admin@"$h" "exit" && echo "MID:$h OK" || echo "MID:$h FAIL"
+done
+
+for h in NEW_HOST1 NEW_HOST2; do
+    ssh -oBatchMode=yes -oConnectTimeout=8 \
+        -oKexAlgorithms=mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256 \
+        admin@"$h" "exit" && echo "NEW:$h OK" || echo "NEW:$h FAIL"
+done
+```
 
 
 

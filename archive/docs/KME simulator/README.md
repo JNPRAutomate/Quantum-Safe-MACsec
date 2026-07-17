@@ -1,33 +1,33 @@
-# QKD/KME Orchestrator - README aggiornato
+# QKD/KME Orchestrator - Updated README
 
-Questo README riassume lo stato della chat corrente e i fix applicati al workflow KME remoto.
+This README summarizes the status of the current session and the fixes applied to the remote KME workflow.
 
-## Contesto
+## Context
 
-Ambiente locale:
+Local environment:
 
 ```text
 macOS
 Python virtualenv attivo
 Repo locale: newMACSEC39_ready_for_git
-Comando principale: python3 kme_orchestrator.py create --count 2
+Main command: python3 kme_orchestrator.py create --count 2
 ```
 
-Host remoto KME:
+Remote KME host:
 
 ```text
-Alias SSH: qkd-kme-lab
-Utente remoto: andrea
-IP remoto: 192.168.2.115
-Workspace remoto: /home/andrea/kme-lab
-Repo ETSI remota: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
-Docker image locale: etsi-kme:local
+SSH alias: qkd-kme-lab
+Remote user: andrea
+Remote IP: 192.168.2.115
+Remote workspace: /home/andrea/kme-lab
+Remote ETSI repository: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
+Local Docker image: etsi-kme:local
 Docker network: qkd_net
 ```
 
-## Workflow corretto
+## Correct workflow
 
-La sequenza corretta del comando `create` è:
+The correct sequence for the `create` command is:
 
 ```text
 bootstrap
@@ -35,140 +35,140 @@ install-host
 build-env
 build-image
 deploy
-validate opzionale
+validate optional
 ```
 
-Dettaglio responsabilità degli step:
+Detailed step responsibilities:
 
 ```text
 bootstrap
-  - crea/verifica chiave SSH
-  - installa la public key sul server remoto
-  - configura alias SSH
-  - verifica SSH passwordless
-  - rileva OS remoto
-  - crea workspace remoto
-  - scrive lo state
+  - creates/verifies SSH key
+  - installs the public key on the remote server
+  - configures SSH alias
+  - verifies passwordless SSH
+  - detects remote OS
+  - creates remote workspace
+  - writes state
 
 install-host
-  - verifica sudo passwordless
-  - pulisce sorgenti APT rotte
-  - installa prerequisiti base
+  - verifies passwordless sudo
+  - cleans broken APT sources
+  - installs base prerequisites
   - installa Docker Engine
   - installa Docker Compose plugin
-  - abilita e avvia Docker
-  - aggiunge utente remoto al gruppo docker
-  - aggiorna lo state
+  - enables and starts Docker
+  - adds remote user to docker group
+  - updates state
 
 build-env
-  - clona o aggiorna la repo ETSI
-  - crea cartelle remote
-  - genera e carica docker-compose-kme.yml
-  - crea la rete Docker
-  - NON deve fare docker compose up durante create
+  - clones or updates ETSI repository
+  - creates remote directories
+  - generates and uploads docker-compose-kme.yml
+  - creates Docker network
+  - MUST NOT run docker compose up during create
 
 build-image
-  - verifica che la repo ETSI esista
-  - verifica prerequisiti build
-  - opzionalmente esegue cargo build --release sull'host
-  - costruisce l'immagine Docker locale etsi-kme:local
-  - verifica che l'immagine esista
-  - aggiorna lo state
+  - verifies that ETSI repository exists
+  - verifies build prerequisites
+  - optionally runs cargo build --release on host
+  - builds local Docker image etsi-kme:local
+  - verifies that image exists
+  - updates state
 
  deploy
   - esegue docker compose up -d
-  - deve partire solo dopo build-image
+  - must run only after build-image
 
 validate
-  - opzionale
-  - verifica finale del lab deployato
+  - optional
+  - final validation of deployed lab
 ```
 
-## Problemi incontrati e fix
+## Issues encountered and fixes
 
 ### 1. SSH connection refused
 
-Errore iniziale:
+Initial error:
 
 ```text
 ssh: connect to host 192.168.2.115 port 22: Connection refused
 ```
 
-Causa:
+Cause:
 
 ```text
-Il servizio SSH remoto non era disponibile sulla porta 22.
+Remote SSH service was not available on port 22.
 ```
 
-Risoluzione:
+Resolution:
 
 ```bash
 sudo systemctl enable --now ssh
-# oppure su alcune distribuzioni
+# or on some distributions
 sudo systemctl enable --now sshd
 ```
 
-Verifica:
+Verification:
 
 ```bash
 nc -vz 192.168.2.115 22
 ssh andrea@192.168.2.115
 ```
 
-### 2. sudo passwordless mancante
+### 2. Missing passwordless sudo
 
-Errore:
+Error:
 
 ```text
 sudo: a terminal is required to read the password
 sudo: a password is required
 ```
 
-Causa:
+Cause:
 
 ```text
-L'utente remoto andrea non aveva sudo passwordless.
+Remote user andrea did not have passwordless sudo.
 ```
 
-Risoluzione server-side:
+Server-side resolution:
 
 ```bash
 sudo visudo -f /etc/sudoers.d/andrea
 ```
 
-Contenuto:
+Content:
 
 ```text
 andrea ALL=(ALL) NOPASSWD:ALL
 ```
 
-Verifica:
+Verification:
 
 ```bash
 sudo -n true
 ```
 
-### 3. Repository APT CD-ROM rotto
+### 3. Broken APT CD-ROM repository
 
-Errore:
+Error:
 
 ```text
 Error: The repository 'file:/cdrom plucky Release' no longer has a Release file.
 ```
 
-Causa:
+Cause:
 
 ```text
-Ubuntu aveva ancora una sorgente APT verso file:///cdrom.
+Ubuntu still had an APT source pointing to file:///cdrom.
 ```
 
-Trovata con:
+Found with:
 
 ```bash
 grep -R cdrom /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null
 ```
 
-Riga trovata:
+Line found:
 
 ```text
 /etc/apt/sources.list:deb [check-date=no] file:///cdrom plucky main restricted
@@ -181,23 +181,23 @@ sudo sed -i 's|^deb \[check-date=no\] file:///cdrom|# deb [check-date=no] file:/
 sudo apt update
 ```
 
-### 4. Docker GPG key non valida
+### 4. Invalid Docker GPG key
 
-Errore:
+Error:
 
 ```text
 NO_PUBKEY 7EA0A9C3F273FCD8
 The repository 'https://download.docker.com/linux/ubuntu plucky InRelease' is not signed.
 ```
 
-Causa:
+Cause:
 
 ```text
-Il keyring Docker era assente o corrotto.
-Il vecchio install_host.py usava test -f e non rigenerava keyring/list se già presenti ma rotti.
+Docker keyring was missing or corrupted.
+The old install_host.py used test -f and did not regenerate keyring/list when files already existed but were broken.
 ```
 
-Fix manuale usato come riferimento:
+Manual fix used as reference:
 
 ```bash
 sudo rm -f /etc/apt/keyrings/docker.gpg
@@ -216,7 +216,7 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 sudo apt update
 ```
 
-Risultato finale:
+Final result:
 
 ```text
 Docker version 29.2.1
@@ -224,51 +224,51 @@ Docker Compose version v5.0.2
 Docker service active
 ```
 
-### 5. Ordine errato tra build-env e build-image
+### 5. Incorrect order between build-env and build-image
 
-Errore:
+Error:
 
 ```text
 ETSI repository is missing on the remote host.
 Run build-env first to clone or update the repository.
 ```
 
-Causa:
+Cause:
 
 ```text
-build-image veniva chiamato prima di build-env.
+build-image was called before build-env.
 ```
 
 Fix:
 
 ```text
-create ora esegue build-env prima di build-image.
+create now runs build-env before build-image.
 ```
 
-### 6. build-env faceva docker compose up troppo presto
+### 6. build-env ran docker compose up too early
 
-Errore:
+Error:
 
 ```text
 Image etsi-kme:local Pulling
 pull access denied for etsi-kme, repository does not exist or may require docker login
 ```
 
-Causa:
+Cause:
 
 ```text
-build-env chiamava docker compose up prima che build-image avesse creato etsi-kme:local.
-Docker provava quindi a fare pull dal registry.
+build-env called docker compose up before build-image had created etsi-kme:local.
+Docker therefore attempted to pull from registry.
 ```
 
-Fix corretto:
+Correct fix:
 
 ```text
-build-env deve preparare ambiente, repo, compose file e network.
-docker compose up va spostato in deploy.
+build-env must prepare environment, repository, compose file, and network.
+docker compose up must be moved to deploy.
 ```
 
-Nel `kme_orchestrator.py` aggiornato:
+In updated `kme_orchestrator.py`:
 
 ```python
 run_build_env(
@@ -280,15 +280,15 @@ run_build_env(
 )
 ```
 
-### 7. Signature mismatch su run_build_env
+### 7. Signature mismatch on run_build_env
 
-Errore:
+Error:
 
 ```text
 run_build_env() got an unexpected keyword argument 'force'
 ```
 
-Firma reale del tuo `run_build_env`:
+Actual `run_build_env` signature:
 
 ```python
 def run_build_env(
@@ -303,25 +303,25 @@ def run_build_env(
 Fix:
 
 ```text
-Rimosso force dalla chiamata a run_build_env.
-Aggiunto only_db.
+Removed force from run_build_env call.
+Added only_db.
 ```
 
-### 8. Rustup falliva per DNS
+### 8. Rustup failed due to DNS
 
-Errore:
+Error:
 
 ```text
 dns error: failed to lookup address information: Temporary failure in name resolution
 ```
 
-Causa:
+Cause:
 
 ```text
-La VM Ubuntu non riusciva a risolvere static.rust-lang.org.
+The Ubuntu VM could not resolve static.rust-lang.org.
 ```
 
-Verifiche consigliate lato VM:
+Recommended checks on VM:
 
 ```bash
 ping -c 3 8.8.8.8
@@ -330,41 +330,41 @@ cat /etc/resolv.conf
 getent hosts static.rust-lang.org
 ```
 
-Fix applicato a `build_image.py`:
+Fix applied to `build_image.py`:
 
 ```text
-Rust viene installato solo se serve davvero.
-Se cargo manca e DNS verso static.rust-lang.org non funziona, il codice non fallisce più brutalmente.
-Salta host cargo build e continua con docker build.
+Rust is installed only if actually needed.
+If cargo is missing and DNS to static.rust-lang.org does not work, the code no longer fails hard.
+It skips host cargo build and continues with docker build.
 ```
 
-## File generati durante questa chat
+## Files generated during this session
 
 ### kme_orchestrator.py
 
-Fix principali:
+Main fixes:
 
 ```text
-Workflow create corretto.
-Rimosso force da run_build_env.
-build-env chiamato con no_up=True.
-Deploy separato da build-env.
-Validate opzionale.
+Corrected create workflow.
+Removed force from run_build_env.
+build-env called with no_up=True.
+Deploy separated from build-env.
+Optional validate.
 ```
 
-Comando da usare:
+Command to use:
 
 ```bash
 python3 kme_orchestrator.py create --count 2
 ```
 
-Comando per fermarsi dopo build-image:
+Command to stop after build-image:
 
 ```bash
 python3 kme_orchestrator.py create --count 2 --no-deploy
 ```
 
-Comando per saltare cargo host build:
+Command to skip host cargo build:
 
 ```bash
 python3 kme_orchestrator.py create --count 2 --skip-cargo
@@ -372,22 +372,22 @@ python3 kme_orchestrator.py create --count 2 --skip-cargo
 
 ### build_image.py
 
-Fix principali:
+Main fixes:
 
 ```text
 Aggiunto remote_bash.
-Rimosso HTML corrotto nei comandi curl.
-Rust installato solo se serve.
-DNS check specifico per static.rust-lang.org.
-Se Rust install/cargo falliscono, docker build continua.
-skip_cargo salta davvero install_rust e cargo build.
+Removed broken HTML in curl commands.
+Rust installed only if needed.
+Specific DNS check for static.rust-lang.org.
+If Rust install/cargo fails, docker build continues.
+skip_cargo effectively skips install_rust and cargo build.
 no_cache default False.
-Stato aggiornato con cargo_built_on_host.
+State updated with cargo_built_on_host.
 ```
 
-## Stato attuale confermato
+## Confirmed current state
 
-Da log:
+From logs:
 
 ```text
 bootstrap OK
@@ -400,33 +400,33 @@ build-env ha copiato docker-compose-kme.yml
 build-env ha creato qkd_net
 ```
 
-Problema successivo affrontato:
+Next issue addressed:
 
 ```text
-build-image falliva durante rustup per DNS.
+build-image failed during rustup because of DNS.
 ```
 
-Fix disponibile:
+Available fix:
 
 ```text
-Sostituire lib/kme/build_image.py con la versione aggiornata.
+Replace lib/kme/build_image.py with the updated version.
 ```
 
-## Comandi consigliati ora
+## Recommended commands now
 
-Dopo aver sostituito i file aggiornati:
+After replacing updated files:
 
 ```bash
 python3 kme_orchestrator.py create --count 2 --skip-cargo
 ```
 
-Se vuoi testare includendo cargo host build dopo aver sistemato DNS:
+If you want to test including host cargo build after fixing DNS:
 
 ```bash
 python3 kme_orchestrator.py create --count 2
 ```
 
-Verifica DNS su VM:
+Verify DNS on VM:
 
 ```bash
 ssh qkd-kme-lab
@@ -434,7 +434,7 @@ getent hosts static.rust-lang.org
 curl -I https://static.rust-lang.org
 ```
 
-Verifica immagine Docker remota:
+Verify remote Docker image:
 
 ```bash
 ssh qkd-kme-lab
@@ -442,7 +442,7 @@ ssh qkd-kme-lab
 docker image inspect etsi-kme:local >/dev/null && echo OK
 ```
 
-Verifica compose file remoto:
+Verify remote compose file:
 
 ```bash
 ssh qkd-kme-lab
@@ -450,19 +450,19 @@ cd /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
 cat docker-compose-kme.yml
 ```
 
-## Note importanti per il codice
+## Important code notes
 
-### Non usare mega-comandi con && e ||
+### Do not use mega-commands with && and ||
 
-Da evitare:
+Avoid:
 
 ```bash
 A && B || C && D
 ```
 
-Perché la precedenza shell può produrre comportamento ambiguo e debugging pessimo.
+Because shell precedence can produce ambiguous behavior and poor debugging.
 
-Preferire script bash con:
+Prefer bash scripts with:
 
 ```bash
 set -euo pipefail
@@ -471,9 +471,9 @@ if ...; then
 fi
 ```
 
-### install-host deve pulire prima di apt update
+### install-host must clean before apt update
 
-Sequenza corretta:
+Correct sequence:
 
 ```text
 pulizia cdrom source
@@ -487,34 +487,34 @@ install docker
 verify
 ```
 
-### build-env non deve fare deploy
+### build-env must not deploy
 
-Regola definitiva:
+Final rule:
 
 ```text
-build-env prepara.
-build-image costruisce.
-deploy avvia.
-validate verifica.
+build-env prepares.
+build-image builds.
+deploy starts.
+validate verifies.
 ```
 
-## Prossimi punti tecnici da verificare
+## Next technical points to verify
 
-1. Confermare che `lib/kme/build_env.py` rispetti davvero `no_up=True`:
+1. Confirm that `lib/kme/build_env.py` truly respects `no_up=True`:
 
 ```python
 if not no_up:
     docker_compose_up(...)
 ```
 
-2. Verificare che esista un modulo deploy:
+1. Verify that a deploy module exists:
 
 ```text
 lib/kme/deploy.py
 run_deploy(...)
 ```
 
-3. Se deploy.py non esiste ancora, va creato con responsabilità limitata a:
+1. If deploy.py does not exist yet, it should be created with responsibilities limited to:
 
 ```text
 cd repo_dir
@@ -523,5 +523,4 @@ state update
 verify containers
 ```
 
-4. Sistemare DNS della VM se vuoi installare Rust sull'host invece di usare solo Docker build.
-
+1. Fix VM DNS if you want to install Rust on host instead of using only Docker build.
