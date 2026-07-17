@@ -573,7 +573,7 @@ def rollback_candidate(dev, name):
 # ----------------------------------------
 
 
-def configure_qkd_scripts(dev, name, base):
+def render_qkd_script_config(base):
     script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
@@ -582,11 +582,6 @@ def configure_qkd_scripts(dev, name, base):
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
-
-    rollback_candidate(dev, name)
-
-    print(f"[{name}] Rendering event/op templates")
-    print(f"[{name}] Using script_user={script_user}")
 
     context = {
         "script_name": script_name,
@@ -601,7 +596,19 @@ def configure_qkd_scripts(dev, name, base):
     users_cfg = render_common_template("runtime_users.j2", context)
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    full_cfg = peer_ssh_hardening_cfg + "\n" + users_cfg + "\n" + event_cfg + "\n" + op_cfg
+    return peer_ssh_hardening_cfg + "\n" + users_cfg + "\n" + event_cfg + "\n" + op_cfg
+
+
+def configure_qkd_scripts(dev, name, base):
+    script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
+    secrets = base.get("secrets", {})
+    script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
+
+    rollback_candidate(dev, name)
+
+    print(f"[{name}] Rendering event/op templates")
+    print(f"[{name}] Using script_user={script_user}")
+    full_cfg = render_qkd_script_config(base)
 
     print(f"[{name}] Applying QKD script config")
 
@@ -732,6 +739,7 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
 
         if preview:
             print(f"\n=== {name} ===")
+            print(render_qkd_script_config(base))
             print("\n".join(commands))
             continue
 
