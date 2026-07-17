@@ -189,7 +189,8 @@ def copy_file_to_other_re(dev, name, src_path, dst_name=None):
 
 def sync_qkd_scripts_dual_re(dev, name, script_name):
     """
-    Ensure qkd_onbox.py exists on both routing engines before commit synchronize.
+    Ensure qkd_onbox.py and external JSON runtime files exist on both routing
+    engines before commit synchronize.
 
     Also creates/copies legacy onbox.py as a compatibility shim because stale
     configurations can still reference /var/db/scripts/event/onbox.py and break
@@ -197,20 +198,28 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
     """
     op_script_dir = "/var/db/scripts/op"
     event_script_dir = "/var/db/scripts/event"
+    config_dir = QKD.get("ONBOX_CONFIG_DIR", op_script_dir)
+    config_json_name = QKD.get("ONBOX_CONFIG_JSON_NAME", "qkd_onbox_config.json")
+    inventory_json_name = QKD.get("ONBOX_INVENTORY_JSON_NAME", "qkd_onbox_inventory.json")
+    script_mode = QKD.get("ONBOX_SCRIPT_MODE", "0555")
+    json_mode = QKD.get("ONBOX_JSON_MODE", "0664")
 
     op_script = f"{op_script_dir}/{script_name}"
     event_script = f"{event_script_dir}/{script_name}"
     legacy_event_script = f"{event_script_dir}/onbox.py"
     legacy_op_script = f"{op_script_dir}/onbox.py"
+    config_json = f"{config_dir}/{config_json_name}"
+    inventory_json = f"{config_dir}/{inventory_json_name}"
 
     # Ensure local RE has all compatibility files before trying to copy them.
     run_shell(
         dev,
         (
-            f"mkdir -p {op_script_dir} {event_script_dir}; "
+            f"mkdir -p {op_script_dir} {event_script_dir} {config_dir}; "
             f"test -f {event_script} && cp {event_script} {legacy_event_script} || true; "
             f"test -f {op_script} && cp {op_script} {legacy_op_script} || true; "
-            f"chmod 755 {event_script} {op_script} {legacy_event_script} {legacy_op_script} 2>/dev/null || true"
+            f"chmod {script_mode} {event_script} {op_script} {legacy_event_script} {legacy_op_script} 2>/dev/null || true; "
+            f"chmod {json_mode} {config_json} {inventory_json} 2>/dev/null || true"
         ),
         name=name,
         strict=False,
@@ -222,7 +231,14 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
 
     print(f"[{name}] Dual-RE detected - syncing QKD scripts to peer RE")
 
-    for path in (event_script, op_script, legacy_event_script, legacy_op_script):
+    for path in (
+        event_script,
+        op_script,
+        legacy_event_script,
+        legacy_op_script,
+        config_json,
+        inventory_json,
+    ):
         copy_file_to_other_re(dev, name, path)
 
     # Ask Junos to push scripts too. Ignore failure here; file copy above is the primary sync.
@@ -561,6 +577,8 @@ def configure_qkd_scripts(dev, name, base):
     script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
+    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "etsi_peer_view")
+    peer_cmd_class = secrets.get("peer_cmd_class") or QKD.get("PEER_CMD_CLASS", "read-only")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
@@ -573,12 +591,17 @@ def configure_qkd_scripts(dev, name, base):
     context = {
         "script_name": script_name,
         "script_user": script_user,
+        "script_user_class": "super-user",
+        "peer_cmd_user": peer_cmd_user,
+        "peer_cmd_class": peer_cmd_class,
         "rotation_interval_seconds": rotation_interval_seconds,
     }
 
+    peer_ssh_hardening_cfg = render_common_template("peer_cmd_ssh_hardening.j2", context)
+    users_cfg = render_common_template("runtime_users.j2", context)
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    full_cfg = event_cfg + "\n" + op_cfg
+    full_cfg = peer_ssh_hardening_cfg + "\n" + users_cfg + "\n" + event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
 

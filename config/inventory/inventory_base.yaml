@@ -2,10 +2,29 @@ system:
   threads: 1
 
 secrets:
+  # Known bootstrap identity used to enter config mode on first rollout.
+  # Must NOT be script_user and must NOT be the low-priv peer SSH user.
+  bootstrap_user: admin
+  bootstrap_password: ${ENV:QKD_BOOTSTRAP_PASSWORD}
+
   default_user: admin
-  # Avoid cleartext in git: resolve from environment at runtime.
-  # Example: export QKD_SCRIPT_PASSWORD='your-password'
-  default_password: ${ENV:QKD_SCRIPT_PASSWORD}
+  # Optional generic fallback password when a specific one is not provided.
+  default_password: ${ENV:QKD_DEFAULT_PASSWORD}
+
+  # Local on-box runtime account (needs high privileges for config/commit).
   script_user: admin
+  script_password: ${ENV:QKD_SCRIPT_PASSWORD}
+
+  # Peer SSH transport account (low privilege, key-auth, no config rights).
+  peer_cmd_user: etsi_peer_view
+  # Optional and discouraged: keep unset for key-only authentication.
+  # peer_cmd_password: ${ENV:QKD_PEER_CMD_PASSWORD}
+  peer_cmd_class: qkd-peer-readonly
+
+  # Recommended transport key rotation cadence (independent from key-id rotation).
+  peer_cmd_key_rotation_days: 14
+  # Deterministic offset + jitter to avoid synchronized fleet rotation spikes.
+  peer_cmd_key_rotation_offset_minutes: 180
+  peer_cmd_key_rotation_jitter_percent: 10
 kme:
   port: 8443

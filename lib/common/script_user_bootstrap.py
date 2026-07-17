@@ -211,7 +211,8 @@ def get_deploy_user(inventory_base: Dict[str, Any], override: Optional[str] = No
 
     secrets = _secrets_block(inventory_base)
     return str(
-        secrets.get("deploy_user")
+        secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
         or QKD.get("DEPLOY_USER")
         or "root"
     )
@@ -226,7 +227,8 @@ def get_deploy_password_from_config(
 
     secrets = _secrets_block(inventory_base)
     value = (
-        secrets.get("deploy_password")
+        secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
         or secrets.get("root_password")
     )
 
@@ -235,6 +237,34 @@ def get_deploy_password_from_config(
 
 def prompt_deploy_password_once(deploy_user: str) -> str:
     return getpass.getpass("Password for deploy user %s: " % deploy_user)
+
+
+def get_peer_cmd_user(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
+    if override:
+        return override
+
+    secrets = _secrets_block(inventory_base)
+    return str(secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER") or "etsi_peer_view")
+
+
+def get_peer_cmd_password(inventory_base: Dict[str, Any], override: Optional[str] = None) -> Optional[str]:
+    if override is not None:
+        return override
+
+    secrets = _secrets_block(inventory_base)
+    value = (
+        secrets.get("peer_cmd_password")
+        or None
+    )
+    return str(value) if value else None
+
+
+def get_peer_cmd_class(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
+    if override:
+        return override
+
+    secrets = _secrets_block(inventory_base)
+    return str(secrets.get("peer_cmd_class") or QKD.get("PEER_CMD_CLASS") or "read-only")
 
 
 # ---------------------------------------------------------------------------
@@ -319,16 +349,16 @@ def _rpc_text(rpc_result: Any) -> str:
     return str(rpc_result)
 
 
-def script_user_exists(dev: Device, script_user: str) -> bool:
+def user_exists(dev: Device, username: str) -> bool:
     try:
         result = dev.rpc.cli(
-            "show configuration system login user %s" % script_user,
+            "show configuration system login user %s" % username,
             format="text",
         )
         text = _rpc_text(result).strip()
         if not text:
             return False
-        if "user %s" % script_user in text:
+        if "user %s" % username in text:
             return True
         if "class" in text or "authentication" in text or "encrypted-password" in text:
             return True
@@ -338,21 +368,30 @@ def script_user_exists(dev: Device, script_user: str) -> bool:
 
 
 def build_set_commands(
-    script_user: str,
+    username: str,
+    class_name: str,
     encrypted_password: Optional[str],
     user_exists: bool,
+    lock_password_when_missing: bool = False,
 ) -> List[str]:
     commands = [
-        "set system login user %s class super-user" % script_user,
+        "set system login user %s class %s" % (username, class_name),
     ]
 
     if not user_exists:
-        if not encrypted_password:
-            raise ValueError("encrypted_password is required when creating SCRIPT_USER")
-        commands.append(
-            "set system login user %s authentication encrypted-password \"%s\""
-            % (script_user, encrypted_password)
-        )
+        if encrypted_password:
+            commands.append(
+                "set system login user %s authentication encrypted-password \"%s\""
+                % (username, encrypted_password)
+            )
+        elif lock_password_when_missing:
+            # Explicitly lock password-based login for key-only users.
+            commands.append(
+                "set system login user %s authentication encrypted-password \"*\""
+                % username
+            )
+        else:
+            raise ValueError("encrypted_password is required when creating a new user")
 
     return commands
 
@@ -402,6 +441,9 @@ def bootstrap_script_user_on_device(
     deploy_password: Optional[str],
     script_user: str,
     script_password: str,
+    peer_cmd_user: str,
+    peer_cmd_password: str,
+    peer_cmd_class: str,
     port: int = 22,
     dry_run: bool = False,
 ) -> bool:
@@ -415,7 +457,11 @@ def bootstrap_script_user_on_device(
         print("[%s] DRY-RUN check if SCRIPT_USER exists" % name)
         print("[%s] DRY-RUN create user only if missing" % name)
         print("[%s] DRY-RUN ensure class super-user" % name)
+        print("[%s] DRY-RUN check if PEER_CMD_USER exists" % name)
+        print("[%s] DRY-RUN create PEER_CMD_USER only if missing" % name)
+        print("[%s] DRY-RUN ensure class %s for PEER_CMD_USER" % (name, peer_cmd_class))
         print("[%s] DRY-RUN fix /var/home/%s/.ssh ownership and permissions" % (name, script_user))
+        print("[%s] DRY-RUN fix /var/home/%s/.ssh ownership and permissions" % (name, peer_cmd_user))
         return True
 
     dev = Device(
@@ -429,9 +475,33 @@ def bootstrap_script_user_on_device(
     try:
         dev.open()
 
-        exists = script_user_exists(dev, script_user)
-        encrypted_password = None if exists else encrypted_junos_password(script_password)
-        commands = build_set_commands(script_user, encrypted_password, exists)
+        script_exists = user_exists(dev, script_user)
+        peer_exists = user_exists(dev, peer_cmd_user)
+
+        script_encrypted = None if script_exists else encrypted_junos_password(script_password)
+        peer_encrypted = None if peer_exists else (
+            encrypted_junos_password(peer_cmd_password) if peer_cmd_password else None
+        )
+
+        commands = []
+        commands.extend(
+            build_set_commands(
+                script_user,
+                "super-user",
+                script_encrypted,
+                script_exists,
+                lock_password_when_missing=False,
+            )
+        )
+        commands.extend(
+            build_set_commands(
+                peer_cmd_user,
+                peer_cmd_class,
+                peer_encrypted,
+                peer_exists,
+                lock_password_when_missing=True,
+            )
+        )
 
         cu = Config(dev)
         cu.load("\n".join(commands), format="set", merge=True)
@@ -439,10 +509,10 @@ def bootstrap_script_user_on_device(
 
         if diff:
             print("[%s] candidate diff:\n%s" % (name, diff))
-            cu.commit(comment="QKD bootstrap SCRIPT_USER %s" % script_user)
-            print("[%s] OK SCRIPT_USER bootstrap committed" % name)
+            cu.commit(comment="QKD bootstrap users script=%s peer=%s" % (script_user, peer_cmd_user))
+            print("[%s] OK user bootstrap committed (script=%s peer=%s)" % (name, script_user, peer_cmd_user))
         else:
-            print("[%s] no SCRIPT_USER config change required" % name)
+            print("[%s] no user config change required (script=%s peer=%s)" % (name, script_user, peer_cmd_user))
             try:
                 cu.rollback()
             except Exception:
@@ -450,11 +520,13 @@ def bootstrap_script_user_on_device(
 
         if not run_shell_fix(dev, name, script_user):
             return False
+        if not run_shell_fix(dev, name, peer_cmd_user):
+            return False
 
         return True
 
     except Exception as exc:
-        print("[%s] FAIL SCRIPT_USER bootstrap: %s" % (name, exc))
+        print("[%s] FAIL user bootstrap: %s" % (name, exc))
         return False
     finally:
         try:
@@ -471,6 +543,7 @@ def bootstrap_script_users(
     deploy_password: Optional[str] = None,
     script_user: Optional[str] = None,
     script_password: Optional[str] = None,
+    peer_cmd_password: Optional[str] = None,
     dry_run: bool = False,
     prompt_for_deploy_password: bool = False,
     skip_if_no_deploy_password: bool = True,
@@ -496,6 +569,9 @@ def bootstrap_script_users(
 
     resolved_script_user = get_script_user(inventory_base, script_user)
     resolved_script_password = get_script_password(inventory_base, script_password)
+    resolved_peer_cmd_user = get_peer_cmd_user(inventory_base)
+    resolved_peer_cmd_password = get_peer_cmd_password(inventory_base, peer_cmd_password)
+    resolved_peer_cmd_class = get_peer_cmd_class(inventory_base)
     resolved_deploy_user = get_deploy_user(inventory_base, deploy_user)
     resolved_deploy_password = get_deploy_password_from_config(inventory_base, deploy_password)
 
@@ -521,7 +597,11 @@ def bootstrap_script_users(
     print("=== QKD SCRIPT_USER bootstrap ===")
     print("devices      = %d" % len(selected))
     print("deploy_user  = %s" % resolved_deploy_user)
+    print("bootstrap_id = configured")
     print("script_user  = %s" % resolved_script_user)
+    print("peer_cmd_user= %s" % resolved_peer_cmd_user)
+    print("peer_cmd_cls = %s" % resolved_peer_cmd_class)
+    print("peer_cmd_pwd = %s" % ("configured" if resolved_peer_cmd_password else "locked (key-only)"))
     print("dry_run      = %s" % dry_run)
     print("deploy_pwd   = %s" % ("configured/prompted" if resolved_deploy_password else "none"))
     print("idempotent   = true")
@@ -535,6 +615,9 @@ def bootstrap_script_users(
             deploy_password=resolved_deploy_password,
             script_user=resolved_script_user,
             script_password=resolved_script_password,
+            peer_cmd_user=resolved_peer_cmd_user,
+            peer_cmd_password=resolved_peer_cmd_password,
+            peer_cmd_class=resolved_peer_cmd_class,
             dry_run=dry_run,
         )
         if success:

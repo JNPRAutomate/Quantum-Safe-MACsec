@@ -1,6 +1,6 @@
 from pathlib import Path
-from pprint import pformat
 import copy
+import json
 
 from lib.common.settings import CONFIG, QKD
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
@@ -228,9 +228,9 @@ def resolve_pki_runtime():
 # BUILD ONBOX CONFIG
 # ----------------------------
 
-def build_onbox_config(name, device):
+def build_onbox_static_config(name, device):
     """
-    Build the CONFIG dictionary embedded into qkd_onbox.py for one device.
+    Build static JSON config for qkd_onbox.py for one device.
 
     Link-driven runtime contract:
       device["links"] is the source of truth.
@@ -251,14 +251,17 @@ def build_onbox_config(name, device):
     if device.get("managed") is False:
         raise ValueError(f"Refusing to build onbox config for unmanaged device {name}")
 
-    # Deploy/runtime source of truth must be the QKD SCRIPT_USER, normally admin.
+    # Runtime script user (local privileged execution identity).
     # Do not derive this from labuser/device auth. labuser may not have enough
     # privileges for dual-RE file synchronization.
     script_user = device.get("script_user") or QKD["SCRIPT_USER"]
+    # Peer command transport identity (low privilege on peer device).
+    peer_cmd_user = device.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "etsi_peer_view")
 
     script_dir = QKD["SCRIPT_DIR"]
     ssh_home_base = QKD["SSH_HOME_BASE"]
     ssh_key_name = QKD["SSH_KEY_NAME"]
+    peer_cmd_ssh_key_name = QKD.get("PEER_CMD_SSH_KEY_NAME", ssh_key_name)
 
     pki_runtime = resolve_pki_runtime()
 
@@ -272,9 +275,9 @@ def build_onbox_config(name, device):
         "device_name": name,
         "hostname": _device_hostname(name, device),
 
-        "local_sae": _device_sae_id(name, device),
-        "kme_ip": _device_kme_ip(name, device),
-        "kme_port": _device_kme_port(device),
+        # External runtime activation gate.
+        # The script exits safely when disabled.
+        "enabled": False,
 
         # PKI runtime profile
         "pki_profile": pki_runtime["pki_profile"],
@@ -288,14 +291,17 @@ def build_onbox_config(name, device):
         "script_user": script_user,
         "script_dir": script_dir,
         "ssh_key": f"{ssh_home_base}/{script_user}/.ssh/{ssh_key_name}",
+        "peer_cmd_user": peer_cmd_user,
+        "peer_cmd_ssh_key": f"{ssh_home_base}/{script_user}/.ssh/{peer_cmd_ssh_key_name}",
 
         # Logging
         "log_file": QKD["LOG_FILE"],
         "log_max_bytes": QKD["LOG_MAX_BYTES"],
         "log_backup_count": QKD["LOG_BACKUP_COUNT"],
 
-        # Link-driven runtime topology for this device
-        "links": links,
+        # External JSON file paths loaded at runtime by qkd_onbox.py
+        "config_path": f"{QKD.get('ONBOX_CONFIG_DIR', '/var/db/scripts/op')}/{QKD.get('ONBOX_CONFIG_JSON_NAME', 'qkd_onbox_config.json')}",
+        "inventory_path": f"{QKD.get('ONBOX_CONFIG_DIR', '/var/db/scripts/op')}/{QKD.get('ONBOX_INVENTORY_JSON_NAME', 'qkd_onbox_inventory.json')}",
     }
 
     # Optional runtime knobs, only embedded if present in QKD/settings.
@@ -313,6 +319,19 @@ def build_onbox_config(name, device):
             config[config_key] = QKD[settings_key]
 
     return config
+
+
+def build_onbox_inventory_config(name, device):
+    """Build runtime inventory JSON for qkd_onbox.py for one device."""
+    links = normalize_onbox_links(name, device)
+    return {
+        "version": 1,
+        "enabled": False,
+        "local_sae": _device_sae_id(name, device),
+        "kme_ip": _device_kme_ip(name, device),
+        "kme_port": _device_kme_port(device),
+        "links": links,
+    }
 
 
 # ----------------------------
@@ -337,27 +356,8 @@ def generate_onbox_script(name, device, out_dir):
     if not src.exists():
         raise FileNotFoundError(f"Missing source onbox template: {src}")
 
-    config = build_onbox_config(name, device)
-
     with open(src, "r", encoding="utf-8") as handle:
         content = handle.read()
-
-    config_literal = pformat(
-        config,
-        indent=4,
-        width=120,
-        sort_dicts=False,
-    )
-
-    if "__CONFIG_PLACEHOLDER__" not in content:
-        raise RuntimeError(
-            f"Missing __CONFIG_PLACEHOLDER__ in source template: {src}"
-        )
-
-    content = content.replace(
-        "__CONFIG_PLACEHOLDER__",
-        f"CONFIG = {config_literal}",
-    )
 
     with open(dst, "w", encoding="utf-8") as handle:
         handle.write(content)
@@ -365,6 +365,34 @@ def generate_onbox_script(name, device, out_dir):
     dst.chmod(0o755)
 
     return dst
+
+
+def generate_onbox_json_files(name, device, out_dir):
+    """
+    Generate external JSON files consumed by qkd_onbox.py.
+
+    Destination files:
+      - config/runtime/<device>/qkd_onbox_config.json
+      - config/runtime/<device>/qkd_onbox_inventory.json
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    config_name = QKD.get("ONBOX_CONFIG_JSON_NAME", "qkd_onbox_config.json")
+    inventory_name = QKD.get("ONBOX_INVENTORY_JSON_NAME", "qkd_onbox_inventory.json")
+
+    static_path = out_dir / config_name
+    inventory_path = out_dir / inventory_name
+
+    static_cfg = build_onbox_static_config(name, device)
+    inventory_cfg = build_onbox_inventory_config(name, device)
+
+    static_path.write_text(json.dumps(static_cfg, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    inventory_path.write_text(json.dumps(inventory_cfg, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+
+    static_path.chmod(0o664)
+    inventory_path.chmod(0o664)
+
+    return static_path, inventory_path
 
 
 # ----------------------------
@@ -380,6 +408,8 @@ def build_onbox_artifacts(devices):
 
     Output structure:
         config/runtime/<device>/qkd_onbox.py
+        config/runtime/<device>/qkd_onbox_config.json
+        config/runtime/<device>/qkd_onbox_inventory.json
 
     Returns:
         {
@@ -412,7 +442,15 @@ def build_onbox_artifacts(devices):
                 out_dir=device_runtime_dir,
             )
 
+            static_json, inventory_json = generate_onbox_json_files(
+                name,
+                device,
+                out_dir=device_runtime_dir,
+            )
+
             outputs[name]["script"] = script
+            outputs[name]["config_json"] = static_json
+            outputs[name]["inventory_json"] = inventory_json
 
         elif mode == "static":
             # Static mode does not need qkd_onbox.py.
