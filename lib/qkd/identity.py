@@ -403,7 +403,6 @@ def check_script_user_home_simple(device):
         f"ls -ld {ssh_home}; "
         f"echo ### ssh-dir; "
         f"mkdir -p {ssh_dir}; "
-        f"chmod 700 {ssh_dir} 2>/dev/null; "
         f"test -d {ssh_dir}; "
         f"ls -ld {ssh_dir}"
     )
@@ -503,11 +502,6 @@ def check_script_user_ssh_identity(device):
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || {keygen_cmd}; "
         f"{gen_peer}"
-        f"chmod 700 {ssh_dir} 2>/dev/null; "
-        f"chmod 600 {key_path} 2>/dev/null; "
-        f"chmod 644 {pub_path} 2>/dev/null; "
-        f"chmod 600 {peer_key_path} 2>/dev/null; "
-        f"chmod 644 {peer_pub_path} 2>/dev/null; "
         f"test -s {key_path}; "
         f"test -s {pub_path}; "
         f"test -s {peer_key_path}; "
@@ -534,7 +528,6 @@ def check_script_user_authorized_keys(device):
         f"test -s {pub_path}; "
         f"touch {auth_path}; "
         f"grep -q -F -f {pub_path} {auth_path} || cat {pub_path} >> {auth_path}; "
-        f"chmod 600 {auth_path} 2>/dev/null; "
         f"test -s {auth_path}; "
         f"ls -l {auth_path}"
     )
