@@ -367,6 +367,20 @@ def user_exists(dev: Device, username: str) -> bool:
         return False
 
 
+def class_exists(dev: Device, class_name: str) -> bool:
+    try:
+        result = dev.rpc.cli(
+            "show configuration system login class %s" % class_name,
+            format="text",
+        )
+        text = _rpc_text(result).strip()
+        if not text:
+            return False
+        return "class %s" % class_name in text
+    except Exception:
+        return False
+
+
 def build_set_commands(
     username: str,
     class_name: str,
@@ -396,6 +410,24 @@ def build_set_commands(
     return commands
 
 
+def build_peer_cmd_class_commands(class_name: str, script_name: str) -> List[str]:
+    # Built-in Junos classes are always available and should not be redefined.
+    builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
+    if class_name in builtin_classes:
+        return []
+
+    return [
+        "set system login class %s permissions view" % class_name,
+        (
+            "set system login class %s allow-commands "
+            "\"^op %s action (install-key|status) .*$\""
+        )
+        % (class_name, script_name),
+        "set system login class %s deny-commands \".*\"" % class_name,
+        "set system login class %s deny-configuration \".*\"" % class_name,
+    ]
+
+
 def build_ssh_fix_command(script_user: str) -> str:
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
@@ -417,16 +449,26 @@ def build_ssh_fix_command(script_user: str) -> str:
 
 
 def run_shell_fix(dev: Device, name: str, script_user: str) -> bool:
+    # Disabled by default: platform shell behavior and privilege model can make
+    # this noisy and non-portable, while deploy/postdeploy paths install and
+    # validate required peer keys independently.
+    if os.getenv("QKD_ENABLE_SSH_HOME_FIX", "0").lower() not in {"1", "true", "yes"}:
+        print("[%s] ssh home fix skipped for %s (set QKD_ENABLE_SSH_HOME_FIX=1 to enable)" % (name, script_user))
+        return True
+
     command = build_ssh_fix_command(script_user)
     try:
         result = dev.rpc.request_shell_execute(command=command)
         text = _rpc_text(result).strip()
         if text:
             print("[%s] ssh home fix output:\n%s" % (name, text))
+        else:
+            print("[%s] ssh home fix completed for %s" % (name, script_user))
         return True
     except Exception as exc:
-        print("[%s] FAIL ssh home fix: %s" % (name, exc))
-        return False
+        # Non-fatal by design.
+        print("[%s] WARN ssh home fix failed for %s: %s" % (name, script_user, exc))
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +519,8 @@ def bootstrap_script_user_on_device(
 
         script_exists = user_exists(dev, script_user)
         peer_exists = user_exists(dev, peer_cmd_user)
+        peer_class_exists = class_exists(dev, peer_cmd_class)
+        script_name = str(QKD.get("SCRIPT_NAME", "qkd_onbox.py"))
 
         script_encrypted = None if script_exists else encrypted_junos_password(script_password)
         peer_encrypted = None if peer_exists else (
@@ -484,6 +528,8 @@ def bootstrap_script_user_on_device(
         )
 
         commands = []
+        if not peer_class_exists:
+            commands.extend(build_peer_cmd_class_commands(peer_cmd_class, script_name))
         commands.extend(
             build_set_commands(
                 script_user,

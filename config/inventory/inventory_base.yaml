@@ -4,7 +4,7 @@ system:
 secrets:
   # Known bootstrap identity used to enter config mode on first rollout.
   # Must NOT be script_user and must NOT be the low-priv peer SSH user.
-  bootstrap_user: admin
+  bootstrap_user: labuser
   bootstrap_password: ${ENV:QKD_BOOTSTRAP_PASSWORD}
 
   default_user: admin
