@@ -77,6 +77,33 @@ This reduces traffic disruption and avoids abrupt key swaps.
 - KME runtime consumes trusted bundles and per-instance cert/key material
 - operational guardrails include hold-down and failure policies to avoid unstable flapping
 
+## TLS certificate naming constraints (standards)
+
+When certificate identity values represent DNS hostnames (for example SAN `dNSName`, and legacy CN fallback behavior), labels should follow LDH syntax: letters, digits, and hyphen.
+
+Practical guidance for this project:
+
+- avoid underscore (`_`) in hostname-like certificate identities,
+- use hyphen (`-`) where separation is needed,
+- prefer SAN-based identity matching over CN.
+
+Why:
+
+- RFC 5280 requires `dNSName` values to use DNS preferred name syntax (referencing RFC 1034/1123),
+- RFC 6125 defines SAN-first hostname verification and treats CN as deprecated fallback,
+- non-LDH host labels are a common source of TLS interoperability or validation failures.
+
+Notes:
+
+- underscore remains valid in specific DNS owner-name contexts such as `_acme-challenge` and SRV-style labels, but those are not endpoint hostnames used for certificate hostname identity.
+
+References:
+
+- [RFC 5280, section 4.2.1.6 (subjectAltName / dNSName)](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.6)
+- [RFC 1123, section 2.1 (host name requirements)](https://www.rfc-editor.org/rfc/rfc1123#section-2.1)
+- [RFC 1035, section 2.3.1 (preferred name syntax)](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.1)
+- [RFC 6125 (service identity verification, SAN-first model)](https://www.rfc-editor.org/rfc/rfc6125)
+
 ## Reader map for deeper implementation details
 
 - QKD architecture: `docs/qkd/ARCHITECTURE.md`

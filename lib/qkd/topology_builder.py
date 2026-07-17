@@ -52,7 +52,7 @@ try:
     from lib.common.settings import CONFIG, PKI
 except Exception:  # pragma: no cover
     CONFIG = {"runtime_dir": "config/runtime"}
-    PKI = {"SAE_PREFIX": "sae", "SAE_PAD": 3}
+    PKI = {"SAE_PREFIX": "sae", "SAE_PAD": 3, "SAE_SEPARATOR": "-"}
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,8 @@ def _runtime_dir(out_dir: Optional[Any] = None) -> Path:
 def _sae_id(index: int) -> str:
     prefix = PKI.get("SAE_PREFIX", "sae")
     pad = int(PKI.get("SAE_PAD", 3))
-    return f"{prefix}_{str(index).zfill(pad)}"
+    separator = str(PKI.get("SAE_SEPARATOR", "-"))
+    return f"{prefix}{separator}{str(index).zfill(pad)}"
 
 
 def _yaml_dump(path: Path, data: Dict[str, Any]) -> Path:

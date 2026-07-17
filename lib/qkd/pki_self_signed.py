@@ -22,6 +22,13 @@ def write_file(path, data, mode=None):
         path.chmod(mode)
 
     return path
+
+
+def build_kme_name(index):
+    prefix = str(PKI.get("KME_PREFIX", "kme"))
+    pad = int(PKI.get("KME_PAD", 3))
+    separator = str(PKI.get("KME_SEPARATOR", "-"))
+    return f"{prefix}{separator}{index:0{pad}d}"
 # ----------------------------------------
 # CA CERT
 # ----------------------------------------
@@ -242,8 +249,8 @@ def build_unique_kme_inventory(devices):
     Returns:
 
         [
-            {"name": "kme_001", "ip": "100.123.252.10"},
-            {"name": "kme_002", "ip": "100.123.252.11"},
+            {"name": "kme-001", "ip": "100.123.252.10"},
+            {"name": "kme-002", "ip": "100.123.252.11"},
             ...
         ]
     """
@@ -272,7 +279,7 @@ def build_unique_kme_inventory(devices):
 
         kmes.append(
             {
-                "name": f"kme_{index:03d}",
+                "name": build_kme_name(index),
                 "ip": ip,
             }
         )
@@ -291,15 +298,15 @@ def build_self_signed_pki(devices, profile):
             offbox_rootCA.crt
             offbox_rootCA.key
 
-            sae_001/
-                sae_001.crt
-                sae_001.key
-                sae_001.pem
+            sae-001/
+                sae-001.crt
+                sae-001.key
+                sae-001.pem
 
             kme/
-                kme_001.crt
-                kme_001.key
-                kme_001.pem
+                kme-001.crt
+                kme-001.key
+                kme-001.pem
     """
 
     certs_dir = Path(CONFIG["self_signed_dir"])
@@ -419,62 +426,62 @@ def build_self_signed_pki(devices, profile):
 # cp offbox_rootCA.crt root.crt
 # cp offbox_rootCA.key root.key
 # rm offbox_rootCA.* 
-# rm -f kme_001.crt kme_001.csr kme_001.ext
+# rm -f kme-001.crt kme-001.csr kme-001.ext
 
 # now recreate the cert kme since make clean/ make will flush all certs from folder
 
 # STEP 1: create the extension file for the cert
-# cat > kme_001.ext <<EOF
+# cat > kme-001.ext <<EOF
 # basicConstraints=CA:FALSE
 # keyUsage=digitalSignature,keyEncipherment
 # extendedKeyUsage=serverAuth
-# subjectAltName=IP:100.100.100.10,DNS:kme_001
+# subjectAltName=IP:100.100.100.10,DNS:kme-001
 # EOF
 
-# STEP 2: create the cert and key for kme_001
+# STEP 2: create the cert and key for kme-001
 # openssl req \
 #   -newkey rsa:4096 -nodes \
-#   -keyout kme_001.key \
-#   -out kme_001.csr \
+#   -keyout kme-001.key \
+#   -out kme-001.csr \
 #   -subj "/C=IT/O=Juniper Networks/CN=100.100.100.10"
 
 # STEP 3: sign the cert with the rootCA
 # openssl x509 -req \
-#   -in kme_001.csr \
+#   -in kme-001.csr \
 #   -CA root.crt \
 #   -CAkey root.key \
 #   -CAcreateserial \
 #   -days 365 \
-#   -extfile kme_001.ext \
-#   -out kme_001.crt
+#   -extfile kme-001.ext \
+#   -out kme-001.crt
 
-# STEP 4: create the pem file for kme_001
-# cat kme_001.key kme_001.crt > kme_001.pem
+# STEP 4: create the pem file for kme-001
+# cat kme-001.key kme-001.crt > kme-001.pem
 
 # STEP 5: restart the kme containers to load the new certs
 # docker restart kme1 kme2 
 
 
-# cat > kme_002.ext <<EOF
+# cat > kme-002.ext <<EOF
 # > basicConstraints=CA:FALSE
 # > keyUsage=digitalSignature,keyEncipherment
 # > extendedKeyUsage=serverAuth
-# > subjectAltName=IP:100.100.100.11,DNS:kme_002
+# > subjectAltName=IP:100.100.100.11,DNS:kme-002
 # > EOF
 
 # openssl req \
 # >   -newkey rsa:4096 -nodes \
-# >   -keyout kme_002.key \
-# >   -out kme_002.csr \
+# >   -keyout kme-002.key \
+# >   -out kme-002.csr \
 # >   -subj "/C=IT/O=Juniper Networks/CN=100.100.100.11"
 
 # openssl x509 -req \
-# >   -in kme_002.csr \
+# >   -in kme-002.csr \
 # >   -CA root.crt \
 # >   -CAkey root.key \
 # >   -CAcreateserial \
 # >   -days 365 \
-# >   -extfile kme_002.ext \
-# >   -out kme_002.crt
+# >   -extfile kme-002.ext \
+# >   -out kme-002.crt
 
-# cat kme_002.key kme_002.crt > kme_002.pem
+# cat kme-002.key kme-002.crt > kme-002.pem

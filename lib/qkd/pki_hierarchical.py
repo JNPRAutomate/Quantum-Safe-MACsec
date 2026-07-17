@@ -14,10 +14,18 @@ from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from lib.common.config import load_yaml
+from lib.common.settings import PKI
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 DEFAULT_PKI_CONFIG = BASE_DIR / "config" / "pki" / "hierarchical_ca.yml"
+
+
+def build_kme_name(index):
+    prefix = str(PKI.get("KME_PREFIX", "kme"))
+    pad = int(PKI.get("KME_PAD", 3))
+    separator = str(PKI.get("KME_SEPARATOR", "-"))
+    return f"{prefix}{separator}{index:0{pad}d}"
 
 def short_name(path):
     return Path(path).name
@@ -280,7 +288,7 @@ def build_kme_leaf_devices(runtime_devices):
     leaf_devices = []
 
     for index, ip in enumerate(ordered_ips, start=1):
-        name = f"kme_{index:03d}"
+        name = build_kme_name(index)
 
         leaf_devices.append(
             {

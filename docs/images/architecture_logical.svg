@@ -30,11 +30,11 @@
   <!-- QFX -->
   <rect x="700" y="120" width="150" height="70" class="box"/>
   <text x="710" y="145" class="title">QFX1</text>
-  <text x="710" y="165" class="text">sae_001</text>
+  <text x="710" y="165" class="text">sae-001</text>
 
   <rect x="700" y="260" width="150" height="70" class="box"/>
   <text x="710" y="285" class="title">QFX2</text>
-  <text x="710" y="305" class="text">sae_002</text>
+  <text x="710" y="305" class="text">sae-002</text>
 
   <!-- Arrows -->
   <line x1="230" y1="250" x2="350" y2="140" class="arrow"/>

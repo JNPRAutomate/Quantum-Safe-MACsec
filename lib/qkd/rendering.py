@@ -2,6 +2,7 @@ from pathlib import Path
 import hashlib
 from jinja2 import Environment, FileSystemLoader
 
+from lib.common.config import load_runtime_qkd_policy
 from lib.common.settings import CONFIG, QKD
 
 
@@ -29,12 +30,17 @@ def build_device_config(device_name, device, platform, base, topology):
     Therefore rendering must not rely on a top-level device["role"].
     """
 
+    runtime_policy = load_runtime_qkd_policy()
+    qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
+    rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
+
     context = {
         "device": device,
         "platform": platform,
         "kme": base.get("kme", {}),
         "script_name": QKD["SCRIPT_NAME"],
         "script_user": QKD.get("SCRIPT_USER", "admin"),
+        "rotation_interval_seconds": rotation_interval_seconds,
     }
 
     commands = []

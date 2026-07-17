@@ -32,6 +32,8 @@ from typing import Any
 import yaml
 
 from lib.kme.compose import (
+    get_kme_cert,
+    get_kme_key,
     load_yaml as load_kme_yaml,
     resolve_kme_count,
     selected_kmes,
@@ -42,6 +44,7 @@ from lib.kme.state import (
     state_exists,
     update_state,
 )
+from lib.common.settings import PKI
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -210,9 +213,24 @@ def validate_cert_files_command(config: dict[str, Any], count: int) -> str:
         f"test -f {shell_quote(certs_dir + '/root.crt')}",
     ]
 
+    separator = str(PKI.get("KME_SEPARATOR", "-"))
+    legacy_separator = "_" if separator != "_" else "-"
+
     for index in range(1, count + 1):
-        checks.append(f"test -f {shell_quote(certs_dir + f'/kme_{index:03d}.crt')}")
-        checks.append(f"test -f {shell_quote(certs_dir + f'/kme_{index:03d}.key')}")
+        cert_name = get_kme_cert(index)
+        key_name = get_kme_key(index)
+
+        legacy_cert_name = cert_name.replace(separator, legacy_separator)
+        legacy_key_name = key_name.replace(separator, legacy_separator)
+
+        checks.append(
+            f"(test -f {shell_quote(certs_dir + '/' + cert_name)} || "
+            f"test -f {shell_quote(certs_dir + '/' + legacy_cert_name)})"
+        )
+        checks.append(
+            f"(test -f {shell_quote(certs_dir + '/' + key_name)} || "
+            f"test -f {shell_quote(certs_dir + '/' + legacy_key_name)})"
+        )
 
     return " && ".join(checks)
 
