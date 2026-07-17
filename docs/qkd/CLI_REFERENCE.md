@@ -87,6 +87,16 @@ Options:
 - `--local-only`
 - `--pki`
 - `--full-macsec`
+- `--keep-users`
+- `--remove-peer-user`
+- `--remove-script-user`
+
+Behavior notes:
+
+- In remote clean mode (without `--local-only`), clean removes both `SCRIPT_USER` and `PEER_CMD_USER` by default.
+- Use `--keep-users` to keep both users on devices during clean.
+- `--remove-peer-user` and `--remove-script-user` are explicit flags and remain accepted.
+- In `--local-only` mode, user-removal flags are ignored because no remote cleanup is performed.
 
 Examples:
 
@@ -94,6 +104,7 @@ Examples:
 python3 qkd_orchestrator.py clean --local-only
 python3 qkd_orchestrator.py clean --pki
 python3 qkd_orchestrator.py clean --full-macsec
+python3 qkd_orchestrator.py clean --pki --keep-users
 ```
 
 ## Auxiliary Tool: Certificate Manager

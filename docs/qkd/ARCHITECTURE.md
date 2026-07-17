@@ -169,6 +169,19 @@ Design consequences:
 5. deploy scripts/certs/config to devices
 6. validate device state
 
+## Clean behavior (current)
+
+`clean` supports local-only cleanup and remote cleanup.
+
+Remote cleanup removes:
+
+- QKD event/script runtime configuration
+- QKD runtime files and certificate directories on devices
+- link-scoped MACsec and key-chain configuration (or full MACsec with `--full-macsec`)
+- login users used by runtime orchestration (`SCRIPT_USER` and `PEER_CMD_USER`) by default
+
+Use `--keep-users` when you want to preserve users during cleanup.
+
 ## Integration boundary with KME orchestrator
 
 QKD orchestrator is the producer of PKI materials and runtime PKI profile metadata.
