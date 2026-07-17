@@ -2,8 +2,15 @@
 """
 QKD on-box MACsec keychain/MKA controller.
 
-This template is embedded by lib/qkd/onbox_builder.py by replacing
-__CONFIG_PLACEHOLDER__ with a per-device CONFIG dictionary.
+Runtime configuration is loaded from external JSON files preloaded on the router.
+
+Default file locations:
+    - /var/db/scripts/op/qkd_onbox_config.json
+    - /var/db/scripts/op/qkd_onbox_inventory.json
+
+These can be overridden with environment variables:
+    - QKD_ONBOX_CONFIG_PATH
+    - QKD_ONBOX_INVENTORY_PATH
 
 Link-driven runtime contract
 ----------------------------
@@ -35,7 +42,97 @@ import pwd
 
 urllib3.disable_warnings()
 
-__CONFIG_PLACEHOLDER__
+DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
+DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
+
+
+def _load_json_or_die(path, label):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        print(f"ERROR MISSING {label} file: {path}")
+        sys.exit(1)
+    except Exception as exc:
+        print(
+            f"ERROR INVALID {label} JSON file: {path} "
+            f"error_type={type(exc).__name__} error={str(exc)}"
+        )
+        sys.exit(1)
+
+    if not isinstance(data, dict):
+        print(f"ERROR INVALID {label} JSON file: {path} root must be object")
+        sys.exit(1)
+
+    return data
+
+
+def _validate_runtime_contract_or_die(config):
+    required_keys = [
+        "local_sae",
+        "kme_ip",
+        "ca_cert",
+        "script_user",
+        "script_dir",
+        "ssh_key",
+        "peer_cmd_user",
+        "peer_cmd_ssh_key",
+        "log_file",
+        "log_max_bytes",
+        "log_backup_count",
+        "qkd_policy",
+    ]
+    missing = [key for key in required_keys if key not in config]
+    local_sae = config.get("local_sae", "<missing>")
+
+    def _contract_error(message):
+        print(
+            "ERROR INVALID runtime JSON contract: "
+            f"{message} local_sae={local_sae} "
+            f"config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}"
+        )
+        sys.exit(1)
+
+    if missing:
+        _contract_error(f"missing keys={missing}")
+
+    if not isinstance(config.get("qkd_policy"), dict):
+        _contract_error("qkd_policy must be an object")
+
+    if not isinstance(config.get("links"), list):
+        _contract_error("links must be an array")
+
+    try:
+        int(config.get("kme_port", 443))
+        int(config.get("log_max_bytes"))
+        int(config.get("log_backup_count"))
+    except Exception as exc:
+        _contract_error(
+            f"numeric field parse failed error_type={type(exc).__name__} error={str(exc)}"
+        )
+
+
+def runtime_bootstrap_context():
+    return (
+        f"local_sae={DEVICE} kme_ip={KME_IP} kme_port={KME_PORT} "
+        f"links={len(LINKS)} config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}"
+    )
+
+
+CONFIG_PATH = os.environ.get("QKD_ONBOX_CONFIG_PATH", DEFAULT_CONFIG_PATH)
+INVENTORY_PATH = os.environ.get("QKD_ONBOX_INVENTORY_PATH", DEFAULT_INVENTORY_PATH)
+
+STATIC_CONFIG = _load_json_or_die(CONFIG_PATH, "config")
+INVENTORY_CONFIG = _load_json_or_die(INVENTORY_PATH, "inventory")
+
+CONFIG = {}
+CONFIG.update(STATIC_CONFIG)
+CONFIG.update(INVENTORY_CONFIG)
+
+_validate_runtime_contract_or_die(CONFIG)
+
+if not isinstance(CONFIG.get("links"), list):
+    CONFIG["links"] = []
 
 DEVICE = CONFIG["local_sae"]
 KME_IP = CONFIG["kme_ip"]
@@ -46,6 +143,8 @@ LINKS = CONFIG.get("links", [])
 SCRIPT_USER = CONFIG["script_user"]
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
+PEER_CMD_USER = CONFIG.get("peer_cmd_user", SCRIPT_USER)
+PEER_CMD_SSH_KEY = CONFIG.get("peer_cmd_ssh_key", SSH_KEY)
 
 LOG_FILE = CONFIG["log_file"]
 LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
@@ -313,6 +412,10 @@ def db_state_file(peer, iface):
 
 def qkd_policy():
     return CONFIG.get("qkd_policy", {})
+
+
+def config_enabled():
+    return bool(CONFIG.get("enabled", False))
 
 
 def rekey_enabled():
@@ -1519,21 +1622,34 @@ def runtime_user():
 
 def validate_ssh_runtime_for_master():
     user = runtime_user()
-    if not SSH_KEY:
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=SSH_KEY_EMPTY", "ERROR", mode="MASTER")
+    if not PEER_CMD_SSH_KEY:
+        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=PEER_CMD_SSH_KEY_EMPTY", "ERROR", mode="MASTER")
         return False
-    if not Path(SSH_KEY).exists():
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} ssh_key={SSH_KEY} reason=KEY_NOT_FOUND", "ERROR", mode="MASTER")
-        return False
-    if not os.access(SSH_KEY, os.R_OK):
+    if not Path(PEER_CMD_SSH_KEY).exists():
         log(
-            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} peer_cmd_user={PEER_CMD_USER} "
+            f"ssh_key={PEER_CMD_SSH_KEY} reason=KEY_NOT_FOUND",
             "ERROR",
             mode="MASTER",
         )
-        print(f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}")
         return False
-    log(f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}", "INFO", mode="MASTER")
+    if not os.access(PEER_CMD_SSH_KEY, os.R_OK):
+        log(
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} peer_cmd_user={PEER_CMD_USER} ssh_key={PEER_CMD_SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            "ERROR",
+            mode="MASTER",
+        )
+        print(
+            f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} "
+            f"peer_cmd_user={PEER_CMD_USER} ssh_key={PEER_CMD_SSH_KEY}"
+        )
+        return False
+    log(
+        f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} "
+        f"peer_cmd_user={PEER_CMD_USER} ssh_key={PEER_CMD_SSH_KEY}",
+        "INFO",
+        mode="MASTER",
+    )
     return True
 
 
@@ -1542,7 +1658,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         return False
 
     peer_ip = link["peer_ip"]
-    peer_user = SCRIPT_USER
+    peer_user = PEER_CMD_USER
     peer_iface = link["peer_interface"]
     cmd = f"op qkd_onbox.py action {action} iface {peer_iface}"
     if key_id:
@@ -1558,7 +1674,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
 
     ssh_cmd = [
         "ssh",
-        "-i", SSH_KEY,
+        "-i", PEER_CMD_SSH_KEY,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",
@@ -1590,12 +1706,24 @@ def get_peer_status(link, iface):
         return None
 
     peer_ip = link["peer_ip"]
-    peer_user = SCRIPT_USER
+    peer_user = PEER_CMD_USER
     peer_iface = link["peer_interface"]
     cmd = f"op qkd_onbox.py action status iface {peer_iface}"
     log(f"SSH EXEC {peer_user}@{peer_ip} action=status local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
 
-    ssh_cmd = ["ssh", "-i", SSH_KEY, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", f"{peer_user}@{peer_ip}", cmd]
+    ssh_cmd = [
+        "ssh",
+        "-i",
+        PEER_CMD_SSH_KEY,
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{peer_user}@{peer_ip}",
+        cmd,
+    ]
     try:
         result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
@@ -1885,6 +2013,7 @@ def run_slave_status(iface):
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
     state["effective_batch_size"] = effective_batch
+    state["enabled"] = config_enabled()
     print(json.dumps(state))
     return True
 
@@ -2250,7 +2379,14 @@ def run_master():
 # ----------------------------
 
 def main():
-    log("SCRIPT START", "INFO")
+    log(f"SCRIPT START {runtime_bootstrap_context()}", "INFO", mode="CONFIG")
+
+    if not config_enabled():
+        log(
+            f"QKD disabled enabled={CONFIG.get('enabled', False)} config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}",
+            "INFO",
+            mode="CONFIG",
+        )
 
     if MACSEC_MODEL != "keychain":
         log(f"UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain", "ERROR")
@@ -2260,6 +2396,11 @@ def main():
     action, key_id, iface, generation, start_time, batch_b64 = parse_slave()
 
     if action:
+        if not config_enabled() and action != "status":
+            log(f"ACTION SKIPPED while disabled action={action}", "INFO", mode="CONFIG")
+            print(f"ERROR QKD DISABLED action={action}")
+            sys.exit(1)
+
         if action == "install-key":
             if not key_id or not iface:
                 log("INVALID INSTALL-KEY ARGUMENTS", "ERROR", iface, "SLAVE")
@@ -2304,6 +2445,10 @@ def main():
 
     if not validate_ssh_runtime_for_master():
         sys.exit(1)
+
+    if not config_enabled():
+        log("MASTER SKIPPED while disabled", "INFO", mode="CONFIG")
+        sys.exit(0)
 
     if not acquire_lock():
         log("MASTER LOCK BUSY -> EXIT", "ERROR", mode="MASTER")

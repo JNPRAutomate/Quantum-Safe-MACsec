@@ -1,0 +1,2 @@
+set system login user {{ script_user }} class {{ script_user_class | default('super-user', true) }}
+set system login user {{ peer_cmd_user }} class {{ peer_cmd_class | default('read-only', true) }}

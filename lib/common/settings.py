@@ -58,16 +58,12 @@ QKD = {
     # On-box script
     "SCRIPT_NAME": "qkd_onbox.py",
 
-    # Single runtime identity.
-    #
-    # This user must be used consistently for:
-    #   - Junos event-options python-script-user
-    #   - qkd_onbox.py runtime execution
-    #   - peer SSH-exec from one router to another
-    #   - runtime state/log/lock ownership under /var/tmp
-    #
-    # Root must only be used by the orchestrator for deploy/clean/setup.
+    # Runtime identity used for local on-box execution and Junos event script user.
     "SCRIPT_USER": "admin",
+
+    # Dedicated low-privilege identity used only for peer SSH transport
+    # (master -> slave send-command/status for key-id workflow).
+    "PEER_CMD_USER": "etsi_peer_view",
 
     # Privileged deploy/cleanup user.
     #
@@ -86,6 +82,17 @@ QKD = {
     # Full remote path where the op script must exist
     "REMOTE_OP_SCRIPT_PATH": "/var/db/scripts/op/qkd_onbox.py",
 
+    # External runtime JSON files consumed by qkd_onbox.py
+    "ONBOX_CONFIG_DIR": "/var/db/scripts/op",
+    "ONBOX_CONFIG_JSON_NAME": "qkd_onbox_config.json",
+    "ONBOX_INVENTORY_JSON_NAME": "qkd_onbox_inventory.json",
+
+    # File permissions applied at deploy time
+    # 0555: executable/readable but not writable (including owner)
+    "ONBOX_SCRIPT_MODE": "0555",
+    # 0664: JSON editable by owner/group (customer-operable)
+    "ONBOX_JSON_MODE": "0664",
+
     # Runtime files on Junos
     "REMOTE_TMP_DIR": "/var/tmp",
     "LOG_FILE": "/var/tmp/qkd_debug.log",
@@ -99,6 +106,8 @@ QKD = {
     # SSH runtime identity
     "SSH_HOME_BASE": "/var/home",
     "SSH_KEY_NAME": "qkd_id_ed25519",
+    # Private key used by SCRIPT_USER to connect as PEER_CMD_USER on peers.
+    "PEER_CMD_SSH_KEY_NAME": "qkd_peer_cmd_ed25519",
     "SSH_KEY_TYPE": "ed25519",
     # Used only when SSH_KEY_TYPE is rsa.
     "SSH_KEY_BITS": 4096,
@@ -120,6 +129,9 @@ QKD = {
     #
     # authorized_keys:
     #   /var/home/{SCRIPT_USER}/.ssh/authorized_keys
+
+    # Peer command authorized_keys target:
+    #   /var/home/{PEER_CMD_USER}/.ssh/authorized_keys
 
     # Runtime policy
     "ENFORCE_RUNTIME_USER": True,

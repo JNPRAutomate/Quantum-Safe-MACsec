@@ -446,7 +446,8 @@ def run_scp(log, name, src, dst):
 
 def deploy_onbox(log, devices, artifacts):
     """
-    Deploy qkd_onbox.py to Junos devices using SCRIPT_USER/admin as source of truth.
+    Deploy qkd_onbox.py and external JSON runtime files to Junos devices using
+    SCRIPT_USER/admin as source of truth.
 
     Critical behavior:
       - Do NOT use device["auth"]["username"] for ONBOX deployment.
@@ -457,14 +458,23 @@ def deploy_onbox(log, devices, artifacts):
 
     script_user = QKD.get("SCRIPT_USER", "admin")
     script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
+    config_dir = QKD.get("ONBOX_CONFIG_DIR", "/var/db/scripts/op")
+    config_json_name = QKD.get("ONBOX_CONFIG_JSON_NAME", "qkd_onbox_config.json")
+    inventory_json_name = QKD.get("ONBOX_INVENTORY_JSON_NAME", "qkd_onbox_inventory.json")
+    script_mode = QKD.get("ONBOX_SCRIPT_MODE", "0555")
+    json_mode = QKD.get("ONBOX_JSON_MODE", "0664")
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
 
     remote_tmp = f"{tmp_dir}/{script_name}"
+    remote_tmp_config_json = f"{tmp_dir}/{config_json_name}"
+    remote_tmp_inventory_json = f"{tmp_dir}/{inventory_json_name}"
     remote_op = f"{op_script_dir}/{script_name}"
     remote_event = f"{event_script_dir}/{script_name}"
+    remote_config_json = f"{config_dir}/{config_json_name}"
+    remote_inventory_json = f"{config_dir}/{inventory_json_name}"
 
     # Legacy shim kept intentionally: old configs/groups may still reference onbox.py.
     legacy_op = f"{op_script_dir}/onbox.py"
@@ -569,25 +579,30 @@ def deploy_onbox(log, devices, artifacts):
 
     def install_on_active_re(dev):
         """
-        Install script on the active/master RE.
+        Install script and external JSON files on the active/master RE.
         """
         install_cmd = (
-            f"mkdir -p {op_script_dir} {event_script_dir}; "
+            f"mkdir -p {op_script_dir} {event_script_dir} {config_dir}; "
             f"cp {remote_tmp} {remote_op}; "
             f"cp {remote_tmp} {remote_event}; "
             f"cp {remote_tmp} {legacy_op}; "
             f"cp {remote_tmp} {legacy_event}; "
-            f"chmod 755 {remote_op} {remote_event} {legacy_op} {legacy_event}; "
+            f"cp {remote_tmp_config_json} {remote_config_json}; "
+            f"cp {remote_tmp_inventory_json} {remote_inventory_json}; "
+            f"chmod {script_mode} {remote_op} {remote_event} {legacy_op} {legacy_event}; "
+            f"chmod {json_mode} {remote_config_json} {remote_inventory_json}; "
             f"ls -l {remote_op}; "
             f"ls -l {remote_event}; "
-            f"rm -f {remote_tmp}"
+            f"ls -l {remote_config_json}; "
+            f"ls -l {remote_inventory_json}; "
+            f"rm -f {remote_tmp} {remote_tmp_config_json} {remote_tmp_inventory_json}"
         )
 
         return run_shell(dev, install_cmd, strict=True)
 
     def sync_to_re1_if_needed(dev, name):
         """
-        Copy op/event scripts to RE1 on dual-RE systems.
+        Copy op/event scripts and JSON config to RE1 on dual-RE systems.
 
         This MUST run as admin/SCRIPT_USER.
         """
@@ -605,6 +620,8 @@ def deploy_onbox(log, devices, artifacts):
             f"cli -c 'file copy {remote_event} re1:{remote_event}'",
             f"cli -c 'file copy {legacy_op} re1:{legacy_op}'",
             f"cli -c 'file copy {legacy_event} re1:{legacy_event}'",
+            f"cli -c 'file copy {remote_config_json} re1:{remote_config_json}'",
+            f"cli -c 'file copy {remote_inventory_json} re1:{remote_inventory_json}'",
         ]
 
         for cmd in copy_commands:
@@ -637,16 +654,22 @@ def deploy_onbox(log, devices, artifacts):
             log.info(f"[{name}] Skipping unmanaged device")
             continue
 
-        if name not in artifacts or "script" not in artifacts[name]:
-            log.info(f"[{name}] No onbox script artifact -> skipping")
+        if name not in artifacts:
+            log.info(f"[{name}] No onbox artifact entry -> skipping")
             continue
 
         ip = device["ip"]
         hostname = device.get("hostname", name)
 
         script = Path(artifacts[name]["script"])
+        static_json = Path(artifacts[name]["config_json"])
+        inventory_json = Path(artifacts[name]["inventory_json"])
         if not script.exists():
             raise FileNotFoundError(f"[{name}] Missing onbox script artifact: {script}")
+        if not static_json.exists():
+            raise FileNotFoundError(f"[{name}] Missing onbox config artifact: {static_json}")
+        if not inventory_json.exists():
+            raise FileNotFoundError(f"[{name}] Missing onbox inventory artifact: {inventory_json}")
 
         log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {script_user} =====")
 
@@ -656,6 +679,10 @@ def deploy_onbox(log, devices, artifacts):
             with SCP(dev) as scp:
                 log.info(f"[{name}] SCP script to {remote_tmp}")
                 scp.put(str(script), remote_path=remote_tmp)
+                log.info(f"[{name}] SCP config JSON to {remote_tmp_config_json}")
+                scp.put(str(static_json), remote_path=remote_tmp_config_json)
+                log.info(f"[{name}] SCP inventory JSON to {remote_tmp_inventory_json}")
+                scp.put(str(inventory_json), remote_path=remote_tmp_inventory_json)
 
             log.info(f"[{name}] Installing onbox script into op/event directories")
             output = install_on_active_re(dev)
@@ -665,7 +692,7 @@ def deploy_onbox(log, devices, artifacts):
 
             sync_to_re1_if_needed(dev, name)
 
-            log.info(f"[{name}] ONBOX deploy OK")
+            log.info(f"[{name}] ONBOX deploy OK (script immutable mode {script_mode}, json mode {json_mode})")
 
         except Exception as exc:
             log.error(f"[{name}] DEPLOY FAILED -> {exc}")
@@ -747,6 +774,10 @@ def handle_create(args):
     base = load_inventory_base()
     reset_local_runtime_for_create()
     script_user = QKD["SCRIPT_USER"]
+    peer_cmd_user = (
+        ((base.get("secrets") or {}).get("peer_cmd_user") if isinstance(base.get("secrets"), dict) else None)
+        or QKD.get("PEER_CMD_USER", "etsi_peer_view")
+    )
 
     secrets = base.get("secrets", {})
     global_auth = {}
@@ -799,6 +830,7 @@ def handle_create(args):
             "kme_port": kme_port,
             "auth": device_auth,
             "script_user": script_user,
+            "peer_cmd_user": peer_cmd_user,
             "sae_id": inv_dev.get("sae_id", build_sae(i)),
             "managed": inv_dev.get("managed", True),
         }
@@ -839,6 +871,7 @@ def handle_create(args):
     print(f"OK inventory created ({topology}, mode={mode}, pki={pki_profile})")
     print(f"OK inventory source: {repo_path(inventory_path)}")
     print(f"OK QKD runtime script_user fixed to: {script_user}")
+    print(f"OK QKD peer command user fixed to: {peer_cmd_user}")
 
     policy_template = load_qkd_policy_template()
     build_runtime_qkd_policy(
@@ -960,17 +993,31 @@ def handle_deploy(args):
 
     validate_all_devices(devices, phase="predeploy")
 
-    artifacts = {}
+    # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
+    artifacts = build_onbox_artifacts(devices)
+
     for name, device in devices.items():
         if device.get("managed") is False:
             continue
+
         mode = device.get("macsec", {}).get("mode", "qkd")
         if mode != "qkd":
             continue
-        script_path = BASE_DIR / CONFIG["runtime_dir"] / name / QKD["SCRIPT_NAME"]
-        if not script_path.exists():
-            raise RuntimeError(f"[{name}] Missing runtime onbox artifact: {script_path}. Run create first.")
-        artifacts[name] = {"script": script_path}
+
+        device_artifacts = artifacts.get(name, {})
+        expected = ["script", "config_json", "inventory_json"]
+        missing = [key for key in expected if key not in device_artifacts]
+        if missing:
+            raise RuntimeError(
+                f"[{name}] Missing runtime onbox artifacts: {missing}. Run create first."
+            )
+
+        for key in expected:
+            path = Path(device_artifacts[key])
+            if not path.exists():
+                raise RuntimeError(
+                    f"[{name}] Missing runtime onbox artifact file: {path}. Run create first."
+                )
 
     deploy_onbox(log, devices, artifacts)
 

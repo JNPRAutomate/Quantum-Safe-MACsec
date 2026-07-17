@@ -42,6 +42,31 @@ def qkd_authorized_keys():
     return f"{qkd_ssh_dir()}/authorized_keys"
 
 
+def qkd_peer_cmd_user(device=None):
+    if isinstance(device, dict):
+        value = device.get("peer_cmd_user")
+        if value:
+            return str(value)
+    return str(QKD.get("PEER_CMD_USER", "etsi_peer_view"))
+
+
+def qkd_peer_cmd_class():
+    return str(QKD.get("PEER_CMD_CLASS", "read-only"))
+
+
+def qkd_peer_cmd_ssh_private_key():
+    return f"{qkd_ssh_dir()}/{QKD.get('PEER_CMD_SSH_KEY_NAME', QKD.get('SSH_KEY_NAME', 'qkd_id_ed25519'))}"
+
+
+def qkd_peer_cmd_ssh_public_key():
+    return f"{qkd_peer_cmd_ssh_private_key()}.pub"
+
+
+def qkd_peer_cmd_authorized_keys(device=None):
+    peer_user = qkd_peer_cmd_user(device)
+    return f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{peer_user}/.ssh/authorized_keys"
+
+
 def qkd_remote_op_script():
     return QKD.get(
         "REMOTE_OP_SCRIPT_PATH",
@@ -58,6 +83,18 @@ def qkd_remote_event_script():
 
 def qkd_remote_tmp_dir():
     return QKD.get("REMOTE_TMP_DIR", "/var/tmp")
+
+
+def qkd_onbox_config_dir():
+    return QKD.get("ONBOX_CONFIG_DIR", QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op"))
+
+
+def qkd_remote_config_json():
+    return f"{qkd_onbox_config_dir()}/{QKD.get('ONBOX_CONFIG_JSON_NAME', 'qkd_onbox_config.json')}"
+
+
+def qkd_remote_inventory_json():
+    return f"{qkd_onbox_config_dir()}/{QKD.get('ONBOX_INVENTORY_JSON_NAME', 'qkd_onbox_inventory.json')}"
 
 
 def qkd_remote_cert_dir():
@@ -284,6 +321,11 @@ def check_validation_plan():
     print(f"ssh_key              = {qkd_ssh_private_key()}")
     print(f"ssh_pub              = {qkd_ssh_public_key()}")
     print(f"authorized_keys      = {qkd_authorized_keys()}")
+    print(f"peer_cmd_user        = {qkd_peer_cmd_user()}")
+    print(f"peer_cmd_class       = {qkd_peer_cmd_class()}")
+    print(f"peer_cmd_ssh_key     = {qkd_peer_cmd_ssh_private_key()}")
+    print(f"peer_cmd_ssh_pub     = {qkd_peer_cmd_ssh_public_key()}")
+    print(f"peer_cmd_auth_keys   = {qkd_peer_cmd_authorized_keys()}")
     print(f"op_script_path       = {qkd_remote_op_script()}")
     print(f"cert_dir             = {qkd_remote_cert_dir()}")
     print(f"log_file             = {QKD.get('LOG_FILE', '/var/tmp/qkd_debug.log')}")
@@ -441,6 +483,8 @@ def check_script_user_ssh_identity(device):
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
     pub_path = qkd_ssh_public_key()
+    peer_key_path = qkd_peer_cmd_ssh_private_key()
+    peer_pub_path = qkd_peer_cmd_ssh_public_key()
     key_type = str(QKD.get("SSH_KEY_TYPE", "ed25519")).strip().lower()
     key_bits = int(QKD.get("SSH_KEY_BITS", 4096))
     key_comment = QKD.get("SSH_KEY_COMMENT", "qkd-orchestrator")
@@ -452,14 +496,21 @@ def check_script_user_ssh_identity(device):
     else:
         raise ValueError(f"Unsupported SSH_KEY_TYPE={key_type}. Expected 'ed25519' or 'rsa'.")
 
+    gen_peer = "" if peer_key_path == key_path else f"test -f {peer_key_path} || {keygen_cmd.replace(key_path, peer_key_path)}; "
+
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || {keygen_cmd}; "
+        f"{gen_peer}"
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
+        f"chmod 600 {peer_key_path}; "
+        f"chmod 644 {peer_pub_path}; "
         f"ls -l {key_path}; "
-        f"ls -l {pub_path}"
+        f"ls -l {pub_path}; "
+        f"ls -l {peer_key_path}; "
+        f"ls -l {peer_pub_path}"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=60)
     if result.returncode != 0:
@@ -492,7 +543,10 @@ def check_script_user_can_read_private_key(device):
     name = device_name(device)
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
+    peer_key_path = qkd_peer_cmd_ssh_private_key()
     cmd = f"whoami; test -r {key_path}; ls -l {key_path}; echo PRIVATE_KEY_READABLE_OK user={script_user} key={key_path}"
+    if peer_key_path != key_path:
+        cmd += f"; test -r {peer_key_path}; ls -l {peer_key_path}; echo PRIVATE_KEY_READABLE_OK user={script_user} key={peer_key_path}"
     result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"SCRIPT_USER cannot read private key on {name} as {script_user}\nstdout={result.stdout}\nstderr={result.stderr}")
@@ -514,12 +568,12 @@ def check_script_user_atomic_write(device):
 def collect_script_user_public_keys(devices):
     devices = normalize_devices(devices)
     pub_keys = {}
-    pub_path = qkd_ssh_public_key()
+    pub_path = qkd_peer_cmd_ssh_public_key()
     for device in devices:
         name = device_name(device)
         result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
         if result.returncode != 0:
-            raise RuntimeError(f"failed to read SCRIPT_USER public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+            raise RuntimeError(f"failed to read peer command public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
         key = None
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -527,22 +581,27 @@ def collect_script_user_public_keys(devices):
                 key = line
                 break
         if not key:
-            raise RuntimeError(f"invalid SCRIPT_USER public key on {name} path={pub_path}\nraw_output={result.stdout}")
+            raise RuntimeError(f"invalid peer command public key on {name} path={pub_path}\nraw_output={result.stdout}")
         pub_keys[name] = key
     return pub_keys
 
 
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
-    auth_path = qkd_authorized_keys()
     pub_keys = collect_script_user_public_keys(devices)
     for device in devices:
         target = device_name(device)
+        peer_user = qkd_peer_cmd_user(device)
+        auth_path = qkd_peer_cmd_authorized_keys(device)
+        ssh_dir = auth_path.rsplit("/", 1)[0]
         for source_name, pub_key in pub_keys.items():
             quoted_key = shlex.quote(pub_key)
             cmd = (
+                f"mkdir -p {ssh_dir}; "
                 f"touch {auth_path}; "
                 f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}; "
+                f"chown {peer_user} {ssh_dir} {auth_path}; "
+                f"chmod 700 {ssh_dir}; "
                 f"chmod 600 {auth_path}; "
                 f"echo AUTHORIZED_KEY_OK source={source_name} target={target}"
             )
@@ -553,14 +612,15 @@ def install_peer_authorized_keys(devices):
                     f"stdout={result.stdout}\n"
                     f"stderr={result.stderr}"
                 )
-        print("[OK] peer authorized_keys synchronized")
+        print(f"[OK] peer authorized_keys synchronized target={target} peer_cmd_user={peer_user}")
 
 
 def check_peer_ssh_from_device(device):
     device = normalize_device(device)
     name = device_name(device)
-    script_user = qkd_script_user()
-    key_path = qkd_ssh_private_key()
+    peer_user = qkd_peer_cmd_user(device)
+    key_path = qkd_peer_cmd_ssh_private_key()
+    known_hosts = f"{qkd_ssh_dir()}/known_hosts"
 
     for link in device.get("links", []):
         peer_ip = link.get("peer_ip")
@@ -578,13 +638,13 @@ def check_peer_ssh_from_device(device):
             f"ssh -i {key_path} "
             f"-o IdentitiesOnly=yes "
             f"-o StrictHostKeyChecking=no "
-            f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
+            f"-o UserKnownHostsFile={known_hosts} "
             f"-o BatchMode=yes "
             f"-o ConnectTimeout=2 "
             f"-o ServerAliveInterval=2 "
             f"-o ServerAliveCountMax=1 "
             f"-o LogLevel=ERROR "
-            f"{script_user}@{peer_ip} "
+            f"{peer_user}@{peer_ip} "
             f"{shlex.quote(peer_payload)}"
         )
         result = ssh_script_user_onbox_cmd(device, cmd, timeout=8)
@@ -594,7 +654,7 @@ def check_peer_ssh_from_device(device):
         combined_low = combined.lower()
 
         if marker in combined:
-            print(f"[OK] peer SSH {name} -> {peer_ip} as {script_user}")
+            print(f"[OK] peer SSH {name} -> {peer_ip} as {peer_user}")
             continue
 
         hard_fail_markers = [
@@ -607,14 +667,14 @@ def check_peer_ssh_from_device(device):
         ]
         if any(m in combined_low for m in hard_fail_markers):
             raise RuntimeError(
-                f"peer SSH authentication failed from {name} to {peer_ip} as {script_user}\n"
+                f"peer SSH authentication failed from {name} to {peer_ip} as {peer_user}\n"
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )
 
         if "rpctimeouterror" in combined_low or "timeout" in combined_low:
             print(
-                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {script_user}; "
+                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {peer_user}; "
                 "manual SSH may still be valid"
             )
             print_if_verbose(stdout)
@@ -622,7 +682,7 @@ def check_peer_ssh_from_device(device):
             continue
 
         raise RuntimeError(
-            f"peer SSH marker not observed from {name} to {peer_ip} as {script_user}\n"
+            f"peer SSH marker not observed from {name} to {peer_ip} as {peer_user}\n"
             f"expected_marker={marker}\n"
             f"stdout={stdout}\n"
             f"stderr={stderr}"
@@ -649,10 +709,11 @@ def check_event_script_permissions(device):
     device = normalize_device(device)
     name = device_name(device)
     path = qkd_remote_event_script()
-    result = ssh_deploy_cmd(device, f"chmod 755 {path}; ls -l {path}", timeout=30)
+    mode = QKD.get("ONBOX_SCRIPT_MODE", "0555")
+    result = ssh_deploy_cmd(device, f"chmod {mode} {path}; ls -l {path}", timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"event qkd_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(f"[OK] event script permissions set: {path}")
+    print(f"[OK] event script permissions set: {path} mode={mode}")
     print_if_verbose(result.stdout)
 
 
@@ -671,10 +732,31 @@ def check_op_script_permissions(device):
     device = normalize_device(device)
     name = device_name(device)
     path = qkd_remote_op_script()
-    result = ssh_deploy_cmd(device, f"chmod 755 {path}", timeout=30)
+    mode = QKD.get("ONBOX_SCRIPT_MODE", "0555")
+    result = ssh_deploy_cmd(device, f"chmod {mode} {path}; ls -l {path}", timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"qkd_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(f"[OK] op script permissions set: {path}")
+    print(f"[OK] op script permissions set: {path} mode={mode}")
+
+
+def check_onbox_json_permissions(device):
+    device = normalize_device(device)
+    name = device_name(device)
+    mode = QKD.get("ONBOX_JSON_MODE", "0664")
+    config_path = qkd_remote_config_json()
+    inventory_path = qkd_remote_inventory_json()
+    cmd = f"chmod {mode} {config_path} {inventory_path}; ls -l {config_path}; ls -l {inventory_path}"
+    result = ssh_deploy_cmd(device, cmd, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"onbox JSON permission check failed on {name}\n"
+            f"config_path={config_path}\n"
+            f"inventory_path={inventory_path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+    print(f"[OK] onbox JSON permissions set on {name}: mode={mode}")
+    print_if_verbose(result.stdout)
 
 
 def check_system_scripts_python3(device):
@@ -709,26 +791,60 @@ def grep_remote_literal(device, literal, path, timeout=20):
 def check_onbox_embedded_config(device):
     device = normalize_device(device)
     name = device_name(device)
+    config_path = qkd_remote_config_json()
+    inventory_path = qkd_remote_inventory_json()
+
+    for path in (config_path, inventory_path):
+        result = ssh_deploy_cmd(device, f"ls -l {path}", timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"external onbox JSON missing on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}"
+            )
+
     script_user = qkd_script_user()
     expected_key = qkd_ssh_private_key()
-    path = qkd_remote_op_script()
-    result = ssh_deploy_cmd(device, f"grep -n 'script_user\\|ssh_key' {path}", timeout=30)
-    if (
-        result.returncode != 0
-        or "script_user" not in result.stdout
-        or script_user not in result.stdout
-        or "ssh_key" not in result.stdout
-        or expected_key not in result.stdout
-    ):
-        raise RuntimeError(f"embedded qkd_onbox CONFIG mismatch on {name}\nexpected script_user={script_user}\nexpected ssh_key={expected_key}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(f"[OK] embedded CONFIG identity on {name}: script_user={script_user} ssh_key={expected_key}")
-    print_if_verbose(result.stdout)
+    peer_cmd_user = qkd_peer_cmd_user(device)
+    expected_peer_key = qkd_peer_cmd_ssh_private_key()
+    checks = [
+        (config_path, f'"script_user": "{script_user}"'),
+        (config_path, f'"ssh_key": "{expected_key}"'),
+        (config_path, f'"peer_cmd_user": "{peer_cmd_user}"'),
+        (config_path, f'"peer_cmd_ssh_key": "{expected_peer_key}"'),
+        (inventory_path, '"links": ['),
+    ]
+
+    failed = []
+    for path, marker in checks:
+        result = grep_remote_literal(device=device, literal=marker, path=path, timeout=20)
+        if result.returncode != 0:
+            failed.append((path, marker, result.stdout, result.stderr))
+        else:
+            print(f"[OK] external runtime marker on {name}: path={path} marker={marker}")
+            print_if_verbose(result.stdout)
+
+    if failed:
+        lines = []
+        for path, marker, stdout, stderr in failed:
+            lines.append(
+                f"- path={path}\n"
+                f"  expected={marker}\n"
+                f"  stdout={stdout}\n"
+                f"  stderr={stderr}"
+            )
+        raise RuntimeError(
+            f"external qkd_onbox JSON identity validation failed on {name}\n" + "\n".join(lines)
+        )
+
+    print(
+        f"[OK] external JSON identity on {name}: script_user={script_user} ssh_key={expected_key} peer_cmd_user={peer_cmd_user} peer_cmd_ssh_key={expected_peer_key}"
+    )
 
 
 def check_onbox_runtime_policy_config(device):
     device = normalize_device(device)
     name = device_name(device)
-    path = qkd_remote_op_script()
+    config_path = qkd_remote_config_json()
+    inventory_path = qkd_remote_inventory_json()
     runtime_pki = load_runtime_pki_profile()
     runtime_policy = load_runtime_qkd_policy()
     pki = runtime_pki.get("pki", {})
@@ -738,26 +854,37 @@ def check_onbox_runtime_policy_config(device):
     trust_bundle = juniper_pki.get("trust_bundle") or pki.get("trust_bundle")
     max_installed_keys = qkd_policy.get("max_installed_keys")
     required_markers = [
-        ("qkd_policy", '"qkd_policy"'),
-        ("pki_profile", f'"pki_profile": "{pki_profile}"'),
-        ("max_installed_keys", f'"max_installed_keys": {int(max_installed_keys)}'),
+        (config_path, "qkd_policy", '"qkd_policy"'),
+        (config_path, "enabled_flag", '"enabled": false'),
+        (config_path, "pki_profile", f'"pki_profile": "{pki_profile}"'),
+        (config_path, "max_installed_keys", f'"max_installed_keys": {int(max_installed_keys)}'),
+        (inventory_path, "inventory_links", '"links": ['),
+        (inventory_path, "inventory_enabled", '"enabled": false'),
     ]
     if trust_bundle:
-        required_markers.append(("trust_bundle", f'"trust_bundle": "{trust_bundle}"'))
+        required_markers.append((config_path, "trust_bundle", f'"trust_bundle": "{trust_bundle}"'))
     failed = []
-    for label, marker in required_markers:
+    for path, label, marker in required_markers:
         result = grep_remote_literal(device=device, literal=marker, path=path, timeout=20)
         if result.returncode != 0:
-            failed.append((label, marker, result.stdout, result.stderr))
+            failed.append((path, label, marker, result.stdout, result.stderr))
         else:
-            print(f"[OK] embedded runtime marker on {name}: {label}")
+            print(f"[OK] external runtime marker on {name}: {label} ({path})")
             print_if_verbose(result.stdout)
-    print(f"[OK] embedded runtime CONFIG on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
+    print(f"[OK] external runtime CONFIG on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
     if failed:
         lines = []
-        for label, marker, stdout, stderr in failed:
-            lines.append(f"- missing marker={label}\n  expected={marker}\n  stdout={stdout}\n  stderr={stderr}")
-        raise RuntimeError(f"deployed qkd_onbox.py runtime CONFIG validation failed on {name}\npath={path}\n" + "\n".join(lines))
+        for path, label, marker, stdout, stderr in failed:
+            lines.append(
+                f"- missing marker={label}\n"
+                f"  path={path}\n"
+                f"  expected={marker}\n"
+                f"  stdout={stdout}\n"
+                f"  stderr={stderr}"
+            )
+        raise RuntimeError(
+            f"deployed qkd_onbox external JSON validation failed on {name}\n" + "\n".join(lines)
+        )
 
 
 def expected_max_installed_keys():
@@ -935,6 +1062,7 @@ def validate_device_identity_postdeploy(device):
     check_op_script_permissions(device)
     check_event_script_path(device)
     check_event_script_permissions(device)
+    check_onbox_json_permissions(device)
     check_system_scripts_python3(device)
     check_event_options_script_user(device)
     check_onbox_embedded_config(device)
