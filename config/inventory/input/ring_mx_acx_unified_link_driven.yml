@@ -125,7 +125,6 @@ devices:
   - et-0/0/2
 links:
 - id: MX1-MX2
-  type: ring
   node_a: MX1
   interface_a: et-0/0/0
   node_b: MX2
@@ -133,7 +132,6 @@ links:
   ca_name: CA_MX1_MX2
   keychain_name: QKD_CA_MX1_MX2
 - id: MX2-MX3
-  type: ring
   node_a: MX2
   interface_a: et-0/0/2
   node_b: MX3
@@ -141,7 +139,6 @@ links:
   ca_name: CA_MX2_MX3
   keychain_name: QKD_CA_MX2_MX3
 - id: MX3-MX4
-  type: ring
   node_a: MX3
   interface_a: et-0/0/4
   node_b: MX4
@@ -149,7 +146,6 @@ links:
   ca_name: CA_MX3_MX4
   keychain_name: QKD_CA_MX3_MX4
 - id: MX4-MX5
-  type: ring
   node_a: MX4
   interface_a: et-0/0/0
   node_b: MX5
@@ -157,7 +153,6 @@ links:
   ca_name: CA_MX4_MX5
   keychain_name: QKD_CA_MX4_MX5
 - id: MX5-MX6
-  type: ring
   node_a: MX5
   interface_a: et-0/0/4
   node_b: MX6
@@ -165,7 +160,6 @@ links:
   ca_name: CA_MX5_MX6
   keychain_name: QKD_CA_MX5_MX6
 - id: MX6-MX1
-  type: ring
   node_a: MX6
   interface_a: et-0/0/7
   node_b: MX1
@@ -213,7 +207,6 @@ links:
   ca_name: CA_MX4_ACX3
   keychain_name: QKD_CA_MX4_ACX3
 - id: ACX1-ACX2
-  type: ring
   node_a: ACX1
   interface_a: et-2/0/4
   node_b: ACX2
@@ -221,7 +214,6 @@ links:
   ca_name: CA_ACX1_ACX2
   keychain_name: QKD_CA_ACX1_ACX2
 - id: ACX2-ACX3
-  type: ring
   node_a: ACX2
   interface_a: et-2/0/2
   node_b: ACX3
@@ -229,7 +221,6 @@ links:
   ca_name: CA_ACX2_ACX3
   keychain_name: QKD_CA_ACX2_ACX3
 - id: ACX3-ACX4
-  type: ring
   node_a: ACX3
   interface_a: et-2/0/2
   node_b: ACX4
@@ -237,7 +228,6 @@ links:
   ca_name: CA_ACX3_ACX4
   keychain_name: QKD_CA_ACX3_ACX4
 - id: ACX4-ACX5
-  type: ring
   node_a: ACX4
   interface_a: et-0/0/0
   node_b: ACX5
@@ -245,7 +235,6 @@ links:
   ca_name: CA_ACX4_ACX5
   keychain_name: QKD_CA_ACX4_ACX5
 - id: ACX5-ACX1
-  type: ring
   node_a: ACX5
   interface_a: et-0/0/2
   node_b: ACX1

@@ -15,6 +15,7 @@ from lib.common.settings import PKI
 from lib.common.settings import QKD
 from lib.common.config import load_inventory, load_platform
 from lib.common.config import load_runtime_pki_profile
+from lib.common.config import load_runtime_qkd_policy
 from jinja2 import Environment, FileSystemLoader
 
 
@@ -336,8 +337,38 @@ def device_sae_id(device):
     )
 
 
+def sae_id_aliases(sae_id):
+    """Return canonical SAE ID plus a legacy separator variant for compatibility."""
+    if not sae_id:
+        return []
+
+    aliases = [sae_id]
+
+    if "-" in sae_id:
+        aliases.append(sae_id.replace("-", "_"))
+    elif "_" in sae_id:
+        aliases.append(sae_id.replace("_", "-"))
+
+    unique = []
+    for alias in aliases:
+        if alias and alias not in unique:
+            unique.append(alias)
+    return unique
+
+
+def resolve_cert_file_paths(local_dev_dir, sae_id):
+    for candidate_sae in sae_id_aliases(sae_id):
+        candidate_cert = local_dev_dir / f"{candidate_sae}.crt"
+        candidate_key = local_dev_dir / f"{candidate_sae}.key"
+        if candidate_cert.exists() and candidate_key.exists():
+            return candidate_cert, candidate_key
+
+    return local_dev_dir / f"{sae_id}.crt", local_dev_dir / f"{sae_id}.key"
+
+
 def resolve_cert_paths_for_device(name, device):
     sae_id = device_sae_id(device)
+    sae_candidates = sae_id_aliases(sae_id)
 
     runtime_pki = load_runtime_pki_profile()
     pki = runtime_pki.get("pki", {})
@@ -345,10 +376,14 @@ def resolve_cert_paths_for_device(name, device):
 
     if profile == "self_signed":
         profile_dir = CERTS_DIR / "self_signed"
-        candidate_device_dirs = [
-            profile_dir / sae_id,
-            profile_dir / "certs" / sae_id,
-        ]
+        candidate_device_dirs = []
+        for candidate_sae in sae_candidates:
+            candidate_device_dirs.extend(
+                [
+                    profile_dir / candidate_sae,
+                    profile_dir / "certs" / candidate_sae,
+                ]
+            )
 
         local_dev_dir = None
         for candidate in candidate_device_dirs:
@@ -358,8 +393,7 @@ def resolve_cert_paths_for_device(name, device):
         if local_dev_dir is None:
             local_dev_dir = candidate_device_dirs[0]
 
-        local_cert = local_dev_dir / f"{sae_id}.crt"
-        local_key = local_dev_dir / f"{sae_id}.key"
+        local_cert, local_key = resolve_cert_file_paths(local_dev_dir, sae_id)
 
         local_ca_candidates = [
             profile_dir / "offbox_rootCA.crt",
@@ -384,12 +418,16 @@ def resolve_cert_paths_for_device(name, device):
     if profile == "hierarchical_ca":
         profile_dir = CERTS_DIR / "hierarchical_ca"
 
-        candidate_device_dirs = [
-            profile_dir / "juniper_pki" / "certs" / sae_id,
-            profile_dir / "juniper" / sae_id,
-            profile_dir / "devices" / sae_id,
-            profile_dir / sae_id,
-        ]
+        candidate_device_dirs = []
+        for candidate_sae in sae_candidates:
+            candidate_device_dirs.extend(
+                [
+                    profile_dir / "juniper_pki" / "certs" / candidate_sae,
+                    profile_dir / "juniper" / candidate_sae,
+                    profile_dir / "devices" / candidate_sae,
+                    profile_dir / candidate_sae,
+                ]
+            )
 
         local_dev_dir = None
         for candidate in candidate_device_dirs:
@@ -399,8 +437,7 @@ def resolve_cert_paths_for_device(name, device):
         if local_dev_dir is None:
             local_dev_dir = candidate_device_dirs[0]
 
-        local_cert = local_dev_dir / f"{sae_id}.crt"
-        local_key = local_dev_dir / f"{sae_id}.key"
+        local_cert, local_key = resolve_cert_file_paths(local_dev_dir, sae_id)
 
         juniper_pki = pki.get("juniper", {}) or {}
         trust_bundle = juniper_pki.get("trust_bundle") or pki.get("trust_bundle")
@@ -524,6 +561,9 @@ def configure_qkd_scripts(dev, name, base):
     script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
+    runtime_policy = load_runtime_qkd_policy()
+    qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
+    rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
 
     rollback_candidate(dev, name)
 
@@ -533,6 +573,7 @@ def configure_qkd_scripts(dev, name, base):
     context = {
         "script_name": script_name,
         "script_user": script_user,
+        "rotation_interval_seconds": rotation_interval_seconds,
     }
 
     event_cfg = render_common_template("event.j2", context)

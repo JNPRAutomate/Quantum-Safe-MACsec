@@ -403,14 +403,25 @@ def cert_has_san_ip(cert_path: Path) -> bool:
     return "Subject Alternative Name" in result.stdout and "IP Address:" in result.stdout
 
 
+def kme_name_prefixes() -> list[str]:
+    prefix = str(PKI.get("KME_PREFIX", "kme"))
+    separator = str(PKI.get("KME_SEPARATOR", "-"))
+    canonical = f"{prefix}{separator}"
+    legacy = f"{prefix}_" if separator != "_" else f"{prefix}-"
+    if canonical == legacy:
+        return [canonical]
+    return [canonical, legacy]
+
+
 def validate_kme_cert_san_ip(staged_files: list[Path], dry_run: bool = False) -> None:
+    prefixes = tuple(kme_name_prefixes())
     certs = [
         path for path in staged_files
-        if path.name.startswith("kme_") and path.suffix == ".crt" and not path.name.endswith(".chain.crt")
+        if path.name.startswith(prefixes) and path.suffix == ".crt" and not path.name.endswith(".chain.crt")
     ]
 
     if not certs:
-        raise RuntimeError("No kme_*.crt files found for SAN IP validation")
+        raise RuntimeError("No KME leaf .crt files found for SAN IP validation")
 
     if dry_run:
         print(f"[DRY-RUN] Would validate SAN IP on {len(certs)} KME certificates")
@@ -443,6 +454,7 @@ def clean_remote_cert_dir(config: dict[str, Any], dry_run: bool = False) -> None
         f"cd {shell_quote(certs_dir)} && "
         "rm -f "
         "root.crt "
+        "kme-*.crt kme-*.key kme-*.pem kme-*.chain.crt "
         "kme_*.crt kme_*.key kme_*.pem kme_*.chain.crt "
         "trusted-juniper-ca-bundle.crt "
         "juniper-root-ca.crt "
@@ -573,7 +585,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-san-validation",
         action="store_true",
-        help="Skip local SAN IP validation for kme_*.crt files",
+        help="Skip local SAN IP validation for KME leaf .crt files",
     )
 
     return parser.parse_args()

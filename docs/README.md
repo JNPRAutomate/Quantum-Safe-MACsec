@@ -19,4 +19,4 @@ Use this as the starting point for GitHub readers:
 5. `docs/kme/CLI_REFERENCE.md`
 6. `docs/pqc/GLOSSARY.md`
 7. `docs/qkd/qkd_onbox_runtime_lld.md`
-
+8. `docs/qkd/CERT_MANAGER.md`

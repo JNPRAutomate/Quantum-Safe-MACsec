@@ -3,5 +3,6 @@ paramiko
 scp
 lxml
 pyopenssl
+cryptography
 requests
 pyyaml

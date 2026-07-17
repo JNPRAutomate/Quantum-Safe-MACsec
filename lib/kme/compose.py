@@ -21,6 +21,8 @@ from typing import Any
 
 import yaml
 
+from lib.common.settings import PKI
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -253,12 +255,19 @@ def get_kme_ip(config: dict[str, Any], index: int) -> str:
     )
 
 
+def get_kme_leaf_name(index: int) -> str:
+    prefix = str(PKI.get("KME_PREFIX", "kme"))
+    pad = int(PKI.get("KME_PAD", 3))
+    separator = str(PKI.get("KME_SEPARATOR", "-"))
+    return f"{prefix}{separator}{index:0{pad}d}"
+
+
 def get_kme_cert(index: int) -> str:
-    return f"kme_{index:03d}.crt"
+    return f"{get_kme_leaf_name(index)}.crt"
 
 
 def get_kme_key(index: int) -> str:
-    return f"kme_{index:03d}.key"
+    return f"{get_kme_leaf_name(index)}.key"
 
 
 def validate_compose_inputs(config: dict[str, Any], count: int) -> None:

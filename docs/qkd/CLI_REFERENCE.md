@@ -95,3 +95,24 @@ python3 qkd_orchestrator.py clean --local-only
 python3 qkd_orchestrator.py clean --pki
 python3 qkd_orchestrator.py clean --full-macsec
 ```
+
+## Auxiliary Tool: Certificate Manager
+
+For certificate, private key, and bundle inspection (including third-party artifacts), use:
+
+```bash
+python3 tools/cert_manager.py <inputs...> [options]
+```
+
+Quick examples:
+
+```bash
+python3 tools/cert_manager.py certs/hierarchical_ca/juniper_pki/certs -r
+python3 tools/cert_manager.py /path/to/customer_bundle.p7b --json
+python3 tools/cert_manager.py /path/to/private.key --password-prompt
+python3 tools/cert_report_filter.py --input cert_report.json --output cert_issues.txt
+python3 tools/cert_report_filter.py --input cert_report.json --allow-underscore-identifiers --output cert_issues_legacy.txt
+python3 tools/cert_report_filter.py --input cert_report.json --flag-unencrypted-keys --output cert_issues_with_key_warnings.txt
+```
+
+See full reference in `docs/qkd/CERT_MANAGER.md`.

@@ -60,7 +60,13 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 def build_sae(i: int) -> str:
-    return f"{PKI['SAE_PREFIX']}_{str(i).zfill(PKI['SAE_PAD'])}"
+    separator = str(PKI.get("SAE_SEPARATOR", "-"))
+    return f"{PKI['SAE_PREFIX']}{separator}{str(i).zfill(PKI['SAE_PAD'])}"
+
+
+def build_kme(i: int) -> str:
+    separator = str(PKI.get("KME_SEPARATOR", "-"))
+    return f"{PKI['KME_PREFIX']}{separator}{str(i).zfill(PKI['KME_PAD'])}"
 
 
 def _device_kme_ip(device: Dict[str, Any]) -> Optional[str]:
@@ -864,7 +870,7 @@ def handle_create(args):
     expected_signature = build_pki_runtime_signature(runtime_devices)
 
     if profile == "self_signed":
-        marker_file = BASE_DIR / CONFIG["self_signed_dir"] / "kme" / "kme_001.pem"
+        marker_file = BASE_DIR / CONFIG["self_signed_dir"] / "kme" / f"{build_kme(1)}.pem"
     elif profile == "hierarchical_ca":
         marker_file = (
             BASE_DIR

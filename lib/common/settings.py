@@ -41,6 +41,12 @@ PKI = {
     # SAE naming
     "SAE_PREFIX": "sae",
     "SAE_PAD": 3,
+    "SAE_SEPARATOR": "-",
+
+    # KME naming
+    "KME_PREFIX": "kme",
+    "KME_PAD": 3,
+    "KME_SEPARATOR": "-",
 
     # self-signed PKI naming
     "SELF_SIGNED_CA_CERT_NAME": "offbox_rootCA.crt",

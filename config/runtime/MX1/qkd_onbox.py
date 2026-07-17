@@ -3,14 +3,17 @@
 QKD on-box MACsec keychain/MKA controller.
 
 This template is embedded by lib/qkd/onbox_builder.py by replacing
-CONFIG = {   'local_sae': 'sae_001',
-    'kme_ip': '100.123.252.15',
+CONFIG = {   'device_name': 'MX1',
+    'hostname': 'MX1',
+    'local_sae': 'sae-001',
+    'kme_ip': '100.123.252.10',
     'kme_port': 8443,
     'pki_profile': 'hierarchical_ca',
     'ca_cert': 'trusted-kme-ca-bundle.crt',
     'trust_bundle': 'certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt',
-    'qkd_policy': {   'rekey_enabled': False,
-                      'interval_seconds': 60,
+    'qkd_policy': {   'rekey_enabled': True,
+                      'batch_enabled': True,
+                      'interval_seconds': 600,
                       'key_batch_size': 5,
                       'max_installed_keys': 5,
                       'key_ttl_seconds': 0,
@@ -23,32 +26,32 @@ CONFIG = {   'local_sae': 'sae_001',
     'log_max_bytes': 10485760,
     'log_backup_count': 5,
     'links': [   {   'id': 'MX1-MX2',
-                     'type': 'ring',
+                     'type': 'link',
                      'macsec': True,
                      'role': 'master',
                      'interface': 'et-0/0/0',
                      'peer': 'MX2',
                      'peer_ip': '100.123.113.152',
                      'peer_interface': 'et-0/0/0',
-                     'peer_sae': 'sae_002',
+                     'peer_sae': 'sae-002',
                      'ca_name': 'CA_MX1_MX2',
                      'ca_names': ['CA_MX1_MX2'],
                      'keychain_name': 'QKD_CA_MX1_MX2',
-                     'peer_kme_ip': '100.123.252.16',
+                     'peer_kme_ip': '100.123.252.11',
                      'peer_kme_port': 8443},
                  {   'id': 'MX6-MX1',
-                     'type': 'ring',
+                     'type': 'link',
                      'macsec': True,
                      'role': 'slave',
                      'interface': 'et-0/0/2',
                      'peer': 'MX6',
                      'peer_ip': '100.123.113.1',
                      'peer_interface': 'et-0/0/7',
-                     'peer_sae': 'sae_006',
+                     'peer_sae': 'sae-006',
                      'ca_name': 'CA_MX6_MX1',
                      'ca_names': ['CA_MX6_MX1'],
                      'keychain_name': 'QKD_CA_MX6_MX1',
-                     'peer_kme_ip': '100.123.252.20',
+                     'peer_kme_ip': '100.123.252.15',
                      'peer_kme_port': 8443}]} with a per-device CONFIG dictionary.
 
 Link-driven runtime contract
@@ -81,14 +84,17 @@ import pwd
 
 urllib3.disable_warnings()
 
-CONFIG = {   'local_sae': 'sae_001',
-    'kme_ip': '100.123.252.15',
+CONFIG = {   'device_name': 'MX1',
+    'hostname': 'MX1',
+    'local_sae': 'sae-001',
+    'kme_ip': '100.123.252.10',
     'kme_port': 8443,
     'pki_profile': 'hierarchical_ca',
     'ca_cert': 'trusted-kme-ca-bundle.crt',
     'trust_bundle': 'certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt',
-    'qkd_policy': {   'rekey_enabled': False,
-                      'interval_seconds': 60,
+    'qkd_policy': {   'rekey_enabled': True,
+                      'batch_enabled': True,
+                      'interval_seconds': 600,
                       'key_batch_size': 5,
                       'max_installed_keys': 5,
                       'key_ttl_seconds': 0,
@@ -101,32 +107,32 @@ CONFIG = {   'local_sae': 'sae_001',
     'log_max_bytes': 10485760,
     'log_backup_count': 5,
     'links': [   {   'id': 'MX1-MX2',
-                     'type': 'ring',
+                     'type': 'link',
                      'macsec': True,
                      'role': 'master',
                      'interface': 'et-0/0/0',
                      'peer': 'MX2',
                      'peer_ip': '100.123.113.152',
                      'peer_interface': 'et-0/0/0',
-                     'peer_sae': 'sae_002',
+                     'peer_sae': 'sae-002',
                      'ca_name': 'CA_MX1_MX2',
                      'ca_names': ['CA_MX1_MX2'],
                      'keychain_name': 'QKD_CA_MX1_MX2',
-                     'peer_kme_ip': '100.123.252.16',
+                     'peer_kme_ip': '100.123.252.11',
                      'peer_kme_port': 8443},
                  {   'id': 'MX6-MX1',
-                     'type': 'ring',
+                     'type': 'link',
                      'macsec': True,
                      'role': 'slave',
                      'interface': 'et-0/0/2',
                      'peer': 'MX6',
                      'peer_ip': '100.123.113.1',
                      'peer_interface': 'et-0/0/7',
-                     'peer_sae': 'sae_006',
+                     'peer_sae': 'sae-006',
                      'ca_name': 'CA_MX6_MX1',
                      'ca_names': ['CA_MX6_MX1'],
                      'keychain_name': 'QKD_CA_MX6_MX1',
-                     'peer_kme_ip': '100.123.252.20',
+                     'peer_kme_ip': '100.123.252.15',
                      'peer_kme_port': 8443}]}
 
 DEVICE = CONFIG["local_sae"]
@@ -411,6 +417,39 @@ def rekey_enabled():
     return bool(qkd_policy().get("rekey_enabled", True))
 
 
+def batch_mode_enabled():
+    return bool(qkd_policy().get("batch_enabled", True))
+
+
+def active_rotation_mode():
+    effective_batch = key_batch_size() if batch_mode_enabled() else 1
+    return "batch" if effective_batch > 1 else "single"
+
+
+def log_runtime_mode(iface, mode_ctx):
+    enabled = batch_mode_enabled()
+    configured_batch = int(qkd_policy().get("key_batch_size", 1))
+    effective_batch = key_batch_size() if enabled else 1
+    mode = "batch" if effective_batch > 1 else "single"
+
+    log(
+        f"RUNTIME MODE mode={mode} batch_enabled={enabled} configured_batch={configured_batch} effective_batch={effective_batch}",
+        "INFO",
+        iface,
+        mode_ctx,
+    )
+    customer_event(
+        "RUNTIME_MODE",
+        iface=iface,
+        mode=mode_ctx,
+        runtime_mode=mode,
+        batch_enabled=enabled,
+        configured_batch=configured_batch,
+        effective_batch=effective_batch,
+    )
+    return mode, effective_batch
+
+
 def max_installed_keys():
     value = int(qkd_policy().get("max_installed_keys", 5))
     if value < 1:
@@ -423,6 +462,13 @@ def key_batch_size():
     if value < 1:
         return 1
     return min(value, max_installed_keys())
+
+
+def rotation_interval_seconds():
+    value = int(qkd_policy().get("interval_seconds", MIN_ROTATION_INTERVAL))
+    if value < 1:
+        return 1
+    return value
 
 
 def qkd_key_index_from_generation(generation):
@@ -440,6 +486,7 @@ def default_keychain_state(link):
         "keychain_name": stable_keychain_name(link),
         "active_key_id": None,
         "active_confirmed_at": 0,
+        "pending_keys": [],
         "pending_key_id": None,
         "next_start_time": None,
         "last_rotation": 0,
@@ -452,6 +499,103 @@ def default_keychain_state(link):
             "declared_down": False
         }
     }
+
+
+def sync_pending_legacy_fields(state):
+    pending_keys = state.get("pending_keys", [])
+    if pending_keys:
+        head = pending_keys[0]
+        state["pending_key_id"] = head.get("key_id")
+        state["next_start_time"] = head.get("start_time")
+    else:
+        state["pending_key_id"] = None
+        state["next_start_time"] = None
+    return state
+
+
+def normalize_pending_keys(state):
+    pending = state.get("pending_keys")
+    if not isinstance(pending, list):
+        pending = []
+
+    normalized = []
+    seen = set()
+
+    for item in pending:
+        if not isinstance(item, dict):
+            continue
+
+        key_id = item.get("key_id")
+        if not key_id:
+            continue
+
+        key_id = str(key_id)
+        if key_id in seen:
+            continue
+
+        generation = item.get("generation")
+        try:
+            generation = int(generation) if generation is not None else None
+        except Exception:
+            generation = None
+
+        normalized.append(
+            {
+                "generation": generation,
+                "key_id": key_id,
+                "start_time": item.get("start_time"),
+            }
+        )
+        seen.add(key_id)
+
+    legacy_key = state.get("pending_key_id")
+    if legacy_key:
+        legacy_key = str(legacy_key)
+        if legacy_key not in seen:
+            generation = state.get("generation")
+            try:
+                generation = int(generation) if generation is not None else None
+            except Exception:
+                generation = None
+
+            normalized.insert(
+                0,
+                {
+                    "generation": generation,
+                    "key_id": legacy_key,
+                    "start_time": state.get("next_start_time"),
+                },
+            )
+
+    normalized.sort(
+        key=lambda item: (
+            item.get("generation") if item.get("generation") is not None else 2**31,
+            str(item.get("start_time") or ""),
+            item.get("key_id") or "",
+        )
+    )
+
+    state["pending_keys"] = normalized
+    return sync_pending_legacy_fields(state)
+
+
+def append_pending_key(state, generation, key_id, start_time):
+    if not key_id:
+        return normalize_pending_keys(state)
+
+    state = normalize_pending_keys(state)
+    for item in state.get("pending_keys", []):
+        if item.get("key_id") == key_id:
+            return state
+
+    state["pending_keys"].append(
+        {
+            "generation": int(generation) if generation is not None else None,
+            "key_id": key_id,
+            "start_time": start_time,
+        }
+    )
+    return normalize_pending_keys(state)
 
 
 def ensure_health_state(state):
@@ -486,6 +630,7 @@ def load_link_state(peer, iface, link):
     if "keychain_name" not in state:
         state["keychain_name"] = stable_keychain_name(link)
     state = ensure_health_state(state)
+    state = normalize_pending_keys(state)
     return state
 
 
@@ -498,7 +643,8 @@ def keychain_state_valid(state):
         return False
     if not isinstance(state.get("installed_keys"), list):
         return False
-    if not state.get("active_key_id") and not state.get("pending_key_id"):
+    state = normalize_pending_keys(state)
+    if not state.get("active_key_id") and not state.get("pending_keys"):
         return False
     return True
 
@@ -516,14 +662,29 @@ def compare_peer_keychain_state(local_state, peer_state):
         return False
     if local_state.get("active_key_id") != peer_state.get("active_key_id"):
         return False
-    if local_state.get("pending_key_id") != peer_state.get("pending_key_id"):
+    local_state = normalize_pending_keys(local_state)
+    peer_state = normalize_pending_keys(peer_state)
+
+    local_pending = local_state.get("pending_keys", [])
+    peer_pending = peer_state.get("pending_keys", [])
+
+    if len(local_pending) != len(peer_pending):
         return False
-    if local_state.get("next_start_time") != peer_state.get("next_start_time"):
-        return False
+
+    if local_pending:
+        local_head = local_pending[0]
+        peer_head = peer_pending[0]
+        if local_head.get("key_id") != peer_head.get("key_id"):
+            return False
+        if local_head.get("start_time") != peer_head.get("start_time"):
+            return False
+        if int(local_head.get("generation") or -1) != int(peer_head.get("generation") or -2):
+            return False
     return True
 
 
 def save_db_state(peer, iface, state):
+    state = normalize_pending_keys(state)
     path = Path(db_state_file(peer, iface))
     tmp = Path(f"{path}.{os.getpid()}.tmp")
     try:
@@ -607,6 +768,16 @@ def scheduled_key_start_time(link):
     stagger_seconds = link_stagger_minutes(link) * 60
     start_epoch = base_epoch + delay_seconds + stagger_seconds
     return junos_start_time_from_epoch(start_epoch)
+
+
+def scheduled_key_start_time_with_offset(link, offset_index):
+    base = scheduled_key_start_time(link)
+    base_epoch = epoch_from_junos_start_time(base)
+    if base_epoch is None:
+        return base
+    if int(offset_index) <= 0:
+        return base
+    return junos_start_time_from_epoch(base_epoch + int(offset_index) * rotation_interval_seconds())
 
 
 # ----------------------------
@@ -844,7 +1015,7 @@ def rotation_too_soon(state, min_interval=50):
 def get_configured_active_ca(iface):
     cmd = f"show configuration security macsec interfaces {iface} | display set"
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
         log("CONFIG CHECK TIMEOUT", "ERROR", iface, "CONFIG")
         return None
@@ -879,7 +1050,7 @@ def get_configured_active_ca(iface):
 def macsec_has_inuse_sa(iface, expected_ca=None):
     cmd = "show security macsec connections"
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
         log("MACSEC CONNECTION CHECK TIMEOUT", "ERROR", iface, "MACSEC")
         return False
@@ -942,7 +1113,7 @@ def normalize_hex_string(value):
 def get_mka_session_block_for_iface(iface):
     cmd = "show security mka sessions"
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     except subprocess.TimeoutExpired:
         log("MKA SESSION CHECK TIMEOUT", "ERROR", iface, "MKA")
         return None
@@ -1108,15 +1279,30 @@ def mka_confirms_key(iface, key_id, generation=None):
 
 def promote_pending_key_if_mka_confirmed(peer, iface, state):
     state = ensure_health_state(state)
-    pending_key_id = state.get("pending_key_id")
+    state = normalize_pending_keys(state)
+    pending_keys = state.get("pending_keys", [])
+    if not pending_keys:
+        return state, False
+
+    current = pending_keys[0]
+    pending_key_id = current.get("key_id")
+    pending_generation = current.get("generation")
+    pending_start_time = current.get("start_time")
+
     if not pending_key_id:
         return state, False
-    if not mka_confirms_key(iface, pending_key_id, generation=state.get("generation")):
-        log(f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} next_start_time={state.get('next_start_time')}", "INFO", iface, "MKA")
+
+    if not mka_confirms_key(iface, pending_key_id, generation=pending_generation):
+        log(
+            f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={pending_start_time}",
+            "INFO",
+            iface,
+            "MKA",
+        )
         return state, False
 
     promotion_time = int(time.time())
-    next_start_time = state.get("next_start_time")
+    next_start_time = pending_start_time
     activation_epoch = epoch_from_junos_start_time(next_start_time)
     promotion_delay_ms = None
     pending_late_by_ms = None
@@ -1125,9 +1311,18 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         pending_late_by_ms = int((promotion_time - activation_epoch) * 1000)
 
     state["active_key_id"] = pending_key_id
+    if pending_generation is not None:
+        state["generation"] = int(pending_generation)
     state["active_confirmed_at"] = promotion_time
-    state["pending_key_id"] = None
-    state["next_start_time"] = None
+    state["pending_keys"] = pending_keys[1:]
+    state = sync_pending_legacy_fields(state)
+
+    installed = state.get("installed_keys", [])
+    for item in installed:
+        if item.get("key_id") == pending_key_id:
+            item["status"] = "active"
+            item["promoted_at"] = promotion_time
+    state["installed_keys"] = installed[-KEYCHAIN_KEEP_LAST:]
 
     log(
         f"PENDING KEY PROMOTED active_key_id={state.get('active_key_id')} generation={state.get('generation')} "
@@ -1184,73 +1379,89 @@ def ckn_from_key_id(key_id):
     return hashlib.sha256(key_id.encode()).hexdigest()
 
 
-def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, generation=None, start_time=None):
-    try:
-        k = base64.b64decode(key_b64)
-    except Exception as e:
-        log(f"KEY DECODE FAIL key_id={key_id} error={str(e)}", "ERROR", iface, "MACSEC")
+def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
+    if not entries:
+        log("KEYCHAIN INSTALL BATCH EMPTY", "ERROR", iface, "MACSEC")
         return False
 
-    if len(k) < 32:
-        log(f"KEY TOO SHORT len={len(k)} key_id={key_id}", "ERROR", iface, "MACSEC")
-        return False
+    cli_cmds = ["configure"]
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key")
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}")
 
-    cak = k[:32].hex()
-    ckn = ckn_from_key_id(key_id)
+    for entry in entries:
+        key_id = entry.get("key_id")
+        key_b64 = entry.get("key")
+        generation = entry.get("generation")
+        start_time = entry.get("start_time")
 
-    if generation is None:
-        key_index = qkd_key_index_from_time()
-    else:
-        key_index = qkd_key_index_from_generation(generation)
+        if not key_id or not key_b64:
+            log(f"KEYCHAIN INSTALL ENTRY INVALID entry={entry}", "ERROR", iface, "MACSEC")
+            return False
 
-    if not start_time:
-        start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
+        try:
+            k = base64.b64decode(key_b64)
+        except Exception as e:
+            log(f"KEY DECODE FAIL key_id={key_id} error={str(e)}", "ERROR", iface, "MACSEC")
+            return False
 
-    log(
-        f"KEYCHAIN INSTALL START ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}",
-        "INFO",
-        iface,
-        "MACSEC",
-    )
+        if len(k) < 32:
+            log(f"KEY TOO SHORT len={len(k)} key_id={key_id}", "ERROR", iface, "MACSEC")
+            return False
 
-    cmd = (
-        f"configure; "
-        f"delete security macsec connectivity-association {ca_name} pre-shared-key; "
-        f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}; "
-        f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}; "
-        f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"; "
-        f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {start_time}; "
-        f"set security macsec connectivity-association {ca_name} security-mode static-cak; "
-        f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256; "
-        f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain; "
-        f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}; "
-        f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}; "
-        f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}; "
-        f"commit; "
-        f"exit"
-    )
+        cak = k[:32].hex()
+        ckn = ckn_from_key_id(key_id)
+
+        if generation is None:
+            key_index = qkd_key_index_from_time()
+        else:
+            key_index = qkd_key_index_from_generation(generation)
+
+        if not start_time:
+            start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
+
+        log(
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}",
+            "INFO",
+            iface,
+            "MACSEC",
+        )
+
+        cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {start_time}")
+
+    if commit:
+        cli_cmds.append("commit")
+    cli_cmds.append("exit")
+    cmd = "; ".join(cli_cmds)
 
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     except subprocess.TimeoutExpired:
-        log(f"KEYCHAIN INSTALL TIMEOUT ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}", "ERROR", iface, "MACSEC")
+        log(f"KEYCHAIN INSTALL TIMEOUT ca={ca_name} keychain={keychain_name} entries={len(entries)}", "ERROR", iface, "MACSEC")
         return False
     except Exception as e:
-        log(f"KEYCHAIN INSTALL ERROR ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id} error={str(e)}", "ERROR", iface, "MACSEC")
+        log(f"KEYCHAIN INSTALL ERROR ca={ca_name} keychain={keychain_name} entries={len(entries)} error={str(e)}", "ERROR", iface, "MACSEC")
         return False
 
     stdout = result.stdout.decode(errors="ignore").strip()
     stderr = result.stderr.decode(errors="ignore").strip()
     if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(
-            f"KEYCHAIN INSTALL FAIL ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id} "
+            f"KEYCHAIN INSTALL FAIL ca={ca_name} keychain={keychain_name} entries={len(entries)} "
             f"rc={result.returncode} stderr={stderr} stdout={stdout}",
             "ERROR",
             iface,
             "MACSEC",
         )
         try:
-            rb = subprocess.run(["cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            rb = subprocess.run(["/usr/sbin/cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             rb_stdout = rb.stdout.decode(errors="ignore").strip()
             rb_stderr = rb.stderr.decode(errors="ignore").strip()
             log(f"KEYCHAIN INSTALL ROLLBACK DONE ca={ca_name} keychain={keychain_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
@@ -1258,8 +1469,25 @@ def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, generat
             log(f"KEYCHAIN INSTALL ROLLBACK ERROR ca={ca_name} keychain={keychain_name} error={str(e)}", "ERROR", iface, "MACSEC")
         return False
 
-    log(f"KEYCHAIN INSTALL OK ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}", "INFO", iface, "MACSEC")
+    log(f"KEYCHAIN INSTALL OK ca={ca_name} keychain={keychain_name} entries={len(entries)}", "INFO", iface, "MACSEC")
     return True
+
+
+def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, generation=None, start_time=None, commit=True):
+    return install_keychain_batch(
+        iface,
+        [
+            {
+                "key_id": key_id,
+                "key": key_b64,
+                "generation": generation,
+                "start_time": start_time,
+            }
+        ],
+        ca_name,
+        keychain_name,
+        commit=commit,
+    )
 
 
 def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
@@ -1289,7 +1517,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     cmd = "; ".join(cli_cmds)
 
     try:
-        result = subprocess.run(["cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     except subprocess.TimeoutExpired:
         log(f"INTERFACE BIND TIMEOUT ca={ca_name}", "ERROR", iface, "MACSEC")
         return False
@@ -1302,7 +1530,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(f"INTERFACE BIND FAIL ca={ca_name} keychain={keychain_name} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, "MACSEC")
         try:
-            rb = subprocess.run(["cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            rb = subprocess.run(["/usr/sbin/cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             rb_stdout = rb.stdout.decode(errors="ignore").strip()
             rb_stderr = rb.stderr.decode(errors="ignore").strip()
             log(f"INTERFACE BIND ROLLBACK DONE ca={ca_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
@@ -1322,7 +1550,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
 def macsec_down(iface):
     log("MACSEC DOWN", "ERROR", iface, "FAILSAFE")
     try:
-        subprocess.run(["cli", "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        subprocess.run(["/usr/sbin/cli", "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except Exception as e:
         log(f"MACSEC DOWN ERROR error={str(e)}", "ERROR", iface, "FAILSAFE")
 
@@ -1407,7 +1635,7 @@ def validate_ssh_runtime_for_master():
     return True
 
 
-def send_command(link, action, iface, key_id=None, generation=None, start_time=None):
+def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None):
     if not validate_link_runtime(link, require_peer_transport=True):
         return False
 
@@ -1421,6 +1649,8 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         cmd += f" generation {generation}"
     if start_time:
         cmd += f" start-time {start_time}"
+    if batch_b64:
+        cmd += f" batch-b64 {batch_b64}"
 
     log(f"SSH EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} cmd=\"{cmd}\"", "INFO", iface, "MASTER")
 
@@ -1503,6 +1733,7 @@ def parse_slave():
     iface = None
     generation = None
     start_time = None
+    batch_b64 = None
 
     for i, a in enumerate(sys.argv):
         a = a.lstrip("-")
@@ -1519,7 +1750,9 @@ def parse_slave():
                 generation = None
         elif a == "start-time" and i + 1 < len(sys.argv):
             start_time = sys.argv[i + 1]
-    return action, key_id, iface, generation, start_time
+        elif a == "batch-b64" and i + 1 < len(sys.argv):
+            batch_b64 = sys.argv[i + 1]
+    return action, key_id, iface, generation, start_time, batch_b64
 
 
 # ----------------------------
@@ -1530,11 +1763,18 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     if not start_time:
         start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
 
+    runtime_mode, effective_batch = log_runtime_mode(iface, "SLAVE")
+
     log(f"INSTALL-KEY REQUEST key_id={key_id}", "INFO", iface, "SLAVE")
     slave_cycle_start_ms = now_ms()
     rotation = rotation_id_for(iface, generation, key_id)
     customer_event("PEER_INSTALL_REQUEST", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, start_time=start_time)
-    log(f"INSTALL-KEY SCHEDULE key_id={key_id} generation={generation} start_time={start_time}", "INFO", iface, "SLAVE")
+    log(
+        f"INSTALL-KEY SCHEDULE key_id={key_id} generation={generation} start_time={start_time} runtime_mode={runtime_mode} effective_batch={effective_batch}",
+        "INFO",
+        iface,
+        "SLAVE",
+    )
 
     link = link_by_interface(iface)
     if not link:
@@ -1577,12 +1817,11 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         return False
 
     if generation is not None:
-        state["generation"] = generation
+        state["generation"] = int(generation)
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
-    state["pending_key_id"] = key_id
+    state = append_pending_key(state, state.get("generation"), key_id, start_time)
     state["last_rotation"] = int(time.time())
-    state["next_start_time"] = start_time
     state.setdefault("installed_keys", [])
     state["installed_keys"].append({"generation": state.get("generation"), "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
@@ -1606,15 +1845,144 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     return True
 
 
+def run_slave_install_key_batch(batch_b64, iface):
+    if not batch_b64:
+        log("INSTALL-KEY-BATCH MISSING batch-b64", "ERROR", iface, "SLAVE")
+        print("ERROR MISSING batch-b64")
+        return False
+
+    runtime_mode, effective_batch = log_runtime_mode(iface, "SLAVE")
+
+    link = link_by_interface(iface)
+    if not link:
+        log(f"NO LINK MATCH iface={iface}", "ERROR", iface, "SLAVE")
+        print(f"ERROR NO LINK MATCH iface={iface}")
+        return False
+
+    peer = link["peer"]
+    ca_name = stable_ca_name(link)
+    keychain = stable_keychain_name(link)
+    state = load_link_state(peer, iface, link)
+
+    try:
+        decoded = base64.urlsafe_b64decode(batch_b64.encode()).decode()
+        batch = json.loads(decoded)
+    except Exception as e:
+        log(f"INSTALL-KEY-BATCH DECODE FAIL error={str(e)}", "ERROR", iface, "SLAVE")
+        print("ERROR INVALID BATCH")
+        return False
+
+    if not isinstance(batch, list) or not batch:
+        log("INSTALL-KEY-BATCH EMPTY", "ERROR", iface, "SLAVE")
+        print("ERROR EMPTY BATCH")
+        return False
+
+    log(
+        f"INSTALL-KEY-BATCH REQUEST count={len(batch)} runtime_mode={runtime_mode} effective_batch={effective_batch}",
+        "INFO",
+        iface,
+        "SLAVE",
+    )
+
+    install_entries = []
+    for item in batch:
+        if not isinstance(item, dict):
+            continue
+        key_id = item.get("key_id")
+        generation = item.get("generation")
+        start_time = item.get("start_time")
+
+        if not key_id:
+            log(f"INSTALL-KEY-BATCH INVALID ENTRY item={item}", "ERROR", iface, "SLAVE")
+            print("ERROR INVALID BATCH ENTRY")
+            return False
+
+        if not start_time:
+            start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
+
+        rotation = rotation_id_for(iface, generation, key_id)
+        customer_event("PEER_INSTALL_REQUEST", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, start_time=start_time)
+        customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
+        key = do_dec(link["peer_sae"], key_id)
+        if not key:
+            record_kme_failure(peer, iface, state, "DEC_FAILED")
+            print(f"ERROR DEC FAILED key_id={key_id}")
+            return False
+        customer_event("DEC_KEY_OK", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
+
+        install_entries.append(
+            {
+                "key_id": key_id,
+                "key": key,
+                "generation": generation,
+                "start_time": start_time,
+            }
+        )
+
+    if not install_keychain_batch(iface, install_entries, ca_name, keychain, commit=True):
+        record_kme_failure(peer, iface, state, "BATCH_INSTALL_FAILED")
+        print("ERROR KEYCHAIN BATCH INSTALL FAIL")
+        return False
+
+    if not bind_interface_to_stable_ca(iface, ca_name, keychain):
+        print(f"ERROR INTERFACE BIND FAIL ca={ca_name}")
+        return False
+
+    for entry in install_entries:
+        generation = entry.get("generation")
+        key_id = entry.get("key_id")
+        start_time = entry.get("start_time")
+        if generation is not None:
+            state["generation"] = int(generation)
+        state = append_pending_key(state, generation, key_id, start_time)
+        state.setdefault("installed_keys", [])
+        state["installed_keys"].append(
+            {
+                "generation": generation,
+                "key_id": key_id,
+                "installed_at": int(time.time()),
+                "start_time": start_time,
+                "status": "pending",
+            }
+        )
+
+    state["ca_name"] = ca_name
+    state["keychain_name"] = keychain
+    state["last_rotation"] = int(time.time())
+    state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
+    state = clear_kme_failure(peer, iface, state)
+    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+
+    if not save_db_state(peer, iface, state):
+        print("ERROR STATE SAVE FAIL")
+        return False
+
+    customer_event(
+        "PEER_PENDING_KEY_BATCH_INSTALLED",
+        iface=iface,
+        mode="SLAVE",
+        generation=state.get("generation"),
+        key_count=len(install_entries),
+        pending_key_id=state.get("pending_key_id"),
+        promoted=promoted,
+    )
+    print(f"OK INSTALL-KEY-BATCH count={len(install_entries)}")
+    return True
+
+
 def run_slave_status(iface):
     link = link_by_interface(iface)
     if not link:
         return False
+    runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if promoted:
         save_db_state(peer, iface, state)
+    state["runtime_mode"] = runtime_mode
+    state["batch_enabled"] = batch_mode_enabled()
+    state["effective_batch_size"] = effective_batch
     print(json.dumps(state))
     return True
 
@@ -1653,9 +2021,8 @@ def bootstrap_keychain_link(link, force=False):
         log("KEYCHAIN BOOTSTRAP FAILED local bind", "ERROR", iface, "BOOTSTRAP")
         return False
 
-    state["pending_key_id"] = key_id
+    state = append_pending_key(state, generation, key_id, start_time)
     state["last_rotation"] = int(time.time())
-    state["next_start_time"] = start_time
     state["installed_keys"].append({"generation": generation, "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
     state = clear_kme_failure(peer, iface, state)
@@ -1698,6 +2065,7 @@ def run_master():
         iface = link["interface"]
         ca_name = stable_ca_name(link)
         keychain = stable_keychain_name(link)
+        runtime_mode, effective_batch = log_runtime_mode(iface, "MASTER")
 
         state = load_link_state(peer, iface, link)
         state = ensure_health_state(state)
@@ -1797,67 +2165,155 @@ def run_master():
 
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')}", "INFO", iface, "MASTER")
 
-        new_generation = next_generation(state)
-        start_time = scheduled_key_start_time(link)
-        rotation = rotation_id_for(iface, new_generation)
+        batch_size = effective_batch
+        first_generation = next_generation(state)
+        rotation = rotation_id_for(iface, first_generation)
         rotation_start_ms = now_ms()
-        pending_seconds = pending_seconds_until(start_time)
 
-        log(f"KEYCHAIN ROTATION START rotation={rotation} ca={ca_name} keychain={keychain} generation={new_generation} start_time={start_time} pending_seconds={pending_seconds} stagger_minutes={link_stagger_minutes(link)}", "INFO", iface, "MASTER")
-        customer_event("ROTATION_START", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, ca=ca_name, keychain=keychain, start_time=start_time, pending_seconds=pending_seconds, stagger_minutes=link_stagger_minutes(link))
+        log(
+            f"KEYCHAIN ROTATION BATCH START rotation={rotation} ca={ca_name} keychain={keychain} "
+            f"first_generation={first_generation} batch_size={batch_size} runtime_mode={runtime_mode} stagger_minutes={link_stagger_minutes(link)}",
+            "INFO",
+            iface,
+            "MASTER",
+        )
 
-        enc_start_ms = now_ms()
-        customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, peer_sae=link["peer_sae"])
-        key_id, key = do_enc(link["peer_sae"])
-        enc_latency_ms = elapsed_ms(enc_start_ms)
+        batch_records = []
+        enc_batch_start_ms = now_ms()
+        for offset in range(batch_size):
+            generation = first_generation + offset
+            start_time = scheduled_key_start_time_with_offset(link, offset)
+            customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
+            key_id, key = do_enc(link["peer_sae"])
+            if not key_id:
+                record_kme_failure(peer, iface, state, "ENC_FAILED")
+                log("ENC FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                batch_records = []
+                break
+            customer_event("ENC_KEY_OK", iface=iface, mode="MASTER", rotation=rotation_id_for(iface, generation, key_id), generation=generation, key_id=key_id)
+            batch_records.append(
+                {
+                    "generation": generation,
+                    "start_time": start_time,
+                    "key_id": key_id,
+                    "key": key,
+                }
+            )
 
-        if key_id:
-            rotation = rotation_id_for(iface, new_generation, key_id)
-            customer_event("ENC_KEY_OK", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, key_id=key_id, latency_ms=enc_latency_ms)
-
-        if not key_id:
-            record_kme_failure(peer, iface, state, "ENC_FAILED")
-            log("ENC FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+        if not batch_records:
             continue
+
+        peer_payload = []
+        for item in batch_records:
+            peer_payload.append(
+                {
+                    "generation": item["generation"],
+                    "start_time": item["start_time"],
+                    "key_id": item["key_id"],
+                }
+            )
 
         peer_notify_start_ms = now_ms()
-        customer_event("PEER_NOTIFY_START", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, key_id=key_id, peer=peer, peer_ip=link.get("peer_ip"), peer_iface=link.get("peer_interface"), start_time=start_time)
+        if batch_size > 1:
+            payload_json = json.dumps(peer_payload, separators=(",", ":"))
+            payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
+                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
+                log("PEER INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                continue
+        else:
+            item = batch_records[0]
+            if not send_command(
+                link,
+                "install-key",
+                iface,
+                key_id=item["key_id"],
+                generation=item["generation"],
+                start_time=item["start_time"],
+            ):
+                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_FAILED")
+                log("PEER INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                continue
 
-        if not send_command(link, "install-key", iface, key_id=key_id, generation=new_generation, start_time=start_time):
-            record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_FAILED")
-            log("PEER INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-            continue
-
-        customer_event("PEER_ACK", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, key_id=key_id, peer=peer, peer_latency_ms=elapsed_ms(peer_notify_start_ms))
-        time.sleep(0.5)
+        customer_event(
+            "PEER_ACK",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=batch_records[-1]["generation"],
+            key_id=batch_records[0]["key_id"],
+            peer=peer,
+            peer_latency_ms=elapsed_ms(peer_notify_start_ms),
+        )
 
         local_install_start_ms = now_ms()
-        customer_event("LOCAL_KEYCHAIN_INSTALL_START", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time)
+        if batch_size > 1:
+            install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, commit=True)
+            fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
+            fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
+        else:
+            item = batch_records[0]
+            install_ok = install_keychain_key(
+                iface,
+                item["key_id"],
+                item["key"],
+                ca_name,
+                keychain,
+                generation=item["generation"],
+                start_time=item["start_time"],
+                commit=True,
+            )
+            fail_reason = "LOCAL_INSTALL_KEY_FAILED"
+            fail_log = "LOCAL INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY"
 
-        if not install_keychain_key(iface, key_id, key, ca_name, keychain, generation=new_generation, start_time=start_time):
-            record_kme_failure(peer, iface, state, "LOCAL_INSTALL_KEY_FAILED")
-            log("LOCAL INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+        if not install_ok:
+            record_kme_failure(peer, iface, state, fail_reason)
+            log(fail_log, "ERROR", iface, "MASTER")
             continue
 
-        customer_event("LOCAL_KEYCHAIN_INSTALL_OK", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time, install_latency_ms=elapsed_ms(local_install_start_ms), pending_seconds=pending_seconds_until(start_time))
+        customer_event(
+            "LOCAL_KEYCHAIN_INSTALL_OK",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=batch_records[-1]["generation"],
+            key_id=batch_records[0]["key_id"],
+            ca=ca_name,
+            keychain=keychain,
+            start_time=batch_records[0]["start_time"],
+            install_latency_ms=elapsed_ms(local_install_start_ms),
+            pending_seconds=pending_seconds_until(batch_records[0]["start_time"]),
+            key_count=len(batch_records),
+            enc_latency_ms=elapsed_ms(enc_batch_start_ms),
+        )
+
         time.sleep(POST_KEY_INSTALL_SETTLE_SECONDS)
 
-        if start_time_is_due(start_time):
+        first_start_time = batch_records[0]["start_time"]
+        if start_time_is_due(first_start_time):
             if not wait_for_macsec_inuse(iface, ca_name, MACSEC_INUSE_GRACE_SECONDS):
                 record_kme_failure(peer, iface, state, "MACSEC_INUSE_TIMEOUT_AFTER_KEYCHAIN_INSTALL")
                 log("MACSEC NOT INUSE AFTER KEYCHAIN INSTALL -> MARK DEGRADED", "ERROR", iface, "MASTER")
                 continue
         else:
-            log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={start_time}", "INFO", iface, "MASTER")
+            log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={first_start_time}", "INFO", iface, "MASTER")
 
-        state["generation"] = new_generation
+        state["generation"] = batch_records[-1]["generation"]
         state["ca_name"] = ca_name
         state["keychain_name"] = keychain
-        state["pending_key_id"] = key_id
         state["last_rotation"] = int(time.time())
-        state["next_start_time"] = start_time
         state.setdefault("installed_keys", [])
-        state["installed_keys"].append({"generation": new_generation, "key_id": key_id, "start_time": start_time, "status": "pending", "installed_at": int(time.time())})
+        for item in batch_records:
+            state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"])
+            state["installed_keys"].append(
+                {
+                    "generation": item["generation"],
+                    "key_id": item["key_id"],
+                    "start_time": item["start_time"],
+                    "status": "pending",
+                    "installed_at": int(time.time()),
+                }
+            )
         state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
         state = clear_kme_failure(peer, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
@@ -1878,13 +2334,13 @@ def run_master():
             continue
 
         log(
-            f"KEYCHAIN ROTATION DONE rotation={rotation} ca={ca_name} keychain={keychain} generation={new_generation} pending_key_id={key_id} "
-            f"start_time={start_time} pending_seconds={pending_seconds_until(start_time)} promoted={promoted} cycle_duration_ms={elapsed_ms(rotation_start_ms)}",
+            f"KEYCHAIN ROTATION BATCH DONE rotation={rotation} ca={ca_name} keychain={keychain} generation={state.get('generation')} pending_key_id={state.get('pending_key_id')} "
+            f"start_time={state.get('next_start_time')} pending_seconds={pending_seconds_until(state.get('next_start_time'))} promoted={promoted} key_count={len(batch_records)} cycle_duration_ms={elapsed_ms(rotation_start_ms)}",
             "INFO",
             iface,
             "MASTER",
         )
-        customer_event("ROTATION_DONE", iface=iface, mode="MASTER", rotation=rotation, generation=new_generation, key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time, pending_seconds=pending_seconds_until(start_time), promoted=promoted, enc_latency_ms=enc_latency_ms, peer_latency_ms=elapsed_ms(peer_notify_start_ms), local_install_latency_ms=elapsed_ms(local_install_start_ms), cycle_duration_ms=elapsed_ms(rotation_start_ms))
+        customer_event("ROTATION_DONE", iface=iface, mode="MASTER", rotation=rotation, generation=state.get("generation"), key_id=state.get("pending_key_id"), ca=ca_name, keychain=keychain, start_time=state.get("next_start_time"), pending_seconds=pending_seconds_until(state.get("next_start_time")), promoted=promoted, peer_latency_ms=elapsed_ms(peer_notify_start_ms), local_install_latency_ms=elapsed_ms(local_install_start_ms), cycle_duration_ms=elapsed_ms(rotation_start_ms), key_count=len(batch_records))
 
 
 # ----------------------------
@@ -1899,7 +2355,7 @@ def main():
         print(f"ERROR UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain")
         sys.exit(1)
 
-    action, key_id, iface, generation, start_time = parse_slave()
+    action, key_id, iface, generation, start_time, batch_b64 = parse_slave()
 
     if action:
         if action == "install-key":
@@ -1923,6 +2379,21 @@ def main():
                 print("ERROR INVALID STATUS ARGUMENTS")
                 sys.exit(1)
             ok = run_slave_status(iface)
+            sys.exit(0 if ok else 1)
+
+        if action == "install-key-batch":
+            if not iface or not batch_b64:
+                log("INVALID INSTALL-KEY-BATCH ARGUMENTS", "ERROR", iface, "SLAVE")
+                print("ERROR INVALID INSTALL-KEY-BATCH ARGUMENTS")
+                sys.exit(1)
+            if not acquire_action_lock(iface, action):
+                log(f"ACTION LOCK BUSY action={action} iface={iface}", "ERROR", iface, "LOCK")
+                print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
+                sys.exit(1)
+            try:
+                ok = run_slave_install_key_batch(batch_b64, iface)
+            finally:
+                release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
 
         log(f"UNKNOWN ACTION action={action}", "ERROR")

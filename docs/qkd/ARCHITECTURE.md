@@ -60,6 +60,26 @@ PKI outputs are generated in:
 - `certs/self_signed/` or
 - `certs/hierarchical_ca/`
 
+## Certificate identity naming policy
+
+For certificate identity values that may be interpreted as DNS-style host labels (notably SAN `dNSName` and legacy CN-based hostname checks), this project follows an LDH-safe convention:
+
+- preferred SAE ID format: `sae-001`, `sae-002`, ...
+- avoid underscore in hostname-like identity fields
+
+Rationale:
+
+- RFC 5280 `dNSName` processing references DNS preferred host syntax
+- RFC 6125 defines SAN-first hostname verification and CN fallback as legacy/deprecated behavior
+- using hyphen-only separators improves interoperability across TLS stacks and validation toolchains
+
+Authoritative references:
+
+- [RFC 5280 section 4.2.1.6](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.6)
+- [RFC 1123 section 2.1](https://www.rfc-editor.org/rfc/rfc1123#section-2.1)
+- [RFC 1035 section 2.3.1](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.1)
+- [RFC 6125](https://www.rfc-editor.org/rfc/rfc6125)
+
 ## Link-driven model (current design)
 
 The runtime is driven by explicit `links[]` declarations in inventory.

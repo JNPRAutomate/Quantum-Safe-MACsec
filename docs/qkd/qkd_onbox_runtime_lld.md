@@ -273,3 +273,10 @@ Under `/var/tmp` the on-box script uses:
 2. legacy double-buffer `program/activate` actions are intentionally unsupported.
 3. peer coordination depends on SSH transport and peer op-script availability.
 4. all key operations assume ETSI API + mTLS cert paths embedded in `CONFIG`.
+5. SAE identity naming used for cert/path material should remain LDH-safe (`sae-###` preferred, avoid `_` in hostname-like certificate identifiers).
+
+Standards reference for naming constraint context:
+
+- [RFC 5280 section 4.2.1.6](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.6)
+- [RFC 1123 section 2.1](https://www.rfc-editor.org/rfc/rfc1123#section-2.1)
+- [RFC 1035 section 2.3.1](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.1)
