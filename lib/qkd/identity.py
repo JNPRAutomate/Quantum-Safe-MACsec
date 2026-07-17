@@ -277,10 +277,31 @@ def ssh_cmd(device, command, user, timeout=30):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
 
 
+def deploy_auth_user(device):
+    device = normalize_device(device)
+    auth = device.get("auth") or {}
+    return str(auth.get("username") or "")
+
+
 def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker=True):
     device = normalize_device(device)
     script_user = qkd_script_user()
+    deploy_user = deploy_auth_user(device)
     key_path = qkd_ssh_private_key()
+
+    # Fast-path: when deploy auth user already matches script_user, run directly.
+    # This avoids unnecessary localhost SSH dependency on authorized_keys ownership.
+    if deploy_user == script_user:
+        if command.startswith("op "):
+            direct_cmd = "cli -c " + shlex.quote(command)
+        else:
+            direct_cmd = command
+        return ssh_deploy_cmd(
+            device=device,
+            command=direct_cmd,
+            timeout=timeout,
+            include_failed_marker=include_failed_marker,
+        )
 
     if command.startswith("op "):
         remote_payload = command
@@ -520,9 +541,26 @@ def check_script_user_ssh_identity(device):
 def check_script_user_authorized_keys(device):
     device = normalize_device(device)
     name = device_name(device)
+    script_user = qkd_script_user()
+    deploy_user = deploy_auth_user(device)
     ssh_dir = qkd_ssh_dir()
     pub_path = qkd_ssh_public_key()
     auth_path = qkd_authorized_keys()
+
+    if deploy_user == script_user:
+        cmd = (
+            f"mkdir -p {ssh_dir}; "
+            f"test -s {pub_path}; "
+            f"ls -l {pub_path}; "
+            f"ls -l {auth_path} || true"
+        )
+        result = ssh_deploy_cmd(device, cmd, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"authorized_keys precheck failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        print(f"[INFO] authorized_keys mutation skipped on {name}: deploy_user ({deploy_user}) equals script_user ({script_user})")
+        print(result.stdout)
+        return
+
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -s {pub_path}; "
