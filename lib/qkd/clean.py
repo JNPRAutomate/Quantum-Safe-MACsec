@@ -345,6 +345,12 @@ def clean_device(
                     
                     if "warning: statement not found" in line:
                         continue
+
+                    if (
+                        "some configurations require commits to be synchronized" in line.lower()
+                        and "commit no-synchronize" in line.lower()
+                    ):
+                        continue
                     
                     if "Entering configuration mode" in line:
                         continue
@@ -434,6 +440,11 @@ def clean_device(
                 if "exiting configuration mode" in low:
                     return True
                 if "warning: statement not found" in low:
+                    return True
+                if (
+                    "some configurations require commits to be synchronized" in low
+                    and "commit no-synchronize" in low
+                ):
                     return True
                 return False
 
