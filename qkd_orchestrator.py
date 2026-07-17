@@ -362,7 +362,9 @@ def parse_args():
             "  python3 qkd_orchestrator.py clean --local-only --pki\n"
             "  python3 qkd_orchestrator.py clean\n"
             "  python3 qkd_orchestrator.py clean --pki\n"
-            "  python3 qkd_orchestrator.py clean --full-macsec"
+            "  python3 qkd_orchestrator.py clean --full-macsec\n"
+            "  python3 qkd_orchestrator.py clean --pki --keep-users\n"
+            "  python3 qkd_orchestrator.py clean --pki --remove-script-user"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -370,6 +372,21 @@ def parse_args():
     clean.add_argument("--local-only", action="store_true")
     clean.add_argument("--pki", action="store_true")
     clean.add_argument("--full-macsec", action="store_true")
+    clean.add_argument(
+        "--keep-users",
+        action="store_true",
+        help="Keep SCRIPT_USER and PEER_CMD_USER on remote devices (default clean removes both).",
+    )
+    clean.add_argument(
+        "--remove-peer-user",
+        action="store_true",
+        help="Explicitly request removal of configured PEER_CMD_USER and non-built-in peer login class.",
+    )
+    clean.add_argument(
+        "--remove-script-user",
+        action="store_true",
+        help="Explicitly request removal of configured SCRIPT_USER from remote devices.",
+    )
 
     validate = subparsers.add_parser(
         "validate",

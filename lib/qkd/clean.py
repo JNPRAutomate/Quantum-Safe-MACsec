@@ -135,7 +135,13 @@ def collect_qkd_clean_candidates(device):
 # ----------------------------------------
 # CLEAN ONE REMOTE DEVICE
 # ----------------------------------------
-def clean_device(name, device, full_macsec=False):
+def clean_device(
+    name,
+    device,
+    full_macsec=False,
+    remove_peer_user=False,
+    remove_script_user=False,
+):
     try:
         ip = device["ip"]
         user = device["auth"]["username"]
@@ -146,6 +152,9 @@ def clean_device(name, device, full_macsec=False):
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
         remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
+        script_user = str(QKD.get("SCRIPT_USER", "admin"))
+        peer_cmd_user = str(QKD.get("PEER_CMD_USER", "etsi_peer_view"))
+        peer_cmd_class = str(QKD.get("PEER_CMD_CLASS", "read-only"))
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -212,6 +221,15 @@ def clean_device(name, device, full_macsec=False):
             f"delete event-options event-script file {script_name}",
             f"delete system scripts op file {script_name}",
         ]
+
+        if remove_script_user:
+            config_cmds.append(f"delete system login user {script_user}")
+
+        if remove_peer_user:
+            config_cmds.append(f"delete system login user {peer_cmd_user}")
+            builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
+            if peer_cmd_class and peer_cmd_class not in builtin_classes:
+                config_cmds.append(f"delete system login class {peer_cmd_class}")
 
         if full_macsec:
             config_cmds.append("delete security macsec")
@@ -389,6 +407,21 @@ def clean_device(name, device, full_macsec=False):
                 f"set system scripts op file {script_name}",
             ]
 
+            if remove_script_user:
+                forbidden_patterns.append(
+                    f"set system login user {script_user} "
+                )
+
+            if remove_peer_user:
+                forbidden_patterns.append(
+                    f"set system login user {peer_cmd_user} "
+                )
+                builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
+                if peer_cmd_class and peer_cmd_class not in builtin_classes:
+                    forbidden_patterns.append(
+                        f"set system login class {peer_cmd_class} "
+                    )
+
             if full_macsec:
                 forbidden_patterns.extend(
                     [
@@ -513,10 +546,22 @@ def handle_clean(args):
       Local certs are removed ONLY when --pki is explicitly provided.
     """
 
+    remove_peer_user = (
+        getattr(args, "remove_peer_user", False)
+        or not getattr(args, "keep_users", False)
+    )
+    remove_script_user = (
+        getattr(args, "remove_script_user", False)
+        or not getattr(args, "keep_users", False)
+    )
+
     print("=== QKD clean ===")
     print(f"local_only = {args.local_only}")
     print(f"pki        = {args.pki}")
     print(f"full_macsec = {args.full_macsec}")
+    print(f"keep_users = {getattr(args, 'keep_users', False)}")
+    print(f"remove_peer_user = {remove_peer_user}")
+    print(f"remove_script_user = {remove_script_user}")
     print("")
 
     devices_file = BASE_DIR / CONFIG["runtime_dir"] / "devices.yaml"
@@ -525,6 +570,9 @@ def handle_clean(args):
     # LOCAL ONLY MODE
     # ----------------------------------------
     if args.local_only:
+
+        if remove_peer_user or remove_script_user:
+            print("Ignoring user-removal flags in --local-only mode (no remote cleanup).")
 
         clean_runtime()
 
@@ -568,7 +616,9 @@ def handle_clean(args):
         ok = clean_device(
             name,
             device,
-            full_macsec=args.full_macsec
+            full_macsec=args.full_macsec,
+            remove_peer_user=remove_peer_user,
+            remove_script_user=remove_script_user,
         )
 
         if not ok:
