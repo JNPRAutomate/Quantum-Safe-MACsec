@@ -97,6 +97,7 @@ Behavior notes:
 - Use `--keep-users` to keep both users on devices during clean.
 - `--remove-peer-user` and `--remove-script-user` are explicit flags and remain accepted.
 - In `--local-only` mode, user-removal flags are ignored because no remote cleanup is performed.
+- In remote clean mode, device access prefers `secrets.bootstrap_user`/`secrets.bootstrap_password` from `inventory_base.yaml`; runtime device auth is used only as fallback.
 
 Examples:
 

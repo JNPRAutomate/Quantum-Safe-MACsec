@@ -141,17 +141,31 @@ def clean_device(
     full_macsec=False,
     remove_peer_user=False,
     remove_script_user=False,
+    clean_user=None,
+    clean_password=None,
 ):
     try:
         ip = device["ip"]
-        user = device["auth"]["username"]
-        passwd = device["auth"]["password"]
+
+        device_auth = device.get("auth", {}) or {}
+        default_user = device_auth.get("username")
+        default_pass = device_auth.get("password")
+
+        user = clean_user or default_user
+        passwd = clean_password or default_pass
+
+        if not user or not passwd:
+            raise RuntimeError(
+                f"Missing credentials for device {name}. "
+                "Provide bootstrap credentials in inventory_base or runtime auth."
+            )
 
         script_name = QKD["SCRIPT_NAME"]
         script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
         remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
+        auth_user = str(user)
         script_user = str(QKD.get("SCRIPT_USER", "admin"))
         peer_cmd_user = str(QKD.get("PEER_CMD_USER", "etsi_peer_view"))
         peer_cmd_class = str(QKD.get("PEER_CMD_CLASS", "read-only"))
@@ -222,14 +236,16 @@ def clean_device(
             f"delete system scripts op file {script_name}",
         ]
 
+        user_cleanup_cmds = []
+
         if remove_script_user:
-            config_cmds.append(f"delete system login user {script_user}")
+            user_cleanup_cmds.append(f"delete system login user {script_user}")
 
         if remove_peer_user:
-            config_cmds.append(f"delete system login user {peer_cmd_user}")
+            user_cleanup_cmds.append(f"delete system login user {peer_cmd_user}")
             builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
             if peer_cmd_class and peer_cmd_class not in builtin_classes:
-                config_cmds.append(f"delete system login class {peer_cmd_class}")
+                user_cleanup_cmds.append(f"delete system login class {peer_cmd_class}")
 
         if full_macsec:
             config_cmds.append("delete security macsec")
@@ -512,6 +528,31 @@ def clean_device(
 
                 return False
 
+            if user_cleanup_cmds:
+                user_cleanup_body = "; ".join(user_cleanup_cmds)
+                user_cleanup_cmd = (
+                    f"cli -c 'configure; {user_cleanup_body}; commit; exit'"
+                )
+
+                run_shell(
+                    "login users cleanup",
+                    user_cleanup_cmd,
+                    strict=True,
+                )
+
+                removed_users = []
+                if remove_script_user:
+                    removed_users.append(script_user)
+                if remove_peer_user:
+                    removed_users.append(peer_cmd_user)
+
+                if auth_user in removed_users:
+                    print(
+                        f"[{name}] info: current clean session user {auth_user} was removed; "
+                        "post-user verification skipped",
+                        flush=True,
+                    )
+
             print(f"[OK] Device clean complete: {name}")
             return True
 
@@ -612,6 +653,36 @@ def handle_clean(args):
 
     failed = []
 
+    bootstrap_user = None
+    bootstrap_password = None
+
+    try:
+        base = load_inventory_base()
+        secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+        if not isinstance(secrets, dict):
+            secrets = {}
+
+        bootstrap_user = (
+            secrets.get("bootstrap_user")
+            or secrets.get("deploy_user")
+            or None
+        )
+        bootstrap_password = (
+            secrets.get("bootstrap_password")
+            or secrets.get("deploy_password")
+            or secrets.get("root_password")
+            or None
+        )
+    except Exception as exc:
+        print(f"WARN unable to resolve inventory_base bootstrap credentials: {exc}")
+
+    use_bootstrap_auth = bool(bootstrap_user and bootstrap_password)
+
+    if use_bootstrap_auth:
+        print(f"Remote clean auth source: inventory_base bootstrap_user={bootstrap_user}")
+    else:
+        print("Remote clean auth source: runtime devices auth (bootstrap credentials unavailable)")
+
     for name, device in devices.items():
         ok = clean_device(
             name,
@@ -619,6 +690,8 @@ def handle_clean(args):
             full_macsec=args.full_macsec,
             remove_peer_user=remove_peer_user,
             remove_script_user=remove_script_user,
+            clean_user=bootstrap_user if use_bootstrap_auth else None,
+            clean_password=bootstrap_password if use_bootstrap_auth else None,
         )
 
         if not ok:
