@@ -169,6 +169,11 @@ Design consequences:
 5. deploy scripts/certs/config to devices
 6. validate device state
 
+Dual-RE deploy note:
+
+- deploy config keeps both `qkd_onbox.py` and legacy `onbox.py` script stanzas aligned,
+  so commit synchronize can apply cleanly on backup RE as well.
+
 ## Clean behavior (current)
 
 `clean` supports local-only cleanup and remote cleanup.
