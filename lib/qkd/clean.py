@@ -385,11 +385,32 @@ def clean_device(
             out = run_cli_show("show chassis routing-engine")
             low = (out or "").lower()
 
-            return (
-                ("re0" in low and "re1" in low)
-                or ("routing engine 0" in low and "routing engine 1" in low)
-                or ("slot 0:" in low and "slot 1:" in low)
+            re1_lines = []
+            for line in low.splitlines():
+                if (
+                    "re1" in line
+                    or "routing engine 1" in line
+                    or "slot 1:" in line
+                ):
+                    re1_lines.append(line)
+
+            if not re1_lines:
+                return False
+
+            absent_tokens = (
+                " empty",
+                "absent",
+                "not present",
+                "not-installed",
+                "not installed",
+                "not online",
             )
+
+            for line in re1_lines:
+                if not any(token in line for token in absent_tokens):
+                    return True
+
+            return False
 
         def run_re1_cli(label, remote_command):
             escaped = remote_command.replace('"', '\\"')
