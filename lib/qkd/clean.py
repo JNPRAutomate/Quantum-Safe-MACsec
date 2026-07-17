@@ -392,42 +392,29 @@ def clean_device(
             )
 
         def run_re1_cli(label, remote_command):
-            escaped = (
-                remote_command
-                .replace("\\", "\\\\")
-                .replace('"', '\\"')
-            )
+            escaped = remote_command.replace('"', '\\"')
 
             command_candidates = [
-                (
-                    "cli -c \"request routing-engine execute command \\\""
-                    f"{escaped}"
-                    "\\\" routing-engine other\""
-                ),
-                (
-                    "cli -c \"request routing-engine execute command \\\""
-                    f"{escaped}"
-                    "\\\" routing-engine backup\""
-                ),
-                (
-                    "cli -c \"request routing-engine execute command \\\""
-                    f"{escaped}"
-                    "\\\" routing-engine re1\""
-                ),
-                (
-                    "cli -c \"request routing-engine execute other command \\\""
-                    f"{escaped}"
-                    "\\\"\""
-                ),
-                (
-                    "cli -c \"request routing-engine execute re1 command \\\""
-                    f"{escaped}"
-                    "\\\"\""
-                ),
+                f'request routing-engine execute command "{escaped}" routing-engine other',
+                f'request routing-engine execute command "{escaped}" routing-engine backup',
+                f'request routing-engine execute command "{escaped}" routing-engine re1',
+                f'request routing-engine execute other command "{escaped}"',
+                f'request routing-engine execute re1 command "{escaped}"',
             ]
 
             for command in command_candidates:
-                output = run_shell(label, command, strict=False)
+                try:
+                    rsp = dev.rpc.cli(command, format="text")
+                    output = rpc_text(rsp)
+                except Exception as exc:
+                    output = str(exc)
+
+                if output:
+                    for line in output.splitlines():
+                        line = line.strip()
+                        if line:
+                            print(f"[{name}] {line}", flush=True)
+
                 low = (output or "").lower()
 
                 failed = (
