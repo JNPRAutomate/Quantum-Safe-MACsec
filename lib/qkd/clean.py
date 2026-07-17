@@ -423,6 +423,48 @@ def clean_device(
                 f'request routing-engine execute re1 command "{escaped}"',
             ]
 
+            def _benign_line(line):
+                low = line.lower()
+                if not low:
+                    return True
+                if low.startswith("----"):
+                    return True
+                if low in {"backup:", "re0:", "re1:"}:
+                    return True
+                if "entering configuration mode" in low:
+                    return True
+                if "exiting configuration mode" in low:
+                    return True
+                if "warning: statement not found" in low:
+                    return True
+                return False
+
+            def _is_hard_failure(text):
+                low = (text or "").lower()
+                # Connectivity/syntax/command failures are hard failures.
+                if (
+                    "could not connect to re1" in low
+                    or "cannot connect to other re" in low
+                    or "syntax error" in low
+                    or "unknown command" in low
+                    or "unmatched '" in low
+                    or "command not found" in low
+                ):
+                    return True
+
+                # Soft-runtime cleanup may fail due to permissions; keep it non-fatal.
+                if "operation not permitted" in low and "qkd_debug.log" in low:
+                    return False
+
+                # Generic error lines are considered hard failures unless they are
+                # clearly related to benign soft-runtime cleanup above.
+                if "error:" in low:
+                    return True
+
+                return False
+
+            last_output = ""
+
             for command in command_candidates:
                 try:
                     rsp = dev.rpc.cli(command, format="text")
@@ -430,28 +472,32 @@ def clean_device(
                 except Exception as exc:
                     output = str(exc)
 
-                if output:
-                    for line in output.splitlines():
-                        line = line.strip()
-                        if line:
-                            print(f"[{name}] {line}", flush=True)
+                last_output = output or ""
 
-                low = (output or "").lower()
+                if _is_hard_failure(output):
+                    continue
 
-                failed = (
-                    "could not connect to re1" in low
-                    or "cannot connect to other re" in low
-                    or "error:" in low
-                    or "unknown command" in low
-                    or "syntax error" in low
-                    or "unmatched '" in low
-                    or "command not found" in low
-                )
+                meaningful_lines = []
+                for line in (output or "").splitlines():
+                    line = line.strip()
+                    if _benign_line(line):
+                        continue
+                    meaningful_lines.append(line)
 
-                if not failed:
-                    return True
+                if meaningful_lines:
+                    for line in meaningful_lines:
+                        print(f"[{name}] {line}", flush=True)
+                else:
+                    print(f"[{name}] {label} OK (already clean)", flush=True)
+
+                return True
 
             print(f"[{name}] WARN {label} not completed on RE1")
+            if last_output:
+                for line in last_output.splitlines()[:4]:
+                    line = line.strip()
+                    if line:
+                        print(f"[{name}] {line}", flush=True)
             return False
         ##
         def run_cli_show(command):
