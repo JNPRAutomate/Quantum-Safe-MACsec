@@ -232,7 +232,7 @@ def parse_args():
             "  clean      Clean local runtime and optionally remote device configuration\n"
             "  validate   Validate device readiness before or after deploy\n\n"
             "Examples:\n"
-            "  python3 qkd_orchestrator.py create --inventory ring_6_mx_link_driven_with_acx --pki-profile hierarchical_ca\n"
+            "  python3 qkd_orchestrator.py create --inventory <inventory_name_or_path> --pki-profile hierarchical_ca\n"
             "  python3 qkd_orchestrator.py deploy\n"
             "  python3 qkd_orchestrator.py validate --phase predeploy\n"
             "  python3 qkd_orchestrator.py clean --pki\n"
@@ -263,7 +263,7 @@ def parse_args():
             "  config/runtime/<device>/qkd_onbox.py\n\n"
             "Example:\n"
             "  python3 qkd_orchestrator.py create \\\n"
-            "    --inventory ring_6_mx_link_driven_with_acx \\\n"
+            "    --inventory <inventory_name_or_path> \\\n"
             "    --pki-profile hierarchical_ca\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -275,8 +275,8 @@ def parse_args():
         help=(
             "Inventory YAML file or inventory name.\n\n"
             "Examples:\n"
-            "  --inventory ring_6_mx_link_driven_with_acx\n"
-            "  --inventory config/inventory/input/ring_6_mx_link_driven_with_acx.yml"
+            "  --inventory my_link_driven_inventory\n"
+            "  --inventory config/inventory/input/my_link_driven_inventory.yml"
         ),
     )
 

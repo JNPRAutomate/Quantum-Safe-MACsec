@@ -368,6 +368,39 @@ def clean_device(
                 )
 
             return output
+
+        def has_dual_re():
+            out = run_cli_show("show chassis routing-engine")
+            low = (out or "").lower()
+
+            return (
+                ("re0" in low and "re1" in low)
+                or ("routing engine 0" in low and "routing engine 1" in low)
+                or ("slot 0:" in low and "slot 1:" in low)
+            )
+
+        def run_re1_cli(label, cli_command):
+            escaped = cli_command.replace('"', '\\"')
+            command = (
+                "cli -c 'request routing-engine execute command \""
+                f"{escaped}"
+                "\" routing-engine re1'"
+            )
+
+            output = run_shell(label, command, strict=False)
+            low = (output or "").lower()
+
+            if (
+                "could not connect to re1" in low
+                or "cannot connect to other re" in low
+                or "error:" in low
+                or "unknown command" in low
+                or "syntax error" in low
+            ):
+                print(f"[{name}] WARN {label} not completed on RE1")
+                return False
+
+            return True
         ##
         def run_cli_show(command):
             rsp = dev.rpc.cli(
@@ -397,17 +430,32 @@ def clean_device(
         dev.open()
 
         try:
+            dual_re = has_dual_re()
+
             run_shell(
                 "config cleanup",
                 config_cleanup_cmd,
                 strict=True,
             )
 
+            if dual_re:
+                re1_cfg_shell = f"cli -c 'configure; {config_body}; commit; exit'"
+                run_re1_cli(
+                    "re1 config cleanup",
+                    f"start shell command \"{re1_cfg_shell}\"",
+                )
+
             run_shell(
                 "file/cert/runtime cleanup",
                 file_cleanup_cmd,
                 strict=False,
             )
+
+            if dual_re:
+                run_re1_cli(
+                    "re1 file/cert/runtime cleanup",
+                    f"start shell command \"{file_cleanup_cmd}\"",
+                )
 
             failures = []
 
@@ -539,6 +587,13 @@ def clean_device(
                     user_cleanup_cmd,
                     strict=True,
                 )
+
+                if dual_re:
+                    re1_user_shell = f"cli -c 'configure; {user_cleanup_body}; commit; exit'"
+                    run_re1_cli(
+                        "re1 login users cleanup",
+                        f"start shell command \"{re1_user_shell}\"",
+                    )
 
                 removed_users = []
                 if remove_script_user:
