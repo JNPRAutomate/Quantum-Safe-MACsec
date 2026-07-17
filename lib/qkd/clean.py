@@ -161,6 +161,7 @@ def clean_device(
             )
 
         script_name = QKD["SCRIPT_NAME"]
+        legacy_script_name = "onbox.py"
         script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
@@ -233,10 +234,21 @@ def clean_device(
             "delete event-options policy QKD",
             "delete event-options policy QKD_POLICY",
             f"delete event-options event-script file {script_name}",
+            f"delete event-options event-script file {legacy_script_name}",
             f"delete system scripts op file {script_name}",
+            f"delete system scripts op file {legacy_script_name}",
         ]
 
         user_cleanup_cmds = []
+
+        # Remove explicit script-user bindings before deleting users to avoid
+        # Junos constraint failures when stale script stanzas remain.
+        user_cleanup_cmds.extend(
+            [
+                f"delete event-options event-script file {script_name} python-script-user",
+                f"delete event-options event-script file {legacy_script_name} python-script-user",
+            ]
+        )
 
         if remove_script_user:
             user_cleanup_cmds.append(f"delete system login user {script_user}")
@@ -379,28 +391,60 @@ def clean_device(
                 or ("slot 0:" in low and "slot 1:" in low)
             )
 
-        def run_re1_cli(label, cli_command):
-            escaped = cli_command.replace('"', '\\"')
-            command = (
-                "cli -c 'request routing-engine execute command \""
-                f"{escaped}"
-                "\" routing-engine re1'"
+        def run_re1_cli(label, remote_command):
+            escaped = (
+                remote_command
+                .replace("\\", "\\\\")
+                .replace('"', '\\"')
             )
 
-            output = run_shell(label, command, strict=False)
-            low = (output or "").lower()
+            command_candidates = [
+                (
+                    "cli -c \"request routing-engine execute command \\\""
+                    f"{escaped}"
+                    "\\\" routing-engine other\""
+                ),
+                (
+                    "cli -c \"request routing-engine execute command \\\""
+                    f"{escaped}"
+                    "\\\" routing-engine backup\""
+                ),
+                (
+                    "cli -c \"request routing-engine execute command \\\""
+                    f"{escaped}"
+                    "\\\" routing-engine re1\""
+                ),
+                (
+                    "cli -c \"request routing-engine execute other command \\\""
+                    f"{escaped}"
+                    "\\\"\""
+                ),
+                (
+                    "cli -c \"request routing-engine execute re1 command \\\""
+                    f"{escaped}"
+                    "\\\"\""
+                ),
+            ]
 
-            if (
-                "could not connect to re1" in low
-                or "cannot connect to other re" in low
-                or "error:" in low
-                or "unknown command" in low
-                or "syntax error" in low
-            ):
-                print(f"[{name}] WARN {label} not completed on RE1")
-                return False
+            for command in command_candidates:
+                output = run_shell(label, command, strict=False)
+                low = (output or "").lower()
 
-            return True
+                failed = (
+                    "could not connect to re1" in low
+                    or "cannot connect to other re" in low
+                    or "error:" in low
+                    or "unknown command" in low
+                    or "syntax error" in low
+                    or "unmatched '" in low
+                    or "command not found" in low
+                )
+
+                if not failed:
+                    return True
+
+            print(f"[{name}] WARN {label} not completed on RE1")
+            return False
         ##
         def run_cli_show(command):
             rsp = dev.rpc.cli(
@@ -442,7 +486,7 @@ def clean_device(
                 re1_cfg_shell = f"cli -c 'configure; {config_body}; commit; exit'"
                 run_re1_cli(
                     "re1 config cleanup",
-                    f"start shell command \"{re1_cfg_shell}\"",
+                    re1_cfg_shell,
                 )
 
             run_shell(
@@ -454,7 +498,7 @@ def clean_device(
             if dual_re:
                 run_re1_cli(
                     "re1 file/cert/runtime cleanup",
-                    f"start shell command \"{file_cleanup_cmd}\"",
+                    file_cleanup_cmd,
                 )
 
             failures = []
@@ -468,7 +512,9 @@ def clean_device(
                 "set event-options policy QKD",
                 "set event-options policy QKD_POLICY",
                 f"set event-options event-script file {script_name}",
+                f"set event-options event-script file {legacy_script_name}",
                 f"set system scripts op file {script_name}",
+                f"set system scripts op file {legacy_script_name}",
             ]
 
             if remove_script_user:
@@ -592,7 +638,7 @@ def clean_device(
                     re1_user_shell = f"cli -c 'configure; {user_cleanup_body}; commit; exit'"
                     run_re1_cli(
                         "re1 login users cleanup",
-                        f"start shell command \"{re1_user_shell}\"",
+                        re1_user_shell,
                     )
 
                 removed_users = []
