@@ -286,7 +286,7 @@ def clean_device(
         config_body = "; ".join(config_cmds)
 
         config_cleanup_cmd = (
-            f"cli -c 'configure; {config_body}; commit; exit'"
+            f"cli -c 'configure; {config_body}; commit no-synchronize; exit'"
         )
 
         file_cleanup_parts = [
@@ -633,7 +633,7 @@ def clean_device(
             if user_cleanup_cmds:
                 user_cleanup_body = "; ".join(user_cleanup_cmds)
                 user_cleanup_cmd = (
-                    f"cli -c 'configure; {user_cleanup_body}; commit; exit'"
+                    f"cli -c 'configure; {user_cleanup_body}; commit no-synchronize; exit'"
                 )
 
                 run_shell(
