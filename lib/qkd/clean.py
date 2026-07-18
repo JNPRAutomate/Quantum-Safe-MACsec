@@ -383,6 +383,17 @@ def clean_device(
                         and "directory not empty" in line.lower()
                     ):
                         continue
+
+                    if (
+                        "/root/.ssh/authorized_keys" in line.lower()
+                        and (
+                            "cannot create" in line.lower()
+                            or "no such file or directory" in line.lower()
+                            or "operation not permitted" in line.lower()
+                            or "permission denied" in line.lower()
+                        )
+                    ):
+                        continue
                     
                     if "Entering configuration mode" in line:
                         continue
@@ -486,6 +497,16 @@ def clean_device(
                 if (
                     "qkd_debug.log" in low
                     and "operation not permitted" in low
+                ):
+                    return True
+                if (
+                    "/root/.ssh/authorized_keys" in low
+                    and (
+                        "cannot create" in low
+                        or "no such file or directory" in low
+                        or "operation not permitted" in low
+                        or "permission denied" in low
+                    )
                 ):
                     return True
                 return False
