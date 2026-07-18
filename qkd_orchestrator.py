@@ -325,7 +325,8 @@ def parse_args():
             "  3. deploy qkd_onbox.py\n"
             "  4. render/push/commit Junos configuration\n"
             "  5. postdeploy validation\n\n"
-            "Preview and dry-run do not bootstrap users or push config."
+            "Preview and dry-run do not bootstrap users or push config.\n"
+            "Shipment preload mode installs script + placeholder JSON only and stops before config push."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -350,6 +351,14 @@ def parse_args():
         "--script-user-bootstrap-dry-run",
         action="store_true",
         help="Run SCRIPT_USER bootstrap in dry-run mode, then stop before validation/deploy.",
+    )
+    deploy.add_argument(
+        "--shipment-preload",
+        action="store_true",
+        help=(
+            "Install qkd_onbox.py and contract-valid placeholder JSON files only, then stop. "
+            "No Junos config render/push/commit and no postdeploy validation."
+        ),
     )
 
     clean = subparsers.add_parser(
@@ -1040,7 +1049,8 @@ def handle_deploy(args):
     validate_all_devices(devices, phase="predeploy")
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
-    artifacts = build_onbox_artifacts(devices)
+    # Shipment preload mode keeps JSON files present but intentionally unpopulated.
+    artifacts = build_onbox_artifacts(devices, placeholder_json=bool(args.shipment_preload))
 
     for name, device in devices.items():
         if device.get("managed") is False:
@@ -1066,6 +1076,10 @@ def handle_deploy(args):
                 )
 
     deploy_onbox(log, devices, artifacts)
+
+    if args.shipment_preload:
+        print("Shipment preload completed: qkd_onbox.py + placeholder JSON installed; runtime feature remains inactive until customer deploy.")
+        return
 
     run_provisioning(
         log=log,

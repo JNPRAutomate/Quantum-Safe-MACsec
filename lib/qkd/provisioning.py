@@ -284,8 +284,11 @@ def commit_safely(dev, cu, name, sync=True):
     - Dual-RE devices: commit synchronize.
     - If a dual-RE commit synchronize fails because backup RE is missing event
       scripts, sync QKD scripts to peer RE and retry once.
-    - Do not fall back to a normal commit on dual-RE after sync failure, because
-      that hides the actual RE1 problem.
+        - For known Junos license-gating edge case on backup RE
+            ("requires 'L3 VPN (VXLAN)' license" + remote commit failure), fall back
+            to local commit so deploy can continue.
+        - Do not fall back to a normal commit on dual-RE after generic sync failure,
+            because that hides real RE1 problems.
     """
     dual_re = has_dual_re(dev, name) if sync else False
 
@@ -298,6 +301,20 @@ def commit_safely(dev, cu, name, sync=True):
     except Exception as exc:
         text = str(exc)
         low = text.lower()
+
+        vxlan_license_re1_sync_failure = (
+            "requires 'l3 vpn (vxlan)' license" in low
+            and "remote commit-configuration failed" in low
+            and ("re1" in low or "other re" in low or "backup" in low)
+        )
+
+        if sync and dual_re and vxlan_license_re1_sync_failure:
+            print(
+                f"[{name}] commit synchronize blocked by known RE1 VXLAN license warning; "
+                "falling back to local commit (no-synchronize)"
+            )
+            cu.commit()
+            return
 
         if sync and dual_re and (
             "event script missing" in low
