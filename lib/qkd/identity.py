@@ -658,13 +658,13 @@ def install_peer_authorized_keys(devices):
     pub_keys = collect_script_user_public_keys(devices)
 
     def parse_public_key(line):
-        parts = (line or "").strip().split()
+        key_line = (line or "").strip()
+        parts = key_line.split()
         if len(parts) < 2:
             return None, None
         key_type = parts[0].strip()
-        key_data = parts[1].strip()
         if key_type.startswith("ssh-") or key_type.startswith("ecdsa-"):
-            return key_type, key_data
+            return key_type, key_line
         return None, None
 
     for device in devices:
@@ -680,17 +680,17 @@ def install_peer_authorized_keys(devices):
         set_cmds = []
         seen = set()
         for source_name, pub_key in pub_keys.items():
-            key_type, key_data = parse_public_key(pub_key)
-            if not key_type or not key_data:
+            key_type, key_line = parse_public_key(pub_key)
+            if not key_type or not key_line:
                 raise RuntimeError(
                     f"invalid peer public key format source={source_name} target={target} raw={pub_key}"
                 )
-            marker = (key_type, key_data)
+            marker = (key_type, key_line)
             if marker in seen:
                 continue
             seen.add(marker)
             set_cmds.append(
-                f'set system login user {peer_user} authentication {key_type} "{key_data}"'
+                f'set system login user {peer_user} authentication {key_type} "{key_line}"'
             )
 
         dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
