@@ -684,17 +684,44 @@ def collect_script_user_public_keys(devices):
     pub_path = qkd_peer_cmd_ssh_public_key()
     for device in devices:
         name = device_name(device)
-        result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
-        if result.returncode != 0:
-            raise RuntimeError(f"failed to read peer command public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        peer_user = qkd_peer_cmd_user(device)
+
         key = None
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
-                key = line
-                break
+
+        config_result = ssh_deploy_cmd(
+            device,
+            f"cli -c 'show configuration system login user {peer_user} | display set'",
+            timeout=20,
+            include_failed_marker=False,
+        )
+        if config_result.returncode == 0:
+            for line in config_result.stdout.splitlines():
+                line = line.strip()
+                match = re.search(
+                    r'^set system login user \S+ authentication (ssh-[^ ]+|ecdsa-[^ ]+) "([^"]+)"$',
+                    line,
+                )
+                if match:
+                    key = match.group(2).strip()
+                    break
+
         if not key:
-            raise RuntimeError(f"invalid peer command public key on {name} path={pub_path}\nraw_output={result.stdout}")
+            result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
+            if result.returncode != 0:
+                raise RuntimeError(f"failed to read peer command public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
+                    key = line
+                    break
+
+        if not key:
+            raise RuntimeError(
+                f"invalid peer command public key on {name} path={pub_path}\n"
+                f"config_output={config_result.stdout if config_result.returncode == 0 else ''}\n"
+                f"raw_output={result.stdout if 'result' in locals() else ''}"
+            )
+
         pub_keys[name] = key
     return pub_keys
 
