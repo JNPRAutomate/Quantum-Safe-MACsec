@@ -684,7 +684,7 @@ def collect_script_user_public_keys(devices):
     pub_path = qkd_peer_cmd_ssh_public_key()
     for device in devices:
         name = device_name(device)
-        result = ssh_script_user_onbox_cmd(device, f"cat {pub_path}", timeout=20)
+        result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
         if result.returncode != 0:
             raise RuntimeError(f"failed to read peer command public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
         key = None
