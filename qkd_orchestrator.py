@@ -617,22 +617,37 @@ def deploy_onbox(
         """
         install_cmd = (
             f"mkdir -p {op_script_dir} {event_script_dir} {config_dir}; "
+            f"rm -f {remote_op} {remote_event} {legacy_op} {legacy_event}; "
             f"cp {remote_tmp} {remote_op}; "
             f"cp {remote_tmp} {remote_event}; "
             f"cp {remote_tmp} {legacy_op}; "
             f"cp {remote_tmp} {legacy_event}; "
-            f"cp {remote_tmp_config_json} {remote_config_json}; "
-            f"cp {remote_tmp_inventory_json} {remote_inventory_json}; "
+            f"rm -f {remote_config_json} {remote_inventory_json}; "
+            f"mv -f {remote_tmp_config_json} {remote_config_json}; "
+            f"mv -f {remote_tmp_inventory_json} {remote_inventory_json}; "
             f"chmod {script_mode} {remote_op} {remote_event} {legacy_op} {legacy_event}; "
             f"chmod {json_mode} {remote_config_json} {remote_inventory_json}; "
             f"ls -l {remote_op}; "
             f"ls -l {remote_event}; "
             f"ls -l {remote_config_json}; "
             f"ls -l {remote_inventory_json}; "
-            f"rm -f {remote_tmp} {remote_tmp_config_json} {remote_tmp_inventory_json}"
+            f"rm -f {remote_tmp}"
         )
 
-        return run_shell(dev, install_cmd, strict=True)
+        output = run_shell(dev, install_cmd, strict=True)
+        low = (output or "").lower()
+        if (
+            "permission denied" in low
+            or "operation not permitted" in low
+            or "cannot create" in low
+            or "read-only file system" in low
+        ):
+            raise RuntimeError(
+                "ONBOX install reported filesystem permission failure on active RE\n"
+                f"output={output}"
+            )
+
+        return output
 
     def sync_to_re1_if_needed(dev, name):
         """
