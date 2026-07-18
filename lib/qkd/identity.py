@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from lib.common.settings import QKD, PKI
-from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
+from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy, load_inventory_base
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 import json
@@ -238,25 +238,71 @@ def pyez_shell_cmd(device, command, timeout=60, include_failed_marker=True):
     device = normalize_device(device)
     name = device_name(device)
     host = device_host(device)
+    candidates = []
+
     auth = device.get("auth") or {}
     user = auth.get("username")
     passwd = auth.get("password")
-    if not user or not passwd:
-        return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
-    dev = Device(host=host, user=user, passwd=passwd, port=22, timeout=timeout)
+    if user and passwd:
+        candidates.append((str(user), str(passwd), "device.auth"))
+
     try:
-        dev.open()
-        rsp = dev.rpc.request_shell_execute(command=command)
-        text = rpc_output_to_text(rsp)
-        has_error = shell_output_has_error(text, include_failed_marker=include_failed_marker)
-        return CommandResult(1 if has_error else 0, text.strip(), "")
-    except Exception as e:
-        return CommandResult(1, "", str(e))
-    finally:
-        try:
-            dev.close()
-        except Exception:
-            pass
+        base = load_inventory_base()
+        secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+        if not isinstance(secrets, dict):
+            secrets = {}
+
+        bootstrap_user = secrets.get("bootstrap_user") or secrets.get("deploy_user")
+        bootstrap_password = (
+            secrets.get("bootstrap_password")
+            or secrets.get("deploy_password")
+            or secrets.get("root_password")
+        )
+        if bootstrap_user and bootstrap_password:
+            candidates.append((str(bootstrap_user), str(bootstrap_password), "inventory_base.bootstrap/deploy"))
+
+        script_user = secrets.get("script_user") or secrets.get("default_user")
+        script_password = (
+            secrets.get("script_password")
+            or secrets.get("admin_password")
+            or secrets.get("default_password")
+        )
+        if script_user and script_password:
+            candidates.append((str(script_user), str(script_password), "inventory_base.script/default"))
+    except Exception:
+        pass
+
+    deduped_candidates = []
+    seen = set()
+    for cand_user, cand_password, source in candidates:
+        key = (cand_user, cand_password)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_candidates.append((cand_user, cand_password, source))
+
+    if not deduped_candidates:
+        return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
+
+    last_error = None
+    for cand_user, cand_password, source in deduped_candidates:
+        for port in (830, 22):
+            dev = Device(host=host, user=cand_user, passwd=cand_password, port=port, timeout=timeout)
+            try:
+                dev.open()
+                rsp = dev.rpc.request_shell_execute(command=command)
+                text = rpc_output_to_text(rsp)
+                has_error = shell_output_has_error(text, include_failed_marker=include_failed_marker)
+                return CommandResult(1 if has_error else 0, text.strip(), "")
+            except Exception as exc:
+                last_error = exc
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+
+    return CommandResult(1, "", str(last_error))
 
 
 def ssh_deploy_cmd(device, command, timeout=30, include_failed_marker=True):
