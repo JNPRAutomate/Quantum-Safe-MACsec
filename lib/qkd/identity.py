@@ -741,6 +741,40 @@ def install_peer_authorized_keys(devices):
             return key_type, key_line
         return None, None
 
+    def collect_configured_peer_keys(device, peer_user):
+        result = ssh_deploy_cmd(
+            device,
+            f"cli -c 'show configuration system login user {peer_user} | display set'",
+            timeout=20,
+            include_failed_marker=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"failed to read configured peer SSH keys target={device_name(device)} peer_cmd_user={peer_user}\n"
+                f"stdout={result.stdout}\n"
+                f"stderr={result.stderr}"
+            )
+
+        configured = []
+        seen = set()
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            match = re.search(
+                r'^set system login user \S+ authentication (ssh-[^ ]+|ecdsa-[^ ]+) "([^"]+)"$',
+                line,
+            )
+            if not match:
+                continue
+            key_type = match.group(1).strip()
+            key_line = match.group(2).strip()
+            marker = (key_type, key_line)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            configured.append(marker)
+
+        return configured
+
     for device in devices:
         target = device_name(device)
         peer_user = qkd_peer_cmd_user(device)
@@ -753,7 +787,12 @@ def install_peer_authorized_keys(devices):
 
         set_cmds = []
         delete_cmds = []
-        seen_types = set()
+        configured_keys = collect_configured_peer_keys(device, peer_user)
+        for key_type, key_line in configured_keys:
+            delete_cmds.append(
+                f'delete system login user {peer_user} authentication {key_type} "{key_line}"'
+            )
+
         seen = set()
         for source_name, pub_key in pub_keys.items():
             key_type, key_line = parse_public_key(pub_key)
@@ -765,11 +804,6 @@ def install_peer_authorized_keys(devices):
             if marker in seen:
                 continue
             seen.add(marker)
-            if key_type not in seen_types:
-                delete_cmds.append(
-                    f"delete system login user {peer_user} authentication {key_type}"
-                )
-                seen_types.add(key_type)
             set_cmds.append(
                 f'set system login user {peer_user} authentication {key_type} "{key_line}"'
             )
