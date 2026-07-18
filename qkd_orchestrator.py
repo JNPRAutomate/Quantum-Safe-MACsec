@@ -1095,6 +1095,10 @@ def handle_deploy(args):
             devices=devices,
             repo_root=BASE_DIR,
             dry_run=False,
+            # Normal deploy must not silently skip bootstrap when deploy
+            # credentials are missing, otherwise predeploy validation fails
+            # later with opaque ConnectAuthError for SCRIPT_USER.
+            skip_if_no_deploy_password=False,
         )
         if failed:
             raise RuntimeError(
