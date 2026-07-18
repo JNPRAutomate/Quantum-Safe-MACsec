@@ -657,15 +657,82 @@ def configure_qkd_scripts(dev, name, base):
 
 
 def push_config(device_name, device, commands, base):
-    dev = Device(
-        host=device["ip"],
-        user=device["auth"]["username"],
-        passwd=device["auth"]["password"],
-        port=830,
+    secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    auth_candidates = []
+
+    device_auth = device.get("auth", {}) if isinstance(device.get("auth"), dict) else {}
+    device_user = device_auth.get("username")
+    device_password = device_auth.get("password")
+    if device_user and device_password:
+        auth_candidates.append((str(device_user), str(device_password), "device.auth"))
+
+    bootstrap_user = secrets.get("bootstrap_user") or secrets.get("deploy_user")
+    bootstrap_password = (
+        secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
     )
+    if bootstrap_user and bootstrap_password:
+        auth_candidates.append((str(bootstrap_user), str(bootstrap_password), "inventory_base.bootstrap/deploy"))
+
+    script_user = secrets.get("script_user") or secrets.get("default_user")
+    script_password = (
+        secrets.get("script_password")
+        or secrets.get("admin_password")
+        or secrets.get("default_password")
+    )
+    if script_user and script_password:
+        auth_candidates.append((str(script_user), str(script_password), "inventory_base.script/default"))
+
+    deduped_candidates = []
+    seen = set()
+    for user, password, source in auth_candidates:
+        key = (user, password)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_candidates.append((user, password, source))
+
+    if not deduped_candidates:
+        raise RuntimeError(f"[{device_name}] No NETCONF credentials available for provisioning")
+
+    dev = None
+    selected_user = None
+    selected_source = None
+    last_exc = None
+
+    for user, password, source in deduped_candidates:
+        candidate_dev = Device(
+            host=device["ip"],
+            user=user,
+            passwd=password,
+            port=830,
+        )
+        try:
+            candidate_dev.open()
+            dev = candidate_dev
+            selected_user = user
+            selected_source = source
+            break
+        except Exception as exc:
+            last_exc = exc
+            try:
+                candidate_dev.close()
+            except Exception:
+                pass
+
+    if dev is None:
+        raise RuntimeError(
+            f"[{device_name}] NETCONF authentication failed for all credential sources "
+            f"({', '.join(source for _, _, source in deduped_candidates)})\n"
+            f"last_error={last_exc}"
+        )
 
     try:
-        dev.open()
+        print(f"[{device_name}] NETCONF auth selected: user={selected_user} source={selected_source}")
 
         try:
             dev.rpc.cli("file make-directory /var/db/scripts/certs")
