@@ -510,10 +510,6 @@ def deploy_onbox(
     remote_config_json = f"{config_dir}/{config_json_name}"
     remote_inventory_json = f"{config_dir}/{inventory_json_name}"
 
-    # Legacy shim kept intentionally: old configs/groups may still reference onbox.py.
-    legacy_op = f"{op_script_dir}/onbox.py"
-    legacy_event = f"{event_script_dir}/onbox.py"
-
     inventory_base = load_inventory_base()
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
 
@@ -615,24 +611,24 @@ def deploy_onbox(
         """
         Install script and external JSON files on the active/master RE.
         """
-        install_cmd = (
-            f"mkdir -p {op_script_dir} {event_script_dir} {config_dir}; "
-            f"rm -f {remote_op} {remote_event} {legacy_op} {legacy_event}; "
-            f"cp {remote_tmp} {remote_op}; "
-            f"cp {remote_tmp} {remote_event}; "
-            f"cp {remote_tmp} {legacy_op}; "
-            f"cp {remote_tmp} {legacy_event}; "
-            f"rm -f {remote_config_json} {remote_inventory_json}; "
-            f"mv -f {remote_tmp_config_json} {remote_config_json}; "
-            f"mv -f {remote_tmp_inventory_json} {remote_inventory_json}; "
-            f"chmod {script_mode} {remote_op} {remote_event} {legacy_op} {legacy_event}; "
-            f"chmod {json_mode} {remote_config_json} {remote_inventory_json}; "
-            f"ls -l {remote_op}; "
-            f"ls -l {remote_event}; "
-            f"ls -l {remote_config_json}; "
-            f"ls -l {remote_inventory_json}; "
-            f"rm -f {remote_tmp}"
-        )
+        cmd_parts = [
+            f"mkdir -p {op_script_dir} {event_script_dir} {config_dir}",
+            f"rm -f {remote_op} {remote_event}",
+            f"cp {remote_tmp} {remote_op}",
+            f"cp {remote_tmp} {remote_event}",
+            f"rm -f {remote_config_json} {remote_inventory_json}",
+            f"mv -f {remote_tmp_config_json} {remote_config_json}",
+            f"mv -f {remote_tmp_inventory_json} {remote_inventory_json}",
+            f"chmod {script_mode} {remote_op} {remote_event}",
+            f"chmod {json_mode} {remote_config_json} {remote_inventory_json}",
+            f"ls -l {remote_op}",
+            f"ls -l {remote_event}",
+            f"ls -l {remote_config_json}",
+            f"ls -l {remote_inventory_json}",
+            f"rm -f {remote_tmp}",
+        ]
+
+        install_cmd = "; ".join(cmd_parts)
 
         output = run_shell(dev, install_cmd, strict=True)
         fs_error_lines = []
@@ -735,8 +731,6 @@ def deploy_onbox(
         files = [
             (remote_op, remote_op),
             (remote_event, remote_event),
-            (legacy_op, legacy_op),
-            (legacy_event, legacy_event),
             (remote_config_json, remote_config_json),
             (remote_inventory_json, remote_inventory_json),
         ]

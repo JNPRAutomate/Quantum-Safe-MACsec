@@ -4,4 +4,3 @@ set event-options generate-event QKD_TIMER time-interval {{ rotation_interval_se
 set event-options policy QKD events QKD_TIMER
 set event-options policy QKD then event-script {{ script_name }}
 set event-options event-script file {{ script_name }} python-script-user {{ script_user }}
-set event-options event-script file onbox.py python-script-user {{ script_user }}
