@@ -8,6 +8,7 @@ import json
 import subprocess
 import shlex
 import re
+import time
 
 
 # -------------------------------------------------
@@ -594,6 +595,42 @@ def check_script_user_ssh_identity(device):
     else:
         raise ValueError(f"Unsupported SSH_KEY_TYPE={key_type}. Expected 'ed25519' or 'rsa'.")
 
+    def keygen_cmd_for(path):
+        if key_type == "rsa":
+            return f"ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {path}"
+        return f"ssh-keygen -t ed25519 -N \"\" -C \"{key_comment}\" -f {path}"
+
+    def load_rotation_thresholds():
+        script_threshold = 30 * 24 * 3600
+        peer_threshold = 3600
+        try:
+            policy = load_runtime_qkd_policy()
+            qkd_policy = policy.get("qkd_policy", {}) if isinstance(policy, dict) else {}
+            script_threshold = int(qkd_policy.get("script_user_rotation_seconds", script_threshold))
+            peer_threshold = int(qkd_policy.get("peer_cmd_rotation_seconds", peer_threshold))
+        except Exception:
+            pass
+        return max(script_threshold, 0), max(peer_threshold, 0)
+
+    def remote_file_age_seconds(path):
+        cmd = (
+            "python3 -c "
+            + shlex.quote(
+                f"import os,time; p={path!r}; print(int(time.time()-os.path.getmtime(p)) if os.path.exists(p) else -1)"
+            )
+        )
+        result = ssh_deploy_cmd(device, cmd, timeout=20, include_failed_marker=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"failed to read SSH key age on {name} path={path}\nstdout={result.stdout}\nstderr={result.stderr}"
+            )
+        values = re.findall(r"-?\d+", result.stdout or "")
+        if not values:
+            raise RuntimeError(
+                f"invalid SSH key age output on {name} path={path}\nstdout={result.stdout}\nstderr={result.stderr}"
+            )
+        return int(values[-1])
+
     gen_peer = "" if peer_key_path == key_path else f"test -f {peer_key_path} || {keygen_cmd.replace(key_path, peer_key_path)}; "
 
     cmd = (
@@ -618,6 +655,45 @@ def check_script_user_ssh_identity(device):
     if result.returncode != 0:
         raise RuntimeError(f"SSH identity check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(result.stdout)
+
+    script_rotation_s, peer_rotation_s = load_rotation_thresholds()
+    key_thresholds = {key_path: script_rotation_s}
+    if peer_key_path in key_thresholds:
+        key_thresholds[peer_key_path] = min(key_thresholds[peer_key_path], peer_rotation_s)
+    else:
+        key_thresholds[peer_key_path] = peer_rotation_s
+
+    rotate_paths = []
+    for path, threshold in key_thresholds.items():
+        if threshold <= 0:
+            continue
+        age_seconds = remote_file_age_seconds(path)
+        if age_seconds >= threshold:
+            rotate_paths.append((path, age_seconds, threshold))
+
+    for path, age_seconds, threshold in rotate_paths:
+        print(
+            f"[WARN] SSH key rotation due on {name}: key={path} age_seconds={age_seconds} threshold_seconds={threshold}"
+        )
+        pub = f"{path}.pub"
+        rotate_cmd = (
+            f"rm -f {path} {pub}; "
+            f"{keygen_cmd_for(path)}; "
+            f"chown {script_user} {path} {pub}; "
+            f"chmod 600 {path}; "
+            f"chmod 644 {pub}; "
+            f"ls -l {path}; "
+            f"ls -l {pub}"
+        )
+        rotate_result = ssh_deploy_cmd(device, rotate_cmd, timeout=60)
+        if rotate_result.returncode != 0:
+            raise RuntimeError(
+                f"SSH key rotation failed on {name} key={path}\n"
+                f"stdout={rotate_result.stdout}\n"
+                f"stderr={rotate_result.stderr}"
+            )
+        print(rotate_result.stdout)
+        print(f"[OK] SSH key rotated on {name}: key={path}")
 
 
 def check_script_user_authorized_keys(device):
@@ -1392,6 +1468,11 @@ def validate_all_devices_postdeploy(devices):
                 auth["password"] = script_password
     except Exception:
         pass
+
+    # Ensure script-user keys are present and rotated (if due) before syncing
+    # peer authorized keys across devices.
+    for device in devices:
+        check_script_user_ssh_identity(device)
 
     # Ensure peer command keys are present via Junos login configuration before
     # running matrix SSH authentication checks.
