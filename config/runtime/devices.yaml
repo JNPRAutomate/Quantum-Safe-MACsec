@@ -11,7 +11,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-001
     managed: true
     kme:
@@ -63,7 +63,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-002
     managed: true
     kme:
@@ -117,7 +117,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-003
     managed: true
     kme:
@@ -201,7 +201,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-004
     managed: true
     kme:
@@ -285,7 +285,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-005
     managed: true
     kme:
@@ -369,7 +369,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-006
     managed: true
     kme:
@@ -452,7 +452,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-007
     managed: true
     kme:
@@ -519,7 +519,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-008
     managed: true
     kme:
@@ -572,7 +572,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-009
     managed: true
     kme:
@@ -639,7 +639,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-010
     managed: true
     kme:
@@ -691,7 +691,7 @@ devices:
     auth:
       username: admin
       password: juniper1
-    script_user: admin
+    script_user: macsec_user
     sae_id: sae-011
     managed: true
     kme:

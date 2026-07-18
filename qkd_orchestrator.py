@@ -482,7 +482,7 @@ def deploy_onbox(
         Deploy qkd_onbox.py and external JSON runtime files to Junos devices.
 
     Critical behavior:
-            - Standard deploy: use QKD["SCRIPT_USER"] / admin for SCP, install,
+            - Standard deploy: use QKD["SCRIPT_USER"] for SCP, install,
                 and dual-RE file sync.
             - Shipment preload deploy: do not require script-user bootstrap; use
                 preferred credentials (bootstrap/deploy) or runtime device auth.

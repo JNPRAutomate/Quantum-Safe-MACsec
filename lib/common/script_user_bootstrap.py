@@ -68,7 +68,7 @@ except Exception:  # pragma: no cover
         "runtime_dir": "config/runtime",
     }
     QKD = {
-        "SCRIPT_USER": "admin",
+        "SCRIPT_USER": "macsec_user",
         "DEPLOY_USER": "root",
     }
 
