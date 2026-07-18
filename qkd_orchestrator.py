@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 import argparse
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -1108,6 +1109,9 @@ def handle_deploy(args):
     if args.shipment_preload:
         print("Shipment preload mode: SCRIPT_USER bootstrap skipped by design.")
     elif not args.skip_script_user_bootstrap:
+        if os.getenv("QKD_ENABLE_SSH_HOME_FIX") is None:
+            os.environ["QKD_ENABLE_SSH_HOME_FIX"] = "1"
+            print("Deploy bootstrap: auto-enabling QKD_ENABLE_SSH_HOME_FIX=1")
         ok, failed = bootstrap_script_users(
             devices=devices,
             repo_root=BASE_DIR,
