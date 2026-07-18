@@ -3,6 +3,7 @@
 from lib.common.settings import QKD, PKI
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
+from jnpr.junos.utils.config import Config
 import json
 import subprocess
 import shlex
@@ -655,30 +656,69 @@ def collect_script_user_public_keys(devices):
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
     pub_keys = collect_script_user_public_keys(devices)
+
+    def parse_public_key(line):
+        parts = (line or "").strip().split()
+        if len(parts) < 2:
+            return None, None
+        key_type = parts[0].strip()
+        key_data = parts[1].strip()
+        if key_type.startswith("ssh-") or key_type.startswith("ecdsa-"):
+            return key_type, key_data
+        return None, None
+
     for device in devices:
         target = device_name(device)
         peer_user = qkd_peer_cmd_user(device)
-        auth_path = qkd_peer_cmd_authorized_keys(device)
-        ssh_dir = auth_path.rsplit("/", 1)[0]
+        host = device_host(device)
+        auth = device.get("auth") or {}
+        user = auth.get("username")
+        password = auth.get("password")
+        if not user or not password:
+            raise RuntimeError(f"missing auth for peer key sync target={target}")
+
+        set_cmds = []
+        seen = set()
         for source_name, pub_key in pub_keys.items():
-            quoted_key = shlex.quote(pub_key)
-            cmd = (
-                f"mkdir -p {ssh_dir}; "
-                f"touch {auth_path}; "
-                f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}; "
-                f"chown {peer_user} {ssh_dir} {auth_path}; "
-                f"chmod 700 {ssh_dir}; "
-                f"chmod 600 {auth_path}; "
-                f"echo AUTHORIZED_KEY_OK source={source_name} target={target}"
-            )
-            result = ssh_deploy_cmd(device, cmd, timeout=30)
-            if result.returncode != 0:
+            key_type, key_data = parse_public_key(pub_key)
+            if not key_type or not key_data:
                 raise RuntimeError(
-                    f"failed to install peer authorized key source={source_name} target={target}\n"
-                    f"stdout={result.stdout}\n"
-                    f"stderr={result.stderr}"
+                    f"invalid peer public key format source={source_name} target={target} raw={pub_key}"
                 )
-        print(f"[OK] peer authorized_keys synchronized target={target} peer_cmd_user={peer_user}")
+            marker = (key_type, key_data)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            set_cmds.append(
+                f'set system login user {peer_user} authentication {key_type} "{key_data}"'
+            )
+
+        dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
+        try:
+            dev.open()
+            with Config(dev) as cu:
+                for cmd in set_cmds:
+                    cu.load(cmd, format="set", merge=True)
+                diff = cu.diff()
+                if diff:
+                    cu.commit(comment=f"QKD sync peer authorized keys target={target}")
+                    print(f"[OK] peer SSH keys committed target={target} peer_cmd_user={peer_user}")
+                else:
+                    try:
+                        cu.rollback()
+                    except Exception:
+                        pass
+                    print(f"[OK] peer SSH keys already synchronized target={target} peer_cmd_user={peer_user}")
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to configure peer SSH keys target={target} peer_cmd_user={peer_user}\n"
+                f"error={exc}"
+            )
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
 
 
 def check_peer_ssh_from_device(device):
@@ -1210,6 +1250,11 @@ def validate_all_devices_postdeploy(devices):
     print("=== QKD post-deploy validation ===")
     print(f"Devices: {len(devices)}")
     print("")
+
+    # Ensure peer command keys are present via Junos login configuration before
+    # running matrix SSH authentication checks.
+    install_peer_authorized_keys(devices)
+
     failed = []
     for index, device in enumerate(devices, start=1):
         name = device_name(device)
