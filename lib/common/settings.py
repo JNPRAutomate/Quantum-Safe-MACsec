@@ -59,7 +59,7 @@ QKD = {
     "SCRIPT_NAME": "qkd_onbox.py",
 
     # Runtime identity used for local on-box execution and Junos event script user.
-    "SCRIPT_USER": "admin",
+    "SCRIPT_USER": "macsec_user",
 
     # Dedicated low-privilege identity used only for peer SSH transport
     # (master -> slave send-command/status for key-id workflow).

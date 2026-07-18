@@ -70,7 +70,7 @@ Current architecture supports secret injection through environment placeholders 
 secrets:
   default_user: admin
   default_password: ${ENV:QKD_SCRIPT_PASSWORD}
-  script_user: admin
+  script_user: macsec_user
 ```
 
 Resolution behavior:

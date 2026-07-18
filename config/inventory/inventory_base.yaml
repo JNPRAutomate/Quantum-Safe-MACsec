@@ -12,7 +12,7 @@ secrets:
   default_password: ${ENV:QKD_DEFAULT_PASSWORD}
 
   # Local on-box runtime account (needs high privileges for config/commit).
-  script_user: admin
+  script_user: macsec_user
   script_password: ${ENV:QKD_SCRIPT_PASSWORD}
 
   # Peer SSH transport account (low privilege, key-auth, no config rights).
