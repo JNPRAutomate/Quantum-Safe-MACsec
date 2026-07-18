@@ -1126,7 +1126,25 @@ def handle_deploy(args):
                 "SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
             )
 
-    if not args.shipment_preload and bootstrap_user and bootstrap_password:
+    if not args.shipment_preload:
+        script_user = (
+            secrets.get("script_user")
+            or QKD.get("SCRIPT_USER")
+            or "admin"
+        )
+        script_password = (
+            secrets.get("script_password")
+            or secrets.get("admin_password")
+            or secrets.get("default_password")
+            or None
+        )
+
+        if not script_password:
+            raise RuntimeError(
+                "Missing script-user credentials for deploy. Set one of "
+                "inventory_base secrets.script_password/admin_password/default_password."
+            )
+
         for name, device in devices.items():
             if not isinstance(device, dict):
                 continue
@@ -1134,11 +1152,9 @@ def handle_deploy(args):
             if not isinstance(auth, dict):
                 auth = {}
                 device["auth"] = auth
-            auth["username"] = bootstrap_user
-            auth["password"] = bootstrap_password
-        print(f"Deploy auth source: inventory_base bootstrap_user={bootstrap_user}")
-    elif not args.shipment_preload:
-        print("Deploy auth source: runtime device auth (bootstrap credentials unavailable)")
+            auth["username"] = script_user
+            auth["password"] = script_password
+        print(f"Deploy auth source: inventory_base script_user={script_user}")
 
     if args.shipment_preload:
         print("Shipment preload mode: predeploy validation skipped (SCRIPT_USER may not exist yet).")
