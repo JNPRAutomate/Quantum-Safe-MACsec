@@ -476,6 +476,27 @@ def rotation_interval_seconds():
     return value
 
 
+def script_user_rotation_seconds():
+    value = int(qkd_policy().get("script_user_rotation_seconds", 2592000))
+    if value < 1:
+        return 1
+    return value
+
+
+def peer_cmd_rotation_seconds():
+    value = int(qkd_policy().get("peer_cmd_rotation_seconds", 3600))
+    if value < 1:
+        return 1
+    return value
+
+
+def ssh_key_age_seconds(path):
+    try:
+        return max(0, int(time.time() - Path(path).stat().st_mtime))
+    except Exception:
+        return None
+
+
 def qkd_key_index_from_generation(generation):
     return int(generation) % max_installed_keys()
 
@@ -1650,6 +1671,23 @@ def validate_ssh_runtime_for_master():
         "INFO",
         mode="MASTER",
     )
+
+    script_age = ssh_key_age_seconds(SSH_KEY)
+    peer_age = ssh_key_age_seconds(PEER_CMD_SSH_KEY)
+    if script_age is not None and script_age >= script_user_rotation_seconds():
+        log(
+            f"SSH KEY ROTATION DUE runtime_user={user} script_user={SCRIPT_USER} "
+            f"ssh_key={SSH_KEY} age_seconds={script_age} threshold_seconds={script_user_rotation_seconds()}",
+            "WARN",
+            mode="MASTER",
+        )
+    if peer_age is not None and peer_age >= peer_cmd_rotation_seconds():
+        log(
+            f"PEER SSH KEY ROTATION DUE runtime_user={user} peer_cmd_user={PEER_CMD_USER} "
+            f"ssh_key={PEER_CMD_SSH_KEY} age_seconds={peer_age} threshold_seconds={peer_cmd_rotation_seconds()}",
+            "WARN",
+            mode="MASTER",
+        )
     return True
 
 
