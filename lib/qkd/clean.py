@@ -234,6 +234,39 @@ def clean_device(
             return deduped
 
         runtime_paths = runtime_tmp_paths()
+        state_file_prefix = str(QKD.get("STATE_FILE_PREFIX", "/var/tmp/qkd_db"))
+        lock_file_prefix = str(QKD.get("LOCK_FILE_PREFIX", "/var/tmp/qkd_onbox"))
+        log_file_path = str(QKD.get("LOG_FILE", "/var/tmp/qkd_debug.log"))
+
+        tmp_runtime_name_prefixes = {
+            Path(state_file_prefix).name,
+            Path(lock_file_prefix).name,
+            Path(log_file_path).stem,
+        }
+        tmp_runtime_name_prefixes = {
+            prefix for prefix in tmp_runtime_name_prefixes if prefix
+        }
+
+        tmp_runtime_globs = [f"/var/tmp/{prefix}*" for prefix in sorted(tmp_runtime_name_prefixes)]
+        tmp_runtime_globs_expr = " ".join(tmp_runtime_globs) if tmp_runtime_globs else ""
+
+        def list_tmp_runtime_leftovers():
+            output = run_shell(
+                "verify /var/tmp runtime leftovers",
+                f"ls -1 {tmp_runtime_globs_expr} 2>/dev/null || true",
+                strict=False,
+                show_output=False,
+                show_label=False,
+            )
+            leftovers = []
+            for raw_line in (output or "").splitlines():
+                line = raw_line.strip()
+                if not line or not line.startswith("/var/tmp/"):
+                    continue
+                if line not in leftovers:
+                    leftovers.append(line)
+            return leftovers
+
         soft_runtime_paths = [
             "/var/tmp/qkd_debug.log",
         ]
@@ -313,6 +346,8 @@ def clean_device(
                 file_cleanup_parts.append(f"rm -f {path}")
         for path in soft_runtime_paths:
             file_cleanup_parts.append(f"rm -f {path}")
+        if tmp_runtime_globs_expr:
+            file_cleanup_parts.append(f"rm -rf {tmp_runtime_globs_expr} 2>/dev/null || true")
         
         file_cleanup_cmd = "; ".join(file_cleanup_parts)
 
@@ -855,6 +890,10 @@ def clean_device(
 
             for path in soft_runtime_paths:
                 if remote_path_exists(path):
+                    soft_leftovers.append(path)
+
+            for path in list_tmp_runtime_leftovers():
+                if path not in soft_leftovers:
                     soft_leftovers.append(path)
 
             if soft_leftovers:
