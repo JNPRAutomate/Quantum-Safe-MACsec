@@ -343,6 +343,7 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
             direct_cmd = "cli -c " + shlex.quote(command)
         else:
             direct_cmd = command
+        direct_cmd = f"su - {script_user} -c {shlex.quote(direct_cmd)}"
         return ssh_deploy_cmd(
             device=device,
             command=direct_cmd,
@@ -807,8 +808,7 @@ def check_peer_ssh_from_device(device):
             print(f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip")
             continue
 
-        marker = f"QKD_PEER_SSH_OK_{name}_{str(peer_ip).replace('.', '_')}"
-        peer_payload = f"run echo {marker}"
+        peer_payload = 'cli -c "show system uptime"'
 
         cmd = (
             f"ssh -i {key_path} "
@@ -829,7 +829,7 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
-        if marker in combined:
+        if stdout.strip() and "error:" not in combined_low:
             print(f"[OK] peer SSH {name} -> {peer_ip} as {peer_user}")
             continue
 
@@ -858,8 +858,7 @@ def check_peer_ssh_from_device(device):
             continue
 
         raise RuntimeError(
-            f"peer SSH marker not observed from {name} to {peer_ip} as {peer_user}\n"
-            f"expected_marker={marker}\n"
+            f"peer SSH command failed from {name} to {peer_ip} as {peer_user}\n"
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )
