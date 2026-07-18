@@ -635,16 +635,35 @@ def deploy_onbox(
         )
 
         output = run_shell(dev, install_cmd, strict=True)
-        low = (output or "").lower()
-        if (
-            "permission denied" in low
-            or "operation not permitted" in low
-            or "cannot create" in low
-            or "read-only file system" in low
-        ):
+        fs_error_lines = []
+        for raw_line in (output or "").splitlines():
+            line = raw_line.strip()
+            low = line.lower()
+            if not low:
+                continue
+
+            # Some ACX platforms emit benign xattr warnings during mv/cp
+            # (security.SMACK64), even when files are copied correctly.
+            if (
+                "security.smack64" in low
+                and "setting attribute" in low
+                and "operation not permitted" in low
+            ):
+                continue
+
+            if (
+                "permission denied" in low
+                or "operation not permitted" in low
+                or "cannot create" in low
+                or "read-only file system" in low
+            ):
+                fs_error_lines.append(line)
+
+        if fs_error_lines:
             raise RuntimeError(
                 "ONBOX install reported filesystem permission failure on active RE\n"
-                f"output={output}"
+                f"output={output}\n"
+                f"detected_errors={fs_error_lines}"
             )
 
         return output
