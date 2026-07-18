@@ -1061,6 +1061,23 @@ def handle_deploy(args):
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
 
+    inventory_base = load_inventory_base()
+    secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    bootstrap_user = (
+        secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or None
+    )
+    bootstrap_password = (
+        secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or None
+    )
+
     if args.preview or args.dry_run:
         if args.preview:
             print("=== DEPLOY PREVIEW MODE ===")
@@ -1105,6 +1122,20 @@ def handle_deploy(args):
                 "SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
             )
 
+    if not args.shipment_preload and bootstrap_user and bootstrap_password:
+        for name, device in devices.items():
+            if not isinstance(device, dict):
+                continue
+            auth = device.get("auth")
+            if not isinstance(auth, dict):
+                auth = {}
+                device["auth"] = auth
+            auth["username"] = bootstrap_user
+            auth["password"] = bootstrap_password
+        print(f"Deploy auth source: inventory_base bootstrap_user={bootstrap_user}")
+    elif not args.shipment_preload:
+        print("Deploy auth source: runtime device auth (bootstrap credentials unavailable)")
+
     if args.shipment_preload:
         print("Shipment preload mode: predeploy validation skipped (SCRIPT_USER may not exist yet).")
     else:
@@ -1141,11 +1172,6 @@ def handle_deploy(args):
     deploy_password = None
 
     if args.shipment_preload:
-        inventory_base = load_inventory_base()
-        secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
-        if not isinstance(secrets, dict):
-            secrets = {}
-
         deploy_user = (
             secrets.get("bootstrap_user")
             or secrets.get("deploy_user")
