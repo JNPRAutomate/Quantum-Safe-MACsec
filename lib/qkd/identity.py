@@ -477,6 +477,35 @@ def check_runtime_cleanup_simple(device):
         print(f"[WARN] runtime cleanup had non-fatal output on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
 
 
+def check_shipment_preload_artifacts(device):
+    device = normalize_device(device)
+    name = device_name(device)
+    op_path = qkd_remote_op_script()
+    event_path = qkd_remote_event_script()
+    config_path = qkd_remote_config_json()
+    inventory_path = qkd_remote_inventory_json()
+
+    cmd = (
+        f"ls -l {op_path}; "
+        f"ls -l {event_path}; "
+        f"ls -l {config_path}; "
+        f"ls -l {inventory_path}; "
+        f"grep -n -F '\"enabled\": false' {config_path}; "
+        f"grep -n -F '\"enabled\": false' {inventory_path}"
+    )
+
+    result = ssh_deploy_cmd(device, cmd, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"shipment preload artifact check failed on {name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+
+    print(f"[OK] shipment preload artifacts detected on {name}")
+    print_if_verbose(result.stdout)
+
+
 def check_remote_certs(device):
     device = normalize_device(device)
     name = device_name(device)
@@ -1060,27 +1089,49 @@ def check_no_state_save_errors(device):
 # -------------------------------------------------
 
 
-def validate_device_identity_predeploy(device):
+def validate_device_identity_predeploy(device, shipment_aware=False):
     device = normalize_device(device)
     name = device_name(device)
     validate_device_record(device)
 
     if platform_is_legacy_qfx(device):
         print(f"=== QKD legacy QFX pre-deploy validation: {name} ===")
-        check_script_user_exists(device)
-        check_script_user_home_simple(device)
-        check_script_dirs_simple(device)
-        check_runtime_cleanup_simple(device)
+        script_user_ready = True
+        try:
+            check_script_user_exists(device)
+        except Exception:
+            if shipment_aware:
+                check_shipment_preload_artifacts(device)
+                script_user_ready = False
+                print(f"[INFO] shipment-aware predeploy: skipping script-user checks on {name} (SCRIPT_USER not ready yet)")
+            else:
+                raise
+
+        if script_user_ready:
+            check_script_user_home_simple(device)
+            check_script_dirs_simple(device)
+            check_runtime_cleanup_simple(device)
         print(f"[OK] QKD legacy QFX pre-deploy validation passed: {name}")
         return
 
     print(f"=== QKD pre-deploy validation: {name} ===")
-    check_script_user_exists(device)
-    check_script_user_home_simple(device)
-    check_script_dirs_simple(device)
-    check_script_user_ssh_identity(device)
-    check_script_user_authorized_keys(device)
-    check_runtime_cleanup_simple(device)
+    script_user_ready = True
+    try:
+        check_script_user_exists(device)
+    except Exception:
+        if shipment_aware:
+            check_shipment_preload_artifacts(device)
+            script_user_ready = False
+            print(f"[INFO] shipment-aware predeploy: skipping script-user checks on {name} (SCRIPT_USER not ready yet)")
+        else:
+            raise
+
+    if script_user_ready:
+        check_script_user_home_simple(device)
+        check_script_dirs_simple(device)
+        check_script_user_ssh_identity(device)
+        check_script_user_authorized_keys(device)
+        check_runtime_cleanup_simple(device)
     print(f"[OK] QKD pre-deploy validation passed: {name}")
 
 
@@ -1111,7 +1162,7 @@ def validate_device_identity_postdeploy(device):
     print(f"[OK] QKD post-deploy validation passed: {name}")
 
 
-def validate_all_devices_predeploy(devices):
+def validate_all_devices_predeploy(devices, shipment_aware=False):
     devices = normalize_devices(devices)
     check_validation_plan()
     print("")
@@ -1127,7 +1178,7 @@ def validate_all_devices_predeploy(devices):
         print(f"  script_user : {qkd_script_user()}")
         print("")
         try:
-            validate_device_identity_predeploy(device)
+            validate_device_identity_predeploy(device, shipment_aware=shipment_aware)
             print(f"[OK] pre-deploy validation passed: {name}")
             print("")
         except Exception as exc:
@@ -1188,10 +1239,10 @@ def validate_all_devices_postdeploy(devices):
     print("Result: OK")
 
 
-def validate_all_devices(devices, phase="predeploy"):
+def validate_all_devices(devices, phase="predeploy", shipment_aware=False):
     devices = normalize_devices(devices)
     if phase == "predeploy":
-        validate_all_devices_predeploy(devices)
+        validate_all_devices_predeploy(devices, shipment_aware=shipment_aware)
         return
     if phase == "postdeploy":
         validate_all_devices_postdeploy(devices)
