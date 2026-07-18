@@ -583,11 +583,18 @@ def clean_device(
                 if not ok_re1_cfg:
                     peer_cleanup_failures.append("re1 config cleanup")
 
-            run_shell(
+            file_cleanup_output = run_shell(
                 "file/cert/runtime cleanup",
                 file_cleanup_cmd,
                 strict=False,
             )
+
+            cert_cleanup_permission_denied = False
+            for raw_line in (file_cleanup_output or "").splitlines():
+                low = raw_line.strip().lower()
+                if "permission denied" in low and "/var/db/scripts/certs" in low:
+                    cert_cleanup_permission_denied = True
+                    break
 
             if dual_re:
                 ok_re1_files = run_re1_cli(
@@ -676,11 +683,33 @@ def clean_device(
                 if path not in paths_should_be_absent:
                     paths_should_be_absent.append(path)
 
+            deduped_absent_paths = []
+            for path in paths_should_be_absent:
+                if path not in deduped_absent_paths:
+                    deduped_absent_paths.append(path)
+
             file_leftovers = []
 
-            for path in paths_should_be_absent:
+            for path in deduped_absent_paths:
                 if remote_path_exists(path):
                     file_leftovers.append(path)
+
+            if file_leftovers and cert_cleanup_permission_denied:
+                cert_dirs = {
+                    remote_cert_dir,
+                    f"{script_dir}/certs",
+                    f"{op_script_dir}/certs",
+                    f"{event_script_dir}/certs",
+                }
+
+                cert_leftovers = [p for p in file_leftovers if p in cert_dirs]
+                non_cert_leftovers = [p for p in file_leftovers if p not in cert_dirs]
+
+                if cert_leftovers and not non_cert_leftovers:
+                    print(f"[{name}] cleanup warning: cert dir leftovers ignored due to permission denied:")
+                    for path in cert_leftovers:
+                        print(f"[{name}]   {path}")
+                    file_leftovers = []
             
             soft_leftovers = []
 
