@@ -8,6 +8,28 @@ This low-level design explains:
 2. how script + JSON are generated and deployed on each Junos device,
 3. what each function in `qkd_onbox.py` does and where it fits in the runtime flow.
 
+## 1.2 Key rotation pipelines — separation of concerns
+
+There are **two completely independent rotation pipelines**:
+
+### Pipeline 1: MACsec key-id rotation (QKD on-box runtime)
+
+- Managed by: `artifacts/qkd_onbox.py` running as a Junos event script.
+- Trigger: polling cycle every `interval_seconds` (default 60s).
+- Mechanism: fetches key material from KME REST API, installs into `security authentication-key-chains`, programs MACsec keychain.
+- Affected config: `security macsec` + `security authentication-key-chains`.
+- Identity used: `script_user` (`macsec_user`) running on-box.
+
+### Pipeline 2: Peer SSH transport key rotation (orchestrator deploy)
+
+- Managed by: `lib/qkd/identity.py` during `qkd_orchestrator.py deploy` (post-deploy phase).
+- Trigger: when the key file age on the device exceeds `peer_cmd_rotation_seconds` (policy YAML).
+- Mechanism: `ssh-keygen` regenerates `qkd_peer_cmd_ed25519` on the router, then `install_peer_authorized_keys()` syncs the new public key to `etsi_peer_view` on all peers via Junos NETCONF.
+- Affected config: `system login user etsi_peer_view authentication ssh-ed25519`.
+- Identity used: deploy user (`labuser`) via PyEZ `request_shell_execute`.
+
+**These two pipelines do not interact.** Rotating the peer SSH transport key has zero impact on active MACsec sessions, MKA state, or keychain entries.
+
 ## 1.1 Suggested filename alternatives
 
 If you later want a more explicit name, these are meaningful alternatives:

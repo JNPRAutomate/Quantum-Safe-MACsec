@@ -60,6 +60,66 @@ PKI outputs are generated in:
 - `certs/self_signed/` or
 - `certs/hierarchical_ca/`
 
+## SSH key lifecycle and rotation
+
+### Identity model
+
+Two separate SSH key pairs are managed per device under `/var/home/{script_user}/.ssh/`:
+
+| File | Purpose | Owner |
+|------|---------|-------|
+| `qkd_id_ed25519` | `script_user` runtime identity (local op script, Junos NETCONF) | `script_user` |
+| `qkd_peer_cmd_ed25519` | peer transport key — used by `script_user` to SSH into `peer_cmd_user` on remote peers | `script_user` |
+
+**Important: peer SSH key rotation is completely independent from MACsec keychain rotation.**
+- Peer key rotation replaces the transport SSH identity (`qkd_peer_cmd_ed25519`).
+- MACsec keychain rotation (key-id, start-time, secret in `security authentication-key-chains`) is driven by the QKD on-box script via KME.
+- One does not affect the other.
+
+### Rotation policy (config/runtime/qkd_policy.yaml)
+
+```yaml
+qkd_policy:
+  script_user_rotation_seconds: 2592000  # 30 days
+  peer_cmd_rotation_seconds: 3600        # 1 hour (adjust to 1209600 for 14 days)
+  interval_seconds: 60                   # MACsec key-id rotation (independent)
+```
+
+### Rotation enforcement
+
+Key rotation is enforced during `qkd_orchestrator.py deploy` (post-deploy validation phase):
+
+1. `check_script_user_ssh_identity(device)` reads the remote key file age via `python3 -c "import os,time; ..."` on the device.
+2. If the age exceeds `peer_cmd_rotation_seconds`, it regenerates the key: `ssh-keygen ... -f {peer_key_path}`, then repairs ownership (`chown {script_user}`) and mode (`chmod 600`).
+3. `install_peer_authorized_keys(devices)` is called **after** rotation completes, so the new public key is immediately synced to `etsi_peer_view` on all peers.
+
+### Peer user class (`etsi_peer_view`) policy
+
+The Junos class for the peer command user is applied via `config/templates/common/peer_cmd_ssh_hardening.j2`:
+
+```text
+set system login class qkd-peer-readonly permissions view
+set system login class qkd-peer-readonly allow-commands "^(quit|exit|logout)$"
+set system login class qkd-peer-readonly deny-configuration ".*"
+```
+
+**Note:** `deny-commands .*` must NOT be present — it would block the SSH session from running `op qkd_onbox.py`. The class deliberately omits `allow-commands` for `op` because Junos applies the `allow-commands` regex at the point the command is typed; without `deny-commands .*`, `op qkd_onbox.py action (install-key|status) ...` is accessible by default under `permissions view`.
+
+### Key accumulation prevention
+
+`install_peer_authorized_keys()` in `lib/qkd/identity.py` now uses a replace-rather-than-append strategy:
+
+1. Reads currently configured `authentication ssh-ed25519` entries for `etsi_peer_view` via `show configuration system login user ... | display set`.
+2. Generates `delete system login user {peer_user} authentication {key_type} "{full_key}"` for each existing entry.
+3. Applies the new key set.
+4. Commits only if there is a diff.
+
+This prevents unlimited accumulation of authentication entries in Junos config.
+
+### Expected deploy cadence
+
+With `peer_cmd_rotation_seconds=3600`, the orchestrator will trigger key rotation on every deploy run where the key is older than 1 hour. If you want to reduce deploy frequency, set `peer_cmd_rotation_seconds` to match your desired rotation window (e.g. `1209600` for 14 days, matching `peer_cmd_key_rotation_days: 14` in inventory_base).
+
 ## Secrets and credential handling
 
 Runtime login credentials must not be committed in cleartext in repository YAML files.
