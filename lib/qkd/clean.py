@@ -357,6 +357,12 @@ def clean_device(
                         and "commit synchronize should be used" in line.lower()
                     ):
                         continue
+
+                    if (
+                        "qkd_debug.log" in line.lower()
+                        and "operation not permitted" in line.lower()
+                    ):
+                        continue
                     
                     if "Entering configuration mode" in line:
                         continue
@@ -455,6 +461,11 @@ def clean_device(
                 if (
                     "graceful-switchover is enabled" in low
                     and "commit synchronize should be used" in low
+                ):
+                    return True
+                if (
+                    "qkd_debug.log" in low
+                    and "operation not permitted" in low
                 ):
                     return True
                 return False
