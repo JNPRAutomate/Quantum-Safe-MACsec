@@ -752,6 +752,8 @@ def install_peer_authorized_keys(devices):
             raise RuntimeError(f"missing auth for peer key sync target={target}")
 
         set_cmds = []
+        delete_cmds = []
+        seen_types = set()
         seen = set()
         for source_name, pub_key in pub_keys.items():
             key_type, key_line = parse_public_key(pub_key)
@@ -763,6 +765,11 @@ def install_peer_authorized_keys(devices):
             if marker in seen:
                 continue
             seen.add(marker)
+            if key_type not in seen_types:
+                delete_cmds.append(
+                    f"delete system login user {peer_user} authentication {key_type}"
+                )
+                seen_types.add(key_type)
             set_cmds.append(
                 f'set system login user {peer_user} authentication {key_type} "{key_line}"'
             )
@@ -771,6 +778,8 @@ def install_peer_authorized_keys(devices):
         try:
             dev.open()
             with Config(dev) as cu:
+                for cmd in delete_cmds:
+                    cu.load(cmd, format="set", merge=True)
                 for cmd in set_cmds:
                     cu.load(cmd, format="set", merge=True)
                 diff = cu.diff()
