@@ -351,6 +351,12 @@ def clean_device(
                         and "commit no-synchronize" in line.lower()
                     ):
                         continue
+
+                    if (
+                        "graceful-switchover is enabled" in line.lower()
+                        and "commit synchronize should be used" in line.lower()
+                    ):
+                        continue
                     
                     if "Entering configuration mode" in line:
                         continue
@@ -444,6 +450,11 @@ def clean_device(
                 if (
                     "some configurations require commits to be synchronized" in low
                     and "commit no-synchronize" in low
+                ):
+                    return True
+                if (
+                    "graceful-switchover is enabled" in low
+                    and "commit synchronize should be used" in low
                 ):
                     return True
                 return False
