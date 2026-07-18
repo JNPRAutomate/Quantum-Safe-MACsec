@@ -343,7 +343,6 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
             direct_cmd = "cli -c " + shlex.quote(command)
         else:
             direct_cmd = command
-        direct_cmd = f"su - {script_user} -c {shlex.quote(direct_cmd)}"
         return ssh_deploy_cmd(
             device=device,
             command=direct_cmd,
@@ -578,6 +577,7 @@ def check_remote_certs(device):
 def check_script_user_ssh_identity(device):
     device = normalize_device(device)
     name = device_name(device)
+    script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
     pub_path = qkd_ssh_public_key()
@@ -600,10 +600,15 @@ def check_script_user_ssh_identity(device):
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || {keygen_cmd}; "
         f"{gen_peer}"
+        f"chown {script_user} {ssh_dir} {key_path} {pub_path} {peer_key_path} {peer_pub_path}; "
+        f"chmod 700 {ssh_dir}; "
+        f"chmod 600 {key_path} {peer_key_path}; "
+        f"chmod 644 {pub_path} {peer_pub_path}; "
         f"test -s {key_path}; "
         f"test -s {pub_path}; "
         f"test -s {peer_key_path}; "
         f"test -s {peer_pub_path}; "
+        f"ls -ld {ssh_dir}; "
         f"ls -l {key_path}; "
         f"ls -l {pub_path}; "
         f"ls -l {peer_key_path}; "
