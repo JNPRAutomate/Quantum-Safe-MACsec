@@ -1,5 +1,4 @@
 set system login class {{ peer_cmd_class }} permissions view
-set system login class {{ peer_cmd_class }} allow-commands "^op {{ script_name }} action (install-key|status) .*$"
-set system login class {{ peer_cmd_class }} deny-commands ".*"
+set system login class {{ peer_cmd_class }} allow-commands "^(quit|exit|logout)$"
 set system login class {{ peer_cmd_class }} deny-configuration ".*"
 set system login user {{ peer_cmd_user }} authentication encrypted-password "*"
