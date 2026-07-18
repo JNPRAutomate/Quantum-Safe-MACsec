@@ -851,7 +851,7 @@ def check_peer_ssh_from_device(device):
             print(f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip")
             continue
 
-        peer_payload = 'cli -c "show system uptime"'
+        peer_payload = "show system uptime"
 
         cmd = (
             f"ssh -i {key_path} "
