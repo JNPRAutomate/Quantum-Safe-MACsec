@@ -145,6 +145,8 @@ def clean_device(
     clean_password=None,
     fallback_user=None,
     fallback_password=None,
+    fallback_user_secondary=None,
+    fallback_password_secondary=None,
     peer_cmd_class_override=None,
 ):
     try:
@@ -367,6 +369,18 @@ def clean_device(
                     if (
                         "qkd_debug.log" in line.lower()
                         and "operation not permitted" in line.lower()
+                    ):
+                        continue
+
+                    if (
+                        "/var/db/scripts/certs" in line.lower()
+                        and "permission denied" in line.lower()
+                    ):
+                        continue
+
+                    if (
+                        "/var/db/scripts/certs" in line.lower()
+                        and "directory not empty" in line.lower()
                     ):
                         continue
                     
@@ -613,19 +627,24 @@ def clean_device(
                 path for path in cert_paths if remote_path_exists(path)
             ]
 
-            can_try_fallback_cleanup = (
-                bool(cert_leftovers_before_fallback)
-                and bool(fallback_user)
-                and bool(fallback_password)
-                and str(fallback_user) != auth_user
-            )
+            fallback_candidates = []
+            if fallback_user and fallback_password:
+                fallback_candidates.append((str(fallback_user), str(fallback_password)))
+            if fallback_user_secondary and fallback_password_secondary:
+                fallback_candidates.append((str(fallback_user_secondary), str(fallback_password_secondary)))
+
+            # Preserve order and de-duplicate user entries.
+            deduped_candidates = []
+            seen_users = set()
+            for cand_user, cand_password in fallback_candidates:
+                if cand_user in seen_users:
+                    continue
+                seen_users.add(cand_user)
+                deduped_candidates.append((cand_user, cand_password))
+
+            can_try_fallback_cleanup = bool(cert_leftovers_before_fallback and deduped_candidates)
 
             if can_try_fallback_cleanup:
-                print(
-                    f"[{name}] cert cleanup retry with fallback user {fallback_user}",
-                    flush=True,
-                )
-
                 cert_only_cleanup_cmd = "; ".join(
                     [
                         f"rm -rf {remote_cert_dir}",
@@ -635,37 +654,66 @@ def clean_device(
                     ]
                 )
 
-                fallback_dev = Device(
-                    host=ip,
-                    user=fallback_user,
-                    passwd=fallback_password,
-                    port=22,
-                )
+                fallback_success = False
+                last_fallback_exc = None
 
-                try:
-                    fallback_dev.open()
-                    rsp = fallback_dev.rpc.request_shell_execute(command=cert_only_cleanup_cmd)
-                    fallback_output = rpc_text(rsp)
+                for candidate_user, candidate_password in deduped_candidates:
+                    if candidate_user == auth_user:
+                        continue
 
-                    for line in (fallback_output or "").splitlines():
-                        line = line.strip()
-                        if not line:
-                            continue
-                        if "warning: statement not found" in line:
-                            continue
-                        if "permission denied" in line.lower():
-                            continue
-                        print(f"[{name}] {line}", flush=True)
-                except Exception as fallback_exc:
                     print(
-                        f"[{name}] WARN fallback cert cleanup failed as {fallback_user}: {fallback_exc}",
+                        f"[{name}] cert cleanup retry with fallback user {candidate_user}",
                         flush=True,
                     )
-                finally:
+
+                    fallback_dev = Device(
+                        host=ip,
+                        user=candidate_user,
+                        passwd=candidate_password,
+                        port=22,
+                    )
+
                     try:
-                        fallback_dev.close()
-                    except Exception:
-                        pass
+                        fallback_dev.open()
+                        rsp = fallback_dev.rpc.request_shell_execute(command=cert_only_cleanup_cmd)
+                        fallback_output = rpc_text(rsp)
+
+                        for line in (fallback_output or "").splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            if "warning: statement not found" in line:
+                                continue
+                            if "permission denied" in line.lower():
+                                continue
+                            print(f"[{name}] {line}", flush=True)
+
+                        fallback_success = True
+                        break
+                    except Exception as fallback_exc:
+                        last_fallback_exc = fallback_exc
+                        low = str(fallback_exc).lower()
+                        if "connectautherror" in low:
+                            print(
+                                f"[{name}] fallback auth not available for user {candidate_user}; trying next candidate",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"[{name}] WARN fallback cert cleanup failed as {candidate_user}: {fallback_exc}",
+                                flush=True,
+                            )
+                    finally:
+                        try:
+                            fallback_dev.close()
+                        except Exception:
+                            pass
+
+                if not fallback_success and last_fallback_exc:
+                    print(
+                        f"[{name}] WARN fallback cert cleanup exhausted: {last_fallback_exc}",
+                        flush=True,
+                    )
 
             if dual_re:
                 ok_re1_files = run_re1_cli(
@@ -995,6 +1043,8 @@ def handle_clean(args):
     bootstrap_password = None
     fallback_user = None
     fallback_password = None
+    fallback_user_secondary = None
+    fallback_password_secondary = None
     peer_cmd_class_override = None
 
     try:
@@ -1026,6 +1076,12 @@ def handle_clean(args):
             or secrets.get("default_password")
             or None
         )
+        fallback_user_secondary = secrets.get("default_user") or None
+        fallback_password_secondary = (
+            secrets.get("default_password")
+            or secrets.get("admin_password")
+            or None
+        )
         peer_cmd_class_override = (
             secrets.get("peer_cmd_class")
             or QKD.get("PEER_CMD_CLASS", "read-only")
@@ -1045,6 +1101,9 @@ def handle_clean(args):
     else:
         print("Remote clean cert fallback auth source: unavailable")
 
+    if fallback_user_secondary and fallback_password_secondary:
+        print(f"Remote clean cert secondary fallback user: {fallback_user_secondary}")
+
     print(f"Remote clean peer class target: {peer_cmd_class_override}")
 
     for name, device in devices.items():
@@ -1058,6 +1117,8 @@ def handle_clean(args):
             clean_password=bootstrap_password if use_bootstrap_auth else None,
             fallback_user=fallback_user,
             fallback_password=fallback_password,
+            fallback_user_secondary=fallback_user_secondary,
+            fallback_password_secondary=fallback_password_secondary,
             peer_cmd_class_override=peer_cmd_class_override,
         )
 
