@@ -1139,7 +1139,7 @@ def handle_deploy(args):
     if args.shipment_preload:
         print("Shipment preload mode: predeploy validation skipped (SCRIPT_USER may not exist yet).")
     else:
-        validate_all_devices(devices, phase="predeploy")
+        validate_all_devices(devices, phase="predeploy", shipment_aware=True)
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
