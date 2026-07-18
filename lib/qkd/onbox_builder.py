@@ -476,7 +476,11 @@ def build_onbox_artifacts(devices, placeholder_json=False):
         mode = device.get("macsec", {}).get("mode", "qkd")
 
         hostname = _device_hostname(name, device)
-        print(f"Building onbox artifacts for {name}/{hostname} (mode={mode})")
+        device_label = name if hostname == name else f"{name}/{hostname}"
+        if placeholder_json:
+            print(f"Building shipment placeholder artifacts for {device_label} (mode={mode})")
+        else:
+            print(f"Building onbox artifacts for {device_label} (mode={mode})")
 
         outputs[name] = {}
 
