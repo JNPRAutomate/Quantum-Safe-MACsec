@@ -448,12 +448,19 @@ def build_ssh_fix_command(script_user: str) -> str:
     )
 
 
-def run_shell_fix(dev: Device, name: str, script_user: str) -> bool:
+def run_shell_fix(dev: Device, name: str, script_user: str, deploy_user: str) -> bool:
     # Disabled by default: platform shell behavior and privilege model can make
     # this noisy and non-portable, while deploy/postdeploy paths install and
     # validate required peer keys independently.
     if os.getenv("QKD_ENABLE_SSH_HOME_FIX", "0").lower() not in {"1", "true", "yes"}:
         print("[%s] ssh home fix skipped for %s (set QKD_ENABLE_SSH_HOME_FIX=1 to enable)" % (name, script_user))
+        return True
+
+    if str(deploy_user).strip().lower() != "root":
+        print(
+            "[%s] ssh home fix skipped for %s: deploy user %s is not root"
+            % (name, script_user, deploy_user)
+        )
         return True
 
     command = build_ssh_fix_command(script_user)
@@ -564,9 +571,9 @@ def bootstrap_script_user_on_device(
             except Exception:
                 pass
 
-        if not run_shell_fix(dev, name, script_user):
+        if not run_shell_fix(dev, name, script_user, deploy_user):
             return False
-        if not run_shell_fix(dev, name, peer_cmd_user):
+        if not run_shell_fix(dev, name, peer_cmd_user, deploy_user):
             return False
 
         return True
