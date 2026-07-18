@@ -145,6 +145,7 @@ def clean_device(
     clean_password=None,
     fallback_user=None,
     fallback_password=None,
+    peer_cmd_class_override=None,
 ):
     try:
         ip = device["ip"]
@@ -171,7 +172,10 @@ def clean_device(
         auth_user = str(user)
         script_user = str(QKD.get("SCRIPT_USER", "admin"))
         peer_cmd_user = str(QKD.get("PEER_CMD_USER", "etsi_peer_view"))
-        peer_cmd_class = str(QKD.get("PEER_CMD_CLASS", "read-only"))
+        peer_cmd_class = str(
+            peer_cmd_class_override
+            or QKD.get("PEER_CMD_CLASS", "read-only")
+        )
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -991,6 +995,7 @@ def handle_clean(args):
     bootstrap_password = None
     fallback_user = None
     fallback_password = None
+    peer_cmd_class_override = None
 
     try:
         base = load_inventory_base()
@@ -1021,6 +1026,10 @@ def handle_clean(args):
             or secrets.get("default_password")
             or None
         )
+        peer_cmd_class_override = (
+            secrets.get("peer_cmd_class")
+            or QKD.get("PEER_CMD_CLASS", "read-only")
+        )
     except Exception as exc:
         print(f"WARN unable to resolve inventory_base bootstrap credentials: {exc}")
 
@@ -1036,6 +1045,8 @@ def handle_clean(args):
     else:
         print("Remote clean cert fallback auth source: unavailable")
 
+    print(f"Remote clean peer class target: {peer_cmd_class_override}")
+
     for name, device in devices.items():
         ok = clean_device(
             name,
@@ -1047,6 +1058,7 @@ def handle_clean(args):
             clean_password=bootstrap_password if use_bootstrap_auth else None,
             fallback_user=fallback_user,
             fallback_password=fallback_password,
+            peer_cmd_class_override=peer_cmd_class_override,
         )
 
         if not ok:
