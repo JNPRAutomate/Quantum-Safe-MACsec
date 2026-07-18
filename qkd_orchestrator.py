@@ -619,7 +619,7 @@ def deploy_onbox(log, devices, artifacts):
 
     def sync_to_re1_if_needed(dev, name):
         """
-        Copy op/event scripts and JSON config to RE1 on dual-RE systems.
+        Copy op/event scripts and JSON config to peer RE on dual-RE systems.
 
         This MUST run as admin/SCRIPT_USER.
         """
@@ -629,42 +629,71 @@ def deploy_onbox(log, devices, artifacts):
             return
 
         log.info(
-            f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {script_user}"
+            f"[{name}] Dual-RE detected - syncing ONBOX scripts to peer RE as {script_user}"
         )
 
-        copy_commands = [
-            f"cli -c 'file copy {remote_op} re1:{remote_op}'",
-            f"cli -c 'file copy {remote_event} re1:{remote_event}'",
-            f"cli -c 'file copy {legacy_op} re1:{legacy_op}'",
-            f"cli -c 'file copy {legacy_event} re1:{legacy_event}'",
-            f"cli -c 'file copy {remote_config_json} re1:{remote_config_json}'",
-            f"cli -c 'file copy {remote_inventory_json} re1:{remote_inventory_json}'",
-        ]
+        def run_peer_copy(src, dst):
+            peer_payloads = [
+                f"cli -c 'file copy re0:{src} {dst}'",
+                f"cli -c 'file copy re1:{src} {dst}'",
+                f"cli -c 'file copy {src} {dst}'",
+            ]
 
-        for cmd in copy_commands:
-
-            output = run_shell(
-                dev,
-                cmd,
-                strict=False,
-            )
-
-            low = (output or "").lower()
-
-            if (
-                "permission denied" in low
-                or "put-file failed" in low
-                or "could not send local copy" in low
-                or "error:" in low
-                or "operation-failed" in low
-            ):
-                raise RuntimeError(
-                    f"[{name}] RE1 ONBOX sync failed as {script_user}\n"
-                    f"command={cmd}\n"
-                    f"output={output}"
+            candidates = []
+            for payload in peer_payloads:
+                escaped = payload.replace('"', '\\"')
+                candidates.extend(
+                    [
+                        f'request routing-engine execute command "{escaped}" routing-engine other',
+                        f'request routing-engine execute command "{escaped}" routing-engine backup',
+                        f'request routing-engine execute command "{escaped}" routing-engine re1',
+                        f'request routing-engine execute other command "{escaped}"',
+                        f'request routing-engine execute re1 command "{escaped}"',
+                    ]
                 )
 
-        log.info(f"[{name}] RE1 ONBOX sync completed")
+            last_output = ""
+
+            for cmd in candidates:
+                output = run_cli(dev, cmd, strict=False)
+                last_output = output or ""
+                low = last_output.lower()
+
+                if (
+                    "permission denied" in low
+                    or "put-file failed" in low
+                    or "could not send local copy" in low
+                    or "operation-failed" in low
+                    or "syntax error" in low
+                    or "unknown command" in low
+                    or "command not found" in low
+                    or "could not connect to re1" in low
+                    or "cannot connect to other re" in low
+                    or "error:" in low
+                ):
+                    continue
+
+                return True
+
+            raise RuntimeError(
+                f"[{name}] Peer RE ONBOX sync failed as {script_user}\n"
+                f"src={src} dst={dst}\n"
+                f"last_output={last_output}"
+            )
+
+        files = [
+            (remote_op, remote_op),
+            (remote_event, remote_event),
+            (legacy_op, legacy_op),
+            (legacy_event, legacy_event),
+            (remote_config_json, remote_config_json),
+            (remote_inventory_json, remote_inventory_json),
+        ]
+
+        for src, dst in files:
+            run_peer_copy(src, dst)
+
+        log.info(f"[{name}] Peer RE ONBOX sync completed")
 
     for name, device in devices.items():
         if device.get("managed") is False:
