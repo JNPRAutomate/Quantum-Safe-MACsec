@@ -212,10 +212,6 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
     """
     Ensure qkd_onbox.py and external JSON runtime files exist on both routing
     engines before commit synchronize.
-
-    Also creates/copies legacy onbox.py as a compatibility shim because stale
-    configurations can still reference /var/db/scripts/event/onbox.py and break
-    commit synchronize before the new candidate is fully checked out.
     """
     op_script_dir = "/var/db/scripts/op"
     event_script_dir = "/var/db/scripts/event"
@@ -227,19 +223,15 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
 
     op_script = f"{op_script_dir}/{script_name}"
     event_script = f"{event_script_dir}/{script_name}"
-    legacy_event_script = f"{event_script_dir}/onbox.py"
-    legacy_op_script = f"{op_script_dir}/onbox.py"
     config_json = f"{config_dir}/{config_json_name}"
     inventory_json = f"{config_dir}/{inventory_json_name}"
 
-    # Ensure local RE has all compatibility files before trying to copy them.
+    # Ensure local RE has required files before trying to copy them.
     run_shell(
         dev,
         (
             f"mkdir -p {op_script_dir} {event_script_dir} {config_dir}; "
-            f"test -f {event_script} && cp {event_script} {legacy_event_script} || true; "
-            f"test -f {op_script} && cp {op_script} {legacy_op_script} || true; "
-            f"chmod {script_mode} {event_script} {op_script} {legacy_event_script} {legacy_op_script} 2>/dev/null || true; "
+            f"chmod {script_mode} {event_script} {op_script} 2>/dev/null || true; "
             f"chmod {json_mode} {config_json} {inventory_json} 2>/dev/null || true"
         ),
         name=name,
@@ -255,8 +247,6 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
     for path in (
         event_script,
         op_script,
-        legacy_event_script,
-        legacy_op_script,
         config_json,
         inventory_json,
     ):
