@@ -613,20 +613,9 @@ def clean_device(
                 f"set system scripts op file {legacy_script_name}",
             ]
 
-            if remove_script_user:
-                forbidden_patterns.append(
-                    f"set system login user {script_user} "
-                )
-
-            if remove_peer_user:
-                forbidden_patterns.append(
-                    f"set system login user {peer_cmd_user} "
-                )
-                builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
-                if peer_cmd_class and peer_cmd_class not in builtin_classes:
-                    forbidden_patterns.append(
-                        f"set system login class {peer_cmd_class} "
-                    )
+            # NOTE: Login-user/class leftovers are verified after the dedicated
+            # login users cleanup step. Checking them here would incorrectly
+            # fail before the cleanup has been executed.
 
             if full_macsec:
                 forbidden_patterns.extend(
@@ -716,14 +705,6 @@ def clean_device(
                     + "\n".join(peer_cleanup_failures)
                 )
 
-            if failures:
-                print(f"[FAIL] Device clean verification failed: {name}")
-
-                for item in failures:
-                    print(item)
-
-                return False
-
             if user_cleanup_cmds:
                 user_cleanup_body = "; ".join(user_cleanup_cmds)
                 user_cleanup_cmd = (
@@ -760,12 +741,55 @@ def clean_device(
                         flush=True,
                     )
 
+                # Post user-cleanup verification for login users/classes.
+                set_output_after_users = run_cli_show(
+                    "show configuration | display set"
+                )
+
+                user_leftovers = []
+
+                if remove_script_user:
+                    pat = f"set system login user {script_user} "
+                    for line in set_output_after_users.splitlines():
+                        line = line.strip()
+                        if pat in line:
+                            user_leftovers.append(line)
+
+                if remove_peer_user:
+                    pat = f"set system login user {peer_cmd_user} "
+                    for line in set_output_after_users.splitlines():
+                        line = line.strip()
+                        if pat in line:
+                            user_leftovers.append(line)
+
+                    builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
+                    if peer_cmd_class and peer_cmd_class not in builtin_classes:
+                        pat = f"set system login class {peer_cmd_class} "
+                        for line in set_output_after_users.splitlines():
+                            line = line.strip()
+                            if pat in line:
+                                user_leftovers.append(line)
+
+                if user_leftovers:
+                    failures.append(
+                        "login user/class leftovers:\n"
+                        + "\n".join(user_leftovers)
+                    )
+
             if dual_re:
                 run_shell(
                     "final commit synchronize",
                     "cli -c 'configure; commit synchronize; exit'",
                     strict=True,
                 )
+
+            if failures:
+                print(f"[FAIL] Device clean verification failed: {name}")
+
+                for item in failures:
+                    print(item)
+
+                return False
 
             print(f"[OK] Device clean complete: {name}")
             return True
