@@ -143,6 +143,8 @@ def clean_device(
     remove_script_user=False,
     clean_user=None,
     clean_password=None,
+    fallback_user=None,
+    fallback_password=None,
 ):
     try:
         ip = device["ip"]
@@ -596,6 +598,71 @@ def clean_device(
                     cert_cleanup_permission_denied = True
                     break
 
+            cert_paths = [
+                remote_cert_dir,
+                f"{script_dir}/certs",
+                f"{op_script_dir}/certs",
+                f"{event_script_dir}/certs",
+            ]
+
+            cert_leftovers_before_fallback = [
+                path for path in cert_paths if remote_path_exists(path)
+            ]
+
+            can_try_fallback_cleanup = (
+                bool(cert_leftovers_before_fallback)
+                and bool(fallback_user)
+                and bool(fallback_password)
+                and str(fallback_user) != auth_user
+            )
+
+            if can_try_fallback_cleanup:
+                print(
+                    f"[{name}] cert cleanup retry with fallback user {fallback_user}",
+                    flush=True,
+                )
+
+                cert_only_cleanup_cmd = "; ".join(
+                    [
+                        f"rm -rf {remote_cert_dir}",
+                        f"rm -rf {script_dir}/certs",
+                        f"rm -rf {op_script_dir}/certs",
+                        f"rm -rf {event_script_dir}/certs",
+                    ]
+                )
+
+                fallback_dev = Device(
+                    host=ip,
+                    user=fallback_user,
+                    passwd=fallback_password,
+                    port=22,
+                )
+
+                try:
+                    fallback_dev.open()
+                    rsp = fallback_dev.rpc.request_shell_execute(command=cert_only_cleanup_cmd)
+                    fallback_output = rpc_text(rsp)
+
+                    for line in (fallback_output or "").splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if "warning: statement not found" in line:
+                            continue
+                        if "permission denied" in line.lower():
+                            continue
+                        print(f"[{name}] {line}", flush=True)
+                except Exception as fallback_exc:
+                    print(
+                        f"[{name}] WARN fallback cert cleanup failed as {fallback_user}: {fallback_exc}",
+                        flush=True,
+                    )
+                finally:
+                    try:
+                        fallback_dev.close()
+                    except Exception:
+                        pass
+
             if dual_re:
                 ok_re1_files = run_re1_cli(
                     "re1 file/cert/runtime cleanup",
@@ -922,6 +989,8 @@ def handle_clean(args):
 
     bootstrap_user = None
     bootstrap_password = None
+    fallback_user = None
+    fallback_password = None
 
     try:
         base = load_inventory_base()
@@ -940,6 +1009,18 @@ def handle_clean(args):
             or secrets.get("root_password")
             or None
         )
+
+        fallback_user = (
+            secrets.get("script_user")
+            or secrets.get("default_user")
+            or None
+        )
+        fallback_password = (
+            secrets.get("script_password")
+            or secrets.get("admin_password")
+            or secrets.get("default_password")
+            or None
+        )
     except Exception as exc:
         print(f"WARN unable to resolve inventory_base bootstrap credentials: {exc}")
 
@@ -950,6 +1031,11 @@ def handle_clean(args):
     else:
         print("Remote clean auth source: runtime devices auth (bootstrap credentials unavailable)")
 
+    if fallback_user and fallback_password:
+        print(f"Remote clean cert fallback auth source: inventory_base user={fallback_user}")
+    else:
+        print("Remote clean cert fallback auth source: unavailable")
+
     for name, device in devices.items():
         ok = clean_device(
             name,
@@ -959,6 +1045,8 @@ def handle_clean(args):
             remove_script_user=remove_script_user,
             clean_user=bootstrap_user if use_bootstrap_auth else None,
             clean_password=bootstrap_password if use_bootstrap_auth else None,
+            fallback_user=fallback_user,
+            fallback_password=fallback_password,
         )
 
         if not ok:
