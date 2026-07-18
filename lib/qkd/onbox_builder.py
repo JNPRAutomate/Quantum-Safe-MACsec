@@ -321,6 +321,38 @@ def build_onbox_static_config(name, device):
     return config
 
 
+def build_onbox_static_config_placeholder():
+    """
+    Build a contract-valid placeholder static JSON for shipment preload.
+
+    All required keys are present, but runtime-specific values are intentionally
+    empty/default so customer activation can populate them later.
+    """
+    return {
+        "device_name": "",
+        "hostname": "",
+        "enabled": False,
+        "pki_profile": "",
+        "ca_cert": "",
+        "trust_bundle": "",
+        "qkd_policy": {},
+        "script_user": "",
+        "script_dir": "",
+        "ssh_key": "",
+        "peer_cmd_user": "",
+        "peer_cmd_ssh_key": "",
+        "log_file": "/var/tmp/qkd_debug.log",
+        "log_max_bytes": 200000,
+        "log_backup_count": 3,
+        "config_path": f"{QKD.get('ONBOX_CONFIG_DIR', '/var/db/scripts/op')}/{QKD.get('ONBOX_CONFIG_JSON_NAME', 'qkd_onbox_config.json')}",
+        "inventory_path": f"{QKD.get('ONBOX_CONFIG_DIR', '/var/db/scripts/op')}/{QKD.get('ONBOX_INVENTORY_JSON_NAME', 'qkd_onbox_inventory.json')}",
+        "links": [],
+        "local_sae": "",
+        "kme_ip": "",
+        "kme_port": 443,
+    }
+
+
 def build_onbox_inventory_config(name, device):
     """Build runtime inventory JSON for qkd_onbox.py for one device."""
     links = normalize_onbox_links(name, device)
@@ -331,6 +363,18 @@ def build_onbox_inventory_config(name, device):
         "kme_ip": _device_kme_ip(name, device),
         "kme_port": _device_kme_port(device),
         "links": links,
+    }
+
+
+def build_onbox_inventory_config_placeholder():
+    """Build contract-valid empty inventory JSON for shipment preload."""
+    return {
+        "version": 1,
+        "enabled": False,
+        "local_sae": "",
+        "kme_ip": "",
+        "kme_port": 443,
+        "links": [],
     }
 
 
@@ -367,7 +411,7 @@ def generate_onbox_script(name, device, out_dir):
     return dst
 
 
-def generate_onbox_json_files(name, device, out_dir):
+def generate_onbox_json_files(name, device, out_dir, placeholder=False):
     """
     Generate external JSON files consumed by qkd_onbox.py.
 
@@ -383,8 +427,12 @@ def generate_onbox_json_files(name, device, out_dir):
     static_path = out_dir / config_name
     inventory_path = out_dir / inventory_name
 
-    static_cfg = build_onbox_static_config(name, device)
-    inventory_cfg = build_onbox_inventory_config(name, device)
+    if placeholder:
+        static_cfg = build_onbox_static_config_placeholder()
+        inventory_cfg = build_onbox_inventory_config_placeholder()
+    else:
+        static_cfg = build_onbox_static_config(name, device)
+        inventory_cfg = build_onbox_inventory_config(name, device)
 
     static_path.write_text(json.dumps(static_cfg, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     inventory_path.write_text(json.dumps(inventory_cfg, indent=2, sort_keys=False) + "\n", encoding="utf-8")
@@ -399,7 +447,7 @@ def generate_onbox_json_files(name, device, out_dir):
 # BUILD ONBOX ARTIFACTS
 # ----------------------------
 
-def build_onbox_artifacts(devices):
+def build_onbox_artifacts(devices, placeholder_json=False):
     """
     Build per-device onbox scripts.
 
@@ -446,6 +494,7 @@ def build_onbox_artifacts(devices):
                 name,
                 device,
                 out_dir=device_runtime_dir,
+                placeholder=placeholder_json,
             )
 
             outputs[name]["script"] = script
