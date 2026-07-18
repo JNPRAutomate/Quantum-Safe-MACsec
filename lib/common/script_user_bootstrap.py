@@ -418,12 +418,7 @@ def build_peer_cmd_class_commands(class_name: str, script_name: str) -> List[str
 
     return [
         "set system login class %s permissions view" % class_name,
-        (
-            "set system login class %s allow-commands "
-            "\"^op %s action (install-key|status) .*$\""
-        )
-        % (class_name, script_name),
-        "set system login class %s deny-commands \".*\"" % class_name,
+        "set system login class %s allow-commands \"^(quit|exit|logout)$\"" % class_name,
         "set system login class %s deny-configuration \".*\"" % class_name,
     ]
 
