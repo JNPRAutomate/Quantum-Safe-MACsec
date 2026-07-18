@@ -808,10 +808,7 @@ def check_peer_ssh_from_device(device):
             continue
 
         marker = f"QKD_PEER_SSH_OK_{name}_{str(peer_ip).replace('.', '_')}"
-        if platform_is_legacy_qfx(device):
-            peer_payload = f"echo {marker}"
-        else:
-            peer_payload = "start shell command " + junos_cli_quote(f"echo {marker}")
+        peer_payload = f"run echo {marker}"
 
         cmd = (
             f"ssh -i {key_path} "
@@ -1323,6 +1320,31 @@ def validate_all_devices_postdeploy(devices):
     print("=== QKD post-deploy validation ===")
     print(f"Devices: {len(devices)}")
     print("")
+
+    try:
+        base = load_inventory_base()
+        secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+        if not isinstance(secrets, dict):
+            secrets = {}
+
+        script_user = secrets.get("script_user") or QKD.get("SCRIPT_USER") or "admin"
+        script_password = (
+            secrets.get("script_password")
+            or secrets.get("admin_password")
+            or secrets.get("default_password")
+            or None
+        )
+
+        if script_password:
+            for device in devices:
+                auth = device.get("auth")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    device["auth"] = auth
+                auth["username"] = script_user
+                auth["password"] = script_password
+    except Exception:
+        pass
 
     # Ensure peer command keys are present via Junos login configuration before
     # running matrix SSH authentication checks.
