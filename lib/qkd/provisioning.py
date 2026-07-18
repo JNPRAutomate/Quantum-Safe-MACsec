@@ -704,25 +704,31 @@ def push_config(device_name, device, commands, base):
     selected_source = None
     last_exc = None
 
+    selected_port = None
+
     for user, password, source in deduped_candidates:
-        candidate_dev = Device(
-            host=device["ip"],
-            user=user,
-            passwd=password,
-            port=830,
-        )
-        try:
-            candidate_dev.open()
-            dev = candidate_dev
-            selected_user = user
-            selected_source = source
-            break
-        except Exception as exc:
-            last_exc = exc
+        for port in (830, 22):
+            candidate_dev = Device(
+                host=device["ip"],
+                user=user,
+                passwd=password,
+                port=port,
+            )
             try:
-                candidate_dev.close()
-            except Exception:
-                pass
+                candidate_dev.open()
+                dev = candidate_dev
+                selected_user = user
+                selected_source = source
+                selected_port = port
+                break
+            except Exception as exc:
+                last_exc = exc
+                try:
+                    candidate_dev.close()
+                except Exception:
+                    pass
+        if dev is not None:
+            break
 
     if dev is None:
         raise RuntimeError(
@@ -732,7 +738,10 @@ def push_config(device_name, device, commands, base):
         )
 
     try:
-        print(f"[{device_name}] NETCONF auth selected: user={selected_user} source={selected_source}")
+        print(
+            f"[{device_name}] NETCONF auth selected: "
+            f"user={selected_user} source={selected_source} port={selected_port}"
+        )
 
         try:
             dev.rpc.cli("file make-directory /var/db/scripts/certs")
