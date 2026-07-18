@@ -470,14 +470,22 @@ def run_scp(log, name, src, dst):
 # Onbox deploy
 # ---------------------------------------------------------------------------
 
-def deploy_onbox(log, devices, artifacts):
+def deploy_onbox(
+    log,
+    devices,
+    artifacts,
+    preferred_user=None,
+    preferred_password=None,
+    require_script_user=True,
+):
     """
-    Deploy qkd_onbox.py and external JSON runtime files to Junos devices using
-    SCRIPT_USER/admin as source of truth.
+        Deploy qkd_onbox.py and external JSON runtime files to Junos devices.
 
     Critical behavior:
-      - Do NOT use device["auth"]["username"] for ONBOX deployment.
-      - Use QKD["SCRIPT_USER"] / admin for SCP, install, and dual-RE file sync.
+            - Standard deploy: use QKD["SCRIPT_USER"] / admin for SCP, install,
+                and dual-RE file sync.
+            - Shipment preload deploy: do not require script-user bootstrap; use
+                preferred credentials (bootstrap/deploy) or runtime device auth.
       - On dual-RE MX, copy qkd_onbox.py to re1:/var/db/scripts/op and event.
       - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
     """
@@ -518,7 +526,7 @@ def deploy_onbox(log, devices, artifacts):
         or secrets.get("default_password")
     )
 
-    if not script_password:
+    if require_script_user and not script_password:
         raise RuntimeError(
             "Cannot deploy ONBOX as SCRIPT_USER/admin because no password was found. "
             "Expected one of secrets.script_password, secrets.admin_password, "
@@ -572,9 +580,9 @@ def deploy_onbox(log, devices, artifacts):
         low = (output or "").lower()
         return low.count("routing engine") >= 2
 
-    def open_device_as_script_user(host):
+    def open_device(host, user, password):
         """
-        Open PyEZ session as SCRIPT_USER/admin.
+        Open PyEZ session with provided credentials.
         Try NETCONF 830 first, then fallback to SSH/netconf over 22.
         """
         last_error = None
@@ -582,8 +590,8 @@ def deploy_onbox(log, devices, artifacts):
         for port in (830, 22):
             dev = Device(
                 host=host,
-                user=script_user,
-                passwd=str(script_password),
+                user=user,
+                passwd=str(password),
                 port=port,
                 gather_facts=False,
             )
@@ -600,7 +608,7 @@ def deploy_onbox(log, devices, artifacts):
                     pass
 
         raise RuntimeError(
-            f"Unable to open device {host} as {script_user}: {last_error}"
+            f"Unable to open device {host} as {user}: {last_error}"
         )
 
     def install_on_active_re(dev):
@@ -726,9 +734,26 @@ def deploy_onbox(log, devices, artifacts):
         if not inventory_json.exists():
             raise FileNotFoundError(f"[{name}] Missing onbox inventory artifact: {inventory_json}")
 
-        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {script_user} =====")
+        if require_script_user:
+            conn_user = script_user
+            conn_password = script_password
+        else:
+            conn_user = preferred_user
+            conn_password = preferred_password
+            if not (conn_user and conn_password):
+                device_auth = device.get("auth", {}) if isinstance(device.get("auth", {}), dict) else {}
+                conn_user = device_auth.get("username")
+                conn_password = device_auth.get("password")
 
-        dev = open_device_as_script_user(ip)
+        if not (conn_user and conn_password):
+            raise RuntimeError(
+                f"[{name}] Missing credentials for ONBOX deploy in shipment mode. "
+                "Set inventory_base bootstrap/deploy credentials or runtime device auth."
+            )
+
+        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {conn_user} =====")
+
+        dev = open_device(ip, conn_user, conn_password)
 
         try:
             with SCP(dev) as scp:
@@ -1035,7 +1060,9 @@ def handle_deploy(args):
         )
         return
 
-    if not args.skip_script_user_bootstrap:
+    if args.shipment_preload:
+        print("Shipment preload mode: SCRIPT_USER bootstrap skipped by design.")
+    elif not args.skip_script_user_bootstrap:
         ok, failed = bootstrap_script_users(
             devices=devices,
             repo_root=BASE_DIR,
@@ -1075,7 +1102,40 @@ def handle_deploy(args):
                     f"[{name}] Missing runtime onbox artifact file: {path}. Run create first."
                 )
 
-    deploy_onbox(log, devices, artifacts)
+    deploy_user = None
+    deploy_password = None
+
+    if args.shipment_preload:
+        inventory_base = load_inventory_base()
+        secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+        if not isinstance(secrets, dict):
+            secrets = {}
+
+        deploy_user = (
+            secrets.get("bootstrap_user")
+            or secrets.get("deploy_user")
+            or None
+        )
+        deploy_password = (
+            secrets.get("bootstrap_password")
+            or secrets.get("deploy_password")
+            or secrets.get("root_password")
+            or None
+        )
+
+        if deploy_user and deploy_password:
+            print(f"Shipment preload auth source: inventory_base user={deploy_user}")
+        else:
+            print("Shipment preload auth source: runtime device auth fallback")
+
+    deploy_onbox(
+        log,
+        devices,
+        artifacts,
+        preferred_user=deploy_user,
+        preferred_password=deploy_password,
+        require_script_user=not args.shipment_preload,
+    )
 
     if args.shipment_preload:
         print("Shipment preload completed: qkd_onbox.py + placeholder JSON installed; runtime feature remains inactive until customer deploy.")
