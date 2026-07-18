@@ -116,9 +116,18 @@ def load_inventory_file(path: Union[str, Path]) -> Dict[str, Any]:
 
 
 def load_inventory() -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-    base = load_yaml(CONFIG_DIR / "inventory_base.yaml")
-    devices = load_yaml(RUNTIME_DIR / "devices.yaml")
-    topology = load_yaml(RUNTIME_DIR / "topology.yaml")
+    base = _resolve_env_placeholders(
+        load_yaml(CONFIG_DIR / "inventory_base.yaml"),
+        path="inventory_base",
+    )
+    devices = _resolve_env_placeholders(
+        load_yaml(RUNTIME_DIR / "devices.yaml"),
+        path="runtime.devices",
+    )
+    topology = _resolve_env_placeholders(
+        load_yaml(RUNTIME_DIR / "topology.yaml"),
+        path="runtime.topology",
+    )
 
     return base, devices.get("devices", {}), topology.get("qkd", {})
 
