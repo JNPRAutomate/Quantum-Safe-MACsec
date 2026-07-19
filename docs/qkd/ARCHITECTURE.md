@@ -1,5 +1,12 @@
 # QKD Orchestrator Architecture
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Specification
+- Architectural layer: QKD/MACsec orchestration control plane
+- Normative scope: module responsibilities, runtime artifacts, identity model, and deploy behavior
+- Out of scope: KME host lifecycle internals
+
 ## Purpose
 
 `qkd_orchestrator.py` owns QKD/MACsec runtime generation and Juniper deployment logic.

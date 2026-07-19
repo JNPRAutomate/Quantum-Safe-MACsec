@@ -1,5 +1,12 @@
 # Config Generation & Runtime Directory
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Specification
+- Architectural layer: build-time artifact generation and runtime contract
+- Normative scope: source-to-runtime transformation boundaries and write authority
+- Out of scope: manual runtime hotfixes (non-normative by design)
+
 ## Overview
 
 The `config/runtime/` directory contains **generated output files**. These are created automatically by the build process and should **NEVER be manually edited**.

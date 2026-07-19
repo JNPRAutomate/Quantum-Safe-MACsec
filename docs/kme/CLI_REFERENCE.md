@@ -1,5 +1,12 @@
 # KME Orchestrator CLI Reference
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Interface Specification
+- Architectural layer: off-box KME orchestration interface
+- Normative scope: command contracts exposed by `kme_orchestrator.py`
+- Out of scope: remote host manual remediation procedures
+
 Entrypoint:
 
 ```bash

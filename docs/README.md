@@ -1,5 +1,25 @@
 # Quantum-Safe MACsec Documentation
 
+## Document Classification
+
+- Document type: Architecture Index and LLD Navigation Specification
+- Architectural layer: repository documentation governance
+- Normative scope: classification and entry-point map for active documents
+- Out of scope: implementation details (delegated to domain documents)
+
+## Documentation Model
+
+All active documents under `docs/` are maintained as architectural and low-level design (LLD) specifications.
+
+Normative expectations for all active documents:
+
+- define system/component boundaries,
+- define interface contracts and behavior,
+- define runtime flows and failure modes,
+- avoid ad-hoc notes that are not tied to architecture or LLD intent.
+
+Operational legacy notes remain under `archive/docs/` and are non-normative.
+
 This documentation is organized by responsibility domain:
 
 - `docs/qkd/` - QKD/MACsec orchestrator architecture and runtime behavior

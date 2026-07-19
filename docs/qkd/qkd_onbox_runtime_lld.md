@@ -1,5 +1,12 @@
 # QKD On-Box Deployment and Runtime LLD (`artifacts/qkd_onbox.py`)
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Runtime Architecture Specification
+- Architectural layer: on-device runtime control loop and peer coordination path
+- Normative scope: runtime contracts, state model, action flow, and failure semantics
+- Out of scope: high-level business rationale and non-technical operational policy
+
 ## 1. Document purpose
 
 This low-level design explains:

@@ -1,5 +1,12 @@
 # QKD Logging and Customer Reporting
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Specification
+- Architectural layer: observability, telemetry extraction, and reporting adapters
+- Normative scope: log source locations, extraction contract, and summary generation path
+- Out of scope: customer-specific report formatting policies
+
 ## Problem
 
 Raw `qkd_debug*.log` files are operationally detailed but noisy for customer-facing status reviews.

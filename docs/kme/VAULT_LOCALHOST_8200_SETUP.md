@@ -1,4 +1,20 @@
-# Vault Local Setup on localhost:8200 for QKD Deploy
+# Vault Integration LLD on localhost:8200 for QKD Deploy
+
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Integration Specification
+- Architectural layer: secret-management integration for deploy control plane
+- Normative scope: Vault authn/authz flow, secret retrieval contract, and deploy injection boundaries
+- Out of scope: enterprise Vault HA topologies and production hardening baselines
+
+## Integration Intent
+
+This document specifies the architecture-level integration between deploy workflows and Vault:
+
+1. where credentials are sourced,
+2. how they are scoped,
+3. how they are injected into deploy runtime,
+4. how token lifecycle is terminated after use.
 
 This guide configures HashiCorp Vault locally on the deployment server at:
 
