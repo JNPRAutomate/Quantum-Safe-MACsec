@@ -288,7 +288,8 @@ def build_onbox_static_config(name, device):
 
         # External runtime activation gate.
         # The script exits safely when disabled.
-        "enabled": False,
+        # Automatically enable when kme_servers is present and valid.
+        "enabled": bool(qkd_policy.get("kme_servers")),
 
         # PKI runtime profile
         "pki_profile": pki_runtime["pki_profile"],
