@@ -454,7 +454,7 @@ devices:
       password: juniper1
     script_user: macsec_user
     sae_id: sae-007
-    managed: true
+    managed: false
     kme:
       ip: 100.123.252.16
       port: 8443
@@ -521,7 +521,7 @@ devices:
       password: juniper1
     script_user: macsec_user
     sae_id: sae-008
-    managed: true
+    managed: false
     kme:
       ip: 100.123.252.17
       port: 8443
@@ -641,7 +641,7 @@ devices:
       password: juniper1
     script_user: macsec_user
     sae_id: sae-010
-    managed: true
+    managed: false
     kme:
       ip: 100.123.252.19
       port: 8443
@@ -693,7 +693,7 @@ devices:
       password: juniper1
     script_user: macsec_user
     sae_id: sae-011
-    managed: true
+    managed: false
     kme:
       ip: 100.123.252.20
       port: 8443
