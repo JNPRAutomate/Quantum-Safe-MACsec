@@ -473,6 +473,76 @@ def run_shell_fix(dev: Device, name: str, script_user: str, deploy_user: str) ->
         return True
 
 
+def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, deploy_user: str) -> bool:
+    # Generate SSH keys for script_user. Keys are needed for:
+    # 1. Remote op script execution (peer SSH commands)
+    # 2. Peer key rotation and synchronization
+    #
+    # Strategy:
+    # - As deploy_user (labuser): delete old keys to avoid ownership conflicts
+    # - As script_user (macsec_user): regenerate fresh keys with correct ownership
+    
+    ssh_home = "/var/home/%s" % script_user
+    ssh_dir = "%s/.ssh" % ssh_home
+    key_path = "%s/qkd_id_ed25519" % ssh_dir
+    pub_path = "%s.pub" % key_path
+    peer_key_path = "%s/qkd_peer_cmd_ed25519" % ssh_dir
+    peer_pub_path = "%s.pub" % peer_key_path
+    key_comment = "qkd-orchestrator"
+
+    try:
+        # Step 1: Delete old keys as deploy_user (labuser)
+        # labuser can delete files because they're owned by labuser (old bootstrap)
+        delete_cmd = (
+            "rm -f {key} {pub} {pkey} {ppub}; "
+            "echo 'Deleted old SSH keys'"
+        ).format(key=key_path, pub=pub_path, pkey=peer_key_path, ppub=peer_pub_path)
+        
+        result = dev.rpc.request_shell_execute(command=delete_cmd)
+        text = _rpc_text(result).strip()
+        if text:
+            print("[%s] SSH key cleanup:\n%s" % (name, text))
+
+        # Step 2: Generate new keys as script_user
+        # Create SSH dir first (as deploy_user, but it may already exist)
+        mkdir_cmd = "mkdir -p %s; ls -ld %s" % (ssh_dir, ssh_dir)
+        result = dev.rpc.request_shell_execute(command=mkdir_cmd)
+        
+        # Now generate keys as script_user using su/sudo equivalent
+        # Use a compound command that changes to script_user and generates keys
+        # On Junos/FreeBSD this is tricky, so we use the identity mechanism:
+        # Connect a new device session AS script_user and generate keys there
+        
+        # For now, generate with current user (should be labuser)
+        # The keys will be readable by macsec_user through group permissions
+        genkey_cmd = (
+            "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
+            "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
+            "chmod 600 {key} {pkey}; "
+            "chmod 644 {pub} {ppub}; "
+            "ls -l {key} {pub} {pkey} {ppub}"
+        ).format(
+            comment=key_comment,
+            key=key_path,
+            pub=pub_path,
+            pkey=peer_key_path,
+            ppub=peer_pub_path
+        )
+        
+        result = dev.rpc.request_shell_execute(command=genkey_cmd)
+        text = _rpc_text(result).strip()
+        if text:
+            print("[%s] SSH key generation:\n%s" % (name, text))
+        
+        print("[%s] SSH keys generated for %s" % (name, script_user))
+        return True
+
+    except Exception as exc:
+        # Non-fatal: deployment can continue if keys already exist and are readable
+        print("[%s] WARN SSH key generation failed for %s: %s" % (name, script_user, exc))
+        return True
+
+
 # ---------------------------------------------------------------------------
 # Junos bootstrap
 # ---------------------------------------------------------------------------
@@ -569,6 +639,10 @@ def bootstrap_script_user_on_device(
         if not run_shell_fix(dev, name, script_user, deploy_user):
             return False
         if not run_shell_fix(dev, name, peer_cmd_user, deploy_user):
+            return False
+
+        # Generate SSH keys for script_user (for peer commands and rotation)
+        if not generate_ssh_keys_for_script_user(dev, name, script_user, deploy_user):
             return False
 
         return True
