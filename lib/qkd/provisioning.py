@@ -511,9 +511,14 @@ def resolve_cert_paths_for_device(name, device):
     )
 
 
-def push_certs(dev, name, device):
+def push_certs(dev, name, device, base=None):
     remote_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
     files = resolve_cert_paths_for_device(name, device)
+
+    secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+    runtime_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
 
     profile = files["profile"]
     sae_id = files["sae_id"]
@@ -549,6 +554,9 @@ def push_certs(dev, name, device):
             scp.put(str(local_file), remote_path=remote_file)
 
     verify_cmd = (
+        f"if id -u {runtime_user} >/dev/null 2>&1; then "
+        f"chown {runtime_user}:wheel {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
+        f"fi; "
         f"chmod 644 {remote_dir}/{local_cert.name}; "
         f"chmod 600 {remote_dir}/{local_key.name}; "
         f"chmod 644 {remote_dir}/{local_ca.name}; "
@@ -579,7 +587,10 @@ def push_certs(dev, name, device):
 
     sync_certs_dual_re(dev, name, remote_dir, [local_cert.name, local_key.name, local_ca.name])
 
-    print(f"[{name}] Certs copied OK {local_cert.name}, {local_key.name}, {local_ca.name}")
+    print(
+        f"[{name}] Certs copied OK {local_cert.name}, {local_key.name}, {local_ca.name} "
+        f"owner={runtime_user}"
+    )
 
 
 # --------------------------
@@ -753,7 +764,7 @@ def push_config(device_name, device, commands, base):
         except Exception:
             pass
 
-        push_certs(dev, device_name, device)
+        push_certs(dev, device_name, device, base)
         configure_qkd_scripts(dev, device_name, base)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
