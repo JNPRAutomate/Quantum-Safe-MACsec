@@ -866,7 +866,9 @@ def install_peer_authorized_keys(devices):
 
     for device in devices:
         target = device_name(device)
-        peer_user = qkd_peer_cmd_user(device)
+        # Cross-device QKD actions (install-key/status) execute as SCRIPT_USER.
+        # Keep peer transport keys synchronized on SCRIPT_USER across the fleet.
+        peer_user = qkd_script_user()
         host = device_host(device)
         auth = device.get("auth") or {}
         user = auth.get("username")
