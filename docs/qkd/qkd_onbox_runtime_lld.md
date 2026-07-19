@@ -194,7 +194,7 @@ Execution gate:
 
 ## 5.4 State persistence and policy access
 
-- `db_state_file(peer, iface)`: per-link state path under `/var/tmp`.
+- `db_state_file(peer, iface)`: per-link state path under SCRIPT_USER state directory (`/var/home/<script_user>/qkd-state`).
 - `qkd_policy()`, `rekey_enabled()`: runtime policy readers.
 - `max_installed_keys()`, `key_batch_size()`: policy-bounded key limits.
 - `qkd_key_index_from_generation(generation)`, `qkd_key_index_from_time()`: key index mapping.
@@ -333,14 +333,18 @@ Minimal schema contract:
 
 ## 8. Operational files created on device
 
-Under `/var/tmp` the on-box script uses:
+Under SCRIPT_USER home state directory (default: `/var/home/macsec_user/qkd-state`) the on-box script uses:
 
 - global lock: `qkd_onbox_<local_sae>.lock`
 - action locks: `qkd_onbox_<local_sae>_<iface>_<action>.lock`
 - state DB: `qkd_db_<peer>_<iface>.json`
 - logs:
-  - primary log file from `CONFIG["log_file"]`
+  - primary log file from `CONFIG["log_file"]` (default: `.../qkd-state/logs/qkd_debug.log`)
   - per-interface debug logs (`qkd_debug_<local_sae>_<iface>.log`)
+
+Compatibility behavior:
+
+- if `CONFIG["log_file"]` is missing or still points to `/var/tmp/...`, runtime redirects debug output to `.../qkd-state/logs/`.
 
 ---
 
@@ -420,19 +424,19 @@ Action: verify cert/key/CA files and KME reachability from device.
 
 - `ERROR KEYCHAIN INSTALL FAIL key_id=<...>`
 Cause: Junos keychain config/commit failure.
-Action: inspect `/var/tmp/qkd_debug*.log` and run operational show commands on keychain/MKA.
+Action: inspect `/var/home/macsec_user/qkd-state/logs/qkd_debug*.log` and run operational show commands on keychain/MKA.
 
 - `ERROR INTERFACE BIND FAIL ca=<...>`
 Cause: MACsec interface bind step failed.
 Action: verify interface name, CA/keychain presence, and platform support constraints.
 
 - `ERROR STATE SAVE FAIL key_id=<...>`
-Cause: state DB write failed under `/var/tmp`.
+Cause: state DB write failed under script-user state directory (`.../qkd-state`).
 Action: check file permissions and any `Operation not permitted` markers in qkd logs.
 
 ### 10.4 Quick triage sequence
 
 1. `op qkd_onbox.py action status iface <iface>`
 2. check JSON presence/permissions under `/var/db/scripts/op`
-3. check `/var/tmp/qkd_debug*.log` for first error marker in timeline order
+3. check `/var/home/macsec_user/qkd-state/logs/qkd_debug*.log` for first error marker in timeline order
 4. validate key runtime fields (`enabled`, `local_sae`, `kme_ip`, `links`, `qkd_policy`)

@@ -256,7 +256,41 @@ If you still see `KEYCHAIN BOOTSTRAP FAILED peer install-key`:
 1. confirm deploy commit includes peer-key sync and TLS mode fix,
 2. rerun deploy on both link endpoints (for example `MX1` and `MX2`),
 3. inspect peer sync counters in deploy output (`configured_keys` vs `desired_keys`),
-4. recheck `/var/tmp/qkd_debug.log` for `DEC FAILED` recurrence.
+4. recheck `/var/home/macsec_user/qkd-state/logs/qkd_debug.log` for `DEC FAILED` recurrence.
+
+### Troubleshooting: ACX pre-deploy fails with missing SSH keys after bootstrap
+
+Symptom:
+
+- bootstrap prints `OK` for device user creation,
+- then pre-deploy fails with:
+  - `SSH identity check failed ... Keys missing or not readable`
+  - missing `/var/home/macsec_user/.ssh/qkd_id_ed25519` and peer key files.
+
+Typical root cause:
+
+- bootstrap could not open a session as `macsec_user`,
+- fallback key generation ran as non-root deploy user (for example `labuser`),
+- key writes in `/var/home/macsec_user/.ssh` failed with `Permission denied`.
+
+Corrective behavior now implemented:
+
+1. bootstrap verifies key material exists and is readable before declaring success,
+2. if deploy-user fallback cannot write keys, bootstrap retries key generation using `root` fallback (when `secrets.root_password` is configured),
+3. if all attempts fail, bootstrap fails fast instead of reporting false success.
+
+Required inventory secret for robust ACX bootstrap:
+
+```yaml
+secrets:
+  root_password: "<device-root-password>"
+```
+
+Operational recommendation:
+
+1. keep `bootstrap_user`/`bootstrap_password` for normal user bootstrap path,
+2. also provide `root_password` for platforms where key generation fallback requires root privileges,
+3. rerun `deploy` after updating secrets.
 
 ---
 
