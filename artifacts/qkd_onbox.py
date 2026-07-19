@@ -1696,7 +1696,10 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         return False
 
     peer_ip = link["peer_ip"]
-    peer_user = PEER_CMD_USER
+    # Remote QKD actions are stateful and may install keychains, bind interfaces,
+    # update state files, and perform dec_keys. They must therefore run as the
+    # full runtime script identity, not the low-privilege peer transport user.
+    peer_user = SCRIPT_USER
     peer_iface = link["peer_interface"]
     cmd = f"op qkd_onbox.py action {action} iface {peer_iface}"
     if key_id:
@@ -1744,7 +1747,7 @@ def get_peer_status(link, iface):
         return None
 
     peer_ip = link["peer_ip"]
-    peer_user = PEER_CMD_USER
+    peer_user = SCRIPT_USER
     peer_iface = link["peer_interface"]
     cmd = f"op qkd_onbox.py action status iface {peer_iface}"
     log(f"SSH EXEC {peer_user}@{peer_ip} action=status local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
