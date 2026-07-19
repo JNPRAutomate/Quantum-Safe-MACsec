@@ -368,11 +368,12 @@ def build_onbox_static_config_placeholder():
 def build_onbox_inventory_config(name, device):
     """Build runtime inventory JSON for qkd_onbox.py for one device."""
     links = normalize_onbox_links(name, device)
+    kme_ip = _device_kme_ip(name, device)
     return {
         "version": 1,
-        "enabled": False,
+        "enabled": bool(kme_ip),
         "local_sae": _device_sae_id(name, device),
-        "kme_ip": _device_kme_ip(name, device),
+        "kme_ip": kme_ip,
         "kme_port": _device_kme_port(device),
         "links": links,
     }
