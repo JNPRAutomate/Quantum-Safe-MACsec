@@ -613,10 +613,24 @@ def check_script_user_ssh_identity(device):
         return max(script_threshold, 0), max(peer_threshold, 0)
 
     def remote_file_age_seconds(path):
+        # Use stat to get file modification time
+        # Platform-aware: Junos uses stat -f, Linux uses stat -c
+        platform = device.get("platform", "").lower()
+        if platform in ("mx", "qfx", "acx"):
+            # Junos FreeBSD: use stat -f
+            cmd_tmpl = "stat -f '%m' {path}"
+        else:
+            # Linux (ACX, generic): use stat -c
+            cmd_tmpl = "stat -c '%Y' {path}"
+        
         cmd = (
             "python3 -c "
             + shlex.quote(
-                f"import os,time; p={path!r}; print(int(time.time()-os.path.getmtime(p)) if os.path.exists(p) else -1)"
+                f"import os,time; "
+                f"p={path!r}; "
+                f"mtime=os.path.getmtime(p) if os.path.exists(p) else -1; "
+                f"age=int(time.time()-mtime) if mtime>0 else -1; "
+                f"print(age)"
             )
         )
         result = ssh_deploy_cmd(device, cmd, timeout=20, include_failed_marker=False)
@@ -631,50 +645,20 @@ def check_script_user_ssh_identity(device):
             )
         return int(values[-1])
 
-    # Use Python to handle SSH key generation with proper conditional logic.
-    # Junos shell doesn't support if/then/fi or || operators reliably.
-    # Python code:
-    # 1. Check if each key exists and is readable by script_user
-    # 2. If not readable (old deployment, wrong owner), delete and regenerate
-    # 3. Verify all keys exist, have size > 0, and are readable
-    
-    python_code = (
-        "import os,subprocess; "
-        "keys=[(%(kp)r,%(pub)r,%(kg)r),(%(pkp)r,%(ppub)r,%(pkg)r)]; "
-        "for priv,pub,cmd in keys: "
-        "  readable=False; "
-        "  try: "
-        "    f=open(priv,'r'); f.read(1); f.close(); readable=True; "
-        "  except: pass; "
-        "  if not readable: "
-        "    try: os.remove(priv); "
-        "    except: pass; "
-        "    try: os.remove(pub); "
-        "    except: pass; "
-        "    subprocess.run(cmd,shell=True,check=True); "
-        "  f=open(priv,'rb'); assert len(f.read())>0; f.close(); "
-        "  f=open(pub,'rb'); assert len(f.read())>0; f.close(); "
-        "print('SSH keys ready')"
-    ) % {
-        'kp': key_path,
-        'pub': pub_path,
-        'pkp': peer_key_path,
-        'ppub': peer_pub_path,
-        'kg': keygen_cmd,
-        'pkg': keygen_cmd_for(peer_key_path),
-    }
-    
+    # Pre-deploy SSH identity check: keys must exist, be readable, and have size > 0
+    # Key generation happens in bootstrap, not here. This function only verifies.
     cmd_main = (
         f"mkdir -p {ssh_dir}; "
-        f"python3 -c {shlex.quote(python_code)}; "
-        f"chmod 600 {key_path} {peer_key_path}; "
-        f"chmod 644 {pub_path} {peer_pub_path}; "
-        f"test -s {key_path}; "
-        f"test -s {pub_path}; "
-        f"test -s {peer_key_path}; "
-        f"test -s {peer_pub_path}; "
+        f"test -f {key_path}; "
         f"test -r {key_path}; "
+        f"test -s {key_path}; "
+        f"test -f {pub_path}; "
+        f"test -s {pub_path}; "
+        f"test -f {peer_key_path}; "
         f"test -r {peer_key_path}; "
+        f"test -s {peer_key_path}; "
+        f"test -f {peer_pub_path}; "
+        f"test -s {peer_pub_path}; "
         f"ls -ld {ssh_dir}; "
         f"ls -l {key_path}; "
         f"ls -l {pub_path}; "
@@ -684,7 +668,11 @@ def check_script_user_ssh_identity(device):
     
     result = ssh_deploy_cmd(device, cmd_main, timeout=60)
     if result.returncode != 0:
-        raise RuntimeError(f"SSH identity check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(
+            f"SSH identity check failed on {name}. "
+            f"Keys missing or not readable. Run bootstrap first.\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
     print(result.stdout)
 
     script_rotation_s, peer_rotation_s = load_rotation_thresholds()
