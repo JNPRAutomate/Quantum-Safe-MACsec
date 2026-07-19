@@ -1117,6 +1117,7 @@ def handle_deploy(args):
             preview=args.preview,
             ssh_key=args.ssh_key,
             debug=args.debug,
+            devices=devices,
         )
         return
 
@@ -1247,6 +1248,7 @@ def handle_deploy(args):
         preview=False,
         ssh_key=args.ssh_key,
         debug=args.debug,
+        devices=devices,
     )
 
     validate_all_devices(devices, phase="postdeploy")
