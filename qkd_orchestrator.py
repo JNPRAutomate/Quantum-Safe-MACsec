@@ -362,6 +362,16 @@ def parse_args():
         ),
     )
     deploy.add_argument(
+        "--skip-predeploy-validation",
+        action="store_true",
+        help="Skip predeploy validation (SCRIPT_USER SSH connectivity checks).",
+    )
+    deploy.add_argument(
+        "--skip-postdeploy-validation",
+        action="store_true",
+        help="Skip postdeploy validation checks.",
+    )
+    deploy.add_argument(
         "--devices",
         type=str,
         default=None,
@@ -1178,6 +1188,8 @@ def handle_deploy(args):
 
     if args.shipment_preload:
         print("Shipment preload mode: predeploy validation skipped (SCRIPT_USER may not exist yet).")
+    elif args.skip_predeploy_validation:
+        print("Skipping predeploy validation (--skip-predeploy-validation flag set).")
     else:
         validate_all_devices(devices, phase="predeploy", shipment_aware=True)
 
@@ -1251,7 +1263,10 @@ def handle_deploy(args):
         devices=devices,
     )
 
-    validate_all_devices(devices, phase="postdeploy")
+    if args.skip_postdeploy_validation:
+        print("Skipping postdeploy validation (--skip-postdeploy-validation flag set).")
+    else:
+        validate_all_devices(devices, phase="postdeploy")
 
 
 # ---------------------------------------------------------------------------
