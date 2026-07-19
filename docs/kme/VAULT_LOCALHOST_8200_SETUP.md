@@ -66,6 +66,11 @@ For production, enable TLS and harden authentication.
 
 ## 5. Create least-privilege policy and AppRole
 
+This section has two variants:
+
+- root-managed credentials in `/etc/qkd` (legacy/lab)
+- non-root user credentials in `~/.config/qkd` (recommended for user `aterren`)
+
     cat > /tmp/qkd-deploy-policy.hcl <<'EOF'
     path "secret/data/qkd/live" {
       capabilities = ["read"]
@@ -84,31 +89,132 @@ For production, enable TLS and harden authentication.
       token_max_ttl="4h" \
       secret_id_ttl="24h"
 
+  ### 5A. Legacy/root path (`/etc/qkd`)
+
     sudo mkdir -p /etc/qkd
     vault read -field=role_id auth/approle/role/qkd-deploy/role-id | sudo tee /etc/qkd/role_id >/dev/null
     vault write -f -field=secret_id auth/approle/role/qkd-deploy/secret-id | sudo tee /etc/qkd/secret_id >/dev/null
     sudo chmod 600 /etc/qkd/role_id /etc/qkd/secret_id
 
+### 5B. Non-root path (recommended for `aterren`)
+
+  mkdir -p ~/.config/qkd
+  chmod 700 ~/.config/qkd
+
+  vault read -field=role_id auth/approle/role/qkd-deploy/role-id > ~/.config/qkd/role_id
+  vault write -f -field=secret_id auth/approle/role/qkd-deploy/secret-id > ~/.config/qkd/secret_id
+  chmod 600 ~/.config/qkd/role_id ~/.config/qkd/secret_id
+
 ## 6. Test AppRole access
+
+Important: on some Vault CLI versions `vault kv get -token=...` is not supported.
+Use `VAULT_TOKEN` in environment instead.
+
+### 6A. Test with non-root files (recommended)
+
+  ROLE_ID="$(cat ~/.config/qkd/role_id)"
+  SECRET_ID="$(cat ~/.config/qkd/secret_id)"
+
+  APP_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
+  VAULT_TOKEN="$APP_TOKEN" vault kv get secret/qkd/live
+
+### 6B. Test with root-managed files (legacy)
 
     ROLE_ID="$(sudo cat /etc/qkd/role_id)"
     SECRET_ID="$(sudo cat /etc/qkd/secret_id)"
 
     APP_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
-    vault kv get -token="$APP_TOKEN" secret/qkd/live
+    VAULT_TOKEN="$APP_TOKEN" vault kv get secret/qkd/live
 
 ## 7. Run QKD deploy without persistent cleartext exports
 
-    ROLE_ID="$(sudo cat /etc/qkd/role_id)"
-    SECRET_ID="$(sudo cat /etc/qkd/secret_id)"
+  ### 7A. One-shot manual deploy command
+
+    ROLE_ID="$(cat ~/.config/qkd/role_id)"
+    SECRET_ID="$(cat ~/.config/qkd/secret_id)"
     APP_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
 
-    QKD_BOOTSTRAP_PASSWORD="$(vault kv get -token="$APP_TOKEN" -field=bootstrap_password secret/qkd/live)" \
-    QKD_SCRIPT_PASSWORD="$(vault kv get -token="$APP_TOKEN" -field=script_password secret/qkd/live)" \
-    QKD_DEFAULT_PASSWORD="$(vault kv get -token="$APP_TOKEN" -field=default_password secret/qkd/live)" \
+    QKD_BOOTSTRAP_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=bootstrap_password secret/qkd/live)" \
+    QKD_SCRIPT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=script_password secret/qkd/live)" \
+    QKD_DEFAULT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=default_password secret/qkd/live)" \
     python3 qkd_orchestrator.py deploy --skip-predeploy-validation --skip-postdeploy-validation
 
-## 8. Security notes for production
+    VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true
+
+  ### 7B. Repository wrapper script (`tools/deploy_with_vault.sh`)
+
+  Use the wrapper committed in this repository:
+
+    tools/deploy_with_vault.sh
+
+  Default behavior:
+
+  - reads role_id/secret_id from `~/.config/qkd/role_id` and `~/.config/qkd/secret_id`
+  - logs in via AppRole
+  - loads QKD env vars from Vault
+  - runs `qkd_orchestrator.py deploy` from project root
+  - revokes token (`revoke-self`) and unsets secrets on exit
+
+  Run it from anywhere:
+
+    cd /path/to/repo
+    chmod 750 tools/deploy_with_vault.sh
+    ./tools/deploy_with_vault.sh
+
+  Optional overrides:
+
+    VAULT_SECRET_PATH=secret/qkd/aterren ./tools/deploy_with_vault.sh
+    QKD_DEPLOY_ARGS="--devices MX1 --skip-predeploy-validation --skip-postdeploy-validation" ./tools/deploy_with_vault.sh
+
+  ## 8. Optional shell function for user-only env loading
+
+  Add to `~/.bashrc`:
+
+    qkd_env_from_vault() {
+      export VAULT_ADDR="http://127.0.0.1:8200"
+      local ROLE_ID SECRET_ID APP_TOKEN
+      ROLE_ID="$(cat "$HOME/.config/qkd/role_id")" || return 1
+      SECRET_ID="$(cat "$HOME/.config/qkd/secret_id")" || return 1
+      APP_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")" || return 1
+      export QKD_BOOTSTRAP_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=bootstrap_password secret/qkd/live)" || return 1
+      export QKD_SCRIPT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=script_password secret/qkd/live)" || return 1
+      export QKD_DEFAULT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=default_password secret/qkd/live)" || return 1
+      VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true
+      unset APP_TOKEN ROLE_ID SECRET_ID
+      echo "QKD env loaded in current shell"
+    }
+
+  Reload and test:
+
+    source ~/.bashrc
+    type qkd_env_from_vault
+    qkd_env_from_vault
+    env | grep '^QKD_' | cut -d= -f1
+
+  ## 9. Troubleshooting
+
+  ### `aterren is not in the sudoers file`
+
+  - This is an authorization issue, not a password typo.
+  - Use the non-root path (`~/.config/qkd`) to avoid sudo dependency for daily operations.
+
+  ### `failed to determine alias name from login request`
+
+  - Usually `ROLE_ID` or `SECRET_ID` is empty.
+  - Verify lengths:
+
+    echo "role_id_len=${#ROLE_ID} secret_id_len=${#SECRET_ID}"
+
+  ### `flag provided but not defined: -token`
+
+  - Your Vault CLI does not support `-token` on `vault kv get`.
+  - Use `VAULT_TOKEN=... vault kv get ...` instead.
+
+  ### `qkd_env_from_vault: command not found`
+
+  - Run `source ~/.bashrc` after adding the function.
+  - If login shell does not auto-load `.bashrc`, source it from `.bash_profile`.
+  ## 10. Security notes for production
 
 - Do not use tls_disable = 1 in production.
 - Use HTTPS listener with proper server certificate.
