@@ -887,46 +887,51 @@ def clean_device(
                     file_leftovers = []
 
             # Fallback cleanup for /var/tmp files with permission denied (sticky bit issue).
-            # These files are typically owned by macsec_user or root, so retry as root.
+            # Files owned by macsec_user have sticky bit protection. Try as root.
             if file_leftovers:
                 tmp_leftovers = [p for p in file_leftovers if p.startswith("/var/tmp/")]
                 other_leftovers = [p for p in file_leftovers if not p.startswith("/var/tmp/")]
 
-                if tmp_leftovers and not other_leftovers:
-                    # Try fallback cleanup as root if root credentials are available.
-                    fallback_tmp_cleanup_success = False
-                    if fallback_user == "root" and fallback_password:
-                        print(f"[{name}] /var/tmp cleanup fallback as root", flush=True)
-                        tmp_cleanup_cmd = "rm -rf " + " ".join(tmp_leftovers) + " 2>/dev/null || true"
-                        fallback_dev_tmp = Device(
-                            host=ip,
-                            user="root",
-                            passwd=fallback_password,
-                            port=22,
-                        )
-                        try:
-                            fallback_dev_tmp.open()
-                            rsp = fallback_dev_tmp.rpc.request_shell_execute(command=tmp_cleanup_cmd)
-                            fallback_tmp_cleanup_success = True
-                            print(f"[{name}] /var/tmp cleanup via root completed", flush=True)
-                        except Exception as tmp_exc:
-                            print(f"[{name}] WARN /var/tmp fallback cleanup failed: {tmp_exc}", flush=True)
-                        finally:
-                            try:
-                                fallback_dev_tmp.close()
-                            except Exception:
-                                pass
-
-                    if fallback_tmp_cleanup_success:
+                if tmp_leftovers and not other_leftovers and fallback_user == "root" and fallback_password:
+                    print(f"[{name}] /var/tmp cleanup fallback as root", flush=True)
+                    
+                    # Build rm commands one per file (safer than glob expansion)
+                    rm_cmds = [f"rm -f {path}" for path in tmp_leftovers]
+                    tmp_cleanup_cmd = "; ".join(rm_cmds)
+                    
+                    fallback_dev_tmp = Device(
+                        host=ip,
+                        user="root",
+                        passwd=fallback_password,
+                        port=22,
+                    )
+                    try:
+                        fallback_dev_tmp.open()
+                        rsp = fallback_dev_tmp.rpc.request_shell_execute(command=tmp_cleanup_cmd)
+                        # Shell execute output is for logging only; don't rely on exit code
+                        fallback_output = rpc_text(rsp)
+                        if fallback_output and fallback_output.strip():
+                            for line in fallback_output.splitlines():
+                                if line.strip() and "permission denied" not in line.lower():
+                                    print(f"[{name}] {line}", flush=True)
+                        print(f"[{name}] /var/tmp cleanup via root completed", flush=True)
+                        
                         # Re-verify after fallback cleanup
                         file_leftovers_after_fallback = [
                             path for path in tmp_leftovers if remote_path_exists(path)
                         ]
                         if not file_leftovers_after_fallback:
-                            print(f"[{name}] cleanup warning: /var/tmp leftovers removed via root fallback")
+                            print(f"[{name}] cleanup note: /var/tmp leftovers removed via root")
                             file_leftovers = []
                         else:
                             file_leftovers = file_leftovers_after_fallback
+                    except Exception as tmp_exc:
+                        print(f"[{name}] WARN /var/tmp fallback cleanup failed: {tmp_exc}", flush=True)
+                    finally:
+                        try:
+                            fallback_dev_tmp.close()
+                        except Exception:
+                            pass
             
             soft_leftovers = []
 
