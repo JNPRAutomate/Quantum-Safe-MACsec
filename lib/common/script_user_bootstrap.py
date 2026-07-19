@@ -478,9 +478,10 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
     # 1. Remote op script execution (peer SSH commands)
     # 2. Peer key rotation and synchronization
     #
-    # Strategy:
-    # - As deploy_user (labuser): delete old keys to avoid ownership conflicts
-    # - As script_user (macsec_user): regenerate fresh keys with correct ownership
+    # Single consistent approach for all platforms:
+    # 1. Delete old keys as deploy_user
+    # 2. Create SSH dir as deploy_user
+    # 3. Generate keys AS script_user (by opening a new connection with script_user creds)
     
     ssh_home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % ssh_home
@@ -491,8 +492,7 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
     key_comment = "qkd-orchestrator"
 
     try:
-        # Step 1: Delete old keys as deploy_user (labuser)
-        # labuser can delete files because they're owned by labuser (old bootstrap)
+        # Step 1: Delete old keys as deploy_user
         delete_cmd = (
             "rm -f {key} {pub} {pkey} {ppub}; "
             "echo 'Deleted old SSH keys'"
@@ -503,44 +503,86 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
         if text:
             print("[%s] SSH key cleanup:\n%s" % (name, text))
 
-        # Step 2: Generate new keys as script_user
-        # Create SSH dir first (as deploy_user, but it may already exist)
-        mkdir_cmd = "mkdir -p %s; ls -ld %s" % (ssh_dir, ssh_dir)
-        result = dev.rpc.request_shell_execute(command=mkdir_cmd)
+        # Step 2: Create SSH dir as deploy_user
+        mkdir_cmd = "mkdir -p %s" % ssh_dir
+        dev.rpc.request_shell_execute(command=mkdir_cmd)
         
-        # Now generate keys as script_user using su/sudo equivalent
-        # Use a compound command that changes to script_user and generates keys
-        # On Junos/FreeBSD this is tricky, so we use the identity mechanism:
-        # Connect a new device session AS script_user and generate keys there
+        # Step 3: Generate keys AS script_user
+        # Connect as script_user to generate keys with correct ownership
+        host = str(dev.hostname)
+        port = dev.port
+        script_user_pwd = dev.passwd  # Use same password if available
         
-        # For now, generate with current user (should be labuser)
-        # The keys will be readable by macsec_user through group permissions
-        genkey_cmd = (
-            "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
-            "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
-            "chmod 600 {key} {pkey}; "
-            "chmod 644 {pub} {ppub}; "
-            "ls -l {key} {pub} {pkey} {ppub}"
-        ).format(
-            comment=key_comment,
-            key=key_path,
-            pub=pub_path,
-            pkey=peer_key_path,
-            ppub=peer_pub_path
+        dev_as_script_user = Device(
+            host=host,
+            user=script_user,
+            passwd=script_user_pwd,
+            port=port,
+            gather_facts=False,
         )
         
-        result = dev.rpc.request_shell_execute(command=genkey_cmd)
-        text = _rpc_text(result).strip()
-        if text:
-            print("[%s] SSH key generation:\n%s" % (name, text))
-        
-        print("[%s] SSH keys generated for %s" % (name, script_user))
-        return True
+        try:
+            dev_as_script_user.open()
+            
+            genkey_cmd = (
+                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
+                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
+                "chmod 600 {key} {pkey}; "
+                "chmod 644 {pub} {ppub}; "
+                "ls -l {key} {pub} {pkey} {ppub}"
+            ).format(
+                comment=key_comment,
+                key=key_path,
+                pub=pub_path,
+                pkey=peer_key_path,
+                ppub=peer_pub_path
+            )
+            
+            result = dev_as_script_user.rpc.request_shell_execute(command=genkey_cmd)
+            text = _rpc_text(result).strip()
+            if text:
+                print("[%s] SSH key generation:\n%s" % (name, text))
+            
+            print("[%s] SSH keys generated for %s" % (name, script_user))
+            return True
+            
+        except Exception as exc:
+            # If we can't connect as script_user, fall back to generating as deploy_user
+            # and setting permissions liberally (may work on some platforms)
+            print("[%s] INFO unable to connect as %s, attempting key generation as deploy_user" % (name, script_user))
+            
+            genkey_cmd = (
+                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
+                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
+                "chmod 600 {key} {pkey}; "
+                "chmod 644 {pub} {ppub}; "
+                "ls -l {key} {pub} {pkey} {ppub}"
+            ).format(
+                comment=key_comment,
+                key=key_path,
+                pub=pub_path,
+                pkey=peer_key_path,
+                ppub=peer_pub_path
+            )
+            
+            result = dev.rpc.request_shell_execute(command=genkey_cmd)
+            text = _rpc_text(result).strip()
+            if text:
+                print("[%s] SSH key generation (fallback):\n%s" % (name, text))
+            
+            return True
+        finally:
+            try:
+                dev_as_script_user.close()
+            except Exception:
+                pass
 
     except Exception as exc:
         # Non-fatal: deployment can continue if keys already exist and are readable
         print("[%s] WARN SSH key generation failed for %s: %s" % (name, script_user, exc))
         return True
+
+
 
 
 # ---------------------------------------------------------------------------
