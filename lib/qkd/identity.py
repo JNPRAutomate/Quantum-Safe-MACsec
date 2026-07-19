@@ -633,13 +633,12 @@ def check_script_user_ssh_identity(device):
 
     gen_peer = "" if peer_key_path == key_path else f"test -f {peer_key_path} || {keygen_cmd.replace(key_path, peer_key_path)}; "
 
-    # Create keys and attempt to fix ownership. Chown may fail without root, but that's acceptable
-    # if files are already readable by script_user.
+    # Create keys and fix permissions. Don't attempt chown - if files exist and are readable, that's sufficient.
+    # If they don't exist, keygen creates them as deploy_user and they're readable.
     cmd_main = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || {keygen_cmd}; "
         f"{gen_peer}"
-        f"chown {script_user} {ssh_dir} {key_path} {pub_path} {peer_key_path} {peer_pub_path} 2>/dev/null; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {key_path} {peer_key_path}; "
         f"chmod 644 {pub_path} {peer_pub_path}; "
@@ -684,7 +683,6 @@ def check_script_user_ssh_identity(device):
         rotate_cmd = (
             f"rm -f {path} {pub}; "
             f"{keygen_cmd_for(path)}; "
-            f"chown {script_user} {path} {pub} 2>/dev/null; "
             f"chmod 600 {path}; "
             f"chmod 644 {pub}; "
             f"ls -l {path}; "
