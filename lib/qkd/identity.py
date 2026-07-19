@@ -613,26 +613,25 @@ def check_script_user_ssh_identity(device):
         return max(script_threshold, 0), max(peer_threshold, 0)
 
     def remote_file_age_seconds(path):
-        # Use stat to get file modification time
+        # Calculate file age using stat + date + awk (no Python, Junos-compatible)
         # Platform-aware: Junos uses stat -f, Linux uses stat -c
         platform = device.get("platform", "").lower()
-        if platform in ("mx", "qfx", "acx"):
-            # Junos FreeBSD: use stat -f
-            cmd_tmpl = "stat -f '%m' {path}"
-        else:
-            # Linux (ACX, generic): use stat -c
-            cmd_tmpl = "stat -c '%Y' {path}"
         
-        cmd = (
-            "python3 -c "
-            + shlex.quote(
-                f"import os,time; "
-                f"p={path!r}; "
-                f"mtime=os.path.getmtime(p) if os.path.exists(p) else -1; "
-                f"age=int(time.time()-mtime) if mtime>0 else -1; "
-                f"print(age)"
+        if platform in ("mx", "qfx"):
+            # Junos FreeBSD: use stat -f '%m'
+            cmd = (
+                f"awk -v mtime=$(stat -f '%m' {path}) "
+                f"-v now=$(date +%s) "
+                f"'BEGIN {{print now - mtime}}'"
             )
-        )
+        else:
+            # Linux/ACX: use stat -c '%Y'
+            cmd = (
+                f"awk -v mtime=$(stat -c '%Y' {path}) "
+                f"-v now=$(date +%s) "
+                f"'BEGIN {{print now - mtime}}'"
+            )
+        
         result = ssh_deploy_cmd(device, cmd, timeout=20, include_failed_marker=False)
         if result.returncode != 0:
             raise RuntimeError(

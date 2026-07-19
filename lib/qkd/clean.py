@@ -1266,6 +1266,12 @@ def handle_clean(args):
             f"Local runtime was not removed."
         )
 
+    # If --devices is specified, don't clean local runtime (selective device clean only)
+    if getattr(args, 'devices', None):
+        print("Selective device clean requested (--devices flag) -> local runtime preserved")
+        print("Selective clean complete")
+        return
+
     clean_runtime()
 
     if args.pki:
