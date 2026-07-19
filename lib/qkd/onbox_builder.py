@@ -268,6 +268,17 @@ def build_onbox_static_config(name, device):
     runtime_qkd_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_qkd_policy.get("qkd_policy", {})
 
+    # Add device-specific KME servers to policy
+    kme_ip = _device_kme_ip(name, device)
+    kme_port = _device_kme_port(device)
+    qkd_policy["kme_servers"] = [
+        {
+            "host": kme_ip,
+            "port": kme_port,
+        }
+    ]
+    qkd_policy["kme_ca_cert"] = pki_runtime["ca_cert"]
+
     links = normalize_onbox_links(name, device)
 
     config = {
