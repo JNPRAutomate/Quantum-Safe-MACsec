@@ -1,5 +1,12 @@
 # PQC/QKD Theory and Standards Context
 
+## Document Classification
+
+- Document type: Architecture Reference and Low Level Design Context
+- Architectural layer: standards rationale informing QKD/MACsec control-plane design
+- Normative scope: concepts and standards constraints that shape implementation decisions
+- Out of scope: command-level operational runbooks
+
 ## Why this project exists
 
 The project integrates MACsec with QKD-derived key material so that link encryption can use externally provided, frequently rotated secrets rather than relying only on traditional key agreement behavior.

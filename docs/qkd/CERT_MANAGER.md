@@ -1,5 +1,12 @@
 # Certificate Manager (Auxiliary Script)
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Interface Specification
+- Architectural layer: certificate inspection and compliance evidence pipeline
+- Normative scope: input/output behavior and integration contract for `tools/cert_manager.py` and `tools/cert_report_filter.py`
+- Out of scope: PKI generation design (covered by QKD/KME architecture docs)
+
 This project includes a standalone Python helper script to inspect certificates,
 private keys, and bundles generated internally or received from third-party KME vendors.
 

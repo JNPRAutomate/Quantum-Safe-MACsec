@@ -1,5 +1,12 @@
 # Glossary
 
+## Document Classification
+
+- Document type: Architectural Glossary (LLD Support Artifact)
+- Architectural layer: shared terminology across QKD/KME/PQC design documents
+- Normative scope: canonical definitions used by architecture and LLD documents
+- Out of scope: troubleshooting or procedural instructions
+
 ## A
 
 **AN (Association Number)**  

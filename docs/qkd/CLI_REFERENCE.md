@@ -1,5 +1,12 @@
 # QKD Orchestrator CLI Reference
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Interface Specification
+- Architectural layer: off-box control plane interface
+- Normative scope: command contracts exposed by `qkd_orchestrator.py`
+- Out of scope: runtime logs interpretation and operator playbooks not tied to command semantics
+
 Entrypoint:
 
 ```bash

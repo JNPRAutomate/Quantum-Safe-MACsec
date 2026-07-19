@@ -1,5 +1,12 @@
 # KME Orchestrator Architecture
 
+## Document Classification
+
+- Document type: Low Level Design (LLD) and Architecture Specification
+- Architectural layer: KME infrastructure orchestration control plane
+- Normative scope: lifecycle modules, state model, and integration boundaries
+- Out of scope: QKD runtime keychain internals
+
 ## Purpose
 
 After cloning [github etsi014 test-suite](https://github.com/cybermerqury/etsi-gs-qkd-014-testsuite) which provides the basic test environment infrastructure as per [ETSI GS QKD 014 v1.1.1](https://www.etsi.org/deliver/etsi_gs/QKD/001_099/014/01.01.01_60/gs_QKD014v010101p.pdf) standard, this repository `kme_orchestrator.py` manages the KME infrastructure lifecycle on the remote host:
