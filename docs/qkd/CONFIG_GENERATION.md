@@ -258,3 +258,50 @@ If you still see `KEYCHAIN BOOTSTRAP FAILED peer install-key`:
 3. inspect peer sync counters in deploy output (`configured_keys` vs `desired_keys`),
 4. recheck `/var/tmp/qkd_debug.log` for `DEC FAILED` recurrence.
 
+---
+
+## Canonical User Execution Order
+
+This is the required and repeatable order of identities during QKD deployment and runtime.
+
+1. Bootstrap phase (identity preparation)
+  - Primary identity: bootstrap/deploy user (example: labuser).
+  - Purpose: create/align runtime identities, classes, and base SSH scaffolding.
+
+2. Provisioning phase (normal deploy)
+  - Primary identity: script user (macsec_user).
+  - Fallback identity: bootstrap/deploy user only when script user auth is unavailable.
+  - Purpose: push runtime artifacts (scripts, JSON, certs) with ownership aligned to runtime execution.
+
+3. Runtime local execution
+  - Identity: script user (macsec_user).
+  - Purpose: run qkd_onbox control loop and perform local ENC operations.
+
+4. Peer command transport (master to slave)
+  - Origin identity: script user uses peer command SSH private key.
+  - Destination identity: peer command user (etsi_peer_view).
+  - Purpose: invoke remote op actions (install-key, status) on directly linked peers.
+
+5. Peer DEC during install-key
+  - Execution context: remote op action running under peer command user.
+  - Requirement: peer-side TLS material must be readable by the execution path.
+  - Failure signature when broken: SSH RC=0 followed by DEC FAILED.
+
+6. Peer SSH key lifecycle during deploy
+  - Deploy sync removes stale keys and installs only currently valid direct-neighbor keys.
+  - Keys must not accumulate across unrelated devices.
+
+7. Root usage policy
+  - Root is break-glass only for exceptional recovery.
+  - Normal steady-state deploy and runtime must not require manual root intervention.
+
+### Quick Action-to-Identity Map
+
+- Create users/classes: bootstrap/deploy user
+- Push runtime artifacts: script user (fallback bootstrap user)
+- Run qkd_onbox: script user
+- Master to peer transport: script user -> peer command user
+- Peer install-key/dec path: peer command user with readable TLS key material
+
+This order prevents the recurrent class of failures where transport works but peer key install fails due to identity/permission mismatch.
+
