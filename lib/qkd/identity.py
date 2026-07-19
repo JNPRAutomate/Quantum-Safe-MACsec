@@ -631,23 +631,44 @@ def check_script_user_ssh_identity(device):
             )
         return int(values[-1])
 
-    gen_peer = "" if peer_key_path == key_path else f"test -f {peer_key_path} || {keygen_cmd.replace(key_path, peer_key_path)}; "
-
-    # Create keys and fix permissions. Don't attempt chown - if files exist and are readable, that's sufficient.
-    # If they don't exist, keygen creates them as deploy_user and they're readable.
-    # Skip directory chmod - may be sticky bit or owned by root; instead just verify file readability.
-    # If files exist but aren't readable (old deployment, wrong owner), delete and regenerate them.
+    # Use Python to handle SSH key generation with proper conditional logic.
+    # Junos shell doesn't support if/then/fi or || operators reliably.
+    # Python code:
+    # 1. Check if each key exists and is readable by script_user
+    # 2. If not readable (old deployment, wrong owner), delete and regenerate
+    # 3. Verify all keys exist, have size > 0, and are readable
+    
+    python_code = (
+        "import os,subprocess; "
+        "keys=[(%(kp)r,%(pub)r,%(kg)r),(%(pkp)r,%(ppub)r,%(pkg)r)]; "
+        "for priv,pub,cmd in keys: "
+        "  readable=False; "
+        "  try: "
+        "    f=open(priv,'r'); f.read(1); f.close(); readable=True; "
+        "  except: pass; "
+        "  if not readable: "
+        "    try: os.remove(priv); "
+        "    except: pass; "
+        "    try: os.remove(pub); "
+        "    except: pass; "
+        "    subprocess.run(cmd,shell=True,check=True); "
+        "  f=open(priv,'rb'); assert len(f.read())>0; f.close(); "
+        "  f=open(pub,'rb'); assert len(f.read())>0; f.close(); "
+        "print('SSH keys ready')"
+    ) % {
+        'kp': key_path,
+        'pub': pub_path,
+        'pkp': peer_key_path,
+        'ppub': peer_pub_path,
+        'kg': keygen_cmd,
+        'pkg': keygen_cmd_for(peer_key_path),
+    }
     
     cmd_main = (
         f"mkdir -p {ssh_dir}; "
-        f"test -f {key_path} && test -r {key_path}; "
-        f"if test $? -ne 0; then rm -f {key_path} {key_path}.pub 2>/dev/null; fi; "
-        f"test -f {key_path} || {keygen_cmd}; "
-        f"test -f {peer_key_path} && test -r {peer_key_path}; "
-        f"if test $? -ne 0; then rm -f {peer_key_path} {peer_key_path}.pub 2>/dev/null; fi; "
-        f"test -f {peer_key_path} || {keygen_cmd_for(peer_key_path)}; "
-        f"chmod 600 {key_path} {peer_key_path} 2>/dev/null; "
-        f"chmod 644 {pub_path} {peer_pub_path} 2>/dev/null; "
+        f"python3 -c {shlex.quote(python_code)}; "
+        f"chmod 600 {key_path} {peer_key_path}; "
+        f"chmod 644 {pub_path} {peer_pub_path}; "
         f"test -s {key_path}; "
         f"test -s {pub_path}; "
         f"test -s {peer_key_path}; "
