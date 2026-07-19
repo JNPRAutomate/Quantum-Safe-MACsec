@@ -468,6 +468,14 @@ def max_installed_keys():
     return value
 
 
+def max_pending_keys():
+    # Keep status payload bounded so peer status JSON fits reliably over CLI/SSH.
+    value = int(qkd_policy().get("max_pending_keys", 32))
+    if value < 1:
+        return 1
+    return value
+
+
 def key_batch_size():
     value = int(qkd_policy().get("key_batch_size", 5))
     if value < 1:
@@ -606,6 +614,10 @@ def normalize_pending_keys(state):
             item.get("key_id") or "",
         )
     )
+
+    max_pending = max_pending_keys()
+    if len(normalized) > max_pending:
+        normalized = normalized[:max_pending]
 
     state["pending_keys"] = normalized
     return sync_pending_legacy_fields(state)
@@ -2064,7 +2076,26 @@ def run_slave_status(iface):
     state["batch_enabled"] = batch_mode_enabled()
     state["effective_batch_size"] = effective_batch
     state["enabled"] = config_enabled()
-    print(json.dumps(state))
+
+    # Return a compact, contract-relevant payload to avoid oversized status JSON.
+    status_payload = {
+        "generation": state.get("generation"),
+        "ca_name": state.get("ca_name"),
+        "keychain_name": state.get("keychain_name"),
+        "active_key_id": state.get("active_key_id"),
+        "active_confirmed_at": state.get("active_confirmed_at"),
+        "pending_keys": state.get("pending_keys", []),
+        "pending_key_id": state.get("pending_key_id"),
+        "next_start_time": state.get("next_start_time"),
+        "last_rotation": state.get("last_rotation"),
+        "installed_keys": state.get("installed_keys", []),
+        "health": state.get("health", {}),
+        "runtime_mode": state.get("runtime_mode"),
+        "batch_enabled": state.get("batch_enabled"),
+        "effective_batch_size": state.get("effective_batch_size"),
+        "enabled": state.get("enabled"),
+    }
+    print(json.dumps(status_payload))
     return True
 
 
