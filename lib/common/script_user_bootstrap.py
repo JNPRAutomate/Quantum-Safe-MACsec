@@ -473,7 +473,7 @@ def run_shell_fix(dev: Device, name: str, script_user: str, deploy_user: str) ->
         return True
 
 
-def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, deploy_user: str) -> bool:
+def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, script_password: str, deploy_user: str) -> bool:
     # Generate SSH keys for script_user. Keys are needed for:
     # 1. Remote op script execution (peer SSH commands)
     # 2. Peer key rotation and synchronization
@@ -511,12 +511,11 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
         # Connect as script_user to generate keys with correct ownership
         host = str(dev.hostname)
         port = dev.port
-        script_user_pwd = dev.passwd  # Use same password if available
         
         dev_as_script_user = Device(
             host=host,
             user=script_user,
-            passwd=script_user_pwd,
+            passwd=script_password,
             port=port,
             gather_facts=False,
         )
@@ -696,7 +695,7 @@ def bootstrap_script_user_on_device(
             return False
 
         # Generate SSH keys for script_user (for peer commands and rotation)
-        if not generate_ssh_keys_for_script_user(dev, name, script_user, deploy_user):
+        if not generate_ssh_keys_for_script_user(dev, name, script_user, script_password, deploy_user):
             return False
 
         return True
