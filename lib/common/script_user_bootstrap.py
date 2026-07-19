@@ -492,23 +492,13 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
     key_comment = "qkd-orchestrator"
 
     try:
-        # Step 1: Delete old keys as deploy_user
-        delete_cmd = (
-            "rm -f {key} {pub} {pkey} {ppub}; "
-            "echo 'Deleted old SSH keys'"
-        ).format(key=key_path, pub=pub_path, pkey=peer_key_path, ppub=peer_pub_path)
-        
-        result = dev.rpc.request_shell_execute(command=delete_cmd)
-        text = _rpc_text(result).strip()
-        if text:
-            print("[%s] SSH key cleanup:\n%s" % (name, text))
-
-        # Step 2: Create SSH dir as deploy_user
+        # Step 1: Create SSH dir as deploy_user
         mkdir_cmd = "mkdir -p %s" % ssh_dir
         dev.rpc.request_shell_execute(command=mkdir_cmd)
         
-        # Step 3: Generate keys AS script_user
-        # Connect as script_user to generate keys with correct ownership
+        # Step 2: Generate keys and cleanup AS script_user
+        # Connect as script_user to handle keys with correct ownership
+        # This is important for shipment scenario where keys may already exist from preload
         host = str(dev.hostname)
         port = dev.port
         
@@ -523,6 +513,18 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
         try:
             dev_as_script_user.open()
             
+            # Delete old keys as script_user (they can delete their own keys)
+            delete_cmd = (
+                "rm -f {key} {pub} {pkey} {ppub}; "
+                "echo 'Deleted old SSH keys'"
+            ).format(key=key_path, pub=pub_path, pkey=peer_key_path, ppub=peer_pub_path)
+            
+            result = dev_as_script_user.rpc.request_shell_execute(command=delete_cmd)
+            text = _rpc_text(result).strip()
+            if text:
+                print("[%s] SSH key cleanup:\n%s" % (name, text))
+            
+            # Generate new keys as script_user
             genkey_cmd = (
                 "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
                 "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
@@ -547,8 +549,17 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
             
         except Exception as exc:
             # If we can't connect as script_user, fall back to generating as deploy_user
-            # and setting permissions liberally (may work on some platforms)
+            # First try to delete old keys as deploy_user
             print("[%s] INFO unable to connect as %s, attempting key generation as deploy_user" % (name, script_user))
+            
+            delete_cmd = (
+                "rm -f {key} {pub} {pkey} {ppub}"
+            ).format(key=key_path, pub=pub_path, pkey=peer_key_path, ppub=peer_pub_path)
+            
+            try:
+                dev.rpc.request_shell_execute(command=delete_cmd)
+            except Exception:
+                pass  # Ignore deletion failures in fallback
             
             genkey_cmd = (
                 "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
