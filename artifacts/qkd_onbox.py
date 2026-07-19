@@ -176,7 +176,7 @@ CERT = f"{SCRIPT_DIR}/certs/{DEVICE}.crt"
 KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
 CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
-STATE_DIR = "/var/tmp"
+STATE_DIR = str(Path(SSH_KEY).parent.parent / "qkd-state")
 
 
 # ----------------------------
@@ -714,6 +714,7 @@ def save_db_state(peer, iface, state):
     path = Path(db_state_file(peer, iface))
     tmp = Path(f"{path}.{os.getpid()}.tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(state, indent=2))
         try:
             if path.exists():
@@ -817,6 +818,7 @@ def lock_file():
 def acquire_lock():
     path = Path(lock_file())
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.mkdir(mode=0o700)
         try:
             (path / "pid").write_text(str(os.getpid()))
@@ -889,6 +891,7 @@ def acquire_action_lock(iface, action):
     owner_file = path / "owner"
     pid = str(os.getpid())
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.mkdir(mode=0o700)
         try:
             owner_file.write_text(pid)
