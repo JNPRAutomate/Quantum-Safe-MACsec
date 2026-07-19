@@ -361,6 +361,12 @@ def parse_args():
             "No Junos config render/push/commit and no postdeploy validation."
         ),
     )
+    deploy.add_argument(
+        "--devices",
+        type=str,
+        default=None,
+        help="Comma-separated list of device names to deploy to (e.g., 'MX1,MX2,MX3'). If not specified, deploys to all managed devices.",
+    )
 
     clean = subparsers.add_parser(
         "clean",
@@ -1061,6 +1067,16 @@ def handle_create(args):
 def handle_deploy(args):
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
+
+    # Filter devices if --devices specified
+    if args.devices:
+        device_names = {name.strip() for name in args.devices.split(",")}
+        devices = {name: dev for name, dev in devices.items() if name in device_names}
+        if not devices:
+            print(f"Error: No matching devices found in specified list: {args.devices}")
+            sys.exit(1)
+        print(f"=== Deploying to specified devices: {', '.join(sorted(devices.keys()))} ===")
+        print("")
 
     inventory_base = load_inventory_base()
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
