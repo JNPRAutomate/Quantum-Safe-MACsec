@@ -173,11 +173,14 @@ def clean_device(
         remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
         auth_user = str(user)
         script_user = str(QKD.get("SCRIPT_USER", "admin"))
+        ssh_home_base = str(QKD.get("SSH_HOME_BASE", "/var/home"))
         peer_cmd_user = str(QKD.get("PEER_CMD_USER", "etsi_peer_view"))
         peer_cmd_class = str(
             peer_cmd_class_override
             or QKD.get("PEER_CMD_CLASS", "read-only")
         )
+        state_dir = f"{ssh_home_base}/{script_user}/qkd-state"
+        logs_dir = f"{state_dir}/logs"
 
         # Get script_user password for pre-cleanup (deleting their own files)
         script_user_pwd = None
@@ -213,12 +216,14 @@ def clean_device(
                 or name
             )
 
-        def runtime_tmp_paths():
+        def runtime_state_paths():
             sae = device_sae_id()
 
             paths = [
                 f"/var/tmp/{script_name}",
                 f"/var/tmp/qkd_onbox_{sae}.lock",
+                f"{state_dir}/qkd_onbox_{sae}.lock",
+                f"{logs_dir}/qkd_debug.log",
             ]
 
             for link in device.get("links", []):
@@ -236,6 +241,10 @@ def clean_device(
                         f"/var/tmp/qkd_debug_{sae}_{safe_iface}.log",
                         f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_install-key.lock",
                         f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_status.lock",
+                        f"{state_dir}/qkd_db_{peer}_{safe_iface}.json",
+                        f"{state_dir}/qkd_onbox_{sae}_{safe_iface}_install-key.lock",
+                        f"{state_dir}/qkd_onbox_{sae}_{safe_iface}_status.lock",
+                        f"{logs_dir}/qkd_debug_{sae}_{safe_iface}.log",
                     ]
                 )
 
@@ -247,10 +256,10 @@ def clean_device(
 
             return deduped
 
-        runtime_paths = runtime_tmp_paths()
+        runtime_paths = runtime_state_paths()
         state_file_prefix = str(QKD.get("STATE_FILE_PREFIX", "/var/tmp/qkd_db"))
         lock_file_prefix = str(QKD.get("LOCK_FILE_PREFIX", "/var/tmp/qkd_onbox"))
-        log_file_path = str(QKD.get("LOG_FILE", "/var/tmp/qkd_debug.log"))
+        log_file_path = str(QKD.get("LOG_FILE", "/var/home/macsec_user/qkd-state/logs/qkd_debug.log"))
 
         tmp_runtime_name_prefixes = {
             Path(state_file_prefix).name,
@@ -358,6 +367,8 @@ def clean_device(
                 file_cleanup_parts.append(f"rm -rf {path}")
             else:
                 file_cleanup_parts.append(f"rm -f {path}")
+        file_cleanup_parts.append(f"rm -rf {logs_dir}")
+        file_cleanup_parts.append(f"rmdir {state_dir} 2>/dev/null || true")
         for path in soft_runtime_paths:
             file_cleanup_parts.append(f"rm -f {path}")
         

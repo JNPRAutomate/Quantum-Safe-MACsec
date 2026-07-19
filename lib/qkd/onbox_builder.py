@@ -353,7 +353,7 @@ def build_onbox_static_config_placeholder():
         "ssh_key": "",
         "peer_cmd_user": "",
         "peer_cmd_ssh_key": "",
-        "log_file": "/var/tmp/qkd_debug.log",
+        "log_file": QKD["LOG_FILE"],
         "log_max_bytes": 200000,
         "log_backup_count": 3,
         "config_path": f"{QKD.get('ONBOX_CONFIG_DIR', '/var/db/scripts/op')}/{QKD.get('ONBOX_CONFIG_JSON_NAME', 'qkd_onbox_config.json')}",

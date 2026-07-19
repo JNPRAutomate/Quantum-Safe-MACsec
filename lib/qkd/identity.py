@@ -397,7 +397,7 @@ def check_validation_plan():
     print(f"peer_cmd_auth_keys   = {qkd_peer_cmd_authorized_keys()}")
     print(f"op_script_path       = {qkd_remote_op_script()}")
     print(f"cert_dir             = {qkd_remote_cert_dir()}")
-    print(f"log_file             = {QKD.get('LOG_FILE', '/var/tmp/qkd_debug.log')}")
+    print(f"log_file             = {QKD.get('LOG_FILE', '/var/home/macsec_user/qkd-state/logs/qkd_debug.log')}")
     print(f"runtime_tmp_dir      = {qkd_remote_tmp_dir()}")
 
 
@@ -507,12 +507,25 @@ def check_script_dirs_simple(device):
 def check_runtime_cleanup_simple(device):
     device = normalize_device(device)
     name = device_name(device)
+    script_user = str(QKD.get("SCRIPT_USER", "macsec_user"))
+    ssh_home_base = str(QKD.get("SSH_HOME_BASE", "/var/home"))
+    state_dir = f"{ssh_home_base}/{script_user}/qkd-state"
+    logs_dir = f"{state_dir}/logs"
     cmd = (
         "echo ### qkd-runtime-cleanup; "
+        f"mkdir -p {logs_dir}; "
+        f"chflags nouchg,noschg {state_dir}/qkd_db_*.json 2>/dev/null; "
+        f"chflags nouchg,noschg {state_dir}/qkd_db_*.json.*.tmp 2>/dev/null; "
+        f"chflags nouchg,noschg {state_dir}/qkd_onbox_* 2>/dev/null; "
+        f"chflags nouchg,noschg {logs_dir}/qkd_debug*.log 2>/dev/null; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json.*.tmp; "
         "chflags nouchg,noschg /var/tmp/qkd_debug*.log; "
         "chflags nouchg,noschg /var/tmp/qkd_onbox_*; "
+        f"rm -f {state_dir}/qkd_db_*.json; "
+        f"rm -f {state_dir}/qkd_db_*.json.*.tmp; "
+        f"rm -rf {state_dir}/qkd_onbox_*; "
+        f"rm -f {logs_dir}/qkd_debug*.log; "
         "rm -f /var/tmp/qkd_db_*.json; "
         "rm -f /var/tmp/qkd_db_*.json.*.tmp; "
         "rm -f /var/tmp/qkd_debug*.log; "

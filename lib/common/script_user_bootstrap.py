@@ -473,7 +473,15 @@ def run_shell_fix(dev: Device, name: str, script_user: str, deploy_user: str) ->
         return True
 
 
-def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, script_password: str, deploy_user: str) -> bool:
+def generate_ssh_keys_for_script_user(
+    dev: Device,
+    name: str,
+    script_user: str,
+    script_password: str,
+    deploy_user: str,
+    fallback_user: Optional[str] = None,
+    fallback_password: Optional[str] = None,
+) -> bool:
     # Generate SSH keys for script_user. Keys are needed for:
     # 1. Remote op script execution (peer SSH commands)
     # 2. Peer key rotation and synchronization
@@ -490,6 +498,54 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
     peer_key_path = "%s/qkd_peer_cmd_ed25519" % ssh_dir
     peer_pub_path = "%s.pub" % peer_key_path
     key_comment = "qkd-orchestrator"
+
+    def _verify_keys_present(dev_conn: Device, label: str) -> bool:
+        verify_cmd = (
+            "test -r {key} && "
+            "test -r {pub} && "
+            "test -r {pkey} && "
+            "test -r {ppub} && "
+            "echo __QKD_KEYS_OK__ && "
+            "ls -l {key} {pub} {pkey} {ppub}"
+        ).format(
+            key=key_path,
+            pub=pub_path,
+            pkey=peer_key_path,
+            ppub=peer_pub_path,
+        )
+        try:
+            result = dev_conn.rpc.request_shell_execute(command=verify_cmd)
+            text = _rpc_text(result).strip()
+            if "__QKD_KEYS_OK__" in text:
+                if text:
+                    print("[%s] SSH key verification (%s):\n%s" % (name, label, text))
+                return True
+            if text:
+                print("[%s] WARN SSH key verification (%s) output:\n%s" % (name, label, text))
+            return False
+        except Exception as exc:
+            print("[%s] WARN SSH key verification failed (%s): %s" % (name, label, exc))
+            return False
+
+    def _generate_as_connection(dev_conn: Device, label: str) -> bool:
+        genkey_cmd = (
+            "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
+            "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
+            "chmod 600 {key} {pkey}; "
+            "chmod 644 {pub} {ppub}; "
+            "ls -l {key} {pub} {pkey} {ppub}"
+        ).format(
+            comment=key_comment,
+            key=key_path,
+            pub=pub_path,
+            pkey=peer_key_path,
+            ppub=peer_pub_path,
+        )
+        result = dev_conn.rpc.request_shell_execute(command=genkey_cmd)
+        text = _rpc_text(result).strip()
+        if text:
+            print("[%s] SSH key generation (%s):\n%s" % (name, label, text))
+        return _verify_keys_present(dev_conn, label)
 
     try:
         # Step 1: Create SSH dir as deploy_user
@@ -524,32 +580,14 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
             if text:
                 print("[%s] SSH key cleanup:\n%s" % (name, text))
             
-            # Generate new keys as script_user
-            genkey_cmd = (
-                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
-                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
-                "chmod 600 {key} {pkey}; "
-                "chmod 644 {pub} {ppub}; "
-                "ls -l {key} {pub} {pkey} {ppub}"
-            ).format(
-                comment=key_comment,
-                key=key_path,
-                pub=pub_path,
-                pkey=peer_key_path,
-                ppub=peer_pub_path
-            )
-            
-            result = dev_as_script_user.rpc.request_shell_execute(command=genkey_cmd)
-            text = _rpc_text(result).strip()
-            if text:
-                print("[%s] SSH key generation:\n%s" % (name, text))
-            
-            print("[%s] SSH keys generated for %s" % (name, script_user))
-            return True
+            if _generate_as_connection(dev_as_script_user, "script_user"):
+                print("[%s] SSH keys generated for %s" % (name, script_user))
+                return True
+            print("[%s] WARN generated keys as %s but verification failed" % (name, script_user))
+            return False
             
         except Exception as exc:
-            # If we can't connect as script_user, fall back to generating as deploy_user
-            # First try to delete old keys as deploy_user
+            # If we can't connect as script_user, fall back to deploy_user/root.
             print("[%s] INFO unable to connect as %s, attempting key generation as deploy_user" % (name, script_user))
             
             delete_cmd = (
@@ -561,26 +599,45 @@ def generate_ssh_keys_for_script_user(dev: Device, name: str, script_user: str, 
             except Exception:
                 pass  # Ignore deletion failures in fallback
             
-            genkey_cmd = (
-                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {key}; "
-                "ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {pkey}; "
-                "chmod 600 {key} {pkey}; "
-                "chmod 644 {pub} {ppub}; "
-                "ls -l {key} {pub} {pkey} {ppub}"
-            ).format(
-                comment=key_comment,
-                key=key_path,
-                pub=pub_path,
-                pkey=peer_key_path,
-                ppub=peer_pub_path
-            )
-            
-            result = dev.rpc.request_shell_execute(command=genkey_cmd)
-            text = _rpc_text(result).strip()
-            if text:
-                print("[%s] SSH key generation (fallback):\n%s" % (name, text))
-            
-            return True
+            if _generate_as_connection(dev, "deploy_user"):
+                return True
+
+            fallback_user_norm = str(fallback_user or "").strip()
+            if (
+                fallback_user_norm
+                and fallback_password
+                and fallback_user_norm != str(deploy_user).strip()
+            ):
+                print("[%s] INFO retrying key generation as fallback user %s" % (name, fallback_user_norm))
+                dev_as_fallback = Device(
+                    host=host,
+                    user=fallback_user_norm,
+                    passwd=fallback_password,
+                    port=port,
+                    gather_facts=False,
+                )
+                try:
+                    dev_as_fallback.open()
+                    try:
+                        dev_as_fallback.rpc.request_shell_execute(command=mkdir_cmd)
+                    except Exception:
+                        pass
+                    try:
+                        dev_as_fallback.rpc.request_shell_execute(command=delete_cmd)
+                    except Exception:
+                        pass
+                    if _generate_as_connection(dev_as_fallback, "fallback_user"):
+                        return True
+                except Exception as f_exc:
+                    print("[%s] WARN fallback key generation failed as %s: %s" % (name, fallback_user_norm, f_exc))
+                finally:
+                    try:
+                        dev_as_fallback.close()
+                    except Exception:
+                        pass
+
+            print("[%s] WARN SSH keys not generated for %s (all attempts failed)" % (name, script_user))
+            return False
         finally:
             try:
                 dev_as_script_user.close()
@@ -610,6 +667,8 @@ def bootstrap_script_user_on_device(
     peer_cmd_user: str,
     peer_cmd_password: str,
     peer_cmd_class: str,
+    fallback_user: Optional[str] = None,
+    fallback_password: Optional[str] = None,
     port: int = 22,
     dry_run: bool = False,
 ) -> bool:
@@ -706,7 +765,15 @@ def bootstrap_script_user_on_device(
             return False
 
         # Generate SSH keys for script_user (for peer commands and rotation)
-        if not generate_ssh_keys_for_script_user(dev, name, script_user, script_password, deploy_user):
+        if not generate_ssh_keys_for_script_user(
+            dev,
+            name,
+            script_user,
+            script_password,
+            deploy_user,
+            fallback_user=fallback_user,
+            fallback_password=fallback_password,
+        ):
             return False
 
         return True
@@ -760,6 +827,9 @@ def bootstrap_script_users(
     resolved_peer_cmd_class = get_peer_cmd_class(inventory_base)
     resolved_deploy_user = get_deploy_user(inventory_base, deploy_user)
     resolved_deploy_password = get_deploy_password_from_config(inventory_base, deploy_password)
+    secrets = _secrets_block(inventory_base)
+    fallback_user = "root"
+    fallback_password = str(secrets.get("root_password")) if secrets.get("root_password") else None
 
     if not dry_run and resolved_deploy_password is None and prompt_for_deploy_password:
         resolved_deploy_password = prompt_deploy_password_once(resolved_deploy_user)
@@ -804,6 +874,8 @@ def bootstrap_script_users(
             peer_cmd_user=resolved_peer_cmd_user,
             peer_cmd_password=resolved_peer_cmd_password,
             peer_cmd_class=resolved_peer_cmd_class,
+            fallback_user=fallback_user,
+            fallback_password=fallback_password,
             dry_run=dry_run,
         )
         if success:
