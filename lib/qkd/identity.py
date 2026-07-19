@@ -390,6 +390,7 @@ def check_validation_plan():
     print(f"ssh_key              = {qkd_ssh_private_key()}")
     print(f"ssh_pub              = {qkd_ssh_public_key()}")
     print(f"authorized_keys      = {qkd_authorized_keys()}")
+    print(f"peer_key_sync_target = {qkd_script_user()}")
     print(f"peer_cmd_user        = {qkd_peer_cmd_user()}")
     print(f"peer_cmd_class       = {qkd_peer_cmd_class()}")
     print(f"peer_cmd_ssh_key     = {qkd_peer_cmd_ssh_private_key()}")
@@ -817,6 +818,15 @@ def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
     pub_keys = collect_script_user_public_keys(devices)
     device_names = {device_name(d) for d in devices}
+    max_attempts = 5
+    retry_wait_seconds = [2, 4, 8, 12]
+
+    def is_config_locked_error(exc):
+        text = str(exc or "").lower()
+        return (
+            "configuration database locked by" in text
+            or "exclusive [edit]" in text
+        )
 
     def linked_peer_sources(target_device):
         """
@@ -877,24 +887,33 @@ def install_peer_authorized_keys(devices):
 
         return configured
 
+    synced_targets = []
+    failed_targets = []
+
     for device in devices:
         target = device_name(device)
         # Cross-device QKD actions (install-key/status) execute as SCRIPT_USER.
         # Keep peer transport keys synchronized on SCRIPT_USER across the fleet.
-        peer_user = qkd_script_user()
+        sync_target_user = qkd_script_user()
         host = device_host(device)
         auth = device.get("auth") or {}
         user = auth.get("username")
         password = auth.get("password")
         if not user or not password:
-            raise RuntimeError(f"missing auth for peer key sync target={target}")
+            failed_targets.append((target, "missing auth for peer key sync"))
+            continue
 
         set_cmds = []
         delete_cmds = []
-        configured_keys = collect_configured_peer_keys(device, peer_user)
+        try:
+            configured_keys = collect_configured_peer_keys(device, sync_target_user)
+        except Exception as exc:
+            failed_targets.append((target, f"failed to collect configured keys: {exc}"))
+            continue
+
         for key_type, key_line in configured_keys:
             delete_cmds.append(
-                f'delete system login user {peer_user} authentication {key_type} "{key_line}"'
+                f'delete system login user {sync_target_user} authentication {key_type} "{key_line}"'
             )
 
         source_names = linked_peer_sources(device)
@@ -918,42 +937,70 @@ def install_peer_authorized_keys(devices):
                 continue
             seen.add(marker)
             set_cmds.append(
-                f'set system login user {peer_user} authentication {key_type} "{key_line}"'
+                f'set system login user {sync_target_user} authentication {key_type} "{key_line}"'
             )
 
         print(
-            f"[INFO] peer SSH key sync target={target} peer_cmd_user={peer_user} "
+            f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
             f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)}"
         )
 
-        dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
-        try:
-            dev.open()
-            with Config(dev) as cu:
-                for cmd in delete_cmds:
-                    cu.load(cmd, format="set", merge=True)
-                for cmd in set_cmds:
-                    cu.load(cmd, format="set", merge=True)
-                diff = cu.diff()
-                if diff:
-                    cu.commit(comment=f"QKD sync peer authorized keys target={target}")
-                    print(f"[OK] peer SSH keys committed target={target} peer_cmd_user={peer_user}")
-                else:
-                    try:
-                        cu.rollback()
-                    except Exception:
-                        pass
-                    print(f"[OK] peer SSH keys already synchronized target={target} peer_cmd_user={peer_user}")
-        except Exception as exc:
-            raise RuntimeError(
-                f"failed to configure peer SSH keys target={target} peer_cmd_user={peer_user}\n"
-                f"error={exc}"
-            )
-        finally:
+        success = False
+        last_error = None
+
+        for attempt in range(1, max_attempts + 1):
+            dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
             try:
-                dev.close()
-            except Exception:
-                pass
+                dev.open()
+                with Config(dev) as cu:
+                    for cmd in delete_cmds:
+                        cu.load(cmd, format="set", merge=True)
+                    for cmd in set_cmds:
+                        cu.load(cmd, format="set", merge=True)
+                    diff = cu.diff()
+                    if diff:
+                        cu.commit(comment=f"QKD sync peer authorized keys target={target}")
+                        print(f"[OK] peer SSH keys committed target={target} sync_target_user={sync_target_user}")
+                    else:
+                        try:
+                            cu.rollback()
+                        except Exception:
+                            pass
+                        print(f"[OK] peer SSH keys already synchronized target={target} sync_target_user={sync_target_user}")
+                synced_targets.append(target)
+                success = True
+                break
+            except Exception as exc:
+                last_error = exc
+                if is_config_locked_error(exc) and attempt < max_attempts:
+                    wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+                    print(
+                        f"[WARN] peer SSH key sync lock target={target} attempt={attempt}/{max_attempts} "
+                        f"wait={wait_seconds}s error={exc}"
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                break
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+
+        if not success:
+            failed_targets.append((target, str(last_error)))
+
+    print("=== QKD peer SSH key sync summary ===")
+    print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
+    print(f"Synced targets: {len(synced_targets)}")
+    if failed_targets:
+        print(f"Failed targets: {len(failed_targets)}")
+        for target, error in failed_targets:
+            print(f"- {target}: {error}")
+        raise RuntimeError(
+            "failed to configure peer SSH keys on: "
+            + ", ".join(target for target, _ in failed_targets)
+        )
 
 
 def check_peer_ssh_from_device(device):
