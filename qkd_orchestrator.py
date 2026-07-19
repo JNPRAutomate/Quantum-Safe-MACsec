@@ -46,7 +46,7 @@ from lib.qkd.pki_self_signed import build_self_signed_pki
 from lib.qkd.pki_hierarchical import build_hierarchical_pki
 from lib.qkd.onbox_builder import build_onbox_artifacts
 from lib.qkd.provisioning import run_provisioning
-from lib.qkd.identity import validate_all_devices
+from lib.qkd.identity import validate_all_devices, install_peer_authorized_keys
 from lib.qkd.clean import handle_clean
 from lib.kme.instructions import print_manual_kme_copy_instructions
 
@@ -1262,6 +1262,10 @@ def handle_deploy(args):
         debug=args.debug,
         devices=devices,
     )
+
+    # Always synchronize peer command authorized keys during deploy so
+    # runtime master->peer install-key does not depend on postdeploy validation.
+    install_peer_authorized_keys(devices)
 
     if args.skip_postdeploy_validation:
         print("Skipping postdeploy validation (--skip-postdeploy-validation flag set).")

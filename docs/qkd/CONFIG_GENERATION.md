@@ -213,3 +213,48 @@ python3 qkd_orchestrator.py clean        # Removes device state
 
 Each `create` run completely regenerates all runtime files from the inventory inputs.
 
+---
+
+## Deploy-Time Peer Key Automation (No Manual Fixes)
+
+The deploy flow now includes mandatory peer transport preparation, so operators do not need to manually edit `authorized_keys` on devices.
+
+### What deploy now enforces
+
+1. **Peer SSH key sync runs during deploy**
+  - Peer key synchronization is executed in the deploy path even if post-deploy validation is skipped.
+  - This prevents runtime bootstrap failures caused by missing peer transport keys.
+
+2. **`authorized_keys` is scoped to direct topology peers**
+  - For each target device, only keys from directly linked neighbors are installed.
+  - Keys from unrelated devices are removed.
+  - Stale/rotated keys are replaced during the same sync cycle.
+
+3. **TLS private key mode for peer DEC path**
+  - Device TLS private keys are deployed with mode `640` (not `600`).
+  - This allows controlled read access required by peer command execution path during `install-key` / `dec_keys`.
+
+### Expected runtime behavior after deploy
+
+- `authorized_keys` should contain only currently valid neighbor keys.
+- If a key rotates, old entries are deleted and replaced by new entries.
+- Master-side logs should move from `SSH RC=255` or `DEC FAILED` failures to successful peer install flow.
+
+### Why this was necessary
+
+Previous behavior could leave runtime with:
+- successful `ENC` on master,
+- successful SSH transport (`SSH RC=0`),
+- but peer `DEC FAILED` because peer-side TLS key read path was not consistently prepared.
+
+Deploy now performs the preparation in the correct order so bootstrap is reproducible and non-manual.
+
+### Troubleshooting quick check
+
+If you still see `KEYCHAIN BOOTSTRAP FAILED peer install-key`:
+
+1. confirm deploy commit includes peer-key sync and TLS mode fix,
+2. rerun deploy on both link endpoints (for example `MX1` and `MX2`),
+3. inspect peer sync counters in deploy output (`configured_keys` vs `desired_keys`),
+4. recheck `/var/tmp/qkd_debug.log` for `DEC FAILED` recurrence.
+
