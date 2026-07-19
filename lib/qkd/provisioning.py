@@ -720,8 +720,17 @@ def push_config(device_name, device, commands, base):
 
     selected_port = None
 
-    for user, password, source in deduped_candidates:
+    def open_device_connection(user, password, source, preferred_ports=None):
+        ports = []
+        for port in (preferred_ports or []):
+            if port and port not in ports:
+                ports.append(port)
         for port in (830, 22):
+            if port not in ports:
+                ports.append(port)
+
+        last_error = None
+        for port in ports:
             candidate_dev = Device(
                 host=device["ip"],
                 user=user,
@@ -730,17 +739,27 @@ def push_config(device_name, device, commands, base):
             )
             try:
                 candidate_dev.open()
-                dev = candidate_dev
-                selected_user = user
-                selected_source = source
-                selected_port = port
-                break
+                return candidate_dev, port
             except Exception as exc:
-                last_exc = exc
+                last_error = exc
                 try:
                     candidate_dev.close()
                 except Exception:
                     pass
+        raise RuntimeError(
+            f"[{device_name}] Unable to open NETCONF session user={user} source={source} last_error={last_error}"
+        )
+
+    for user, password, source in deduped_candidates:
+        try:
+            candidate_dev, port = open_device_connection(user, password, source)
+            dev = candidate_dev
+            selected_user = user
+            selected_source = source
+            selected_port = port
+            break
+        except Exception as exc:
+            last_exc = exc
         if dev is not None:
             break
 
@@ -762,7 +781,44 @@ def push_config(device_name, device, commands, base):
         except Exception:
             pass
 
-        push_certs(dev, device_name, device, base)
+        try:
+            push_certs(dev, device_name, device, base)
+        except Exception as exc:
+            error_text = str(exc)
+            can_retry_with_bootstrap = (
+                selected_source == "device.auth"
+                and bootstrap_user
+                and bootstrap_password
+                and selected_user != str(bootstrap_user)
+                and "Permission denied" in error_text
+            )
+            if not can_retry_with_bootstrap:
+                raise
+
+            print(
+                f"[{device_name}] Cert copy via {selected_user} failed with permission denied; "
+                f"retrying as {bootstrap_user}"
+            )
+            retry_dev = None
+            try:
+                retry_dev, retry_port = open_device_connection(
+                    str(bootstrap_user),
+                    str(bootstrap_password),
+                    "inventory_base.bootstrap/deploy",
+                    preferred_ports=[selected_port],
+                )
+                print(
+                    f"[{device_name}] NETCONF retry for cert copy: "
+                    f"user={bootstrap_user} source=inventory_base.bootstrap/deploy port={retry_port}"
+                )
+                push_certs(retry_dev, device_name, device, base)
+            finally:
+                if retry_dev is not None:
+                    try:
+                        retry_dev.close()
+                    except Exception:
+                        pass
+
         configure_qkd_scripts(dev, device_name, base)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
