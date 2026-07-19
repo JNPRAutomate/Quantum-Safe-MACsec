@@ -816,13 +816,19 @@ def should_skip_device(name, device):
 # ----------------------------------------
 
 
-def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=False):
+def run_provisioning(log=None, dry_run=False, preview=False, ssh_key=None, debug=False, devices=None):
     global DEBUG
     DEBUG = debug
 
-    base, devices, topology = load_inventory()
+    base, loaded_devices, topology = load_inventory()
 
-    for name, device in devices.items():
+    # If devices are pre-filtered (from --devices flag), use those; otherwise use all loaded devices
+    if devices is not None:
+        devices_to_process = devices
+    else:
+        devices_to_process = loaded_devices
+
+    for name, device in devices_to_process.items():
         if should_skip_device(name, device):
             continue
 
