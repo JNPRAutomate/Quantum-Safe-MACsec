@@ -186,8 +186,12 @@ def clean_device(
             secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
             if isinstance(secrets, dict):
                 script_user_pwd = secrets.get("script_password")
-        except Exception:
-            pass  # If we can't load secrets, pre-cleanup will be skipped
+                if script_user_pwd:
+                    print(f"[{name}] loaded script_password from inventory_base", flush=True)
+                else:
+                    print(f"[{name}] script_password not found in inventory_base secrets", flush=True)
+        except Exception as load_exc:
+            print(f"[{name}] unable to load inventory_base for script_password: {load_exc}", flush=True)
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -668,6 +672,7 @@ def clean_device(
             # Pre-cleanup: Try to remove user-owned files AS the script_user before removing the user.
             # This is important for sticky bit directories like /var/tmp/ where only the owner can delete.
             if script_user and script_user_pwd:
+                print(f"[{name}] attempting pre-cleanup as {script_user}", flush=True)
                 try:
                     dev_as_script_user = Device(
                         host=ip,
@@ -677,15 +682,17 @@ def clean_device(
                         gather_facts=False,
                     )
                     dev_as_script_user.open()
+                    print(f"[{name}] pre-cleanup: connected as {script_user}", flush=True)
                     try:
                         # Run file cleanup as script_user to delete their own files (sticky bit safe)
                         rsp = dev_as_script_user.rpc.request_shell_execute(
                             command=file_cleanup_cmd
                         )
+                        print(f"[{name}] pre-cleanup: cleanup command executed as {script_user}", flush=True)
                         # Successfully cleaned as script_user; no need to output since errors are expected for some paths
                     except Exception as pre_exc:
                         # Pre-cleanup may fail on some files; that's OK, deploy_user will try next
-                        pass
+                        print(f"[{name}] pre-cleanup: command error (OK to continue): {pre_exc}", flush=True)
                     finally:
                         try:
                             dev_as_script_user.close()
@@ -693,7 +700,9 @@ def clean_device(
                             pass
                 except Exception as conn_exc:
                     # If we can't connect as script_user, that's OK - will try as deploy_user
-                    pass
+                    print(f"[{name}] pre-cleanup: unable to connect as {script_user}: {conn_exc}", flush=True)
+            else:
+                print(f"[{name}] pre-cleanup: skipped (script_user={script_user}, has_pwd={bool(script_user_pwd)})", flush=True)
 
             file_cleanup_output = run_shell(
                 "file/cert/runtime cleanup",
