@@ -655,6 +655,34 @@ def clean_device(
                 if not ok_re1_cfg:
                     peer_cleanup_failures.append("re1 config cleanup")
 
+            # Pre-cleanup: Try to remove user-owned files AS the script_user before removing the user.
+            # This is important for sticky bit directories like /var/tmp/ where only the owner can delete.
+            try:
+                if script_user and script_user_pwd:
+                    dev_as_script_user = Device(
+                        host=ip,
+                        user=script_user,
+                        passwd=script_user_pwd,
+                        port=22,
+                        gather_facts=False,
+                    )
+                    dev_as_script_user.open()
+                    try:
+                        # Run file cleanup as script_user to delete their own files (sticky bit safe)
+                        rsp = dev_as_script_user.rpc.request_shell_execute(
+                            command=file_cleanup_cmd
+                        )
+                        # Don't print output; these are expected failures that we handle below
+                    except Exception:
+                        pass  # Ignore pre-cleanup errors; we'll try again as deploy_user
+                    finally:
+                        try:
+                            dev_as_script_user.close()
+                        except Exception:
+                            pass
+            except Exception:
+                pass  # If we can't connect as script_user, that's OK - we'll clean as deploy_user
+
             file_cleanup_output = run_shell(
                 "file/cert/runtime cleanup",
                 file_cleanup_cmd,
