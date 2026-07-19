@@ -1,0 +1,4 @@
+# PQC Include Order
+
+!INCLUDE "THEORY_AND_STANDARDS.md"
+!INCLUDE "GLOSSARY.md"

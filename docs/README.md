@@ -40,3 +40,20 @@ Use this as the starting point for GitHub readers:
 6. `docs/pqc/GLOSSARY.md`
 7. `docs/qkd/qkd_onbox_runtime_lld.md`
 8. `docs/qkd/CERT_MANAGER.md`
+
+## Consolidated Navigation and Assembly
+
+For ordered reading and unified export:
+
+1. Global TOC: `docs/TOC.md`
+2. Global include entrypoint: `docs/__mdinclude.md`
+3. Domain TOCs:
+   - `docs/qkd/TOC.md`
+   - `docs/kme/TOC.md`
+   - `docs/pqc/TOC.md`
+4. Domain include files:
+   - `docs/qkd/__mdinclude.md`
+   - `docs/kme/__mdinclude.md`
+   - `docs/pqc/__mdinclude.md`
+
+These include files provide deterministic document order for downstream mdinclude/pandoc assembly workflows.
