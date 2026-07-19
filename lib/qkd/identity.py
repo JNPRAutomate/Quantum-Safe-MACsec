@@ -613,17 +613,17 @@ def check_script_user_ssh_identity(device):
         return max(script_threshold, 0), max(peer_threshold, 0)
 
     def remote_file_age_seconds(path):
-        # Calculate file age using stat + date + awk (no Python, Junos-compatible)
+        # Calculate file age using stat + date + expr (Junos-compatible)
+        # Backticks work on Junos, $() does not
         # Platform-aware: Junos uses stat -f, Linux uses stat -c
         platform = device.get("platform", "").lower()
         
         if platform in ("mx", "qfx"):
-            # Junos FreeBSD: use stat -f '%m'
-            # Use pipe to avoid awk variable name parsing conflicts
-            cmd = f"echo $(stat -f '%m' {path}) $(date +%s) | awk '{{print $2 - $1}}'"
+            # Junos FreeBSD: use stat -f '%m' with backticks and expr
+            cmd = f"expr `date +%s` - `stat -f '%m' {path}`"
         else:
-            # Linux/ACX: use stat -c '%Y'
-            cmd = f"echo $(stat -c '%Y' {path}) $(date +%s) | awk '{{print $2 - $1}}'"
+            # Linux/ACX: use stat -c '%Y' with backticks and expr
+            cmd = f"expr `date +%s` - `stat -c '%Y' {path}`"
         
         result = ssh_deploy_cmd(device, cmd, timeout=20, include_failed_marker=False)
         if result.returncode != 0:
