@@ -803,6 +803,22 @@ def collect_script_user_public_keys(devices):
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
     pub_keys = collect_script_user_public_keys(devices)
+    device_names = {device_name(d) for d in devices}
+
+    def linked_peer_sources(target_device):
+        """
+        Return source device names that are expected to open peer SSH sessions
+        towards target_device. We scope authorized keys to direct topology peers
+        instead of installing keys from the entire fleet.
+        """
+        sources = set()
+        for link in target_device.get("links", []) or []:
+            if not isinstance(link, dict):
+                continue
+            peer = link.get("peer")
+            if peer and peer in device_names:
+                sources.add(str(peer))
+        return sources
 
     def parse_public_key(line):
         key_line = (line or "").strip()
@@ -866,8 +882,17 @@ def install_peer_authorized_keys(devices):
                 f'delete system login user {peer_user} authentication {key_type} "{key_line}"'
             )
 
+        source_names = linked_peer_sources(device)
+        if not source_names:
+            print(f"[WARN] no linked peer sources found for target={target}; peer authorized_keys will be cleared")
+
         seen = set()
-        for source_name, pub_key in pub_keys.items():
+        for source_name in sorted(source_names):
+            pub_key = pub_keys.get(source_name)
+            if not pub_key:
+                raise RuntimeError(
+                    f"missing peer public key source={source_name} target={target}; run deploy/bootstrap on source first"
+                )
             key_type, key_line = parse_public_key(pub_key)
             if not key_type or not key_line:
                 raise RuntimeError(
@@ -880,6 +905,11 @@ def install_peer_authorized_keys(devices):
             set_cmds.append(
                 f'set system login user {peer_user} authentication {key_type} "{key_line}"'
             )
+
+        print(
+            f"[INFO] peer SSH key sync target={target} peer_cmd_user={peer_user} "
+            f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)}"
+        )
 
         dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
         try:

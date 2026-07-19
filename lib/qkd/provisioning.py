@@ -519,6 +519,7 @@ def push_certs(dev, name, device, base=None):
     if not isinstance(secrets, dict):
         secrets = {}
     runtime_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
+    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "etsi_peer_view")
 
     profile = files["profile"]
     sae_id = files["sae_id"]
@@ -558,7 +559,7 @@ def push_certs(dev, name, device, base=None):
         f"chown {runtime_user}:wheel {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
         f"fi; "
         f"chmod 644 {remote_dir}/{local_cert.name}; "
-        f"chmod 600 {remote_dir}/{local_key.name}; "
+        f"chmod 640 {remote_dir}/{local_key.name}; "
         f"chmod 644 {remote_dir}/{local_ca.name}; "
         f"test -s {remote_dir}/{local_cert.name} && echo OK:{remote_dir}/{local_cert.name}; "
         f"test -s {remote_dir}/{local_key.name} && echo OK:{remote_dir}/{local_key.name}; "
@@ -589,7 +590,7 @@ def push_certs(dev, name, device, base=None):
 
     print(
         f"[{name}] Certs copied OK {local_cert.name}, {local_key.name}, {local_ca.name} "
-        f"owner={runtime_user}"
+        f"owner={runtime_user} key_mode=640 peer_cmd_user={peer_cmd_user}"
     )
 
 
