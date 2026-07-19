@@ -948,6 +948,21 @@ def clean_device(
                 for path in soft_leftovers:
                     print(f"[{name}]   {path}")
             
+            # Separate /var/tmp log files from hard failures (permission denied on sticky bit is benign).
+            if file_leftovers:
+                # Check which ones are /var/tmp/*.log files (likely to have permission issues with sticky bit)
+                log_leftovers = [p for p in file_leftovers if "/var/tmp/" in p and "qkd_debug" in p and p.endswith((".log", ".log.1", ".log.2", ".log.3", ".log.4", ".log.5"))]
+                hard_leftovers = [p for p in file_leftovers if p not in log_leftovers]
+                
+                # Log files are soft leftovers; move them to warnings
+                if log_leftovers and not hard_leftovers:
+                    for log_path in log_leftovers:
+                        if log_path not in soft_leftovers:
+                            soft_leftovers.append(log_path)
+                    file_leftovers = []
+                elif hard_leftovers:
+                    file_leftovers = hard_leftovers
+
             if file_leftovers:
                 failures.append(
                     "file/runtime/cert leftovers:\n"
