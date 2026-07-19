@@ -95,9 +95,9 @@ QKD = {
 
     # Runtime files on Junos
     "REMOTE_TMP_DIR": "/var/tmp",
-    "LOG_FILE": "/var/tmp/qkd_debug.log",
-    "STATE_FILE_PREFIX": "/var/tmp/qkd_db",
-    "LOCK_FILE_PREFIX": "/var/tmp/qkd_onbox",
+    "LOG_FILE": "/var/home/macsec_user/qkd-state/logs/qkd_debug.log",
+    "STATE_FILE_PREFIX": "/var/home/macsec_user/qkd-state/qkd_db",
+    "LOCK_FILE_PREFIX": "/var/home/macsec_user/qkd-state/qkd_onbox",
 
     # Log rotation inside qkd_onbox.py
     "LOG_MAX_BYTES": 10485760,

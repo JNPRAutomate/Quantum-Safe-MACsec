@@ -146,7 +146,6 @@ SSH_KEY = CONFIG["ssh_key"]
 PEER_CMD_USER = CONFIG.get("peer_cmd_user", SCRIPT_USER)
 PEER_CMD_SSH_KEY = CONFIG.get("peer_cmd_ssh_key", SSH_KEY)
 
-LOG_FILE = CONFIG["log_file"]
 LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
 LOG_BACKUP_COUNT = int(CONFIG["log_backup_count"])
 
@@ -177,6 +176,12 @@ KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
 CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
 STATE_DIR = str(Path(SSH_KEY).parent.parent / "qkd-state")
+LOG_DIR = f"{STATE_DIR}/logs"
+CONFIG_LOG_FILE = str(CONFIG.get("log_file", "")).strip()
+if not CONFIG_LOG_FILE or CONFIG_LOG_FILE.startswith("/var/tmp/"):
+    LOG_FILE = f"{LOG_DIR}/qkd_debug.log"
+else:
+    LOG_FILE = CONFIG_LOG_FILE
 
 
 # ----------------------------
@@ -253,6 +258,7 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     def write_log_line(log_file):
         try:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
             rotate_one_log(log_file)
             with open(log_file, "a") as f:
                 f.write(line)
@@ -263,7 +269,7 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     if iface:
         safe_iface = iface.replace("/", "_")
-        link_log_file = f"{STATE_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
+        link_log_file = f"{LOG_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
         write_log_line(link_log_file)
 
 
