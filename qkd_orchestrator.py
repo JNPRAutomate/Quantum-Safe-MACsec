@@ -1082,7 +1082,8 @@ def handle_create(args):
 
 def handle_deploy(args):
     log = setup_logger(verbose=args.verbose)
-    devices = load_runtime_devices()
+    all_runtime_devices = load_runtime_devices()
+    devices = all_runtime_devices
 
     # Filter devices if --devices specified
     if args.devices:
@@ -1184,6 +1185,21 @@ def handle_deploy(args):
                 device["auth"] = auth
             auth["username"] = script_user
             auth["password"] = script_password
+
+        # Peer transport synchronization must run against the full runtime
+        # inventory, not only the selected deploy subset. Otherwise a partial
+        # deploy (for example MX1,MX2) rotates keys on selected devices but does
+        # not propagate the new peer key to non-selected neighbors (for example
+        # MX3), and runtime bootstrap fails with SSH RC=255.
+        for name, device in all_runtime_devices.items():
+            if not isinstance(device, dict):
+                continue
+            auth = device.get("auth")
+            if not isinstance(auth, dict):
+                auth = {}
+                device["auth"] = auth
+            auth["username"] = script_user
+            auth["password"] = script_password
         print(f"Deploy auth source: inventory_base script_user={script_user}")
 
     if args.shipment_preload:
@@ -1198,7 +1214,7 @@ def handle_deploy(args):
     # postdeploy-only step, and keeps peer SSH working even if a subsequent
     # device hits a provisioning failure.
     if not args.shipment_preload:
-        install_peer_authorized_keys(devices)
+        install_peer_authorized_keys(all_runtime_devices)
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
@@ -1272,7 +1288,7 @@ def handle_deploy(args):
 
     # Always synchronize peer command authorized keys during deploy so
     # runtime master->peer install-key does not depend on postdeploy validation.
-    install_peer_authorized_keys(devices)
+    install_peer_authorized_keys(all_runtime_devices)
 
     if args.skip_postdeploy_validation:
         print("Skipping postdeploy validation (--skip-postdeploy-validation flag set).")
