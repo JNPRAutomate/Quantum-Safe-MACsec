@@ -179,6 +179,16 @@ def clean_device(
             or QKD.get("PEER_CMD_CLASS", "read-only")
         )
 
+        # Get script_user password for pre-cleanup (deleting their own files)
+        script_user_pwd = None
+        try:
+            base = load_inventory_base()
+            secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+            if isinstance(secrets, dict):
+                script_user_pwd = secrets.get("script_password")
+        except Exception:
+            pass  # If we can't load secrets, pre-cleanup will be skipped
+
         print(f"Cleaning device {name} {ip}", flush=True)
 
         iface_candidates, ca_candidates, keychain_candidates = (
@@ -657,8 +667,8 @@ def clean_device(
 
             # Pre-cleanup: Try to remove user-owned files AS the script_user before removing the user.
             # This is important for sticky bit directories like /var/tmp/ where only the owner can delete.
-            try:
-                if script_user and script_user_pwd:
+            if script_user and script_user_pwd:
+                try:
                     dev_as_script_user = Device(
                         host=ip,
                         user=script_user,
@@ -672,16 +682,18 @@ def clean_device(
                         rsp = dev_as_script_user.rpc.request_shell_execute(
                             command=file_cleanup_cmd
                         )
-                        # Don't print output; these are expected failures that we handle below
-                    except Exception:
-                        pass  # Ignore pre-cleanup errors; we'll try again as deploy_user
+                        # Successfully cleaned as script_user; no need to output since errors are expected for some paths
+                    except Exception as pre_exc:
+                        # Pre-cleanup may fail on some files; that's OK, deploy_user will try next
+                        pass
                     finally:
                         try:
                             dev_as_script_user.close()
                         except Exception:
                             pass
-            except Exception:
-                pass  # If we can't connect as script_user, that's OK - we'll clean as deploy_user
+                except Exception as conn_exc:
+                    # If we can't connect as script_user, that's OK - will try as deploy_user
+                    pass
 
             file_cleanup_output = run_shell(
                 "file/cert/runtime cleanup",
