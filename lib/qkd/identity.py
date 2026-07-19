@@ -619,18 +619,11 @@ def check_script_user_ssh_identity(device):
         
         if platform in ("mx", "qfx"):
             # Junos FreeBSD: use stat -f '%m'
-            cmd = (
-                f"awk -v mtime=$(stat -f '%m' {path}) "
-                f"-v now=$(date +%s) "
-                f"'BEGIN {{print now - mtime}}'"
-            )
+            # Use pipe to avoid awk variable name parsing conflicts
+            cmd = f"echo $(stat -f '%m' {path}) $(date +%s) | awk '{{print $2 - $1}}'"
         else:
             # Linux/ACX: use stat -c '%Y'
-            cmd = (
-                f"awk -v mtime=$(stat -c '%Y' {path}) "
-                f"-v now=$(date +%s) "
-                f"'BEGIN {{print now - mtime}}'"
-            )
+            cmd = f"echo $(stat -c '%Y' {path}) $(date +%s) | awk '{{print $2 - $1}}'"
         
         result = ssh_deploy_cmd(device, cmd, timeout=20, include_failed_marker=False)
         if result.returncode != 0:
