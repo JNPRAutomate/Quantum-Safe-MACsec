@@ -253,7 +253,7 @@ def clean_device(
         def list_tmp_runtime_leftovers():
             output = run_shell(
                 "verify /var/tmp runtime leftovers",
-                f"ls -1 {tmp_runtime_globs_expr} 2>/dev/null || true",
+                f"ls -1 {tmp_runtime_globs_expr} 2>&1",
                 strict=False,
                 show_output=False,
                 show_label=False,
@@ -347,7 +347,7 @@ def clean_device(
         for path in soft_runtime_paths:
             file_cleanup_parts.append(f"rm -f {path}")
         if tmp_runtime_globs_expr:
-            file_cleanup_parts.append(f"rm -rf {tmp_runtime_globs_expr} 2>/dev/null || true")
+            file_cleanup_parts.append(f"rm -rf {tmp_runtime_globs_expr}")
         
         file_cleanup_cmd = "; ".join(file_cleanup_parts)
 
@@ -619,11 +619,7 @@ def clean_device(
         def remote_path_exists(path):
             output = run_shell(
                 f"verify path {path}",
-                (
-                    f"test -e {path} "
-                    f"&& echo EXISTS:{path} "
-                    f"|| true"
-                ),
+                f"test -e {path} && echo EXISTS:{path}",
                 strict=False,
                 show_output=False,
                 show_label=False,
