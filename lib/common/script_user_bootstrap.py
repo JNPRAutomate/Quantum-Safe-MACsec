@@ -589,6 +589,12 @@ def bootstrap_script_user_on_device(
     try:
         dev.open()
 
+        # Always rollback first to clear any pending config from previous operations
+        try:
+            dev.rpc.request_shell_execute(command="cli -c 'rollback 0'")
+        except Exception:
+            pass  # Rollback may not always be available; continue anyway
+
         script_exists = user_exists(dev, script_user)
         peer_exists = user_exists(dev, peer_cmd_user)
         peer_class_exists = class_exists(dev, peer_cmd_class)
@@ -622,6 +628,12 @@ def bootstrap_script_user_on_device(
         )
 
         cu = Config(dev)
+        # Clear any pending config in candidate before loading bootstrap config
+        try:
+            cu.rollback()
+        except Exception:
+            pass
+        
         cu.load("\n".join(commands), format="set", merge=True)
         diff = cu.diff()
 
