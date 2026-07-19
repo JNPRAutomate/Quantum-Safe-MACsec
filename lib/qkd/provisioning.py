@@ -663,12 +663,11 @@ def push_config(device_name, device, commands, base):
 
     auth_candidates = []
 
-    device_auth = device.get("auth", {}) if isinstance(device.get("auth"), dict) else {}
-    device_user = device_auth.get("username")
-    device_password = device_auth.get("password")
-    if device_user and device_password:
-        auth_candidates.append((str(device_user), str(device_password), "device.auth"))
-
+    # For provisioning (config + cert push), we MUST use bootstrap/deploy user (labuser)
+    # which has admin privileges to write certs and push config.
+    # device.auth (macsec_user) is runtime-only, with limited privileges.
+    # Therefore: try bootstrap_user FIRST, then fall back to device.auth
+    
     bootstrap_user = secrets.get("bootstrap_user") or secrets.get("deploy_user")
     bootstrap_password = (
         secrets.get("bootstrap_password")
@@ -677,6 +676,12 @@ def push_config(device_name, device, commands, base):
     )
     if bootstrap_user and bootstrap_password:
         auth_candidates.append((str(bootstrap_user), str(bootstrap_password), "inventory_base.bootstrap/deploy"))
+
+    device_auth = device.get("auth", {}) if isinstance(device.get("auth"), dict) else {}
+    device_user = device_auth.get("username")
+    device_password = device_auth.get("password")
+    if device_user and device_password:
+        auth_candidates.append((str(device_user), str(device_password), "device.auth"))
 
     script_user = secrets.get("script_user") or secrets.get("default_user")
     script_password = (
