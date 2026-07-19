@@ -633,11 +633,13 @@ def check_script_user_ssh_identity(device):
 
     gen_peer = "" if peer_key_path == key_path else f"test -f {peer_key_path} || {keygen_cmd.replace(key_path, peer_key_path)}; "
 
-    cmd = (
+    # Create keys and attempt to fix ownership. Chown may fail without root, but that's acceptable
+    # if files are already readable by script_user.
+    cmd_main = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || {keygen_cmd}; "
         f"{gen_peer}"
-        f"chown {script_user} {ssh_dir} {key_path} {pub_path} {peer_key_path} {peer_pub_path}; "
+        f"chown {script_user} {ssh_dir} {key_path} {pub_path} {peer_key_path} {peer_pub_path} 2>/dev/null; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {key_path} {peer_key_path}; "
         f"chmod 644 {pub_path} {peer_pub_path}; "
@@ -645,13 +647,16 @@ def check_script_user_ssh_identity(device):
         f"test -s {pub_path}; "
         f"test -s {peer_key_path}; "
         f"test -s {peer_pub_path}; "
+        f"test -r {key_path}; "
+        f"test -r {peer_key_path}; "
         f"ls -ld {ssh_dir}; "
         f"ls -l {key_path}; "
         f"ls -l {pub_path}; "
         f"ls -l {peer_key_path}; "
         f"ls -l {peer_pub_path}"
     )
-    result = ssh_deploy_cmd(device, cmd, timeout=60)
+    
+    result = ssh_deploy_cmd(device, cmd_main, timeout=60)
     if result.returncode != 0:
         raise RuntimeError(f"SSH identity check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(result.stdout)
@@ -679,7 +684,7 @@ def check_script_user_ssh_identity(device):
         rotate_cmd = (
             f"rm -f {path} {pub}; "
             f"{keygen_cmd_for(path)}; "
-            f"chown {script_user} {path} {pub}; "
+            f"chown {script_user} {path} {pub} 2>/dev/null; "
             f"chmod 600 {path}; "
             f"chmod 644 {pub}; "
             f"ls -l {path}; "
