@@ -360,10 +360,19 @@ def clean_device(
                 file_cleanup_parts.append(f"rm -f {path}")
         for path in soft_runtime_paths:
             file_cleanup_parts.append(f"rm -f {path}")
+        
+        # Build safe version (without sticky bit globs) for deploy_user cleanup
+        file_cleanup_cmd_safe = "; ".join(file_cleanup_parts)
+        
+        # Add sticky bit glob patterns for full cleanup (pre-cleanup as script_user)
         if tmp_runtime_globs_expr:
             file_cleanup_parts.append(f"rm -rf {tmp_runtime_globs_expr}")
         
-        file_cleanup_cmd = "; ".join(file_cleanup_parts)
+        # Full version includes sticky bit globs for script_user pre-cleanup
+        file_cleanup_cmd_full = "; ".join(file_cleanup_parts)
+        
+        # Default to full for backward compatibility
+        file_cleanup_cmd = file_cleanup_cmd_full
 
         dev = Device(
             host=ip,
@@ -684,9 +693,9 @@ def clean_device(
                     dev_as_script_user.open()
                     print(f"[{name}] pre-cleanup: connected as {script_user}", flush=True)
                     try:
-                        # Run file cleanup as script_user to delete their own files (sticky bit safe)
+                        # Use full cleanup command (includes sticky bit globs) for script_user pre-cleanup
                         rsp = dev_as_script_user.rpc.request_shell_execute(
-                            command=file_cleanup_cmd
+                            command=file_cleanup_cmd_full
                         )
                         print(f"[{name}] pre-cleanup: cleanup command executed as {script_user}", flush=True)
                         # Successfully cleaned as script_user; no need to output since errors are expected for some paths
@@ -706,7 +715,7 @@ def clean_device(
 
             file_cleanup_output = run_shell(
                 "file/cert/runtime cleanup",
-                file_cleanup_cmd,
+                file_cleanup_cmd_safe,
                 strict=False,
             )
 
