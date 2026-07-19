@@ -99,6 +99,11 @@ Behavior notes:
 - In `--local-only` mode, user-removal flags are ignored because no remote cleanup is performed.
 - In remote clean mode, device access prefers `secrets.bootstrap_user`/`secrets.bootstrap_password` from `inventory_base.yaml`; runtime device auth is used only as fallback.
 
+Deploy credential note:
+
+- On platforms where bootstrap cannot generate SSH keys as `SCRIPT_USER` and deploy user is non-root, deploy can require `secrets.root_password` for root fallback key generation.
+- If missing, bootstrap now fails fast (no false success), and pre-deploy reports missing SSH identity files.
+
 Examples:
 
 ```bash
