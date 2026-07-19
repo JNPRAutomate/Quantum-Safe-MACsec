@@ -635,13 +635,19 @@ def check_script_user_ssh_identity(device):
 
     # Create keys and fix permissions. Don't attempt chown - if files exist and are readable, that's sufficient.
     # If they don't exist, keygen creates them as deploy_user and they're readable.
+    # Skip directory chmod - may be sticky bit or owned by root; instead just verify file readability.
+    # If files exist but aren't readable (old deployment, wrong owner), delete and regenerate them.
+    
     cmd_main = (
         f"mkdir -p {ssh_dir}; "
+        f"test -f {key_path} && test -r {key_path}; "
+        f"if test $? -ne 0; then rm -f {key_path} {key_path}.pub 2>/dev/null; fi; "
         f"test -f {key_path} || {keygen_cmd}; "
-        f"{gen_peer}"
-        f"chmod 700 {ssh_dir}; "
-        f"chmod 600 {key_path} {peer_key_path}; "
-        f"chmod 644 {pub_path} {peer_pub_path}; "
+        f"test -f {peer_key_path} && test -r {peer_key_path}; "
+        f"if test $? -ne 0; then rm -f {peer_key_path} {peer_key_path}.pub 2>/dev/null; fi; "
+        f"test -f {peer_key_path} || {keygen_cmd_for(peer_key_path)}; "
+        f"chmod 600 {key_path} {peer_key_path} 2>/dev/null; "
+        f"chmod 644 {pub_path} {peer_pub_path} 2>/dev/null; "
         f"test -s {key_path}; "
         f"test -s {pub_path}; "
         f"test -s {peer_key_path}; "
