@@ -555,9 +555,7 @@ def push_certs(dev, name, device, base=None):
             scp.put(str(local_file), remote_path=remote_file)
 
     verify_cmd = (
-        f"if id -u {runtime_user} >/dev/null 2>&1; then "
         f"chown {runtime_user}:wheel {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
-        f"fi; "
         f"chmod 644 {remote_dir}/{local_cert.name}; "
         f"chmod 640 {remote_dir}/{local_key.name}; "
         f"chmod 644 {remote_dir}/{local_ca.name}; "
