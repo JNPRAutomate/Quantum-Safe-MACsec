@@ -1193,6 +1193,13 @@ def handle_deploy(args):
     else:
         validate_all_devices(devices, phase="predeploy", shipment_aware=True)
 
+    # Ensure peer transport keys are synchronized before provisioning. This
+    # prevents runtime master->peer bootstrap from depending on a later
+    # postdeploy-only step, and keeps peer SSH working even if a subsequent
+    # device hits a provisioning failure.
+    if not args.shipment_preload:
+        install_peer_authorized_keys(devices)
+
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
     artifacts = build_onbox_artifacts(devices, placeholder_json=bool(args.shipment_preload))
