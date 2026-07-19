@@ -944,17 +944,24 @@ def clean_device(
                 for path in soft_leftovers:
                     print(f"[{name}]   {path}")
             
-            # Separate /var/tmp log files from hard failures (permission denied on sticky bit is benign).
+            # Separate /var/tmp files from hard failures (permission denied on sticky bit is benign).
             if file_leftovers:
-                # Check which ones are /var/tmp/*.log files (likely to have permission issues with sticky bit)
-                log_leftovers = [p for p in file_leftovers if "/var/tmp/" in p and "qkd_debug" in p and p.endswith((".log", ".log.1", ".log.2", ".log.3", ".log.4", ".log.5"))]
-                hard_leftovers = [p for p in file_leftovers if p not in log_leftovers]
+                # Check which ones are /var/tmp/* files with sticky bit permission issues
+                # These include: qkd_debug*.log*, qkd_db*.json*, which are owned by macsec_user
+                sticky_bit_leftovers = [
+                    p for p in file_leftovers 
+                    if "/var/tmp/" in p and (
+                        ("qkd_debug" in p and p.endswith((".log", ".log.1", ".log.2", ".log.3", ".log.4", ".log.5")))
+                        or ("qkd_db" in p and p.endswith((".json", ".json.bak")))
+                    )
+                ]
+                hard_leftovers = [p for p in file_leftovers if p not in sticky_bit_leftovers]
                 
-                # Log files are soft leftovers; move them to warnings
-                if log_leftovers and not hard_leftovers:
-                    for log_path in log_leftovers:
-                        if log_path not in soft_leftovers:
-                            soft_leftovers.append(log_path)
+                # Sticky bit files are soft leftovers; move them to warnings
+                if sticky_bit_leftovers and not hard_leftovers:
+                    for sticky_path in sticky_bit_leftovers:
+                        if sticky_path not in soft_leftovers:
+                            soft_leftovers.append(sticky_path)
                     file_leftovers = []
                 elif hard_leftovers:
                     file_leftovers = hard_leftovers
@@ -1154,6 +1161,16 @@ def handle_clean(args):
             print("Using inventory_base devices")
         else:
             print("No devices found anywhere -> skipping remote device cleanup")
+
+    # Filter devices if --devices specified
+    if getattr(args, 'devices', None):
+        device_names = {name.strip() for name in args.devices.split(",")}
+        devices = {name: dev for name, dev in devices.items() if name in device_names}
+        if not devices:
+            print(f"Error: No matching devices found in specified list: {args.devices}")
+            return
+        print(f"=== Cleaning specified devices: {', '.join(sorted(devices.keys()))} ===")
+        print("")
 
     failed = []
 

@@ -403,6 +403,12 @@ def parse_args():
         action="store_true",
         help="Explicitly request removal of configured SCRIPT_USER from remote devices.",
     )
+    clean.add_argument(
+        "--devices",
+        type=str,
+        default=None,
+        help="Comma-separated list of device names to clean (e.g., 'MX1,MX2,MX3'). If not specified, cleans all managed devices.",
+    )
 
     validate = subparsers.add_parser(
         "validate",
