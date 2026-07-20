@@ -252,8 +252,11 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
     ):
         copy_file_to_other_re(dev, name, path)
 
-    # Ask Junos to push scripts too. Ignore failure here; file copy above is the primary sync.
-    run_cli(dev, "commit synchronize scripts", name=name, strict=False)
+    # Ask Junos to push scripts too only when explicitly enabled.
+    # In some dual-RE environments this command can transiently contend for
+    # candidate DB lock and interfere with immediate follow-up config loads.
+    if bool(QKD.get("ENABLE_COMMIT_SYNCHRONIZE_SCRIPTS", False)):
+        run_cli(dev, "commit synchronize scripts", name=name, strict=False)
 
 
 def sync_certs_dual_re(dev, name, remote_dir, filenames):
@@ -318,6 +321,24 @@ def commit_safely(dev, cu, name, sync=True):
         print(f"[{name}] COMMIT FAILED")
         print(text)
         raise
+
+
+def is_config_db_lock_error(exc):
+    low = str(exc).lower()
+    return (
+        "configuration database locked" in low
+        or "exclusive [edit]" in low
+    )
+
+
+def lock_retry_parameters():
+    max_attempts = int(QKD.get("CONFIG_DB_LOCK_RETRY_ATTEMPTS", 5))
+    base_wait_seconds = int(QKD.get("CONFIG_DB_LOCK_RETRY_WAIT_SECONDS", 2))
+    if max_attempts < 1:
+        max_attempts = 1
+    if base_wait_seconds < 1:
+        base_wait_seconds = 1
+    return max_attempts, base_wait_seconds
 
 
 # ----------------------------------------
@@ -654,19 +675,7 @@ def configure_qkd_scripts(dev, name, base):
     if has_dual_re(dev, name):
         sync_qkd_scripts_dual_re(dev, name, script_name)
 
-    def _is_config_db_lock_error(exc):
-        low = str(exc).lower()
-        return (
-            "configuration database locked" in low
-            or "exclusive [edit]" in low
-        )
-
-    max_attempts = int(QKD.get("CONFIG_DB_LOCK_RETRY_ATTEMPTS", 5))
-    base_wait_seconds = int(QKD.get("CONFIG_DB_LOCK_RETRY_WAIT_SECONDS", 2))
-    if max_attempts < 1:
-        max_attempts = 1
-    if base_wait_seconds < 1:
-        base_wait_seconds = 1
+    max_attempts, base_wait_seconds = lock_retry_parameters()
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -675,7 +684,7 @@ def configure_qkd_scripts(dev, name, base):
                 commit_safely(dev, cu, name, sync=True)
             break
         except Exception as exc:
-            if not _is_config_db_lock_error(exc) or attempt == max_attempts:
+            if not is_config_db_lock_error(exc) or attempt == max_attempts:
                 raise
             wait_seconds = base_wait_seconds * attempt
             print(
@@ -848,12 +857,26 @@ def push_config(device_name, device, commands, base):
         configure_qkd_scripts(dev, device_name, base)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
+        max_attempts, base_wait_seconds = lock_retry_parameters()
+
         with Config(dev) as cu:
             for cmd in commands:
                 cmd = cmd.strip()
                 if not cmd or cmd.startswith("#"):
                     continue
-                cu.load(cmd, format="set")
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        cu.load(cmd, format="set")
+                        break
+                    except Exception as exc:
+                        if not is_config_db_lock_error(exc) or attempt == max_attempts:
+                            raise
+                        wait_seconds = base_wait_seconds * attempt
+                        print(
+                            f"[{device_name}] WARN config load lock attempt={attempt}/{max_attempts} "
+                            f"wait={wait_seconds}s"
+                        )
+                        time.sleep(wait_seconds)
 
             if cu.diff():
                 print(f"[{device_name}] Applying config")
