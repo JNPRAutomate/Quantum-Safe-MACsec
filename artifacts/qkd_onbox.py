@@ -2739,10 +2739,6 @@ def run_master():
             log("CONTROLLED BOOTSTRAP COMPLETE AFTER LOCAL CONFIG INVALID -> EXIT THIS LINK CYCLE", "INFO", iface, "MASTER")
             continue
 
-        if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
-            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
-            continue
-
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
                 log("KME HOLD EXPIRED AND LINK ALREADY DECLARED DOWN -> SKIP", "ERROR", iface, "MASTER")
@@ -2768,6 +2764,10 @@ def run_master():
         if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
             log(f"MACSEC NOT INUSE ca={ca_name} -> CONTROLLED BOOTSTRAP", "ERROR", iface, "MASTER")
             bootstrap_keychain_link(link, force=True)
+            continue
+
+        if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
+            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
             continue
 
         peer_state = get_peer_status(link, iface)
