@@ -839,14 +839,17 @@ def pending_head_age_seconds(state):
 def prune_stale_pending_head(state, iface=None, mode_ctx="STATE"):
     state = normalize_pending_keys(state)
     pending = state.get("pending_keys", [])
-    if len(pending) <= 1:
+    if not pending:
         return state, False
 
     now_epoch = int(time.time())
     stale_after = pending_stale_seconds()
     pruned_any = False
 
-    while len(pending) > 1:
+    while pending:
+        # Keep a single pending key only when there is no active key yet.
+        if len(pending) == 1 and not state.get("active_key_id"):
+            break
         head = pending[0]
         head_key_id = head.get("key_id")
         head_generation = head.get("generation")
