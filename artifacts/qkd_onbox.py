@@ -696,6 +696,9 @@ def ensure_health_state(state):
     health.setdefault("last_kme_error", None)
     health.setdefault("degraded", False)
     health.setdefault("declared_down", False)
+    health.setdefault("peer_mismatch_defer_count", 0)
+    health.setdefault("peer_mismatch_defer_since", 0)
+    health.setdefault("peer_mismatch_defer_pending_key", None)
     return state
 
 
@@ -778,6 +781,27 @@ def pending_stale_seconds():
         return value
     # Default: keep at least 4 intervals before considering a pending head stale.
     return max(120, rotation_interval_seconds() * 4)
+
+
+def peer_mismatch_defer_limit_cycles():
+    value = int(qkd_policy().get("peer_mismatch_defer_limit_cycles", 5))
+    if value < 1:
+        return 1
+    return value
+
+
+def peer_mismatch_defer_max_age_seconds():
+    value = int(qkd_policy().get("peer_mismatch_defer_max_age_seconds", 0))
+    if value > 0:
+        return value
+    return max(180, pending_stale_seconds())
+
+
+def pending_head_age_seconds(state):
+    epoch = epoch_from_junos_start_time(state.get("next_start_time"))
+    if epoch is None:
+        return None
+    return max(0, int(time.time()) - int(epoch))
 
 
 def prune_stale_pending_head(state, iface=None, mode_ctx="STATE"):
@@ -2775,15 +2799,50 @@ def run_master():
                 )
                 continue
             if peer_state_converging(state, peer_state) and macsec_has_inuse_sa(iface, expected_ca=ca_name):
-                log(
-                    f"PEER STATE MISMATCH DEFER local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
-                    f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
-                    f"local_pending_key={state.get('pending_key_id')} peer_pending_key={peer_state.get('pending_key_id')} reason=SHARED_KEYS_CONVERGING",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-                continue
+                health = state.get("health", {})
+                pending_key = state.get("pending_key_id")
+                if health.get("peer_mismatch_defer_pending_key") != pending_key:
+                    health["peer_mismatch_defer_count"] = 0
+                    health["peer_mismatch_defer_since"] = int(time.time())
+                    health["peer_mismatch_defer_pending_key"] = pending_key
+
+                health["peer_mismatch_defer_count"] = int(health.get("peer_mismatch_defer_count", 0)) + 1
+                if int(health.get("peer_mismatch_defer_since", 0)) <= 0:
+                    health["peer_mismatch_defer_since"] = int(time.time())
+
+                defer_count = int(health.get("peer_mismatch_defer_count", 0))
+                defer_limit = peer_mismatch_defer_limit_cycles()
+                pending_age = pending_head_age_seconds(state)
+                pending_age_limit = peer_mismatch_defer_max_age_seconds()
+
+                expired_by_count = defer_count >= defer_limit
+                expired_by_age = pending_age is not None and pending_age >= pending_age_limit
+
+                if expired_by_count or expired_by_age:
+                    log(
+                        f"PEER STATE MISMATCH DEFER EXPIRED local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                        f"defer_count={defer_count} defer_limit={defer_limit} pending_age_seconds={pending_age} pending_age_limit_seconds={pending_age_limit} "
+                        f"pending_key_id={pending_key} -> CONTROLLED_BOOTSTRAP",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    health["peer_mismatch_defer_count"] = 0
+                    health["peer_mismatch_defer_since"] = 0
+                    health["peer_mismatch_defer_pending_key"] = None
+                else:
+                    state["health"] = health
+                    save_db_state(peer, iface, state)
+                    log(
+                        f"PEER STATE MISMATCH DEFER local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                        f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
+                        f"local_pending_key={state.get('pending_key_id')} peer_pending_key={peer_state.get('pending_key_id')} "
+                        f"defer_count={defer_count}/{defer_limit} pending_age_seconds={pending_age} pending_age_limit_seconds={pending_age_limit} reason=SHARED_KEYS_CONVERGING",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
             log(
                 f"PEER STATE MISMATCH -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} "
@@ -2796,6 +2855,14 @@ def run_master():
             )
             bootstrap_keychain_link(link, force=True)
             continue
+
+        health = state.get("health", {})
+        if int(health.get("peer_mismatch_defer_count", 0)) > 0:
+            health["peer_mismatch_defer_count"] = 0
+            health["peer_mismatch_defer_since"] = 0
+            health["peer_mismatch_defer_pending_key"] = None
+            state["health"] = health
+            save_db_state(peer, iface, state)
 
         if state.get("pending_key_id"):
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
