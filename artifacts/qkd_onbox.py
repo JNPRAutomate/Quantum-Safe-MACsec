@@ -3011,7 +3011,12 @@ def run_master():
         else:
             log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={first_start_time}", "INFO", iface, "MASTER")
 
-        state["generation"] = batch_records[-1]["generation"]
+        # Keep generation anchored to the active key generation.
+        # In batch mode we may preinstall future keys (pending), but generation
+        # must advance only when MKA confirms/promotes each pending key.
+        # Advancing here to the last scheduled generation can cause false
+        # peer mismatches and drop pending entries during normalization.
+        state["scheduled_generation_max"] = batch_records[-1]["generation"]
         state["ca_name"] = ca_name
         state["keychain_name"] = keychain
         state["last_rotation"] = int(time.time())
