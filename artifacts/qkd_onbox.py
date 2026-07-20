@@ -1863,10 +1863,9 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     action = "delete" if remove else "set"
     ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
     login_user = target_login_user or PEER_CMD_USER or SCRIPT_USER
-    cli_cmd = (
+    remote_cmd = (
         f"configure private; {action} system login user {login_user} authentication {key_type} \"{key_line}\"; commit and-quit"
     )
-    remote_cmd = f"cli -c {shlex.quote(cli_cmd)}"
     retry_wait_seconds = [2, 4, 8]
     for attempt in range(1, len(retry_wait_seconds) + 2):
         ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
@@ -1885,7 +1884,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
 
 
 def validate_peer_ssh_key_on_remote(peer_ip, ssh_key_path):
-    remote_cmd = f"cli -c {shlex.quote('show system uptime | no-more')}"
+    remote_cmd = "show system uptime | no-more"
     return ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=15, remote_user=PEER_CMD_USER)
 
 
