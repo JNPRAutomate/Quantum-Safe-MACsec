@@ -157,7 +157,39 @@ MIN_ROTATION_INTERVAL = int(CONFIG.get("min_rotation_interval", 50))
 KME_FAIL_THRESHOLD = int(CONFIG.get("kme_fail_threshold", 5))
 KME_HOLD_DOWN_SECONDS = int(CONFIG.get("kme_hold_down_seconds", 3600))
 MACSEC_INUSE_GRACE_SECONDS = int(CONFIG.get("macsec_inuse_grace_seconds", 60))
-PEER_MISMATCH_GRACE_SECONDS = int(CONFIG.get("peer_mismatch_grace_seconds", 180))
+
+
+def _int_or_default(value, default):
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+_policy = CONFIG.get("qkd_policy", {})
+if not isinstance(_policy, dict):
+    _policy = {}
+
+_policy_interval_seconds = _int_or_default(_policy.get("interval_seconds", 60), 60)
+if _policy_interval_seconds < 1:
+    _policy_interval_seconds = 60
+
+_grace_cycles = _int_or_default(_policy.get("peer_mismatch_grace_cycles", 3), 3)
+if _grace_cycles < 1:
+    _grace_cycles = 1
+if _grace_cycles > 10:
+    _grace_cycles = 10
+
+_derived_peer_mismatch_grace = _policy_interval_seconds * _grace_cycles
+_grace_min_seconds = _int_or_default(CONFIG.get("peer_mismatch_grace_min_seconds", 120), 120)
+_grace_max_seconds = _int_or_default(CONFIG.get("peer_mismatch_grace_max_seconds", 600), 600)
+if _grace_min_seconds < 1:
+    _grace_min_seconds = 1
+if _grace_max_seconds < _grace_min_seconds:
+    _grace_max_seconds = _grace_min_seconds
+_derived_peer_mismatch_grace = max(_grace_min_seconds, min(_derived_peer_mismatch_grace, _grace_max_seconds))
+
+PEER_MISMATCH_GRACE_SECONDS = _int_or_default(CONFIG.get("peer_mismatch_grace_seconds", _derived_peer_mismatch_grace), _derived_peer_mismatch_grace)
 
 MACSEC_MODEL = CONFIG.get("macsec_model", "keychain")
 
