@@ -1410,7 +1410,7 @@ def get_mka_session_block_for_iface(iface):
         if in_target:
             block.append(line)
     if not block:
-        log(f"MKA SESSION CHECK FAIL iface={iface} not found", "ERROR", iface, "MKA")
+        log(f"MKA SESSION NOT FOUND iface={iface} status=transient", "INFO", iface, "MKA")
         return None
     return "\n".join(block)
 
