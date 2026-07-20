@@ -1866,7 +1866,8 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     cli_cmd = (
         f"configure private; {action} system login user {login_user} authentication {key_type} \"{key_line}\"; commit and-quit"
     )
-    remote_cmd = f"start shell command cli -c {shlex.quote(cli_cmd)}"
+    shell_cmd = f"cli -c {shlex.quote(cli_cmd)}"
+    remote_cmd = f"start shell command {shlex.quote(shell_cmd)}"
     retry_wait_seconds = [2, 4, 8]
     for attempt in range(1, len(retry_wait_seconds) + 2):
         ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
