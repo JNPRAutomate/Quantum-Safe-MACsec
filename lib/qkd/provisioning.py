@@ -654,9 +654,35 @@ def configure_qkd_scripts(dev, name, base):
     if has_dual_re(dev, name):
         sync_qkd_scripts_dual_re(dev, name, script_name)
 
-    with Config(dev) as cu:
-        cu.load(full_cfg, format="set", merge=False)
-        commit_safely(dev, cu, name, sync=True)
+    def _is_config_db_lock_error(exc):
+        low = str(exc).lower()
+        return (
+            "configuration database locked" in low
+            or "exclusive [edit]" in low
+        )
+
+    max_attempts = int(QKD.get("CONFIG_DB_LOCK_RETRY_ATTEMPTS", 5))
+    base_wait_seconds = int(QKD.get("CONFIG_DB_LOCK_RETRY_WAIT_SECONDS", 2))
+    if max_attempts < 1:
+        max_attempts = 1
+    if base_wait_seconds < 1:
+        base_wait_seconds = 1
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with Config(dev) as cu:
+                cu.load(full_cfg, format="set", merge=False)
+                commit_safely(dev, cu, name, sync=True)
+            break
+        except Exception as exc:
+            if not _is_config_db_lock_error(exc) or attempt == max_attempts:
+                raise
+            wait_seconds = base_wait_seconds * attempt
+            print(
+                f"[{name}] WARN QKD script config lock attempt={attempt}/{max_attempts} "
+                f"wait={wait_seconds}s error={exc}"
+            )
+            time.sleep(wait_seconds)
 
     print(f"[{name}] QKD scripts event and op configured OK")
 
