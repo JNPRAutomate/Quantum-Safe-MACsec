@@ -328,6 +328,8 @@ def is_config_db_lock_error(exc):
     return (
         "configuration database locked" in low
         or "exclusive [edit]" in low
+        or "private edits in use" in low
+        or "try 'configure private' or 'configure exclusive'" in low
     )
 
 
