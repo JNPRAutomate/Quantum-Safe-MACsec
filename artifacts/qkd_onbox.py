@@ -1776,30 +1776,31 @@ def parse_public_key_line(public_key_line):
     return key_type, " ".join(parts)
 
 
-def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20):
+def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20, remote_user=None):
+    ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
     ssh_cmd = [
         "ssh",
         "-i", ssh_key_path,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",
-        f"{SCRIPT_USER}@{peer_ip}",
+        f"{ssh_remote_user}@{peer_ip}",
         remote_cmd,
     ]
     try:
         result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired:
-        log(f"SSH REMOTE TIMEOUT peer={peer_ip} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
+        log(f"SSH REMOTE TIMEOUT peer={peer_ip} user={ssh_remote_user} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
         return False, "", "timeout"
     except Exception as e:
-        log(f"SSH REMOTE ERROR peer={peer_ip} error={str(e)} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
+        log(f"SSH REMOTE ERROR peer={peer_ip} user={ssh_remote_user} error={str(e)} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
         return False, "", str(e)
 
     stdout = result.stdout.decode(errors="ignore").strip()
     stderr = result.stderr.decode(errors="ignore").strip()
     combined = f"{stdout}\n{stderr}"
     if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-        log(f"SSH REMOTE FAIL peer={peer_ip} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, mode_ctx)
+        log(f"SSH REMOTE FAIL peer={peer_ip} user={ssh_remote_user} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, mode_ctx)
         return False, stdout, stderr
     return True, stdout, stderr
 
@@ -1866,7 +1867,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     remote_cmd = f"cli -c {shlex.quote(cli_cmd)}"
     retry_wait_seconds = [2, 4, 8]
     for attempt in range(1, len(retry_wait_seconds) + 2):
-        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30)
+        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30, remote_user=PEER_CMD_USER)
         if ok:
             return ok, stdout, stderr
         if attempt >= len(retry_wait_seconds) + 1 or not ssh_remote_lock_error(stdout, stderr):
@@ -1883,7 +1884,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
 
 def validate_peer_ssh_key_on_remote(peer_ip, ssh_key_path):
     remote_cmd = f"cli -c {shlex.quote('show system uptime | no-more')}"
-    return ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=15)
+    return ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=15, remote_user=PEER_CMD_USER)
 
 
 def auto_rotate_peer_ssh_key_if_due(links):
@@ -1930,15 +1931,23 @@ def auto_rotate_peer_ssh_key_if_due(links):
     )
 
     for target in targets:
-        ok, _, _ = apply_peer_public_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY, next_key_type, next_key_line, remove=False)
+        ok, stdout, stderr = apply_peer_public_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY, next_key_type, next_key_line, remove=False)
         if not ok:
-            log(f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="SSHKEY")
+            log(
+                f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
             return False
 
     for target in targets:
-        ok, _, _ = validate_peer_ssh_key_on_remote(target["peer_ip"], next_key_path)
+        ok, stdout, stderr = validate_peer_ssh_key_on_remote(target["peer_ip"], next_key_path)
         if not ok:
-            log(f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="SSHKEY")
+            log(
+                f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
             return False
 
     try:
