@@ -1486,7 +1486,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         state = normalize_pending_keys(state)
     pending_keys = state.get("pending_keys", [])
     if not pending_keys:
-        return state, False
+        return state, False, bool(pruned)
 
     current = pending_keys[0]
     pending_key_id = current.get("key_id")
@@ -1494,7 +1494,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
     pending_start_time = current.get("start_time")
 
     if not pending_key_id:
-        return state, False
+        return state, False, bool(pruned)
 
     if not mka_confirms_key(iface, pending_key_id, generation=pending_generation):
         log(
@@ -1503,7 +1503,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             iface,
             "MKA",
         )
-        return state, False
+        return state, False, bool(pruned)
 
     promotion_time = int(time.time())
     next_start_time = pending_start_time
@@ -1546,7 +1546,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         promotion_delay_ms=promotion_delay_ms,
         pending_late_by_ms=pending_late_by_ms,
     )
-    return state, True
+    return state, True, True
 
 
 def states_share_any_key(local_state, peer_state):
@@ -2450,7 +2450,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     state["installed_keys"].append({"generation": generation, "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
     state = clear_kme_failure(peer, iface, state)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
         print(f"ERROR STATE SAVE FAIL key_id={key_id}")
@@ -2573,7 +2573,7 @@ def run_slave_install_key_batch(batch_b64, iface):
     state["last_rotation"] = int(time.time())
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
     state = clear_kme_failure(peer, iface, state)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
         print("ERROR STATE SAVE FAIL")
@@ -2599,8 +2599,8 @@ def run_slave_status(iface):
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-    if promoted:
+    state, promoted, state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    if promoted or state_changed:
         save_db_state(peer, iface, state)
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
@@ -2680,7 +2680,7 @@ def bootstrap_keychain_link(link, force=False):
         log("KEYCHAIN BOOTSTRAP MACSEC INUSE TIMEOUT", "ERROR", iface, "BOOTSTRAP")
         return False
 
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if not save_db_state(peer, iface, state):
         log("KEYCHAIN BOOTSTRAP STATE SAVE FAIL", "ERROR", iface, "BOOTSTRAP")
         return False
@@ -2718,8 +2718,8 @@ def run_master():
 
         state = load_link_state(peer, iface, link)
         state = ensure_health_state(state)
-        state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-        if promoted:
+        state, promoted, state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
+        if promoted or state_changed:
             if not save_db_state(peer, iface, state):
                 log("STATE SAVE FAIL AFTER MKA PROMOTION", "ERROR", iface, "MASTER")
                 continue
@@ -3029,7 +3029,7 @@ def run_master():
             )
         state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
         state = clear_kme_failure(peer, iface, state)
-        state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+        state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
         if not save_db_state(peer, iface, state):
             log("STATE SAVE FAIL AFTER KEYCHAIN ROTATION", "ERROR", iface, "MASTER")
