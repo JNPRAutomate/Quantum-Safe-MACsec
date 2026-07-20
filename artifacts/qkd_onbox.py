@@ -1862,7 +1862,7 @@ def generate_next_peer_ssh_keypair():
 def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, remove=False):
     action = "delete" if remove else "set"
     cli_cmd = (
-        f"configure private; {action} system login user {SCRIPT_USER} authentication {key_type} \"{key_line}\"; commit and-quit"
+        f"configure private; {action} system login user {PEER_CMD_USER} authentication {key_type} \"{key_line}\"; commit and-quit"
     )
     remote_cmd = f"cli -c {shlex.quote(cli_cmd)}"
     retry_wait_seconds = [2, 4, 8]
@@ -1874,7 +1874,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
             return ok, stdout, stderr
         wait_seconds = retry_wait_seconds[attempt - 1]
         log(
-            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
+            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
             "ERROR",
             mode="SSHKEY",
         )
