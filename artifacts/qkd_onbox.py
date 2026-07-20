@@ -2819,8 +2819,9 @@ def run_master():
             continue
 
         if not compare_peer_keychain_state(state, peer_state):
+            converging = peer_state_converging(state, peer_state)
             in_grace, age_seconds = recent_local_promotion_grace_active(state, PEER_MISMATCH_GRACE_SECONDS)
-            if in_grace and macsec_has_inuse_sa(iface, expected_ca=ca_name):
+            if converging and in_grace and macsec_has_inuse_sa(iface, expected_ca=ca_name):
                 log(
                     f"PEER STATE MISMATCH GRACE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                     f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
@@ -2830,7 +2831,7 @@ def run_master():
                     "MASTER",
                 )
                 continue
-            if peer_state_converging(state, peer_state) and macsec_has_inuse_sa(iface, expected_ca=ca_name):
+            if converging and macsec_has_inuse_sa(iface, expected_ca=ca_name):
                 health = state.get("health", {})
                 pending_key = state.get("pending_key_id")
                 if health.get("peer_mismatch_defer_pending_key") != pending_key:
