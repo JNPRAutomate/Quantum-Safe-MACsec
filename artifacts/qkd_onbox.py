@@ -890,6 +890,38 @@ def next_generation(state):
     return int(state.get("generation", 0)) + 1
 
 
+def highest_known_generation(state):
+    state = normalize_pending_keys(state)
+    values = []
+
+    try:
+        values.append(int(state.get("generation", 0)))
+    except Exception:
+        pass
+
+    for item in state.get("pending_keys", []) or []:
+        try:
+            if isinstance(item, dict) and item.get("generation") is not None:
+                values.append(int(item.get("generation")))
+        except Exception:
+            continue
+
+    for item in state.get("installed_keys", []) or []:
+        try:
+            if isinstance(item, dict) and item.get("generation") is not None:
+                values.append(int(item.get("generation")))
+        except Exception:
+            continue
+
+    if not values:
+        return 0
+    return max(values)
+
+
+def next_generation_safe(state):
+    return highest_known_generation(state) + 1
+
+
 def ceil_epoch_to_next_minute(epoch_seconds):
     epoch_seconds = int(epoch_seconds)
     if epoch_seconds % 60 == 0:
@@ -2635,7 +2667,7 @@ def bootstrap_keychain_link(link, force=False):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     old_state = load_link_state(peer, iface, link)
-    generation = next_generation(old_state)
+    generation = next_generation_safe(old_state)
     start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time()) + 60))
     state = default_keychain_state(link)
     state["generation"] = generation
