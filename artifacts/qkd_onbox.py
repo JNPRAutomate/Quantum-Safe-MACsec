@@ -370,10 +370,27 @@ def elapsed_ms(start_ms):
 def epoch_from_junos_start_time(start_time):
     if not start_time:
         return None
-    try:
-        return int(time.mktime(time.strptime(start_time, "%Y-%m-%d.%H:%M")))
-    except Exception:
-        return None
+    raw = str(start_time).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d.%H:%M:%S", "%Y-%m-%d.%H:%M"):
+        try:
+            return int(time.mktime(time.strptime(raw, fmt)))
+        except Exception:
+            continue
+    return None
+
+
+def format_start_time_display(start_time):
+    epoch = epoch_from_junos_start_time(start_time)
+    if epoch is None:
+        return start_time
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch))
+
+
+def format_start_time_cli(start_time):
+    epoch = epoch_from_junos_start_time(start_time)
+    if epoch is None:
+        return start_time
+    return time.strftime("%Y-%m-%d.%H:%M", time.localtime(epoch))
 
 
 def pending_seconds_until(start_time):
@@ -395,6 +412,8 @@ def customer_event(event, iface=None, mode=None, **fields):
     for key, value in fields.items():
         if value is None:
             continue
+        if key in ("start_time", "next_start_time", "scheduled_start_time"):
+            value = format_start_time_display(value)
         parts.append(f"{key}={value}")
     log(" ".join(parts), "INFO", iface, mode)
 
@@ -591,7 +610,7 @@ def normalize_pending_keys(state):
             {
                 "generation": generation,
                 "key_id": key_id,
-                "start_time": item.get("start_time"),
+                "start_time": format_start_time_display(item.get("start_time")),
             }
         )
         seen.add(key_id)
@@ -611,7 +630,7 @@ def normalize_pending_keys(state):
                 {
                     "generation": generation,
                     "key_id": legacy_key,
-                    "start_time": state.get("next_start_time"),
+                    "start_time": format_start_time_display(state.get("next_start_time")),
                 },
             )
 
@@ -873,7 +892,7 @@ def link_stagger_minutes(link):
 
 
 def junos_start_time_from_epoch(epoch_seconds):
-    return time.strftime("%Y-%m-%d.%H:%M", time.localtime(int(epoch_seconds)))
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(epoch_seconds)))
 
 
 def start_time_is_future(start_time, grace_seconds=0):
@@ -1610,7 +1629,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
             start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
 
         log(
-            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}",
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={format_start_time_display(start_time)} key_id={key_id}",
             "INFO",
             iface,
             "MACSEC",
@@ -1619,7 +1638,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
         cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
-        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {start_time}")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {format_start_time_cli(start_time)}")
 
     if commit:
         cli_cmds.append("commit")
@@ -2198,7 +2217,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
     if generation is not None:
         cmd += f" generation {generation}"
     if start_time:
-        cmd += f" start-time {start_time}"
+        cmd += f" start-time {format_start_time_cli(start_time)}"
     if batch_b64:
         cmd += f" batch-b64 {batch_b64}"
 
