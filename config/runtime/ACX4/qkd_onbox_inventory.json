@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "enabled": true,
+  "local_sae": "sae-010",
+  "kme_ip": "100.123.252.19",
+  "kme_port": 8443,
+  "links": [
+    {
+      "id": "ACX3-ACX4",
+      "type": "link",
+      "macsec": true,
+      "role": "slave",
+      "interface": "et-0/0/2",
+      "peer": "ACX3",
+      "peer_ip": "100.123.170.203",
+      "peer_interface": "et-2/0/2",
+      "peer_sae": "sae-009",
+      "ca_name": "CA_ACX3_ACX4",
+      "ca_names": [
+        "CA_ACX3_ACX4"
+      ],
+      "keychain_name": "QKD_CA_ACX3_ACX4",
+      "peer_kme_ip": "100.123.252.18",
+      "peer_kme_port": 8443
+    },
+    {
+      "id": "ACX4-ACX5",
+      "type": "link",
+      "macsec": true,
+      "role": "master",
+      "interface": "et-0/0/0",
+      "peer": "ACX5",
+      "peer_ip": "100.123.182.1",
+      "peer_interface": "et-0/0/0",
+      "peer_sae": "sae-011",
+      "ca_name": "CA_ACX4_ACX5",
+      "ca_names": [
+        "CA_ACX4_ACX5"
+      ],
+      "keychain_name": "QKD_CA_ACX4_ACX5",
+      "peer_kme_ip": "100.123.252.20",
+      "peer_kme_port": 8443
+    }
+  ]
+}
