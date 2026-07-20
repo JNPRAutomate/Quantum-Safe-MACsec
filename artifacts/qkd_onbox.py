@@ -157,6 +157,7 @@ MIN_ROTATION_INTERVAL = int(CONFIG.get("min_rotation_interval", 50))
 KME_FAIL_THRESHOLD = int(CONFIG.get("kme_fail_threshold", 5))
 KME_HOLD_DOWN_SECONDS = int(CONFIG.get("kme_hold_down_seconds", 3600))
 MACSEC_INUSE_GRACE_SECONDS = int(CONFIG.get("macsec_inuse_grace_seconds", 60))
+PEER_MISMATCH_GRACE_SECONDS = int(CONFIG.get("peer_mismatch_grace_seconds", 180))
 
 MACSEC_MODEL = CONFIG.get("macsec_model", "keychain")
 
@@ -165,6 +166,7 @@ MKA_SAK_REKEY_INTERVAL = int(CONFIG.get("mka_sak_rekey_interval", 300))
 
 KEYCHAIN_KEEP_LAST = int(CONFIG.get("keychain_keep_last", 3))
 POST_KEY_INSTALL_SETTLE_SECONDS = int(CONFIG.get("post_key_install_settle_seconds", 3))
+PEER_INSTALL_LOCK_RETRIES = int(CONFIG.get("peer_install_lock_retries", 3))
 
 KEYCHAIN_START_DELAY_MINUTES = int(CONFIG.get("keychain_start_delay_minutes", 3))
 ROTATION_STAGGER_MINUTES = int(CONFIG.get("rotation_stagger_minutes", 1))
@@ -749,6 +751,64 @@ def compare_peer_keychain_state(local_state, peer_state):
         if int(local_head.get("generation") or -1) != int(peer_head.get("generation") or -2):
             return False
     return True
+
+
+def pending_stale_seconds():
+    value = int(qkd_policy().get("pending_stale_seconds", 0))
+    if value > 0:
+        return value
+    # Default: keep at least 4 intervals before considering a pending head stale.
+    return max(120, rotation_interval_seconds() * 4)
+
+
+def prune_stale_pending_head(state, iface=None, mode_ctx="STATE"):
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if len(pending) <= 1:
+        return state, False
+
+    now_epoch = int(time.time())
+    stale_after = pending_stale_seconds()
+    pruned_any = False
+
+    while len(pending) > 1:
+        head = pending[0]
+        head_key_id = head.get("key_id")
+        head_generation = head.get("generation")
+        head_start_time = head.get("start_time")
+        head_epoch = epoch_from_junos_start_time(head_start_time)
+        if head_epoch is None:
+            break
+        age_seconds = now_epoch - int(head_epoch)
+        if age_seconds <= stale_after:
+            break
+
+        pending = pending[1:]
+        state["pending_keys"] = pending
+        state = sync_pending_legacy_fields(state)
+        pruned_any = True
+        log(
+            f"PENDING STALE DROP key_id={head_key_id} generation={head_generation} start_time={head_start_time} age_seconds={age_seconds} stale_after_seconds={stale_after}",
+            "ERROR",
+            iface,
+            mode_ctx,
+        )
+
+    return state, pruned_any
+
+
+def recent_local_promotion_grace_active(local_state, grace_seconds):
+    try:
+        confirmed_at = int(local_state.get("active_confirmed_at") or 0)
+        window = max(0, int(grace_seconds))
+    except Exception:
+        return False, None
+    if confirmed_at <= 0 or window <= 0:
+        return False, None
+    age_seconds = int(time.time()) - confirmed_at
+    if age_seconds < window:
+        return True, age_seconds
+    return False, age_seconds
 
 
 def save_db_state(peer, iface, state):
@@ -1377,6 +1437,10 @@ def mka_confirms_key(iface, key_id, generation=None):
 def promote_pending_key_if_mka_confirmed(peer, iface, state):
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
+    state, pruned = prune_stale_pending_head(state, iface=iface, mode_ctx="MKA")
+    if pruned:
+        # Persisting is handled by caller paths already writing state after promotions/changes.
+        state = normalize_pending_keys(state)
     pending_keys = state.get("pending_keys", [])
     if not pending_keys:
         return state, False
@@ -1440,6 +1504,30 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         pending_late_by_ms=pending_late_by_ms,
     )
     return state, True
+
+
+def states_share_any_key(local_state, peer_state):
+    def collect_keys(state):
+        keys = set()
+        active_key = state.get("active_key_id")
+        if active_key:
+            keys.add(str(active_key))
+        for item in state.get("pending_keys", []) or []:
+            if isinstance(item, dict) and item.get("key_id"):
+                keys.add(str(item.get("key_id")))
+        return keys
+
+    local_state = normalize_pending_keys(local_state)
+    peer_state = normalize_pending_keys(peer_state)
+    return len(collect_keys(local_state).intersection(collect_keys(peer_state))) > 0
+
+
+def peer_state_converging(local_state, peer_state):
+    if local_state.get("ca_name") != peer_state.get("ca_name"):
+        return False
+    if local_state.get("keychain_name") != peer_state.get("keychain_name"):
+        return False
+    return states_share_any_key(local_state, peer_state)
 
 
 def wait_for_macsec_inuse(iface, expected_ca, grace_seconds):
@@ -2126,24 +2214,44 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         cmd,
     ]
     timeout_seconds = 30 if action in ("install-key", "install-key-batch") else 10
-    try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        log(f"SSH TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
-        return False
-    except Exception as e:
-        log(f"SSH ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
-        return False
+    max_attempts = max(1, PEER_INSTALL_LOCK_RETRIES + 1) if action in ("install-key", "install-key-batch") else 1
+    retry_wait_seconds = [2, 4, 8, 12, 16]
 
-    stdout = result.stdout.decode(errors="ignore").strip()
-    stderr = result.stderr.decode(errors="ignore").strip()
-    log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
-    combined = f"{stdout}\n{stderr}"
-    failure_markers = ["ERROR", "DEC FAILED", "KEYCHAIN INSTALL FAIL", "INSTALL-KEY ABORTED", "Traceback", "PermissionError", "op script failed", "op script fails", "exit code"]
-    if result.returncode != 0 or any(marker in combined for marker in failure_markers):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            log(f"SSH TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
+            return False
+        except Exception as e:
+            log(f"SSH ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
+            return False
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+        stderr = result.stderr.decode(errors="ignore").strip()
+        log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
+        combined = f"{stdout}\n{stderr}"
+        failure_markers = ["ERROR", "DEC FAILED", "KEYCHAIN INSTALL FAIL", "INSTALL-KEY ABORTED", "Traceback", "PermissionError", "op script failed", "op script fails", "exit code"]
+        failed = result.returncode != 0 or any(marker in combined for marker in failure_markers)
+        if not failed:
+            return True
+
+        lock_busy = "RUNTIME CONFIG LOCK BUSY" in combined and action in ("install-key", "install-key-batch")
+        if lock_busy and attempt < max_attempts:
+            wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+            log(
+                f"SSH RETRY action={action} reason=REMOTE_RUNTIME_LOCK_BUSY attempt={attempt}/{max_attempts} wait={wait_seconds}s peer={peer_ip}",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            time.sleep(wait_seconds)
+            continue
+
         log(f"SSH FAIL action={action} stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
         return False
-    return True
+
+    return False
 
 
 def get_peer_status(link, iface):
@@ -2636,6 +2744,27 @@ def run_master():
             continue
 
         if not compare_peer_keychain_state(state, peer_state):
+            in_grace, age_seconds = recent_local_promotion_grace_active(state, PEER_MISMATCH_GRACE_SECONDS)
+            if in_grace and macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                log(
+                    f"PEER STATE MISMATCH GRACE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                    f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
+                    f"grace_age_seconds={age_seconds} grace_window_seconds={PEER_MISMATCH_GRACE_SECONDS}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                continue
+            if peer_state_converging(state, peer_state) and macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                log(
+                    f"PEER STATE MISMATCH DEFER local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                    f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
+                    f"local_pending_key={state.get('pending_key_id')} peer_pending_key={peer_state.get('pending_key_id')} reason=SHARED_KEYS_CONVERGING",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                continue
             log(
                 f"PEER STATE MISMATCH -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} "
