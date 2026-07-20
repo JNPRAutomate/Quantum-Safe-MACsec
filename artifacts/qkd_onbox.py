@@ -319,7 +319,9 @@ def log_key_timeline(iface, event, **fields):
     File: <LOG_DIR>/qkd_rotation_timeline_<DEVICE>_<iface>.log
     Format:
         2026-07-20 18:30:00  ROTATION    gen=42..46  keys=5  first=abc12345  next_start=2026-07-20T18:31:00  pending=5
-        2026-07-20 18:31:02  PROMOTE     gen=42  key=abc12345  pending=4  delay_ms=2034
+        2026-07-20 18:31:02  PROMOTE     gen=42  key_id=abc12345  pending=4  delay_ms=2034
+    
+    Note: key_id is the 8-character hex short ID, NOT the actual CAK/CKN (secrets are never logged).
     """
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     field_str = "  ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
@@ -1627,7 +1629,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         iface,
         "PROMOTE",
         gen=state.get("generation"),
-        key=str(pending_key_id or "")[:8],
+        key_id=str(pending_key_id or "")[:8],
         pending=len(state.get("pending_keys", [])),
         delay_ms=promotion_delay_ms,
     )
@@ -2095,7 +2097,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     # Both SET and DELETE use the full key_line value as-is.
     # Junos stores the complete line including type prefix and validates/matches on it.
     set_line = (
-        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
+        python3 qkd_orchestrator.py deploy --inventory config/inventory/input/ring_mx_acx_unified_link_driven.yml        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
     )
     upload_cmd = f"start shell command \"cat >{remote_set_path}\""
     apply_cmd = (
