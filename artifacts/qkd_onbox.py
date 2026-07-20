@@ -1859,22 +1859,24 @@ def generate_next_peer_ssh_keypair():
         return None, None
 
 
-def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, remove=False):
+def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, remove=False, remote_user=None, target_login_user=None):
     action = "delete" if remove else "set"
+    ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
+    login_user = target_login_user or PEER_CMD_USER or SCRIPT_USER
     cli_cmd = (
-        f"configure private; {action} system login user {PEER_CMD_USER} authentication {key_type} \"{key_line}\"; commit and-quit"
+        f"configure private; {action} system login user {login_user} authentication {key_type} \"{key_line}\"; commit and-quit"
     )
     remote_cmd = f"cli -c {shlex.quote(cli_cmd)}"
     retry_wait_seconds = [2, 4, 8]
     for attempt in range(1, len(retry_wait_seconds) + 2):
-        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30, remote_user=PEER_CMD_USER)
+        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
         if ok:
             return ok, stdout, stderr
         if attempt >= len(retry_wait_seconds) + 1 or not ssh_remote_lock_error(stdout, stderr):
             return ok, stdout, stderr
         wait_seconds = retry_wait_seconds[attempt - 1]
         log(
-            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
+            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} remote_user={ssh_remote_user} target_login_user={login_user} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
             "ERROR",
             mode="SSHKEY",
         )
@@ -1885,6 +1887,88 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
 def validate_peer_ssh_key_on_remote(peer_ip, ssh_key_path):
     remote_cmd = f"cli -c {shlex.quote('show system uptime | no-more')}"
     return ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=15, remote_user=PEER_CMD_USER)
+
+
+def ensure_peer_ssh_key_bootstrap(links):
+    targets = peer_rotation_targets(links)
+    if not targets:
+        log("PEER SSH KEY BOOTSTRAP SKIP reason=NO_TARGETS", "INFO", mode="SSHKEY")
+        return True
+
+    current_pub_path = peer_cmd_public_key_path()
+    try:
+        current_key_line = Path(current_pub_path).read_text().strip()
+    except Exception as e:
+        log(f"PEER SSH KEY BOOTSTRAP READ CURRENT PUB FAIL path={current_pub_path} error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
+    current_key_type, current_key_line = parse_public_key_line(current_key_line)
+    if not current_key_type or not current_key_line:
+        log(f"PEER SSH KEY BOOTSTRAP INVALID CURRENT PUB path={current_pub_path}", "ERROR", mode="SSHKEY")
+        return False
+
+    log(
+        f"PEER SSH KEY BOOTSTRAP CHECK ssh_key={PEER_CMD_SSH_KEY} peer_cmd_user={PEER_CMD_USER} targets={len(targets)}",
+        "INFO",
+        mode="SSHKEY",
+    )
+
+    for target in targets:
+        ok, _, _ = validate_peer_ssh_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY)
+        if ok:
+            log(
+                f"PEER SSH KEY BOOTSTRAP OK peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} state=ALREADY_AUTHORIZED",
+                "INFO",
+                mode="SSHKEY",
+            )
+            continue
+
+        if not SSH_KEY or not Path(SSH_KEY).exists() or not os.access(SSH_KEY, os.R_OK):
+            log(
+                f"PEER SSH KEY BOOTSTRAP FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} script_user={SCRIPT_USER} ssh_key={SSH_KEY} reason=SCRIPT_SSH_KEY_NOT_AVAILABLE",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+        log(
+            f"PEER SSH KEY BOOTSTRAP APPLY peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER}",
+            "WARN",
+            mode="SSHKEY",
+        )
+        ok, stdout, stderr = apply_peer_public_key_on_remote(
+            target["peer_ip"],
+            SSH_KEY,
+            current_key_type,
+            current_key_line,
+            remove=False,
+            remote_user=SCRIPT_USER,
+            target_login_user=PEER_CMD_USER,
+        )
+        if not ok:
+            log(
+                f"PEER SSH KEY BOOTSTRAP APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+        ok, stdout, stderr = validate_peer_ssh_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY)
+        if not ok:
+            log(
+                f"PEER SSH KEY BOOTSTRAP VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+        log(
+            f"PEER SSH KEY BOOTSTRAP COMPLETE peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER}",
+            "INFO",
+            mode="SSHKEY",
+        )
+
+    return True
 
 
 def auto_rotate_peer_ssh_key_if_due(links):
@@ -2428,6 +2512,9 @@ def bootstrap_keychain_link(link, force=False):
 
 def run_master():
     links = managed_links()
+    if not ensure_peer_ssh_key_bootstrap(links):
+        log("PEER SSH KEY BOOTSTRAP FAILED -> EXIT CURRENT MASTER CYCLE", "ERROR", mode="SSHKEY")
+        return
     if not auto_rotate_peer_ssh_key_if_due(links):
         log("PEER SSH KEY ROTATION FAILED -> KEEP CURRENT KEY", "ERROR", mode="SSHKEY")
 
