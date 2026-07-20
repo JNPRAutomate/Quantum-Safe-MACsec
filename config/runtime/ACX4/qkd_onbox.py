@@ -1971,7 +1971,7 @@ def parse_public_key_line(public_key_line):
     key_type = parts[0].strip()
     if not (key_type.startswith("ssh-") or key_type.startswith("ecdsa-")):
         return None, None
-    return key_type, " ".join(parts)
+    return key_type, " ".join(parts[1:])
 
 
 def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20, remote_user=None, stdin_text=None):
