@@ -1923,9 +1923,9 @@ def ensure_peer_ssh_key_bootstrap(links):
             )
             continue
 
-        if not SSH_KEY or not Path(SSH_KEY).exists() or not os.access(SSH_KEY, os.R_OK):
+        if not PEER_CMD_SSH_KEY or not Path(PEER_CMD_SSH_KEY).exists() or not os.access(PEER_CMD_SSH_KEY, os.R_OK):
             log(
-                f"PEER SSH KEY BOOTSTRAP FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} script_user={SCRIPT_USER} ssh_key={SSH_KEY} reason=SCRIPT_SSH_KEY_NOT_AVAILABLE",
+                f"PEER SSH KEY BOOTSTRAP FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} ssh_key={PEER_CMD_SSH_KEY} reason=PEER_CMD_SSH_KEY_NOT_AVAILABLE",
                 "ERROR",
                 mode="SSHKEY",
             )
@@ -1938,7 +1938,7 @@ def ensure_peer_ssh_key_bootstrap(links):
         )
         ok, stdout, stderr = apply_peer_public_key_on_remote(
             target["peer_ip"],
-            SSH_KEY,
+            PEER_CMD_SSH_KEY,
             current_key_type,
             current_key_line,
             remove=False,
