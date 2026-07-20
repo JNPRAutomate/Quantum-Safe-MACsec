@@ -1924,14 +1924,12 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         log(f"INSTALL-KEY ABORTED reason=INTERFACE_BIND_FAILED ca={ca_name} keychain={keychain} key_id={key_id}", "ERROR", iface, "SLAVE")
         return False
 
-    if generation is not None:
-        state["generation"] = int(generation)
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
-    state = append_pending_key(state, state.get("generation"), key_id, start_time)
+    state = append_pending_key(state, generation, key_id, start_time)
     state["last_rotation"] = int(time.time())
     state.setdefault("installed_keys", [])
-    state["installed_keys"].append({"generation": state.get("generation"), "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
+    state["installed_keys"].append({"generation": generation, "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
     state = clear_kme_failure(peer, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
@@ -1942,13 +1940,13 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         return False
 
     log(
-        f"KEYCHAIN PENDING KEY INSTALLED ca={ca_name} keychain={keychain} generation={state.get('generation')} "
+        f"KEYCHAIN PENDING KEY INSTALLED ca={ca_name} keychain={keychain} generation={generation} "
         f"pending_key_id={key_id} start_time={start_time} pending_seconds={pending_seconds_until(start_time)} promoted={promoted}",
         "INFO",
         iface,
         "SLAVE",
     )
-    customer_event("PEER_PENDING_KEY_INSTALLED", iface=iface, mode="SLAVE", rotation=rotation, generation=state.get("generation"), key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time, pending_seconds=pending_seconds_until(start_time), promoted=promoted, cycle_duration_ms=elapsed_ms(slave_cycle_start_ms))
+    customer_event("PEER_PENDING_KEY_INSTALLED", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time, pending_seconds=pending_seconds_until(start_time), promoted=promoted, cycle_duration_ms=elapsed_ms(slave_cycle_start_ms))
     print(f"OK INSTALL-KEY key_id={key_id}")
     return True
 
@@ -2040,8 +2038,6 @@ def run_slave_install_key_batch(batch_b64, iface):
         generation = entry.get("generation")
         key_id = entry.get("key_id")
         start_time = entry.get("start_time")
-        if generation is not None:
-            state["generation"] = int(generation)
         state = append_pending_key(state, generation, key_id, start_time)
         state.setdefault("installed_keys", [])
         state["installed_keys"].append(
@@ -2069,7 +2065,7 @@ def run_slave_install_key_batch(batch_b64, iface):
         "PEER_PENDING_KEY_BATCH_INSTALLED",
         iface=iface,
         mode="SLAVE",
-        generation=state.get("generation"),
+        generation=install_entries[-1].get("generation"),
         key_count=len(install_entries),
         pending_key_id=state.get("pending_key_id"),
         promoted=promoted,
