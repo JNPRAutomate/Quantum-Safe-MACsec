@@ -1776,7 +1776,7 @@ def parse_public_key_line(public_key_line):
     return key_type, " ".join(parts)
 
 
-def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20, remote_user=None):
+def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20, remote_user=None, stdin_text=None):
     ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
     ssh_cmd = [
         "ssh",
@@ -1788,7 +1788,8 @@ def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MAS
         remote_cmd,
     ]
     try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        input_bytes = None if stdin_text is None else str(stdin_text).encode()
+        result = subprocess.run(ssh_cmd, input=input_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired:
         log(f"SSH REMOTE TIMEOUT peer={peer_ip} user={ssh_remote_user} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
         return False, "", "timeout"
@@ -1863,15 +1864,31 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     action = "delete" if remove else "set"
     ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
     login_user = target_login_user or PEER_CMD_USER or SCRIPT_USER
-    cli_cmd = (
-        f"configure private; {action} system login user {login_user} authentication {key_type} \"{key_line}\"; commit and-quit"
+    remote_set_path = f"/var/tmp/qkd_peer_auth_{login_user}.set"
+    set_line = (
+        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
     )
-    shell_cmd = f"cli -c {shlex.quote(cli_cmd)}"
-    remote_cmd = f"start shell command {shlex.quote(shell_cmd)}"
+    upload_cmd = f"start shell command \"cat >{remote_set_path}\""
+    apply_cmd = (
+        f"start shell command \"cli -c 'configure private; load set {remote_set_path}; commit and-quit'\""
+    )
+    cleanup_cmd = f"start shell command \"rm -f {remote_set_path}\""
     retry_wait_seconds = [2, 4, 8]
     for attempt in range(1, len(retry_wait_seconds) + 2):
-        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
+        ok, stdout, stderr = ssh_remote_exec(
+            peer_ip,
+            ssh_key_path,
+            upload_cmd,
+            mode_ctx="MASTER",
+            timeout=30,
+            remote_user=ssh_remote_user,
+            stdin_text=set_line,
+        )
+        if not ok:
+            return ok, stdout, stderr
+        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, apply_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
         if ok:
+            ssh_remote_exec(peer_ip, ssh_key_path, cleanup_cmd, mode_ctx="MASTER", timeout=15, remote_user=ssh_remote_user)
             return ok, stdout, stderr
         if attempt >= len(retry_wait_seconds) + 1 or not ssh_remote_lock_error(stdout, stderr):
             return ok, stdout, stderr
