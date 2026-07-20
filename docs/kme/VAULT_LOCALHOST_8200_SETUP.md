@@ -230,6 +230,49 @@ Use `VAULT_TOKEN` in environment instead.
 
   - Run `source ~/.bashrc` after adding the function.
   - If login shell does not auto-load `.bashrc`, source it from `.bash_profile`.
+
+  ### `invalid role or secret ID` during `auth/approle/login`
+
+  - Root cause is usually one of these:
+    - `secret_id` expired (configured `secret_id_ttl` reached),
+    - role was recreated, making old `role_id`/`secret_id` invalid,
+    - wrong credential files are being read.
+  - Regenerate AppRole credentials and overwrite local files:
+
+    ROLE_ID_FILE="$HOME/.config/qkd/role_id"
+    SECRET_ID_FILE="$HOME/.config/qkd/secret_id"
+    mkdir -p "$HOME/.config/qkd"
+    chmod 700 "$HOME/.config/qkd"
+    vault read -field=role_id auth/approle/role/qkd-deploy/role-id > "$ROLE_ID_FILE"
+    vault write -f -field=secret_id auth/approle/role/qkd-deploy/secret-id > "$SECRET_ID_FILE"
+    chmod 600 "$ROLE_ID_FILE" "$SECRET_ID_FILE"
+
+  ### `permission denied` on `secret/data/qkd/aterren` (HTTP 403)
+
+  - The default `qkd-deploy` policy in this guide grants read on `secret/qkd/live`, not `secret/qkd/aterren`.
+  - Use the default path unless policy was explicitly extended:
+
+    export VAULT_SECRET_PATH=secret/qkd/live
+
+  - Verify token capabilities quickly:
+
+    APP_TOKEN="$(vault write -field=token auth/approle/login role_id="$(cat ~/.config/qkd/role_id)" secret_id="$(cat ~/.config/qkd/secret_id)")"
+    VAULT_TOKEN="$APP_TOKEN" vault token capabilities secret/data/qkd/live
+    VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true
+
+  ### `./tools/deploy_with_vault.sh: Permission denied`
+
+  - The wrapper is not executable by default if execute bit is missing.
+  - Fix with:
+
+    chmod 750 tools/deploy_with_vault.sh
+    ./tools/deploy_with_vault.sh
+
+  ### `qkd_env_from_vault` prints success after Vault errors
+
+  - If your local shell function echoes success even after `vault kv get` 403 errors, the function is missing strict failure checks.
+  - Prefer the repository wrapper `tools/deploy_with_vault.sh`, which exits on failures (`set -Eeuo pipefail`).
+  - If using a custom shell function, ensure every `vault kv get` is guarded and aborts the function on failure.
   ## 10. Security notes for production
 
 - Do not use tls_disable = 1 in production.
