@@ -1085,6 +1085,28 @@ def handle_deploy(args):
     all_runtime_devices = load_runtime_devices()
     devices = all_runtime_devices
 
+    def peer_sync_scope(selected_devices, full_inventory):
+        scoped = {}
+        selected_names = set(selected_devices.keys())
+        peer_names = set()
+
+        for device in selected_devices.values():
+            if not isinstance(device, dict):
+                continue
+            for link in device.get("links", []) or []:
+                if not isinstance(link, dict):
+                    continue
+                peer = link.get("peer")
+                if peer:
+                    peer_names.add(str(peer))
+
+        for name in sorted(selected_names | peer_names):
+            device = full_inventory.get(name)
+            if isinstance(device, dict):
+                scoped[name] = device
+
+        return scoped
+
     # Filter devices if --devices specified
     if args.devices:
         device_names = {name.strip() for name in args.devices.split(",")}
@@ -1186,11 +1208,9 @@ def handle_deploy(args):
             auth["username"] = script_user
             auth["password"] = script_password
 
-        # Peer transport synchronization must run against the full runtime
-        # inventory, not only the selected deploy subset. Otherwise a partial
-        # deploy (for example MX1,MX2) rotates keys on selected devices but does
-        # not propagate the new peer key to non-selected neighbors (for example
-        # MX3), and runtime bootstrap fails with SSH RC=255.
+        # Peer transport synchronization must include the selected deploy set
+        # and their direct neighbors. Running against the full runtime inventory
+        # breaks partial deploys when unrelated devices are not yet bootstrap-ready.
         for name, device in all_runtime_devices.items():
             if not isinstance(device, dict):
                 continue
@@ -1214,7 +1234,7 @@ def handle_deploy(args):
     # postdeploy-only step, and keeps peer SSH working even if a subsequent
     # device hits a provisioning failure.
     if not args.shipment_preload:
-        install_peer_authorized_keys(all_runtime_devices)
+        install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
