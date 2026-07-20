@@ -838,6 +838,10 @@ def install_peer_authorized_keys(devices):
             or "exclusive [edit]" in text
         )
 
+    def is_statement_not_found_warning(exc):
+        text = str(exc or "").lower()
+        return "statement not found" in text
+
     def linked_peer_sources(target_device):
         """
         Return source device names that are expected to open peer SSH sessions
@@ -913,24 +917,12 @@ def install_peer_authorized_keys(devices):
             failed_targets.append((target, "missing auth for peer key sync"))
             continue
 
-        set_cmds = []
-        delete_cmds = []
-        try:
-            configured_keys = collect_configured_peer_keys(device, sync_target_user)
-        except Exception as exc:
-            failed_targets.append((target, f"failed to collect configured keys: {exc}"))
-            continue
-
-        for key_type, key_line in configured_keys:
-            delete_cmds.append(
-                f'delete system login user {sync_target_user} authentication {key_type} "{key_line}"'
-            )
-
         source_names = linked_peer_sources(device)
         if not source_names:
             print(f"[WARN] no linked peer sources found for target={target}; peer authorized_keys will be cleared")
 
         seen = set()
+        desired_keys = []
         for source_name in sorted(source_names):
             pub_key = pub_keys.get(source_name)
             if not pub_key:
@@ -946,14 +938,7 @@ def install_peer_authorized_keys(devices):
             if marker in seen:
                 continue
             seen.add(marker)
-            set_cmds.append(
-                f'set system login user {sync_target_user} authentication {key_type} "{key_line}"'
-            )
-
-        print(
-            f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
-            f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)}"
-        )
+            desired_keys.append(marker)
 
         success = False
         last_error = None
@@ -961,10 +946,28 @@ def install_peer_authorized_keys(devices):
         for attempt in range(1, max_attempts + 1):
             dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
             try:
+                configured_keys = collect_configured_peer_keys(device, sync_target_user)
+                delete_cmds = [
+                    f'delete system login user {sync_target_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in configured_keys
+                ]
+                set_cmds = [
+                    f'set system login user {sync_target_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in desired_keys
+                ]
+                print(
+                    f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
+                    f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
+                )
                 dev.open()
                 with Config(dev) as cu:
                     for cmd in delete_cmds:
-                        cu.load(cmd, format="set", merge=True)
+                        try:
+                            cu.load(cmd, format="set", merge=True)
+                        except Exception as exc:
+                            if is_statement_not_found_warning(exc):
+                                continue
+                            raise
                     for cmd in set_cmds:
                         cu.load(cmd, format="set", merge=True)
                     diff = cu.diff()
