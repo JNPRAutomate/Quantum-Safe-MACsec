@@ -615,9 +615,25 @@ def normalize_pending_keys(state):
         )
     )
 
+    active_generation = None
+    try:
+        if state.get("generation") is not None:
+            active_generation = int(state.get("generation"))
+    except Exception:
+        active_generation = None
+
+    # If an active key exists, pending entries must represent future rotations.
+    if state.get("active_key_id") and active_generation is not None:
+        normalized = [
+            item
+            for item in normalized
+            if item.get("generation") is None or int(item.get("generation")) > active_generation
+        ]
+
     max_pending = max_pending_keys()
     if len(normalized) > max_pending:
-        normalized = normalized[:max_pending]
+        # Keep the newest pending entries, not the oldest ones.
+        normalized = normalized[-max_pending:]
 
     state["pending_keys"] = normalized
     return sync_pending_legacy_fields(state)
