@@ -38,6 +38,7 @@ import json
 import os
 import hashlib
 import pwd
+import shlex
 
 
 urllib3.disable_warnings()
@@ -609,8 +610,10 @@ def normalize_pending_keys(state):
 
     normalized.sort(
         key=lambda item: (
+            epoch_from_junos_start_time(item.get("start_time"))
+            if epoch_from_junos_start_time(item.get("start_time")) is not None
+            else 2**31,
             item.get("generation") if item.get("generation") is not None else 2**31,
-            str(item.get("start_time") or ""),
             item.get("key_id") or "",
         )
     )
@@ -913,6 +916,32 @@ def release_lock():
             path.unlink()
     except Exception:
         pass
+
+
+def acquire_runtime_config_lock(iface=None, action=None, attempts=12, wait_seconds=1):
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        if acquire_lock():
+            if iface and action:
+                log(
+                    f"RUNTIME CONFIG LOCK ACQUIRED action={action} iface={iface} attempt={attempt}",
+                    "INFO",
+                    iface,
+                    "LOCK",
+                )
+            return True
+        if attempt >= max(1, int(attempts)):
+            break
+        if iface and action:
+            log(
+                f"RUNTIME CONFIG LOCK WAIT action={action} iface={iface} attempt={attempt}/{attempts} wait={wait_seconds}s",
+                "ERROR",
+                iface,
+                "LOCK",
+            )
+        time.sleep(max(1, int(wait_seconds)))
+    if iface and action:
+        log(f"RUNTIME CONFIG LOCK BUSY action={action} iface={iface}", "ERROR", iface, "LOCK")
+    return False
 
 
 def action_lock_file(iface, action):
@@ -1728,6 +1757,211 @@ def validate_ssh_runtime_for_master():
     return True
 
 
+def peer_cmd_public_key_path():
+    return f"{PEER_CMD_SSH_KEY}.pub"
+
+
+def parse_public_key_line(public_key_line):
+    parts = str(public_key_line or "").strip().split()
+    if len(parts) < 2:
+        return None, None
+    key_type = parts[0].strip()
+    if not (key_type.startswith("ssh-") or key_type.startswith("ecdsa-")):
+        return None, None
+    return key_type, " ".join(parts)
+
+
+def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20):
+    ssh_cmd = [
+        "ssh",
+        "-i", ssh_key_path,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+        f"{SCRIPT_USER}@{peer_ip}",
+        remote_cmd,
+    ]
+    try:
+        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"SSH REMOTE TIMEOUT peer={peer_ip} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
+        return False, "", "timeout"
+    except Exception as e:
+        log(f"SSH REMOTE ERROR peer={peer_ip} error={str(e)} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
+        return False, "", str(e)
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    combined = f"{stdout}\n{stderr}"
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        log(f"SSH REMOTE FAIL peer={peer_ip} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, mode_ctx)
+        return False, stdout, stderr
+    return True, stdout, stderr
+
+
+def ssh_remote_lock_error(stdout, stderr):
+    low = f"{stdout or ''}\n{stderr or ''}".lower()
+    return (
+        "configuration database locked by" in low
+        or "exclusive [edit]" in low
+    )
+
+
+def peer_rotation_targets(links):
+    targets = []
+    seen = set()
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        peer_ip = link.get("peer_ip")
+        peer_name = link.get("peer")
+        if not peer_ip or peer_ip in seen:
+            continue
+        seen.add(peer_ip)
+        targets.append({"peer": peer_name, "peer_ip": peer_ip})
+    return targets
+
+
+def generate_next_peer_ssh_keypair():
+    next_key_path = f"{PEER_CMD_SSH_KEY}.next"
+    next_pub_path = f"{next_key_path}.pub"
+    try:
+        Path(PEER_CMD_SSH_KEY).parent.mkdir(parents=True, exist_ok=True)
+        for path in (next_key_path, next_pub_path):
+            try:
+                Path(path).unlink()
+            except Exception:
+                pass
+        result = subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", f"qkd-onbox-auto-rotate-{DEVICE}", "-f", next_key_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            log(
+                f"PEER SSH KEY ROTATION GENERATE FAIL rc={result.returncode} stderr={result.stderr.decode(errors='ignore').strip()} stdout={result.stdout.decode(errors='ignore').strip()}",
+                "ERROR",
+                mode="MASTER",
+            )
+            return None, None
+        Path(next_key_path).chmod(0o600)
+        Path(next_pub_path).chmod(0o644)
+        return next_key_path, next_pub_path
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION GENERATE ERROR error={str(e)}", "ERROR", mode="MASTER")
+        return None, None
+
+
+def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, remove=False):
+    action = "delete" if remove else "set"
+    cli_cmd = (
+        f"configure private; {action} system login user {SCRIPT_USER} authentication {key_type} \"{key_line}\"; commit and-quit"
+    )
+    remote_cmd = f"cli -c {shlex.quote(cli_cmd)}"
+    retry_wait_seconds = [2, 4, 8]
+    for attempt in range(1, len(retry_wait_seconds) + 2):
+        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=30)
+        if ok:
+            return ok, stdout, stderr
+        if attempt >= len(retry_wait_seconds) + 1 or not ssh_remote_lock_error(stdout, stderr):
+            return ok, stdout, stderr
+        wait_seconds = retry_wait_seconds[attempt - 1]
+        log(
+            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
+            "ERROR",
+            mode="MASTER",
+        )
+        time.sleep(wait_seconds)
+    return False, "", "remote lock retry exhausted"
+
+
+def validate_peer_ssh_key_on_remote(peer_ip, ssh_key_path):
+    remote_cmd = f"cli -c {shlex.quote('show system uptime | no-more')}"
+    return ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=15)
+
+
+def auto_rotate_peer_ssh_key_if_due(links):
+    peer_age = ssh_key_age_seconds(PEER_CMD_SSH_KEY)
+    threshold = peer_cmd_rotation_seconds()
+    if peer_age is None or peer_age < threshold:
+        return True
+
+    current_pub_path = peer_cmd_public_key_path()
+    try:
+        current_key_line = Path(current_pub_path).read_text().strip()
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION READ CURRENT PUB FAIL path={current_pub_path} error={str(e)}", "ERROR", mode="MASTER")
+        return False
+
+    current_key_type, current_key_line = parse_public_key_line(current_key_line)
+    if not current_key_type or not current_key_line:
+        log(f"PEER SSH KEY ROTATION INVALID CURRENT PUB path={current_pub_path}", "ERROR", mode="MASTER")
+        return False
+
+    targets = peer_rotation_targets(links)
+    if not targets:
+        return True
+
+    next_key_path, next_pub_path = generate_next_peer_ssh_keypair()
+    if not next_key_path or not next_pub_path:
+        return False
+
+    try:
+        next_key_line = Path(next_pub_path).read_text().strip()
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION READ NEXT PUB FAIL path={next_pub_path} error={str(e)}", "ERROR", mode="MASTER")
+        return False
+
+    next_key_type, next_key_line = parse_public_key_line(next_key_line)
+    if not next_key_type or not next_key_line:
+        log(f"PEER SSH KEY ROTATION INVALID NEXT PUB path={next_pub_path}", "ERROR", mode="MASTER")
+        return False
+
+    log(
+        f"PEER SSH KEY ROTATION START ssh_key={PEER_CMD_SSH_KEY} age_seconds={peer_age} threshold_seconds={threshold} targets={len(targets)}",
+        "INFO",
+        mode="MASTER",
+    )
+
+    for target in targets:
+        ok, _, _ = apply_peer_public_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY, next_key_type, next_key_line, remove=False)
+        if not ok:
+            log(f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="MASTER")
+            return False
+
+    for target in targets:
+        ok, _, _ = validate_peer_ssh_key_on_remote(target["peer_ip"], next_key_path)
+        if not ok:
+            log(f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="MASTER")
+            return False
+
+    try:
+        Path(next_key_path).replace(PEER_CMD_SSH_KEY)
+        Path(next_pub_path).replace(current_pub_path)
+        Path(PEER_CMD_SSH_KEY).chmod(0o600)
+        Path(current_pub_path).chmod(0o644)
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION SWAP FAIL error={str(e)}", "ERROR", mode="MASTER")
+        return False
+
+    for target in targets:
+        ok, _, _ = apply_peer_public_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY, current_key_type, current_key_line, remove=True)
+        if not ok:
+            log(
+                f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} old_key_retained=True",
+                "ERROR",
+                mode="MASTER",
+            )
+
+    log(
+        f"PEER SSH KEY ROTATION COMPLETE ssh_key={PEER_CMD_SSH_KEY} targets={len(targets)}",
+        "INFO",
+        mode="MASTER",
+    )
+    return True
+
+
 def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None):
     if not validate_link_runtime(link, require_peer_transport=True):
         return False
@@ -1759,8 +1993,9 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         f"{peer_user}@{peer_ip}",
         cmd,
     ]
+    timeout_seconds = 30 if action in ("install-key", "install-key-batch") else 10
     try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         log(f"SSH TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
         return False
@@ -2178,7 +2413,11 @@ def bootstrap_keychain_link(link, force=False):
 
 
 def run_master():
-    master_links = [link for link in managed_links() if link.get("role") == "master"]
+    links = managed_links()
+    if not auto_rotate_peer_ssh_key_if_due(links):
+        log("PEER SSH KEY ROTATION FAILED -> KEEP CURRENT KEY", "ERROR", mode="MASTER")
+
+    master_links = [link for link in links if link.get("role") == "master"]
     if not master_links:
         return
 
@@ -2504,7 +2743,13 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
-                ok = run_slave_install_key(key_id, iface, generation, start_time)
+                if not acquire_runtime_config_lock(iface, action):
+                    print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
+                    sys.exit(1)
+                try:
+                    ok = run_slave_install_key(key_id, iface, generation, start_time)
+                finally:
+                    release_lock()
             finally:
                 release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
@@ -2527,7 +2772,13 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
-                ok = run_slave_install_key_batch(batch_b64, iface)
+                if not acquire_runtime_config_lock(iface, action):
+                    print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
+                    sys.exit(1)
+                try:
+                    ok = run_slave_install_key_batch(batch_b64, iface)
+                finally:
+                    release_lock()
             finally:
                 release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
