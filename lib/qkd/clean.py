@@ -368,7 +368,7 @@ def clean_device(
             else:
                 file_cleanup_parts.append(f"rm -f {path}")
         file_cleanup_parts.append(f"rm -rf {logs_dir}")
-        file_cleanup_parts.append(f"rmdir {state_dir} 2>/dev/null || true")
+        file_cleanup_parts.append(f"rmdir {state_dir}")
         for path in soft_runtime_paths:
             file_cleanup_parts.append(f"rm -f {path}")
         
@@ -394,12 +394,21 @@ def clean_device(
 
         def rpc_text(rsp):
             try:
-                return etree.tostring(
+                raw = etree.tostring(
                     rsp,
-                    encoding="unicode",
+                    encoding="utf-8",
                     method="text",
-                ).strip()
+                )
+                if isinstance(raw, bytes):
+                    return raw.decode("utf-8", errors="ignore").strip()
+                return str(raw).strip()
             except Exception:
+                try:
+                    raw = etree.tostring(rsp, encoding="utf-8")
+                    if isinstance(raw, bytes):
+                        return raw.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    pass
                 return str(rsp).strip()
 
         ##
@@ -439,6 +448,18 @@ def clean_device(
                         "qkd_debug.log" in line.lower()
                         and "operation not permitted" in line.lower()
                     ):
+                        continue
+
+                    if (
+                        state_dir.lower() in line.lower()
+                        and (
+                            "no such file or directory" in line.lower()
+                            or "permission denied" in line.lower()
+                        )
+                    ):
+                        continue
+
+                    if "true: command not found." in line.lower():
                         continue
 
                     if (
