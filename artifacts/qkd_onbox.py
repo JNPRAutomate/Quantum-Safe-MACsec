@@ -183,6 +183,7 @@ if not CONFIG_LOG_FILE or CONFIG_LOG_FILE.startswith("/var/tmp/"):
     LOG_FILE = f"{LOG_DIR}/qkd_debug.log"
 else:
     LOG_FILE = CONFIG_LOG_FILE
+SSH_ROTATION_LOG_FILE = f"{LOG_DIR}/qkd_ssh_rotation_{DEVICE}.log"
 
 
 # ----------------------------
@@ -265,6 +266,10 @@ def log(msg, level="INFO", iface=None, mode=None):
                 f.write(line)
         except Exception:
             pass
+
+    if mode == "SSHKEY":
+        write_log_line(SSH_ROTATION_LOG_FILE)
+        return
 
     write_log_line(LOG_FILE)
 
@@ -1745,14 +1750,14 @@ def validate_ssh_runtime_for_master():
             f"SSH KEY ROTATION DUE runtime_user={user} script_user={SCRIPT_USER} "
             f"ssh_key={SSH_KEY} age_seconds={script_age} threshold_seconds={script_user_rotation_seconds()}",
             "WARN",
-            mode="MASTER",
+            mode="SSHKEY",
         )
     if peer_age is not None and peer_age >= peer_cmd_rotation_seconds():
         log(
             f"PEER SSH KEY ROTATION DUE runtime_user={user} peer_cmd_user={PEER_CMD_USER} "
             f"ssh_key={PEER_CMD_SSH_KEY} age_seconds={peer_age} threshold_seconds={peer_cmd_rotation_seconds()}",
             "WARN",
-            mode="MASTER",
+            mode="SSHKEY",
         )
     return True
 
@@ -1842,14 +1847,14 @@ def generate_next_peer_ssh_keypair():
             log(
                 f"PEER SSH KEY ROTATION GENERATE FAIL rc={result.returncode} stderr={result.stderr.decode(errors='ignore').strip()} stdout={result.stdout.decode(errors='ignore').strip()}",
                 "ERROR",
-                mode="MASTER",
+                mode="SSHKEY",
             )
             return None, None
         Path(next_key_path).chmod(0o600)
         Path(next_pub_path).chmod(0o644)
         return next_key_path, next_pub_path
     except Exception as e:
-        log(f"PEER SSH KEY ROTATION GENERATE ERROR error={str(e)}", "ERROR", mode="MASTER")
+        log(f"PEER SSH KEY ROTATION GENERATE ERROR error={str(e)}", "ERROR", mode="SSHKEY")
         return None, None
 
 
@@ -1870,7 +1875,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
         log(
             f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
             "ERROR",
-            mode="MASTER",
+            mode="SSHKEY",
         )
         time.sleep(wait_seconds)
     return False, "", "remote lock retry exhausted"
@@ -1891,12 +1896,12 @@ def auto_rotate_peer_ssh_key_if_due(links):
     try:
         current_key_line = Path(current_pub_path).read_text().strip()
     except Exception as e:
-        log(f"PEER SSH KEY ROTATION READ CURRENT PUB FAIL path={current_pub_path} error={str(e)}", "ERROR", mode="MASTER")
+        log(f"PEER SSH KEY ROTATION READ CURRENT PUB FAIL path={current_pub_path} error={str(e)}", "ERROR", mode="SSHKEY")
         return False
 
     current_key_type, current_key_line = parse_public_key_line(current_key_line)
     if not current_key_type or not current_key_line:
-        log(f"PEER SSH KEY ROTATION INVALID CURRENT PUB path={current_pub_path}", "ERROR", mode="MASTER")
+        log(f"PEER SSH KEY ROTATION INVALID CURRENT PUB path={current_pub_path}", "ERROR", mode="SSHKEY")
         return False
 
     targets = peer_rotation_targets(links)
@@ -1910,30 +1915,30 @@ def auto_rotate_peer_ssh_key_if_due(links):
     try:
         next_key_line = Path(next_pub_path).read_text().strip()
     except Exception as e:
-        log(f"PEER SSH KEY ROTATION READ NEXT PUB FAIL path={next_pub_path} error={str(e)}", "ERROR", mode="MASTER")
+        log(f"PEER SSH KEY ROTATION READ NEXT PUB FAIL path={next_pub_path} error={str(e)}", "ERROR", mode="SSHKEY")
         return False
 
     next_key_type, next_key_line = parse_public_key_line(next_key_line)
     if not next_key_type or not next_key_line:
-        log(f"PEER SSH KEY ROTATION INVALID NEXT PUB path={next_pub_path}", "ERROR", mode="MASTER")
+        log(f"PEER SSH KEY ROTATION INVALID NEXT PUB path={next_pub_path}", "ERROR", mode="SSHKEY")
         return False
 
     log(
         f"PEER SSH KEY ROTATION START ssh_key={PEER_CMD_SSH_KEY} age_seconds={peer_age} threshold_seconds={threshold} targets={len(targets)}",
         "INFO",
-        mode="MASTER",
+        mode="SSHKEY",
     )
 
     for target in targets:
         ok, _, _ = apply_peer_public_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY, next_key_type, next_key_line, remove=False)
         if not ok:
-            log(f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="MASTER")
+            log(f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="SSHKEY")
             return False
 
     for target in targets:
         ok, _, _ = validate_peer_ssh_key_on_remote(target["peer_ip"], next_key_path)
         if not ok:
-            log(f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="MASTER")
+            log(f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}", "ERROR", mode="SSHKEY")
             return False
 
     try:
@@ -1942,7 +1947,7 @@ def auto_rotate_peer_ssh_key_if_due(links):
         Path(PEER_CMD_SSH_KEY).chmod(0o600)
         Path(current_pub_path).chmod(0o644)
     except Exception as e:
-        log(f"PEER SSH KEY ROTATION SWAP FAIL error={str(e)}", "ERROR", mode="MASTER")
+        log(f"PEER SSH KEY ROTATION SWAP FAIL error={str(e)}", "ERROR", mode="SSHKEY")
         return False
 
     for target in targets:
@@ -1951,13 +1956,13 @@ def auto_rotate_peer_ssh_key_if_due(links):
             log(
                 f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} old_key_retained=True",
                 "ERROR",
-                mode="MASTER",
+                mode="SSHKEY",
             )
 
     log(
         f"PEER SSH KEY ROTATION COMPLETE ssh_key={PEER_CMD_SSH_KEY} targets={len(targets)}",
         "INFO",
-        mode="MASTER",
+        mode="SSHKEY",
     )
     return True
 
@@ -2415,7 +2420,7 @@ def bootstrap_keychain_link(link, force=False):
 def run_master():
     links = managed_links()
     if not auto_rotate_peer_ssh_key_if_due(links):
-        log("PEER SSH KEY ROTATION FAILED -> KEEP CURRENT KEY", "ERROR", mode="MASTER")
+        log("PEER SSH KEY ROTATION FAILED -> KEEP CURRENT KEY", "ERROR", mode="SSHKEY")
 
     master_links = [link for link in links if link.get("role") == "master"]
     if not master_links:
