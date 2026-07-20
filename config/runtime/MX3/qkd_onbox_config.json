@@ -1,0 +1,37 @@
+{
+  "device_name": "MX3",
+  "hostname": "MX3",
+  "enabled": true,
+  "pki_profile": "hierarchical_ca",
+  "ca_cert": "trusted-kme-ca-bundle.crt",
+  "trust_bundle": "certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt",
+  "qkd_policy": {
+    "rekey_enabled": true,
+    "batch_enabled": true,
+    "interval_seconds": 60,
+    "script_user_rotation_seconds": 2592000,
+    "peer_cmd_rotation_seconds": 3600,
+    "key_batch_size": 5,
+    "max_installed_keys": 5,
+    "key_ttl_seconds": 0,
+    "purge_on_kme_loss": false,
+    "purge_after_seconds": 0,
+    "kme_servers": [
+      {
+        "host": "100.123.252.12",
+        "port": 8443
+      }
+    ],
+    "kme_ca_cert": "trusted-kme-ca-bundle.crt"
+  },
+  "script_user": "macsec_user",
+  "script_dir": "/var/db/scripts",
+  "ssh_key": "/var/home/macsec_user/.ssh/qkd_id_ed25519",
+  "peer_cmd_user": "etsi_peer_view",
+  "peer_cmd_ssh_key": "/var/home/macsec_user/.ssh/qkd_peer_cmd_ed25519",
+  "log_file": "/var/home/macsec_user/qkd-state/logs/qkd_debug.log",
+  "log_max_bytes": 10485760,
+  "log_backup_count": 5,
+  "config_path": "/var/db/scripts/op/qkd_onbox_config.json",
+  "inventory_path": "/var/db/scripts/op/qkd_onbox_inventory.json"
+}

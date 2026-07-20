@@ -1956,5 +1956,8 @@ for h in NEW_HOST1 NEW_HOST2; do
 done
 ```
 
-
+## To empty files from shell of the Junos
+```sh
+for f in /var/home/macsec_user/qkd-state/logs/qkd_debug*.log /var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation*.log; do : > "$f"; done
+```
 

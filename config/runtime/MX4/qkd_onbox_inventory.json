@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "enabled": true,
+  "local_sae": "sae-004",
+  "kme_ip": "100.123.252.13",
+  "kme_port": 8443,
+  "links": [
+    {
+      "id": "MX3-MX4",
+      "type": "link",
+      "macsec": true,
+      "role": "slave",
+      "interface": "et-0/0/4",
+      "peer": "MX3",
+      "peer_ip": "100.123.113.2",
+      "peer_interface": "et-0/0/4",
+      "peer_sae": "sae-003",
+      "ca_name": "CA_MX3_MX4",
+      "ca_names": [
+        "CA_MX3_MX4"
+      ],
+      "keychain_name": "QKD_CA_MX3_MX4",
+      "peer_kme_ip": "100.123.252.12",
+      "peer_kme_port": 8443
+    },
+    {
+      "id": "MX4-MX5",
+      "type": "link",
+      "macsec": true,
+      "role": "master",
+      "interface": "et-0/0/0",
+      "peer": "MX5",
+      "peer_ip": "100.123.113.3",
+      "peer_interface": "et-0/0/0",
+      "peer_sae": "sae-005",
+      "ca_name": "CA_MX4_MX5",
+      "ca_names": [
+        "CA_MX4_MX5"
+      ],
+      "keychain_name": "QKD_CA_MX4_MX5",
+      "peer_kme_ip": "100.123.252.14",
+      "peer_kme_port": 8443
+    },
+    {
+      "id": "MX4-MX6",
+      "type": "extra",
+      "macsec": true,
+      "role": "master",
+      "interface": "et-0/0/6",
+      "peer": "MX6",
+      "peer_ip": "100.123.113.1",
+      "peer_interface": "et-0/0/6",
+      "peer_sae": "sae-006",
+      "ca_name": "CA_MX4_MX6",
+      "ca_names": [
+        "CA_MX4_MX6"
+      ],
+      "keychain_name": "QKD_CA_MX4_MX6",
+      "peer_kme_ip": "100.123.252.15",
+      "peer_kme_port": 8443
+    },
+    {
+      "id": "MX4-ACX3",
+      "type": "interworking",
+      "macsec": true,
+      "role": "master",
+      "interface": "et-0/0/8",
+      "peer": "ACX3",
+      "peer_ip": "100.123.170.203",
+      "peer_interface": "et-2/0/0",
+      "peer_sae": "sae-009",
+      "ca_name": "CA_MX4_ACX3",
+      "ca_names": [
+        "CA_MX4_ACX3"
+      ],
+      "keychain_name": "QKD_CA_MX4_ACX3",
+      "peer_kme_ip": "100.123.252.18",
+      "peer_kme_port": 8443
+    }
+  ]
+}

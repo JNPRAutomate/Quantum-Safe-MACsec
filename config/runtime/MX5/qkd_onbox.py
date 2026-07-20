@@ -2,85 +2,15 @@
 """
 QKD on-box MACsec keychain/MKA controller.
 
-This template is embedded by lib/qkd/onbox_builder.py by replacing
-CONFIG = {   'device_name': 'MX5',
-    'hostname': 'MX5',
-    'local_sae': 'sae-005',
-    'kme_ip': '100.123.252.14',
-    'kme_port': 8443,
-    'pki_profile': 'hierarchical_ca',
-    'ca_cert': 'trusted-kme-ca-bundle.crt',
-    'trust_bundle': 'certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt',
-    'qkd_policy': {   'rekey_enabled': True,
-                      'batch_enabled': True,
-                      'interval_seconds': 600,
-                      'key_batch_size': 5,
-                      'max_installed_keys': 5,
-                      'key_ttl_seconds': 0,
-                      'purge_on_kme_loss': False,
-                      'purge_after_seconds': 0},
-    'script_user': 'admin',
-    'script_dir': '/var/db/scripts',
-    'ssh_key': '/var/home/admin/.ssh/qkd_id_rsa',
-    'log_file': '/var/tmp/qkd_debug.log',
-    'log_max_bytes': 10485760,
-    'log_backup_count': 5,
-    'links': [   {   'id': 'MX4-MX5',
-                     'type': 'link',
-                     'macsec': True,
-                     'role': 'slave',
-                     'interface': 'et-0/0/0',
-                     'peer': 'MX4',
-                     'peer_ip': '100.123.113.4',
-                     'peer_interface': 'et-0/0/0',
-                     'peer_sae': 'sae-004',
-                     'ca_name': 'CA_MX4_MX5',
-                     'ca_names': ['CA_MX4_MX5'],
-                     'keychain_name': 'QKD_CA_MX4_MX5',
-                     'peer_kme_ip': '100.123.252.13',
-                     'peer_kme_port': 8443},
-                 {   'id': 'MX5-MX6',
-                     'type': 'link',
-                     'macsec': True,
-                     'role': 'master',
-                     'interface': 'et-0/0/4',
-                     'peer': 'MX6',
-                     'peer_ip': '100.123.113.1',
-                     'peer_interface': 'et-0/0/4',
-                     'peer_sae': 'sae-006',
-                     'ca_name': 'CA_MX5_MX6',
-                     'ca_names': ['CA_MX5_MX6'],
-                     'keychain_name': 'QKD_CA_MX5_MX6',
-                     'peer_kme_ip': '100.123.252.15',
-                     'peer_kme_port': 8443},
-                 {   'id': 'MX3-MX5',
-                     'type': 'extra',
-                     'macsec': True,
-                     'role': 'slave',
-                     'interface': 'et-0/0/6',
-                     'peer': 'MX3',
-                     'peer_ip': '100.123.113.2',
-                     'peer_interface': 'et-0/0/6',
-                     'peer_sae': 'sae-003',
-                     'ca_name': 'CA_MX3_MX5',
-                     'ca_names': ['CA_MX3_MX5'],
-                     'keychain_name': 'QKD_CA_MX3_MX5',
-                     'peer_kme_ip': '100.123.252.12',
-                     'peer_kme_port': 8443},
-                 {   'id': 'MX5-ACX1',
-                     'type': 'interworking',
-                     'macsec': True,
-                     'role': 'master',
-                     'interface': 'et-0/0/8',
-                     'peer': 'ACX1',
-                     'peer_ip': '100.123.170.202',
-                     'peer_interface': 'et-2/0/0',
-                     'peer_sae': 'sae-007',
-                     'ca_name': 'CA_MX5_ACX1',
-                     'ca_names': ['CA_MX5_ACX1'],
-                     'keychain_name': 'QKD_CA_MX5_ACX1',
-                     'peer_kme_ip': '100.123.252.16',
-                     'peer_kme_port': 8443}]} with a per-device CONFIG dictionary.
+Runtime configuration is loaded from external JSON files preloaded on the router.
+
+Default file locations:
+    - /var/db/scripts/op/qkd_onbox_config.json
+    - /var/db/scripts/op/qkd_onbox_inventory.json
+
+These can be overridden with environment variables:
+    - QKD_ONBOX_CONFIG_PATH
+    - QKD_ONBOX_INVENTORY_PATH
 
 Link-driven runtime contract
 ----------------------------
@@ -108,88 +38,102 @@ import json
 import os
 import hashlib
 import pwd
+import shlex
 
 
 urllib3.disable_warnings()
 
-CONFIG = {   'device_name': 'MX5',
-    'hostname': 'MX5',
-    'local_sae': 'sae-005',
-    'kme_ip': '100.123.252.14',
-    'kme_port': 8443,
-    'pki_profile': 'hierarchical_ca',
-    'ca_cert': 'trusted-kme-ca-bundle.crt',
-    'trust_bundle': 'certs/hierarchical_ca/trust_exchange/install_on_juniper/trusted-kme-ca-bundle.crt',
-    'qkd_policy': {   'rekey_enabled': True,
-                      'batch_enabled': True,
-                      'interval_seconds': 600,
-                      'key_batch_size': 5,
-                      'max_installed_keys': 5,
-                      'key_ttl_seconds': 0,
-                      'purge_on_kme_loss': False,
-                      'purge_after_seconds': 0},
-    'script_user': 'admin',
-    'script_dir': '/var/db/scripts',
-    'ssh_key': '/var/home/admin/.ssh/qkd_id_rsa',
-    'log_file': '/var/tmp/qkd_debug.log',
-    'log_max_bytes': 10485760,
-    'log_backup_count': 5,
-    'links': [   {   'id': 'MX4-MX5',
-                     'type': 'link',
-                     'macsec': True,
-                     'role': 'slave',
-                     'interface': 'et-0/0/0',
-                     'peer': 'MX4',
-                     'peer_ip': '100.123.113.4',
-                     'peer_interface': 'et-0/0/0',
-                     'peer_sae': 'sae-004',
-                     'ca_name': 'CA_MX4_MX5',
-                     'ca_names': ['CA_MX4_MX5'],
-                     'keychain_name': 'QKD_CA_MX4_MX5',
-                     'peer_kme_ip': '100.123.252.13',
-                     'peer_kme_port': 8443},
-                 {   'id': 'MX5-MX6',
-                     'type': 'link',
-                     'macsec': True,
-                     'role': 'master',
-                     'interface': 'et-0/0/4',
-                     'peer': 'MX6',
-                     'peer_ip': '100.123.113.1',
-                     'peer_interface': 'et-0/0/4',
-                     'peer_sae': 'sae-006',
-                     'ca_name': 'CA_MX5_MX6',
-                     'ca_names': ['CA_MX5_MX6'],
-                     'keychain_name': 'QKD_CA_MX5_MX6',
-                     'peer_kme_ip': '100.123.252.15',
-                     'peer_kme_port': 8443},
-                 {   'id': 'MX3-MX5',
-                     'type': 'extra',
-                     'macsec': True,
-                     'role': 'slave',
-                     'interface': 'et-0/0/6',
-                     'peer': 'MX3',
-                     'peer_ip': '100.123.113.2',
-                     'peer_interface': 'et-0/0/6',
-                     'peer_sae': 'sae-003',
-                     'ca_name': 'CA_MX3_MX5',
-                     'ca_names': ['CA_MX3_MX5'],
-                     'keychain_name': 'QKD_CA_MX3_MX5',
-                     'peer_kme_ip': '100.123.252.12',
-                     'peer_kme_port': 8443},
-                 {   'id': 'MX5-ACX1',
-                     'type': 'interworking',
-                     'macsec': True,
-                     'role': 'master',
-                     'interface': 'et-0/0/8',
-                     'peer': 'ACX1',
-                     'peer_ip': '100.123.170.202',
-                     'peer_interface': 'et-2/0/0',
-                     'peer_sae': 'sae-007',
-                     'ca_name': 'CA_MX5_ACX1',
-                     'ca_names': ['CA_MX5_ACX1'],
-                     'keychain_name': 'QKD_CA_MX5_ACX1',
-                     'peer_kme_ip': '100.123.252.16',
-                     'peer_kme_port': 8443}]}
+DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
+DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
+
+
+def _load_json_or_die(path, label):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        print(f"ERROR MISSING {label} file: {path}")
+        sys.exit(1)
+    except Exception as exc:
+        print(
+            f"ERROR INVALID {label} JSON file: {path} "
+            f"error_type={type(exc).__name__} error={str(exc)}"
+        )
+        sys.exit(1)
+
+    if not isinstance(data, dict):
+        print(f"ERROR INVALID {label} JSON file: {path} root must be object")
+        sys.exit(1)
+
+    return data
+
+
+def _validate_runtime_contract_or_die(config):
+    required_keys = [
+        "local_sae",
+        "kme_ip",
+        "ca_cert",
+        "script_user",
+        "script_dir",
+        "ssh_key",
+        "peer_cmd_user",
+        "peer_cmd_ssh_key",
+        "log_file",
+        "log_max_bytes",
+        "log_backup_count",
+        "qkd_policy",
+    ]
+    missing = [key for key in required_keys if key not in config]
+    local_sae = config.get("local_sae", "<missing>")
+
+    def _contract_error(message):
+        print(
+            "ERROR INVALID runtime JSON contract: "
+            f"{message} local_sae={local_sae} "
+            f"config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}"
+        )
+        sys.exit(1)
+
+    if missing:
+        _contract_error(f"missing keys={missing}")
+
+    if not isinstance(config.get("qkd_policy"), dict):
+        _contract_error("qkd_policy must be an object")
+
+    if not isinstance(config.get("links"), list):
+        _contract_error("links must be an array")
+
+    try:
+        int(config.get("kme_port", 443))
+        int(config.get("log_max_bytes"))
+        int(config.get("log_backup_count"))
+    except Exception as exc:
+        _contract_error(
+            f"numeric field parse failed error_type={type(exc).__name__} error={str(exc)}"
+        )
+
+
+def runtime_bootstrap_context():
+    return (
+        f"local_sae={DEVICE} kme_ip={KME_IP} kme_port={KME_PORT} "
+        f"links={len(LINKS)} config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}"
+    )
+
+
+CONFIG_PATH = os.environ.get("QKD_ONBOX_CONFIG_PATH", DEFAULT_CONFIG_PATH)
+INVENTORY_PATH = os.environ.get("QKD_ONBOX_INVENTORY_PATH", DEFAULT_INVENTORY_PATH)
+
+STATIC_CONFIG = _load_json_or_die(CONFIG_PATH, "config")
+INVENTORY_CONFIG = _load_json_or_die(INVENTORY_PATH, "inventory")
+
+CONFIG = {}
+CONFIG.update(STATIC_CONFIG)
+CONFIG.update(INVENTORY_CONFIG)
+
+_validate_runtime_contract_or_die(CONFIG)
+
+if not isinstance(CONFIG.get("links"), list):
+    CONFIG["links"] = []
 
 DEVICE = CONFIG["local_sae"]
 KME_IP = CONFIG["kme_ip"]
@@ -200,8 +144,9 @@ LINKS = CONFIG.get("links", [])
 SCRIPT_USER = CONFIG["script_user"]
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
+PEER_CMD_USER = CONFIG.get("peer_cmd_user", SCRIPT_USER)
+PEER_CMD_SSH_KEY = CONFIG.get("peer_cmd_ssh_key", SSH_KEY)
 
-LOG_FILE = CONFIG["log_file"]
 LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
 LOG_BACKUP_COUNT = int(CONFIG["log_backup_count"])
 
@@ -213,6 +158,39 @@ KME_FAIL_THRESHOLD = int(CONFIG.get("kme_fail_threshold", 5))
 KME_HOLD_DOWN_SECONDS = int(CONFIG.get("kme_hold_down_seconds", 3600))
 MACSEC_INUSE_GRACE_SECONDS = int(CONFIG.get("macsec_inuse_grace_seconds", 60))
 
+
+def _int_or_default(value, default):
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+_policy = CONFIG.get("qkd_policy", {})
+if not isinstance(_policy, dict):
+    _policy = {}
+
+_policy_interval_seconds = _int_or_default(_policy.get("interval_seconds", 60), 60)
+if _policy_interval_seconds < 1:
+    _policy_interval_seconds = 60
+
+_grace_cycles = _int_or_default(_policy.get("peer_mismatch_grace_cycles", 3), 3)
+if _grace_cycles < 1:
+    _grace_cycles = 1
+if _grace_cycles > 10:
+    _grace_cycles = 10
+
+_derived_peer_mismatch_grace = _policy_interval_seconds * _grace_cycles
+_grace_min_seconds = _int_or_default(CONFIG.get("peer_mismatch_grace_min_seconds", 120), 120)
+_grace_max_seconds = _int_or_default(CONFIG.get("peer_mismatch_grace_max_seconds", 600), 600)
+if _grace_min_seconds < 1:
+    _grace_min_seconds = 1
+if _grace_max_seconds < _grace_min_seconds:
+    _grace_max_seconds = _grace_min_seconds
+_derived_peer_mismatch_grace = max(_grace_min_seconds, min(_derived_peer_mismatch_grace, _grace_max_seconds))
+
+PEER_MISMATCH_GRACE_SECONDS = _int_or_default(CONFIG.get("peer_mismatch_grace_seconds", _derived_peer_mismatch_grace), _derived_peer_mismatch_grace)
+
 MACSEC_MODEL = CONFIG.get("macsec_model", "keychain")
 
 MKA_TRANSMIT_INTERVAL = int(CONFIG.get("mka_transmit_interval", 2000))
@@ -220,6 +198,7 @@ MKA_SAK_REKEY_INTERVAL = int(CONFIG.get("mka_sak_rekey_interval", 300))
 
 KEYCHAIN_KEEP_LAST = int(CONFIG.get("keychain_keep_last", 3))
 POST_KEY_INSTALL_SETTLE_SECONDS = int(CONFIG.get("post_key_install_settle_seconds", 3))
+PEER_INSTALL_LOCK_RETRIES = int(CONFIG.get("peer_install_lock_retries", 3))
 
 KEYCHAIN_START_DELAY_MINUTES = int(CONFIG.get("keychain_start_delay_minutes", 3))
 ROTATION_STAGGER_MINUTES = int(CONFIG.get("rotation_stagger_minutes", 1))
@@ -231,7 +210,14 @@ CERT = f"{SCRIPT_DIR}/certs/{DEVICE}.crt"
 KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
 CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
-STATE_DIR = "/var/tmp"
+STATE_DIR = str(Path(SSH_KEY).parent.parent / "qkd-state")
+LOG_DIR = f"{STATE_DIR}/logs"
+CONFIG_LOG_FILE = str(CONFIG.get("log_file", "")).strip()
+if not CONFIG_LOG_FILE or CONFIG_LOG_FILE.startswith("/var/tmp/"):
+    LOG_FILE = f"{LOG_DIR}/qkd_debug.log"
+else:
+    LOG_FILE = CONFIG_LOG_FILE
+SSH_ROTATION_LOG_FILE = f"{LOG_DIR}/qkd_ssh_rotation_{DEVICE}.log"
 
 
 # ----------------------------
@@ -308,17 +294,22 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     def write_log_line(log_file):
         try:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
             rotate_one_log(log_file)
             with open(log_file, "a") as f:
                 f.write(line)
         except Exception:
             pass
 
+    if mode == "SSHKEY":
+        write_log_line(SSH_ROTATION_LOG_FILE)
+        return
+
     write_log_line(LOG_FILE)
 
     if iface:
         safe_iface = iface.replace("/", "_")
-        link_log_file = f"{STATE_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
+        link_log_file = f"{LOG_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
         write_log_line(link_log_file)
 
 
@@ -411,10 +402,27 @@ def elapsed_ms(start_ms):
 def epoch_from_junos_start_time(start_time):
     if not start_time:
         return None
-    try:
-        return int(time.mktime(time.strptime(start_time, "%Y-%m-%d.%H:%M")))
-    except Exception:
-        return None
+    raw = str(start_time).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d.%H:%M:%S", "%Y-%m-%d.%H:%M"):
+        try:
+            return int(time.mktime(time.strptime(raw, fmt)))
+        except Exception:
+            continue
+    return None
+
+
+def format_start_time_display(start_time):
+    epoch = epoch_from_junos_start_time(start_time)
+    if epoch is None:
+        return start_time
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch))
+
+
+def format_start_time_cli(start_time):
+    epoch = epoch_from_junos_start_time(start_time)
+    if epoch is None:
+        return start_time
+    return time.strftime("%Y-%m-%d.%H:%M", time.localtime(epoch))
 
 
 def pending_seconds_until(start_time):
@@ -436,6 +444,8 @@ def customer_event(event, iface=None, mode=None, **fields):
     for key, value in fields.items():
         if value is None:
             continue
+        if key in ("start_time", "next_start_time", "scheduled_start_time"):
+            value = format_start_time_display(value)
         parts.append(f"{key}={value}")
     log(" ".join(parts), "INFO", iface, mode)
 
@@ -467,6 +477,10 @@ def db_state_file(peer, iface):
 
 def qkd_policy():
     return CONFIG.get("qkd_policy", {})
+
+
+def config_enabled():
+    return bool(CONFIG.get("enabled", False))
 
 
 def rekey_enabled():
@@ -513,6 +527,14 @@ def max_installed_keys():
     return value
 
 
+def max_pending_keys():
+    # Keep status payload bounded so peer status JSON fits reliably over CLI/SSH.
+    value = int(qkd_policy().get("max_pending_keys", 32))
+    if value < 1:
+        return 1
+    return value
+
+
 def key_batch_size():
     value = int(qkd_policy().get("key_batch_size", 5))
     if value < 1:
@@ -525,6 +547,27 @@ def rotation_interval_seconds():
     if value < 1:
         return 1
     return value
+
+
+def script_user_rotation_seconds():
+    value = int(qkd_policy().get("script_user_rotation_seconds", 2592000))
+    if value < 1:
+        return 1
+    return value
+
+
+def peer_cmd_rotation_seconds():
+    value = int(qkd_policy().get("peer_cmd_rotation_seconds", 3600))
+    if value < 1:
+        return 1
+    return value
+
+
+def ssh_key_age_seconds(path):
+    try:
+        return max(0, int(time.time() - Path(path).stat().st_mtime))
+    except Exception:
+        return None
 
 
 def qkd_key_index_from_generation(generation):
@@ -599,7 +642,7 @@ def normalize_pending_keys(state):
             {
                 "generation": generation,
                 "key_id": key_id,
-                "start_time": item.get("start_time"),
+                "start_time": format_start_time_display(item.get("start_time")),
             }
         )
         seen.add(key_id)
@@ -619,17 +662,39 @@ def normalize_pending_keys(state):
                 {
                     "generation": generation,
                     "key_id": legacy_key,
-                    "start_time": state.get("next_start_time"),
+                    "start_time": format_start_time_display(state.get("next_start_time")),
                 },
             )
 
     normalized.sort(
         key=lambda item: (
+            epoch_from_junos_start_time(item.get("start_time"))
+            if epoch_from_junos_start_time(item.get("start_time")) is not None
+            else 2**31,
             item.get("generation") if item.get("generation") is not None else 2**31,
-            str(item.get("start_time") or ""),
             item.get("key_id") or "",
         )
     )
+
+    active_generation = None
+    try:
+        if state.get("generation") is not None:
+            active_generation = int(state.get("generation"))
+    except Exception:
+        active_generation = None
+
+    # If an active key exists, pending entries must represent future rotations.
+    if state.get("active_key_id") and active_generation is not None:
+        normalized = [
+            item
+            for item in normalized
+            if item.get("generation") is None or int(item.get("generation")) > active_generation
+        ]
+
+    max_pending = max_pending_keys()
+    if len(normalized) > max_pending:
+        # Keep the newest pending entries, not the oldest ones.
+        normalized = normalized[-max_pending:]
 
     state["pending_keys"] = normalized
     return sync_pending_legacy_fields(state)
@@ -663,6 +728,9 @@ def ensure_health_state(state):
     health.setdefault("last_kme_error", None)
     health.setdefault("degraded", False)
     health.setdefault("declared_down", False)
+    health.setdefault("peer_mismatch_defer_count", 0)
+    health.setdefault("peer_mismatch_defer_since", 0)
+    health.setdefault("peer_mismatch_defer_pending_key", None)
     return state
 
 
@@ -739,11 +807,94 @@ def compare_peer_keychain_state(local_state, peer_state):
     return True
 
 
+def pending_stale_seconds():
+    value = int(qkd_policy().get("pending_stale_seconds", 0))
+    if value > 0:
+        return value
+    # Default: keep at least 4 intervals before considering a pending head stale.
+    return max(120, rotation_interval_seconds() * 4)
+
+
+def peer_mismatch_defer_limit_cycles():
+    value = int(qkd_policy().get("peer_mismatch_defer_limit_cycles", 5))
+    if value < 1:
+        return 1
+    return value
+
+
+def peer_mismatch_defer_max_age_seconds():
+    value = int(qkd_policy().get("peer_mismatch_defer_max_age_seconds", 0))
+    if value > 0:
+        return value
+    return max(180, pending_stale_seconds())
+
+
+def pending_head_age_seconds(state):
+    epoch = epoch_from_junos_start_time(state.get("next_start_time"))
+    if epoch is None:
+        return None
+    return max(0, int(time.time()) - int(epoch))
+
+
+def prune_stale_pending_head(state, iface=None, mode_ctx="STATE"):
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if not pending:
+        return state, False
+
+    now_epoch = int(time.time())
+    stale_after = pending_stale_seconds()
+    pruned_any = False
+
+    while pending:
+        # Keep a single pending key only when there is no active key yet.
+        if len(pending) == 1 and not state.get("active_key_id"):
+            break
+        head = pending[0]
+        head_key_id = head.get("key_id")
+        head_generation = head.get("generation")
+        head_start_time = head.get("start_time")
+        head_epoch = epoch_from_junos_start_time(head_start_time)
+        if head_epoch is None:
+            break
+        age_seconds = now_epoch - int(head_epoch)
+        if age_seconds <= stale_after:
+            break
+
+        pending = pending[1:]
+        state["pending_keys"] = pending
+        state = sync_pending_legacy_fields(state)
+        pruned_any = True
+        log(
+            f"PENDING STALE DROP key_id={head_key_id} generation={head_generation} start_time={head_start_time} age_seconds={age_seconds} stale_after_seconds={stale_after}",
+            "ERROR",
+            iface,
+            mode_ctx,
+        )
+
+    return state, pruned_any
+
+
+def recent_local_promotion_grace_active(local_state, grace_seconds):
+    try:
+        confirmed_at = int(local_state.get("active_confirmed_at") or 0)
+        window = max(0, int(grace_seconds))
+    except Exception:
+        return False, None
+    if confirmed_at <= 0 or window <= 0:
+        return False, None
+    age_seconds = int(time.time()) - confirmed_at
+    if age_seconds < window:
+        return True, age_seconds
+    return False, age_seconds
+
+
 def save_db_state(peer, iface, state):
     state = normalize_pending_keys(state)
     path = Path(db_state_file(peer, iface))
     tmp = Path(f"{path}.{os.getpid()}.tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(state, indent=2))
         try:
             if path.exists():
@@ -774,6 +925,38 @@ def next_generation(state):
     return int(state.get("generation", 0)) + 1
 
 
+def highest_known_generation(state):
+    state = normalize_pending_keys(state)
+    values = []
+
+    try:
+        values.append(int(state.get("generation", 0)))
+    except Exception:
+        pass
+
+    for item in state.get("pending_keys", []) or []:
+        try:
+            if isinstance(item, dict) and item.get("generation") is not None:
+                values.append(int(item.get("generation")))
+        except Exception:
+            continue
+
+    for item in state.get("installed_keys", []) or []:
+        try:
+            if isinstance(item, dict) and item.get("generation") is not None:
+                values.append(int(item.get("generation")))
+        except Exception:
+            continue
+
+    if not values:
+        return 0
+    return max(values)
+
+
+def next_generation_safe(state):
+    return highest_known_generation(state) + 1
+
+
 def ceil_epoch_to_next_minute(epoch_seconds):
     epoch_seconds = int(epoch_seconds)
     if epoch_seconds % 60 == 0:
@@ -800,7 +983,7 @@ def link_stagger_minutes(link):
 
 
 def junos_start_time_from_epoch(epoch_seconds):
-    return time.strftime("%Y-%m-%d.%H:%M", time.localtime(int(epoch_seconds)))
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(epoch_seconds)))
 
 
 def start_time_is_future(start_time, grace_seconds=0):
@@ -847,6 +1030,7 @@ def lock_file():
 def acquire_lock():
     path = Path(lock_file())
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.mkdir(mode=0o700)
         try:
             (path / "pid").write_text(str(os.getpid()))
@@ -909,6 +1093,32 @@ def release_lock():
         pass
 
 
+def acquire_runtime_config_lock(iface=None, action=None, attempts=12, wait_seconds=1):
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        if acquire_lock():
+            if iface and action:
+                log(
+                    f"RUNTIME CONFIG LOCK ACQUIRED action={action} iface={iface} attempt={attempt}",
+                    "INFO",
+                    iface,
+                    "LOCK",
+                )
+            return True
+        if attempt >= max(1, int(attempts)):
+            break
+        if iface and action:
+            log(
+                f"RUNTIME CONFIG LOCK WAIT action={action} iface={iface} attempt={attempt}/{attempts} wait={wait_seconds}s",
+                "ERROR",
+                iface,
+                "LOCK",
+            )
+        time.sleep(max(1, int(wait_seconds)))
+    if iface and action:
+        log(f"RUNTIME CONFIG LOCK BUSY action={action} iface={iface}", "ERROR", iface, "LOCK")
+    return False
+
+
 def action_lock_file(iface, action):
     safe_iface = iface.replace("/", "_")
     return f"{STATE_DIR}/qkd_onbox_{DEVICE}_{safe_iface}_{action}.lock"
@@ -919,6 +1129,7 @@ def acquire_action_lock(iface, action):
     owner_file = path / "owner"
     pid = str(os.getpid())
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.mkdir(mode=0o700)
         try:
             owner_file.write_text(pid)
@@ -1199,7 +1410,7 @@ def get_mka_session_block_for_iface(iface):
         if in_target:
             block.append(line)
     if not block:
-        log(f"MKA SESSION CHECK FAIL iface={iface} not found", "ERROR", iface, "MKA")
+        log(f"MKA SESSION NOT FOUND iface={iface} status=transient", "INFO", iface, "MKA")
         return None
     return "\n".join(block)
 
@@ -1336,9 +1547,13 @@ def mka_confirms_key(iface, key_id, generation=None):
 def promote_pending_key_if_mka_confirmed(peer, iface, state):
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
+    state, pruned = prune_stale_pending_head(state, iface=iface, mode_ctx="MKA")
+    if pruned:
+        # Persisting is handled by caller paths already writing state after promotions/changes.
+        state = normalize_pending_keys(state)
     pending_keys = state.get("pending_keys", [])
     if not pending_keys:
-        return state, False
+        return state, False, bool(pruned)
 
     current = pending_keys[0]
     pending_key_id = current.get("key_id")
@@ -1346,7 +1561,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
     pending_start_time = current.get("start_time")
 
     if not pending_key_id:
-        return state, False
+        return state, False, bool(pruned)
 
     if not mka_confirms_key(iface, pending_key_id, generation=pending_generation):
         log(
@@ -1355,7 +1570,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             iface,
             "MKA",
         )
-        return state, False
+        return state, False, bool(pruned)
 
     promotion_time = int(time.time())
     next_start_time = pending_start_time
@@ -1398,7 +1613,31 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         promotion_delay_ms=promotion_delay_ms,
         pending_late_by_ms=pending_late_by_ms,
     )
-    return state, True
+    return state, True, True
+
+
+def states_share_any_key(local_state, peer_state):
+    def collect_keys(state):
+        keys = set()
+        active_key = state.get("active_key_id")
+        if active_key:
+            keys.add(str(active_key))
+        for item in state.get("pending_keys", []) or []:
+            if isinstance(item, dict) and item.get("key_id"):
+                keys.add(str(item.get("key_id")))
+        return keys
+
+    local_state = normalize_pending_keys(local_state)
+    peer_state = normalize_pending_keys(peer_state)
+    return len(collect_keys(local_state).intersection(collect_keys(peer_state))) > 0
+
+
+def peer_state_converging(local_state, peer_state):
+    if local_state.get("ca_name") != peer_state.get("ca_name"):
+        return False
+    if local_state.get("keychain_name") != peer_state.get("keychain_name"):
+        return False
+    return states_share_any_key(local_state, peer_state)
 
 
 def wait_for_macsec_inuse(iface, expected_ca, grace_seconds):
@@ -1481,7 +1720,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
             start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
 
         log(
-            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}",
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={format_start_time_display(start_time)} key_id={key_id}",
             "INFO",
             iface,
             "MACSEC",
@@ -1490,7 +1729,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
         cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
-        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {start_time}")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {format_start_time_cli(start_time)}")
 
     if commit:
         cli_cmds.append("commit")
@@ -1673,21 +1912,383 @@ def runtime_user():
 
 def validate_ssh_runtime_for_master():
     user = runtime_user()
-    if not SSH_KEY:
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=SSH_KEY_EMPTY", "ERROR", mode="MASTER")
+    if not PEER_CMD_SSH_KEY:
+        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=PEER_CMD_SSH_KEY_EMPTY", "ERROR", mode="MASTER")
         return False
-    if not Path(SSH_KEY).exists():
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} ssh_key={SSH_KEY} reason=KEY_NOT_FOUND", "ERROR", mode="MASTER")
-        return False
-    if not os.access(SSH_KEY, os.R_OK):
+    if not Path(PEER_CMD_SSH_KEY).exists():
         log(
-            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} peer_cmd_user={PEER_CMD_USER} "
+            f"ssh_key={PEER_CMD_SSH_KEY} reason=KEY_NOT_FOUND",
             "ERROR",
             mode="MASTER",
         )
-        print(f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}")
         return False
-    log(f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}", "INFO", mode="MASTER")
+    if not os.access(PEER_CMD_SSH_KEY, os.R_OK):
+        log(
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} peer_cmd_user={PEER_CMD_USER} ssh_key={PEER_CMD_SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            "ERROR",
+            mode="MASTER",
+        )
+        print(
+            f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} "
+            f"peer_cmd_user={PEER_CMD_USER} ssh_key={PEER_CMD_SSH_KEY}"
+        )
+        return False
+    log(
+        f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} "
+        f"peer_cmd_user={PEER_CMD_USER} ssh_key={PEER_CMD_SSH_KEY}",
+        "INFO",
+        mode="MASTER",
+    )
+
+    script_age = ssh_key_age_seconds(SSH_KEY)
+    peer_age = ssh_key_age_seconds(PEER_CMD_SSH_KEY)
+    if script_age is not None and script_age >= script_user_rotation_seconds():
+        log(
+            f"SSH KEY ROTATION DUE runtime_user={user} script_user={SCRIPT_USER} "
+            f"ssh_key={SSH_KEY} age_seconds={script_age} threshold_seconds={script_user_rotation_seconds()}",
+            "WARN",
+            mode="SSHKEY",
+        )
+    if peer_age is not None and peer_age >= peer_cmd_rotation_seconds():
+        log(
+            f"PEER SSH KEY ROTATION DUE runtime_user={user} peer_cmd_user={PEER_CMD_USER} "
+            f"ssh_key={PEER_CMD_SSH_KEY} age_seconds={peer_age} threshold_seconds={peer_cmd_rotation_seconds()}",
+            "WARN",
+            mode="SSHKEY",
+        )
+    return True
+
+
+def peer_cmd_public_key_path():
+    return f"{PEER_CMD_SSH_KEY}.pub"
+
+
+def parse_public_key_line(public_key_line):
+    parts = str(public_key_line or "").strip().split()
+    if len(parts) < 2:
+        return None, None
+    key_type = parts[0].strip()
+    if not (key_type.startswith("ssh-") or key_type.startswith("ecdsa-")):
+        return None, None
+    return key_type, " ".join(parts)
+
+
+def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20, remote_user=None, stdin_text=None):
+    ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
+    ssh_cmd = [
+        "ssh",
+        "-i", ssh_key_path,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+        f"{ssh_remote_user}@{peer_ip}",
+        remote_cmd,
+    ]
+    try:
+        input_bytes = None if stdin_text is None else str(stdin_text).encode()
+        result = subprocess.run(ssh_cmd, input=input_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"SSH REMOTE TIMEOUT peer={peer_ip} user={ssh_remote_user} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
+        return False, "", "timeout"
+    except Exception as e:
+        log(f"SSH REMOTE ERROR peer={peer_ip} user={ssh_remote_user} error={str(e)} cmd={remote_cmd}", "ERROR", iface, mode_ctx)
+        return False, "", str(e)
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    combined = f"{stdout}\n{stderr}"
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        log(f"SSH REMOTE FAIL peer={peer_ip} user={ssh_remote_user} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, mode_ctx)
+        return False, stdout, stderr
+    return True, stdout, stderr
+
+
+def ssh_remote_lock_error(stdout, stderr):
+    low = f"{stdout or ''}\n{stderr or ''}".lower()
+    return (
+        "configuration database locked by" in low
+        or "exclusive [edit]" in low
+    )
+
+
+def peer_rotation_targets(links):
+    targets = []
+    seen = set()
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        peer_ip = link.get("peer_ip")
+        peer_name = link.get("peer")
+        if not peer_ip or peer_ip in seen:
+            continue
+        seen.add(peer_ip)
+        targets.append({"peer": peer_name, "peer_ip": peer_ip})
+    return targets
+
+
+def generate_next_peer_ssh_keypair():
+    next_key_path = f"{PEER_CMD_SSH_KEY}.next"
+    next_pub_path = f"{next_key_path}.pub"
+    try:
+        Path(PEER_CMD_SSH_KEY).parent.mkdir(parents=True, exist_ok=True)
+        for path in (next_key_path, next_pub_path):
+            try:
+                Path(path).unlink()
+            except Exception:
+                pass
+        result = subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", f"qkd-onbox-auto-rotate-{DEVICE}", "-f", next_key_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            log(
+                f"PEER SSH KEY ROTATION GENERATE FAIL rc={result.returncode} stderr={result.stderr.decode(errors='ignore').strip()} stdout={result.stdout.decode(errors='ignore').strip()}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return None, None
+        Path(next_key_path).chmod(0o600)
+        Path(next_pub_path).chmod(0o644)
+        return next_key_path, next_pub_path
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION GENERATE ERROR error={str(e)}", "ERROR", mode="SSHKEY")
+        return None, None
+
+
+def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, remove=False, remote_user=None, target_login_user=None):
+    action = "delete" if remove else "set"
+    ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
+    login_user = target_login_user or PEER_CMD_USER or SCRIPT_USER
+    remote_set_path = f"/var/tmp/qkd_peer_auth_{login_user}.set"
+    set_line = (
+        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
+    )
+    upload_cmd = f"start shell command \"cat >{remote_set_path}\""
+    apply_cmd = (
+        f"start shell command \"cli -c 'configure private; load set {remote_set_path}; commit and-quit'\""
+    )
+    cleanup_cmd = f"start shell command \"rm -f {remote_set_path}\""
+    retry_wait_seconds = [2, 4, 8]
+    for attempt in range(1, len(retry_wait_seconds) + 2):
+        ok, stdout, stderr = ssh_remote_exec(
+            peer_ip,
+            ssh_key_path,
+            upload_cmd,
+            mode_ctx="MASTER",
+            timeout=30,
+            remote_user=ssh_remote_user,
+            stdin_text=set_line,
+        )
+        if not ok:
+            return ok, stdout, stderr
+        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, apply_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
+        if ok:
+            ssh_remote_exec(peer_ip, ssh_key_path, cleanup_cmd, mode_ctx="MASTER", timeout=15, remote_user=ssh_remote_user)
+            return ok, stdout, stderr
+        if attempt >= len(retry_wait_seconds) + 1 or not ssh_remote_lock_error(stdout, stderr):
+            return ok, stdout, stderr
+        wait_seconds = retry_wait_seconds[attempt - 1]
+        log(
+            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} remote_user={ssh_remote_user} target_login_user={login_user} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
+            "ERROR",
+            mode="SSHKEY",
+        )
+        time.sleep(wait_seconds)
+    return False, "", "remote lock retry exhausted"
+
+
+def validate_peer_ssh_key_on_remote(peer_ip, ssh_key_path):
+    remote_cmd = "show system uptime | no-more"
+    return ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, mode_ctx="MASTER", timeout=15, remote_user=PEER_CMD_USER)
+
+
+def ensure_peer_ssh_key_bootstrap(links):
+    targets = peer_rotation_targets(links)
+    if not targets:
+        log("PEER SSH KEY BOOTSTRAP SKIP reason=NO_TARGETS", "INFO", mode="SSHKEY")
+        return True
+
+    current_pub_path = peer_cmd_public_key_path()
+    try:
+        current_key_line = Path(current_pub_path).read_text().strip()
+    except Exception as e:
+        log(f"PEER SSH KEY BOOTSTRAP READ CURRENT PUB FAIL path={current_pub_path} error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
+    current_key_type, current_key_line = parse_public_key_line(current_key_line)
+    if not current_key_type or not current_key_line:
+        log(f"PEER SSH KEY BOOTSTRAP INVALID CURRENT PUB path={current_pub_path}", "ERROR", mode="SSHKEY")
+        return False
+
+    log(
+        f"PEER SSH KEY BOOTSTRAP CHECK ssh_key={PEER_CMD_SSH_KEY} peer_cmd_user={PEER_CMD_USER} targets={len(targets)}",
+        "INFO",
+        mode="SSHKEY",
+    )
+
+    for target in targets:
+        ok, _, _ = validate_peer_ssh_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY)
+        if ok:
+            log(
+                f"PEER SSH KEY BOOTSTRAP OK peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} state=ALREADY_AUTHORIZED",
+                "INFO",
+                mode="SSHKEY",
+            )
+            continue
+
+        if not PEER_CMD_SSH_KEY or not Path(PEER_CMD_SSH_KEY).exists() or not os.access(PEER_CMD_SSH_KEY, os.R_OK):
+            log(
+                f"PEER SSH KEY BOOTSTRAP FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} ssh_key={PEER_CMD_SSH_KEY} reason=PEER_CMD_SSH_KEY_NOT_AVAILABLE",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+        log(
+            f"PEER SSH KEY BOOTSTRAP APPLY peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER}",
+            "WARN",
+            mode="SSHKEY",
+        )
+        ok, stdout, stderr = apply_peer_public_key_on_remote(
+            target["peer_ip"],
+            PEER_CMD_SSH_KEY,
+            current_key_type,
+            current_key_line,
+            remove=False,
+            remote_user=SCRIPT_USER,
+            target_login_user=PEER_CMD_USER,
+        )
+        if not ok:
+            log(
+                f"PEER SSH KEY BOOTSTRAP APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+        ok, stdout, stderr = validate_peer_ssh_key_on_remote(target["peer_ip"], PEER_CMD_SSH_KEY)
+        if not ok:
+            log(
+                f"PEER SSH KEY BOOTSTRAP VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+        log(
+            f"PEER SSH KEY BOOTSTRAP COMPLETE peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER}",
+            "INFO",
+            mode="SSHKEY",
+        )
+
+    return True
+
+
+def auto_rotate_peer_ssh_key_if_due(links):
+    peer_age = ssh_key_age_seconds(PEER_CMD_SSH_KEY)
+    threshold = peer_cmd_rotation_seconds()
+    if peer_age is None or peer_age < threshold:
+        return True
+
+    current_pub_path = peer_cmd_public_key_path()
+    try:
+        current_key_line = Path(current_pub_path).read_text().strip()
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION READ CURRENT PUB FAIL path={current_pub_path} error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
+    current_key_type, current_key_line = parse_public_key_line(current_key_line)
+    if not current_key_type or not current_key_line:
+        log(f"PEER SSH KEY ROTATION INVALID CURRENT PUB path={current_pub_path}", "ERROR", mode="SSHKEY")
+        return False
+
+    targets = peer_rotation_targets(links)
+    if not targets:
+        return True
+
+    next_key_path, next_pub_path = generate_next_peer_ssh_keypair()
+    if not next_key_path or not next_pub_path:
+        return False
+
+    try:
+        next_key_line = Path(next_pub_path).read_text().strip()
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION READ NEXT PUB FAIL path={next_pub_path} error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
+    next_key_type, next_key_line = parse_public_key_line(next_key_line)
+    if not next_key_type or not next_key_line:
+        log(f"PEER SSH KEY ROTATION INVALID NEXT PUB path={next_pub_path}", "ERROR", mode="SSHKEY")
+        return False
+
+    log(
+        f"PEER SSH KEY ROTATION START ssh_key={PEER_CMD_SSH_KEY} age_seconds={peer_age} threshold_seconds={threshold} targets={len(targets)}",
+        "INFO",
+        mode="SSHKEY",
+    )
+
+    for target in targets:
+        ok, stdout, stderr = apply_peer_public_key_on_remote(
+            target["peer_ip"],
+            PEER_CMD_SSH_KEY,
+            next_key_type,
+            next_key_line,
+            remove=False,
+            remote_user=SCRIPT_USER,
+            target_login_user=PEER_CMD_USER,
+        )
+        if not ok:
+            log(
+                f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+    for target in targets:
+        ok, stdout, stderr = validate_peer_ssh_key_on_remote(target["peer_ip"], next_key_path)
+        if not ok:
+            log(
+                f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="SSHKEY",
+            )
+            return False
+
+    try:
+        Path(next_key_path).replace(PEER_CMD_SSH_KEY)
+        Path(next_pub_path).replace(current_pub_path)
+        Path(PEER_CMD_SSH_KEY).chmod(0o600)
+        Path(current_pub_path).chmod(0o644)
+    except Exception as e:
+        log(f"PEER SSH KEY ROTATION SWAP FAIL error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
+    for target in targets:
+        ok, _, _ = apply_peer_public_key_on_remote(
+            target["peer_ip"],
+            PEER_CMD_SSH_KEY,
+            current_key_type,
+            current_key_line,
+            remove=True,
+            remote_user=SCRIPT_USER,
+            target_login_user=PEER_CMD_USER,
+        )
+        if not ok:
+            log(
+                f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} old_key_retained=True",
+                "ERROR",
+                mode="SSHKEY",
+            )
+
+    log(
+        f"PEER SSH KEY ROTATION COMPLETE ssh_key={PEER_CMD_SSH_KEY} targets={len(targets)}",
+        "INFO",
+        mode="SSHKEY",
+    )
     return True
 
 
@@ -1696,6 +2297,9 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         return False
 
     peer_ip = link["peer_ip"]
+    # Remote QKD actions are stateful and may install keychains, bind interfaces,
+    # update state files, and perform dec_keys. They must therefore run as the
+    # full runtime script identity, not the low-privilege peer transport user.
     peer_user = SCRIPT_USER
     peer_iface = link["peer_interface"]
     cmd = f"op qkd_onbox.py action {action} iface {peer_iface}"
@@ -1704,7 +2308,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
     if generation is not None:
         cmd += f" generation {generation}"
     if start_time:
-        cmd += f" start-time {start_time}"
+        cmd += f" start-time {format_start_time_cli(start_time)}"
     if batch_b64:
         cmd += f" batch-b64 {batch_b64}"
 
@@ -1712,31 +2316,52 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
 
     ssh_cmd = [
         "ssh",
-        "-i", SSH_KEY,
+        "-i", PEER_CMD_SSH_KEY,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",
         f"{peer_user}@{peer_ip}",
         cmd,
     ]
-    try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    except subprocess.TimeoutExpired:
-        log(f"SSH TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
-        return False
-    except Exception as e:
-        log(f"SSH ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
-        return False
+    timeout_seconds = 30 if action in ("install-key", "install-key-batch") else 10
+    max_attempts = max(1, PEER_INSTALL_LOCK_RETRIES + 1) if action in ("install-key", "install-key-batch") else 1
+    retry_wait_seconds = [2, 4, 8, 12, 16]
 
-    stdout = result.stdout.decode(errors="ignore").strip()
-    stderr = result.stderr.decode(errors="ignore").strip()
-    log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
-    combined = f"{stdout}\n{stderr}"
-    failure_markers = ["ERROR", "DEC FAILED", "KEYCHAIN INSTALL FAIL", "INSTALL-KEY ABORTED", "Traceback", "PermissionError", "op script failed", "op script fails", "exit code"]
-    if result.returncode != 0 or any(marker in combined for marker in failure_markers):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            log(f"SSH TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
+            return False
+        except Exception as e:
+            log(f"SSH ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
+            return False
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+        stderr = result.stderr.decode(errors="ignore").strip()
+        log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
+        combined = f"{stdout}\n{stderr}"
+        failure_markers = ["ERROR", "DEC FAILED", "KEYCHAIN INSTALL FAIL", "INSTALL-KEY ABORTED", "Traceback", "PermissionError", "op script failed", "op script fails", "exit code"]
+        failed = result.returncode != 0 or any(marker in combined for marker in failure_markers)
+        if not failed:
+            return True
+
+        lock_busy = "RUNTIME CONFIG LOCK BUSY" in combined and action in ("install-key", "install-key-batch")
+        if lock_busy and attempt < max_attempts:
+            wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+            log(
+                f"SSH RETRY action={action} reason=REMOTE_RUNTIME_LOCK_BUSY attempt={attempt}/{max_attempts} wait={wait_seconds}s peer={peer_ip}",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            time.sleep(wait_seconds)
+            continue
+
         log(f"SSH FAIL action={action} stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
         return False
-    return True
+
+    return False
 
 
 def get_peer_status(link, iface):
@@ -1749,7 +2374,19 @@ def get_peer_status(link, iface):
     cmd = f"op qkd_onbox.py action status iface {peer_iface}"
     log(f"SSH EXEC {peer_user}@{peer_ip} action=status local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
 
-    ssh_cmd = ["ssh", "-i", SSH_KEY, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", f"{peer_user}@{peer_ip}", cmd]
+    ssh_cmd = [
+        "ssh",
+        "-i",
+        PEER_CMD_SSH_KEY,
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{peer_user}@{peer_ip}",
+        cmd,
+    ]
     try:
         result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
@@ -1872,17 +2509,15 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         log(f"INSTALL-KEY ABORTED reason=INTERFACE_BIND_FAILED ca={ca_name} keychain={keychain} key_id={key_id}", "ERROR", iface, "SLAVE")
         return False
 
-    if generation is not None:
-        state["generation"] = int(generation)
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
-    state = append_pending_key(state, state.get("generation"), key_id, start_time)
+    state = append_pending_key(state, generation, key_id, start_time)
     state["last_rotation"] = int(time.time())
     state.setdefault("installed_keys", [])
-    state["installed_keys"].append({"generation": state.get("generation"), "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
+    state["installed_keys"].append({"generation": generation, "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
     state = clear_kme_failure(peer, iface, state)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
         print(f"ERROR STATE SAVE FAIL key_id={key_id}")
@@ -1890,13 +2525,13 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         return False
 
     log(
-        f"KEYCHAIN PENDING KEY INSTALLED ca={ca_name} keychain={keychain} generation={state.get('generation')} "
+        f"KEYCHAIN PENDING KEY INSTALLED ca={ca_name} keychain={keychain} generation={generation} "
         f"pending_key_id={key_id} start_time={start_time} pending_seconds={pending_seconds_until(start_time)} promoted={promoted}",
         "INFO",
         iface,
         "SLAVE",
     )
-    customer_event("PEER_PENDING_KEY_INSTALLED", iface=iface, mode="SLAVE", rotation=rotation, generation=state.get("generation"), key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time, pending_seconds=pending_seconds_until(start_time), promoted=promoted, cycle_duration_ms=elapsed_ms(slave_cycle_start_ms))
+    customer_event("PEER_PENDING_KEY_INSTALLED", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time, pending_seconds=pending_seconds_until(start_time), promoted=promoted, cycle_duration_ms=elapsed_ms(slave_cycle_start_ms))
     print(f"OK INSTALL-KEY key_id={key_id}")
     return True
 
@@ -1988,8 +2623,6 @@ def run_slave_install_key_batch(batch_b64, iface):
         generation = entry.get("generation")
         key_id = entry.get("key_id")
         start_time = entry.get("start_time")
-        if generation is not None:
-            state["generation"] = int(generation)
         state = append_pending_key(state, generation, key_id, start_time)
         state.setdefault("installed_keys", [])
         state["installed_keys"].append(
@@ -2007,7 +2640,7 @@ def run_slave_install_key_batch(batch_b64, iface):
     state["last_rotation"] = int(time.time())
     state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
     state = clear_kme_failure(peer, iface, state)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
         print("ERROR STATE SAVE FAIL")
@@ -2017,7 +2650,7 @@ def run_slave_install_key_batch(batch_b64, iface):
         "PEER_PENDING_KEY_BATCH_INSTALLED",
         iface=iface,
         mode="SLAVE",
-        generation=state.get("generation"),
+        generation=install_entries[-1].get("generation"),
         key_count=len(install_entries),
         pending_key_id=state.get("pending_key_id"),
         promoted=promoted,
@@ -2033,13 +2666,33 @@ def run_slave_status(iface):
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-    if promoted:
+    state, promoted, state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    if promoted or state_changed:
         save_db_state(peer, iface, state)
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
     state["effective_batch_size"] = effective_batch
-    print(json.dumps(state))
+    state["enabled"] = config_enabled()
+
+    # Return a compact, contract-relevant payload to avoid oversized status JSON.
+    status_payload = {
+        "generation": state.get("generation"),
+        "ca_name": state.get("ca_name"),
+        "keychain_name": state.get("keychain_name"),
+        "active_key_id": state.get("active_key_id"),
+        "active_confirmed_at": state.get("active_confirmed_at"),
+        "pending_keys": state.get("pending_keys", []),
+        "pending_key_id": state.get("pending_key_id"),
+        "next_start_time": state.get("next_start_time"),
+        "last_rotation": state.get("last_rotation"),
+        "installed_keys": state.get("installed_keys", []),
+        "health": state.get("health", {}),
+        "runtime_mode": state.get("runtime_mode"),
+        "batch_enabled": state.get("batch_enabled"),
+        "effective_batch_size": state.get("effective_batch_size"),
+        "enabled": state.get("enabled"),
+    }
+    print(json.dumps(status_payload))
     return True
 
 
@@ -2049,7 +2702,7 @@ def bootstrap_keychain_link(link, force=False):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     old_state = load_link_state(peer, iface, link)
-    generation = next_generation(old_state)
+    generation = next_generation_safe(old_state)
     start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time()) + 60))
     state = default_keychain_state(link)
     state["generation"] = generation
@@ -2094,7 +2747,7 @@ def bootstrap_keychain_link(link, force=False):
         log("KEYCHAIN BOOTSTRAP MACSEC INUSE TIMEOUT", "ERROR", iface, "BOOTSTRAP")
         return False
 
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if not save_db_state(peer, iface, state):
         log("KEYCHAIN BOOTSTRAP STATE SAVE FAIL", "ERROR", iface, "BOOTSTRAP")
         return False
@@ -2110,7 +2763,14 @@ def bootstrap_keychain_link(link, force=False):
 
 
 def run_master():
-    master_links = [link for link in managed_links() if link.get("role") == "master"]
+    links = managed_links()
+    if not ensure_peer_ssh_key_bootstrap(links):
+        log("PEER SSH KEY BOOTSTRAP FAILED -> EXIT CURRENT MASTER CYCLE", "ERROR", mode="SSHKEY")
+        return
+    if not auto_rotate_peer_ssh_key_if_due(links):
+        log("PEER SSH KEY ROTATION FAILED -> KEEP CURRENT KEY", "ERROR", mode="SSHKEY")
+
+    master_links = [link for link in links if link.get("role") == "master"]
     if not master_links:
         return
 
@@ -2125,8 +2785,8 @@ def run_master():
 
         state = load_link_state(peer, iface, link)
         state = ensure_health_state(state)
-        state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-        if promoted:
+        state, promoted, state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
+        if promoted or state_changed:
             if not save_db_state(peer, iface, state):
                 log("STATE SAVE FAIL AFTER MKA PROMOTION", "ERROR", iface, "MASTER")
                 continue
@@ -2144,10 +2804,6 @@ def run_master():
                 log("CONTROLLED BOOTSTRAP FAILED AFTER LOCAL CONFIG INVALID", "ERROR", iface, "MASTER")
                 continue
             log("CONTROLLED BOOTSTRAP COMPLETE AFTER LOCAL CONFIG INVALID -> EXIT THIS LINK CYCLE", "INFO", iface, "MASTER")
-            continue
-
-        if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
-            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
             continue
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
@@ -2172,6 +2828,10 @@ def run_master():
                 log("KME HOLD ACTIVE BUT MACSEC NOT INUSE -> KEEP HOLD", "ERROR", iface, "MASTER")
             continue
 
+        if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
+            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
+            continue
+
         if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
             log(f"MACSEC NOT INUSE ca={ca_name} -> CONTROLLED BOOTSTRAP", "ERROR", iface, "MASTER")
             bootstrap_keychain_link(link, force=True)
@@ -2194,6 +2854,63 @@ def run_master():
             continue
 
         if not compare_peer_keychain_state(state, peer_state):
+            converging = peer_state_converging(state, peer_state)
+            in_grace, age_seconds = recent_local_promotion_grace_active(state, PEER_MISMATCH_GRACE_SECONDS)
+            if converging and in_grace and macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                log(
+                    f"PEER STATE MISMATCH GRACE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                    f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
+                    f"grace_age_seconds={age_seconds} grace_window_seconds={PEER_MISMATCH_GRACE_SECONDS}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                continue
+            if converging and macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                health = state.get("health", {})
+                pending_key = state.get("pending_key_id")
+                if health.get("peer_mismatch_defer_pending_key") != pending_key:
+                    health["peer_mismatch_defer_count"] = 0
+                    health["peer_mismatch_defer_since"] = int(time.time())
+                    health["peer_mismatch_defer_pending_key"] = pending_key
+
+                health["peer_mismatch_defer_count"] = int(health.get("peer_mismatch_defer_count", 0)) + 1
+                if int(health.get("peer_mismatch_defer_since", 0)) <= 0:
+                    health["peer_mismatch_defer_since"] = int(time.time())
+
+                defer_count = int(health.get("peer_mismatch_defer_count", 0))
+                defer_limit = peer_mismatch_defer_limit_cycles()
+                pending_age = pending_head_age_seconds(state)
+                pending_age_limit = peer_mismatch_defer_max_age_seconds()
+
+                expired_by_count = defer_count >= defer_limit
+                expired_by_age = pending_age is not None and pending_age >= pending_age_limit
+
+                if expired_by_count or expired_by_age:
+                    log(
+                        f"PEER STATE MISMATCH DEFER EXPIRED local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                        f"defer_count={defer_count} defer_limit={defer_limit} pending_age_seconds={pending_age} pending_age_limit_seconds={pending_age_limit} "
+                        f"pending_key_id={pending_key} -> CONTROLLED_BOOTSTRAP",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    health["peer_mismatch_defer_count"] = 0
+                    health["peer_mismatch_defer_since"] = 0
+                    health["peer_mismatch_defer_pending_key"] = None
+                else:
+                    state["health"] = health
+                    save_db_state(peer, iface, state)
+                    log(
+                        f"PEER STATE MISMATCH DEFER local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                        f"local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
+                        f"local_pending_key={state.get('pending_key_id')} peer_pending_key={peer_state.get('pending_key_id')} "
+                        f"defer_count={defer_count}/{defer_limit} pending_age_seconds={pending_age} pending_age_limit_seconds={pending_age_limit} reason=SHARED_KEYS_CONVERGING",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
             log(
                 f"PEER STATE MISMATCH -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} "
@@ -2206,6 +2923,14 @@ def run_master():
             )
             bootstrap_keychain_link(link, force=True)
             continue
+
+        health = state.get("health", {})
+        if int(health.get("peer_mismatch_defer_count", 0)) > 0:
+            health["peer_mismatch_defer_count"] = 0
+            health["peer_mismatch_defer_since"] = 0
+            health["peer_mismatch_defer_pending_key"] = None
+            state["health"] = health
+            save_db_state(peer, iface, state)
 
         if state.get("pending_key_id"):
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
@@ -2354,7 +3079,12 @@ def run_master():
         else:
             log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={first_start_time}", "INFO", iface, "MASTER")
 
-        state["generation"] = batch_records[-1]["generation"]
+        # Keep generation anchored to the active key generation.
+        # In batch mode we may preinstall future keys (pending), but generation
+        # must advance only when MKA confirms/promotes each pending key.
+        # Advancing here to the last scheduled generation can cause false
+        # peer mismatches and drop pending entries during normalization.
+        state["scheduled_generation_max"] = batch_records[-1]["generation"]
         state["ca_name"] = ca_name
         state["keychain_name"] = keychain
         state["last_rotation"] = int(time.time())
@@ -2372,7 +3102,7 @@ def run_master():
             )
         state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
         state = clear_kme_failure(peer, iface, state)
-        state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+        state, promoted, _state_changed = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
         if not save_db_state(peer, iface, state):
             log("STATE SAVE FAIL AFTER KEYCHAIN ROTATION", "ERROR", iface, "MASTER")
@@ -2404,7 +3134,14 @@ def run_master():
 # ----------------------------
 
 def main():
-    log("SCRIPT START", "INFO")
+    log(f"SCRIPT START {runtime_bootstrap_context()}", "INFO", mode="CONFIG")
+
+    if not config_enabled():
+        log(
+            f"QKD disabled enabled={CONFIG.get('enabled', False)} config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}",
+            "INFO",
+            mode="CONFIG",
+        )
 
     if MACSEC_MODEL != "keychain":
         log(f"UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain", "ERROR")
@@ -2414,6 +3151,11 @@ def main():
     action, key_id, iface, generation, start_time, batch_b64 = parse_slave()
 
     if action:
+        if not config_enabled() and action != "status":
+            log(f"ACTION SKIPPED while disabled action={action}", "INFO", mode="CONFIG")
+            print(f"ERROR QKD DISABLED action={action}")
+            sys.exit(1)
+
         if action == "install-key":
             if not key_id or not iface:
                 log("INVALID INSTALL-KEY ARGUMENTS", "ERROR", iface, "SLAVE")
@@ -2424,7 +3166,13 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
-                ok = run_slave_install_key(key_id, iface, generation, start_time)
+                if not acquire_runtime_config_lock(iface, action):
+                    print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
+                    sys.exit(1)
+                try:
+                    ok = run_slave_install_key(key_id, iface, generation, start_time)
+                finally:
+                    release_lock()
             finally:
                 release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
@@ -2447,7 +3195,13 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
-                ok = run_slave_install_key_batch(batch_b64, iface)
+                if not acquire_runtime_config_lock(iface, action):
+                    print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
+                    sys.exit(1)
+                try:
+                    ok = run_slave_install_key_batch(batch_b64, iface)
+                finally:
+                    release_lock()
             finally:
                 release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
@@ -2458,6 +3212,10 @@ def main():
 
     if not validate_ssh_runtime_for_master():
         sys.exit(1)
+
+    if not config_enabled():
+        log("MASTER SKIPPED while disabled", "INFO", mode="CONFIG")
+        sys.exit(0)
 
     if not acquire_lock():
         log("MASTER LOCK BUSY -> EXIT", "ERROR", mode="MASTER")

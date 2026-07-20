@@ -12,6 +12,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-001
     managed: true
     kme:
@@ -64,6 +65,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-002
     managed: true
     kme:
@@ -118,6 +120,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-003
     managed: true
     kme:
@@ -202,6 +205,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-004
     managed: true
     kme:
@@ -286,6 +290,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-005
     managed: true
     kme:
@@ -370,6 +375,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-006
     managed: true
     kme:
@@ -453,8 +459,9 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-007
-    managed: false
+    managed: true
     kme:
       ip: 100.123.252.16
       port: 8443
@@ -520,8 +527,9 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-008
-    managed: false
+    managed: true
     kme:
       ip: 100.123.252.17
       port: 8443
@@ -573,6 +581,7 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-009
     managed: true
     kme:
@@ -640,8 +649,9 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-010
-    managed: false
+    managed: true
     kme:
       ip: 100.123.252.19
       port: 8443
@@ -692,8 +702,9 @@ devices:
       username: admin
       password: juniper1
     script_user: macsec_user
+    peer_cmd_user: etsi_peer_view
     sae_id: sae-011
-    managed: false
+    managed: true
     kme:
       ip: 100.123.252.20
       port: 8443
