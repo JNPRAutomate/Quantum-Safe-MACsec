@@ -313,6 +313,27 @@ def log(msg, level="INFO", iface=None, mode=None):
         write_log_line(link_log_file)
 
 
+def log_key_timeline(iface, event, **fields):
+    """Write a single minimal line to the per-link rotation timeline log.
+
+    File: <LOG_DIR>/qkd_rotation_timeline_<DEVICE>_<iface>.log
+    Format:
+        2026-07-20 18:30:00  ROTATION    gen=42..46  keys=5  first=abc12345  next_start=2026-07-20T18:31:00  pending=5
+        2026-07-20 18:31:02  PROMOTE     gen=42  key=abc12345  pending=4  delay_ms=2034
+    """
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    field_str = "  ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+    line = f"{ts}  {event:<10}  {field_str}\n"
+    safe_iface = iface.replace("/", "_")
+    log_file = f"{LOG_DIR}/qkd_rotation_timeline_{DEVICE}_{safe_iface}.log"
+    try:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 # ----------------------------
 # LINK VALIDATION / NORMALIZATION
 # ----------------------------
@@ -1601,6 +1622,14 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         "INFO",
         iface,
         "MKA",
+    )
+    log_key_timeline(
+        iface,
+        "PROMOTE",
+        gen=state.get("generation"),
+        key=str(pending_key_id or "")[:8],
+        pending=len(state.get("pending_keys", [])),
+        delay_ms=promotion_delay_ms,
     )
     customer_event(
         "PENDING_KEY_PROMOTED",
@@ -3127,6 +3156,15 @@ def run_master():
             "MASTER",
         )
         customer_event("ROTATION_DONE", iface=iface, mode="MASTER", rotation=rotation, generation=state.get("generation"), key_id=state.get("pending_key_id"), ca=ca_name, keychain=keychain, start_time=state.get("next_start_time"), pending_seconds=pending_seconds_until(state.get("next_start_time")), promoted=promoted, peer_latency_ms=elapsed_ms(peer_notify_start_ms), local_install_latency_ms=elapsed_ms(local_install_start_ms), cycle_duration_ms=elapsed_ms(rotation_start_ms), key_count=len(batch_records))
+        log_key_timeline(
+            iface,
+            "ROTATION",
+            gen=f"{batch_records[0]['generation']}..{batch_records[-1]['generation']}" if len(batch_records) > 1 else batch_records[0]['generation'],
+            keys=len(batch_records),
+            first=str(batch_records[0]["key_id"])[:8],
+            next_start=batch_records[0]["start_time"],
+            pending=len(state.get("pending_keys", [])),
+        )
 
 
 # ----------------------------

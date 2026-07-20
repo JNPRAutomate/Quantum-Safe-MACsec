@@ -326,6 +326,47 @@ The key operational implication is:
 
 The system therefore behaves like "one commit per batch refill", not "one commit per minute" and not "one commit per promotion".
 
+## 4.4.1 Concrete timing example
+
+Using the default policy values (`interval_seconds: 60`, `key_batch_size: 5`):
+
+```
+t=0       ROTATION DECISION
+          → fetch 5 key-id from KME
+          → install keychain batch:
+              key[0]  start_time = T + X
+              key[1]  start_time = T + X + 60
+              key[2]  start_time = T + X + 120
+              key[3]  start_time = T + X + 180
+              key[4]  start_time = T + X + 240
+          → 1 Junos commit (master side)
+          → 1 Junos commit (peer slave side)
+          pending_keys = [k0, k1, k2, k3, k4]
+
+t ≈  60s  MKA confirms k0 → promoted to active
+          pending_keys = [k1, k2, k3, k4]
+          → ROTATION SKIP reason=PENDING_KEY_SCHEDULED_NOT_DUE
+
+t ≈ 120s  MKA confirms k1 → promoted to active
+          pending_keys = [k2, k3, k4]
+          → ROTATION SKIP
+
+t ≈ 180s  MKA confirms k2 → promoted to active
+          pending_keys = [k3, k4]
+          → ROTATION SKIP
+
+t ≈ 240s  MKA confirms k3 → promoted to active
+          pending_keys = [k4]
+          → ROTATION SKIP (k4 still future)
+
+t ≈ 300s  MKA confirms k4 → promoted to active
+          pending_keys = []
+          → queue exhausted → ROTATION DECISION
+          → next batch fetch and commit
+```
+
+One Junos commit on each side approximately every 5 minutes. MKA key confirmations and state promotions happen every ~60 seconds but do not trigger any Junos commit.
+
 ## 4.5 Observability and logs
 
 The runtime logs by functional mode:
