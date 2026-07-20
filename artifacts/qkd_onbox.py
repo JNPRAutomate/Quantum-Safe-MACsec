@@ -2000,7 +2000,7 @@ def parse_public_key_line(public_key_line):
     key_type = parts[0].strip()
     if not (key_type.startswith("ssh-") or key_type.startswith("ecdsa-")):
         return None, None
-    return key_type, " ".join(parts[1:])
+    return key_type, " ".join(parts)
 
 
 def ssh_remote_exec(peer_ip, ssh_key_path, remote_cmd, iface=None, mode_ctx="MASTER", timeout=20, remote_user=None, stdin_text=None):
@@ -2092,8 +2092,17 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
     login_user = target_login_user or PEER_CMD_USER or SCRIPT_USER
     remote_set_path = f"/var/tmp/qkd_peer_auth_{login_user}.set"
+    # For SET: key_line includes type prefix (Junos requires it for validation)
+    # For DELETE: strip type prefix because Junos has normalized it internally to just base64+comment
+    if remove:
+        # DELETE: extract value without type prefix (what Junos actually stored)
+        parts = (key_line or "").strip().split(maxsplit=1)
+        value_for_cmd = parts[1] if len(parts) > 1 else key_line
+    else:
+        # SET: use full line with type prefix for Junos validation
+        value_for_cmd = key_line
     set_line = (
-        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
+        f"{action} system login user {login_user} authentication {key_type} \"{value_for_cmd}\"\n"
     )
     upload_cmd = f"start shell command \"cat >{remote_set_path}\""
     apply_cmd = (
