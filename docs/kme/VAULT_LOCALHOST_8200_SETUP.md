@@ -188,16 +188,29 @@ Use `VAULT_TOKEN` in environment instead.
 
     qkd_env_from_vault() {
       export VAULT_ADDR="http://127.0.0.1:8200"
+      local SECRET_PATH="${1:-secret/qkd/live}"
       local ROLE_ID SECRET_ID APP_TOKEN
-      ROLE_ID="$(cat "$HOME/.config/qkd/role_id")" || return 1
-      SECRET_ID="$(cat "$HOME/.config/qkd/secret_id")" || return 1
+      local BOOTSTRAP_PASSWORD SCRIPT_PASSWORD DEFAULT_PASSWORD
+
+      ROLE_ID="$(tr -d '\r\n' < "$HOME/.config/qkd/role_id")" || return 1
+      SECRET_ID="$(tr -d '\r\n' < "$HOME/.config/qkd/secret_id")" || return 1
+      [[ -n "$ROLE_ID" && -n "$SECRET_ID" ]] || { echo "role_id/secret_id missing"; return 1; }
+
       APP_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")" || return 1
-      export QKD_BOOTSTRAP_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=bootstrap_password secret/qkd/live)" || return 1
-      export QKD_SCRIPT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=script_password secret/qkd/live)" || return 1
-      export QKD_DEFAULT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=default_password secret/qkd/live)" || return 1
+      [[ -n "$APP_TOKEN" ]] || { echo "AppRole login failed"; return 1; }
+
+      BOOTSTRAP_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=bootstrap_password "$SECRET_PATH")" || { VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true; return 1; }
+      SCRIPT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=script_password "$SECRET_PATH")" || { VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true; return 1; }
+      DEFAULT_PASSWORD="$(VAULT_TOKEN="$APP_TOKEN" vault kv get -field=default_password "$SECRET_PATH")" || { VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true; return 1; }
+
+      export QKD_BOOTSTRAP_PASSWORD="$BOOTSTRAP_PASSWORD"
+      export QKD_SCRIPT_PASSWORD="$SCRIPT_PASSWORD"
+      export QKD_DEFAULT_PASSWORD="$DEFAULT_PASSWORD"
+
       VAULT_TOKEN="$APP_TOKEN" vault token revoke -self >/dev/null 2>&1 || true
-      unset APP_TOKEN ROLE_ID SECRET_ID
-      echo "QKD env loaded in current shell"
+      [[ -n "$QKD_BOOTSTRAP_PASSWORD" && -n "$QKD_SCRIPT_PASSWORD" && -n "$QKD_DEFAULT_PASSWORD" ]] || { echo "empty QKD secret value"; return 1; }
+
+      echo "QKD env loaded in current shell from $SECRET_PATH"
     }
 
   Reload and test:
@@ -206,6 +219,8 @@ Use `VAULT_TOKEN` in environment instead.
     type qkd_env_from_vault
     qkd_env_from_vault
     env | grep '^QKD_' | cut -d= -f1
+
+  If your policy only grants access to `secret/qkd/live`, do not use `secret/qkd/aterren` unless policy was extended.
 
   ## 9. Troubleshooting
 
