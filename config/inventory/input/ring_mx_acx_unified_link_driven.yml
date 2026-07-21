@@ -160,10 +160,10 @@ links:
   ca_name: CA_MX5_MX6
   keychain_name: QKD_CA_MX5_MX6
 - id: MX6-MX1
-  node_a: MX6
-  interface_a: et-0/0/7
-  node_b: MX1
-  interface_b: et-0/0/2
+  node_a: MX1
+  interface_a: et-0/0/2
+  node_b: MX6
+  interface_b: et-0/0/7
   ca_name: CA_MX6_MX1
   keychain_name: QKD_CA_MX6_MX1
 - id: MX3-MX5
