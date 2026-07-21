@@ -153,17 +153,17 @@ links:
   ca_name: CA_MX4_MX5
   keychain_name: QKD_CA_MX4_MX5
 - id: MX5-MX6
-  node_a: MX5
+  node_a: MX6
   interface_a: et-0/0/4
-  node_b: MX6
+  node_b: MX5
   interface_b: et-0/0/4
   ca_name: CA_MX5_MX6
   keychain_name: QKD_CA_MX5_MX6
 - id: MX6-MX1
-  node_a: MX1
-  interface_a: et-0/0/2
-  node_b: MX6
-  interface_b: et-0/0/7
+  node_a: MX6
+  interface_a: et-0/0/7
+  node_b: MX1
+  interface_b: et-0/0/2
   ca_name: CA_MX6_MX1
   keychain_name: QKD_CA_MX6_MX1
 - id: MX3-MX5
@@ -176,17 +176,17 @@ links:
   keychain_name: QKD_CA_MX3_MX5
 - id: MX3-MX6
   type: extra
-  node_a: MX3
+  node_a: MX6
   interface_a: et-0/0/8
-  node_b: MX6
+  node_b: MX3
   interface_b: et-0/0/8
   ca_name: CA_MX3_MX6
   keychain_name: QKD_CA_MX3_MX6
 - id: MX4-MX6
   type: extra
-  node_a: MX4
+  node_a: MX6
   interface_a: et-0/0/6
-  node_b: MX6
+  node_b: MX4
   interface_b: et-0/0/6
   ca_name: CA_MX4_MX6
   keychain_name: QKD_CA_MX4_MX6
