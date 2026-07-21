@@ -5,16 +5,17 @@ Uses Paramiko for direct SSH execution of shell commands.
 Counts PEER SSH KEY ROTATION events from QKD rotation logs.
 """
 
+import warnings
 import sys
 import os
-import warnings
 from pathlib import Path
 from getpass import getpass
+
+# Suppress cryptography deprecation warnings BEFORE importing paramiko
+warnings.filterwarnings("ignore")
+
 import paramiko
 from datetime import datetime
-
-# Suppress cryptography deprecation warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Auto-detect workspace root
 WORKSPACE_ROOT = Path(__file__).parent.parent
