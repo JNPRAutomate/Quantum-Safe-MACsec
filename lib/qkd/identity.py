@@ -1241,8 +1241,7 @@ def check_onbox_embedded_config(device):
         if result.returncode != 0:
             failed.append((path, marker, result.stdout, result.stderr))
         else:
-            print(f"[OK] on-box config check on {name}: {marker} found in {path}")
-            print_if_verbose(result.stdout)
+            print_if_verbose(f"[OK] on-box config check on {name}: {marker} found in {path}")
 
     if failed:
         lines = []
@@ -1258,7 +1257,7 @@ def check_onbox_embedded_config(device):
         )
 
     print(
-        f"[OK] on-box JSON identity verified on {name}: script_user={script_user} ssh_key={expected_key} peer_cmd_user={peer_cmd_user} peer_cmd_ssh_key={expected_peer_key}"
+        f"[OK] on-box JSON identity on {name}: script_user={script_user} peer_cmd_user={peer_cmd_user}"
     )
 
 
@@ -1291,8 +1290,7 @@ def check_onbox_runtime_policy_config(device):
         if result.returncode != 0:
             failed.append((path, label, marker, result.stdout, result.stderr))
         else:
-            print(f"[OK] on-box config check on {name}: {label} present in {path}")
-            print_if_verbose(result.stdout)
+            print_if_verbose(f"[OK] on-box config check on {name}: {label} present in {path}")
     print(f"[OK] on-box runtime config on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
     if failed:
         lines = []
