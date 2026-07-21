@@ -80,8 +80,8 @@ def get_rotation_count(sae_id, password=None):
         else:
             return rotation_count, last_timestamp, "No auth"
         
-        # Count rotations - use bash -c to ensure shell execution
-        cmd_count = f"/bin/bash -c \"grep -c 'PEER SSH KEY ROTATION' {log_file} 2>&1\""
+        # Count rotations - send command directly (may need shell entry on Juniper)
+        cmd_count = f"grep -c 'PEER SSH KEY ROTATION' {log_file} 2>&1"
         print(f"[DEBUG] Device {device_ip}: {cmd_count}", file=sys.stderr)
         stdin, stdout, stderr = client.exec_command(cmd_count)
         count_output = stdout.read().decode().strip()
@@ -99,7 +99,7 @@ def get_rotation_count(sae_id, password=None):
         
         # Get last timestamp if rotations exist
         if rotation_count > 0:
-            cmd_last = f"/bin/bash -c \"grep 'PEER SSH KEY ROTATION' {log_file} 2>&1 | tail -1\""
+            cmd_last = f"grep 'PEER SSH KEY ROTATION' {log_file} 2>&1 | tail -1"
             stdin, stdout, stderr = client.exec_command(cmd_last)
             last_output = stdout.read().decode().strip()
             if last_output:
