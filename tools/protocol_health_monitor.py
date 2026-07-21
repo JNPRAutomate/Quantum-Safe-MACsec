@@ -51,6 +51,7 @@ PROTOCOL_COMMANDS = {
     "LDP": "show ldp session",
     "ISIS": "show isis adjacency",
     "LLDP": "show lldp neighbors",
+    "MPLS": "show mpls lsp",
 }
 
 class ProtocolState:
@@ -266,6 +267,20 @@ def parse_protocol_output(protocol, output):
             "neighbors": neighbor_count,
         }
     
+    elif protocol == "MPLS":
+        # Count LSPs and their states
+        lsp_count = 0
+        up_count = 0
+        for line in lines:
+            if "Name:" in line or "lsp" in line.lower():
+                lsp_count += 1
+            if "Up" in line:
+                up_count += 1
+        return {
+            "lsps": lsp_count,
+            "up": up_count,
+        }
+    
     return {"status": "unknown"}
 
 
@@ -336,6 +351,8 @@ def monitor_protocols_continuous(password=None, duration=300, interval=10, verbo
                             print(f"ISIS: {state.get('up', 0)} | ", end="")
                         elif protocol == "LLDP":
                             print(f"LLDP: {state.get('neighbors', 0)} | ", end="")
+                        elif protocol == "MPLS":
+                            print(f"MPLS: {state.get('up', 0)}/{state.get('lsps', 0)} | ", end="")
                     else:
                         print(f"{protocol}: {state} | ", end="")
                 
