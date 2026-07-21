@@ -301,10 +301,14 @@ def format_tunnel_status(health_data):
     mka_transient = macsec.get('transient', 0)
     mka_down = macsec.get('down', 0)
     
-    # Key summary
+    # Key summary - handle None values
     pending_stale = keys.get('pending_stale_count', 0)
-    active_key = keys.get('active_key_id', 'None')[:8]
-    pending_key = keys.get('pending_key_id', 'None')[:8]
+    active_key = keys.get('active_key_id') or 'None'
+    pending_key = keys.get('pending_key_id') or 'None'
+    
+    # Safely slice keys
+    active_key_short = (active_key[:8] if active_key else 'None')
+    pending_key_short = (pending_key[:8] if pending_key else 'None')
     
     # Status indicators
     status = f"MKA: {mka_up}↑"
@@ -313,7 +317,7 @@ def format_tunnel_status(health_data):
     if mka_down > 0:
         status += f" {mka_down}↓"
     
-    status += f" | Active: {active_key} | Pending: {pending_key}"
+    status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
     
     if pending_stale > 0:
         status += f" | ⚠️ STALE: {pending_stale}"
