@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SSH Key Rotation Report - Juniper Device Collector
-Uses PyEZ for reliable remote command execution on all 11 devices.
+Uses Paramiko for direct SSH execution of shell commands.
 Counts PEER SSH KEY ROTATION events from QKD rotation logs.
 """
 
@@ -9,8 +9,7 @@ import sys
 import os
 from pathlib import Path
 from getpass import getpass
-from jnpr.junos import Device
-from jnpr.junos.exception import ConnectError, RpcTimeoutError
+import paramiko
 from datetime import datetime
 
 # Auto-detect workspace root
@@ -42,7 +41,7 @@ def get_auth():
     return password
 
 def get_rotation_count(sae_id, password=None):
-    """Connect to device and count PEER SSH KEY ROTATION events."""
+    """Connect to device via SSH and count PEER SSH KEY ROTATION events."""
     device_name, device_ip = DEVICES[sae_id]
     key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
     log_file = f"/var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-{sae_id}.log"
@@ -51,59 +50,58 @@ def get_rotation_count(sae_id, password=None):
     last_timestamp = "N/A"
     
     try:
-        # Determine auth method
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        # Connect with either key or password
         if Path(key_path).exists():
-            dev = Device(
-                host=device_ip,
-                user="labuser",
-                ssh_private_key_file=key_path,
-                ssh_config=False,
-                auto_probe=1,
-                timeout=10
+            client.connect(
+                device_ip,
+                username="labuser",
+                key_filename=key_path,
+                timeout=10,
+                look_for_keys=False,
+                allow_agent=False
             )
         elif password:
-            dev = Device(
-                host=device_ip,
-                user="labuser",
+            client.connect(
+                device_ip,
+                username="labuser",
                 password=password,
-                ssh_config=False,
-                auto_probe=1,
-                timeout=10
+                timeout=10,
+                look_for_keys=False,
+                allow_agent=False
             )
         else:
-            return rotation_count, last_timestamp, "No auth method"
+            return rotation_count, last_timestamp, "No auth"
         
-        # Connect and execute command
-        dev.open()
-        
-        # Use PyEZ's rpc method to execute shell commands via request shell
         # Count rotations
-        result = dev.rpc.request_shell(command=f"grep -c 'PEER SSH KEY ROTATION' {log_file}")
+        cmd_count = f"grep -c 'PEER SSH KEY ROTATION' {log_file}"
+        stdin, stdout, stderr = client.exec_command(cmd_count)
+        count_output = stdout.read().decode().strip()
         
-        # Parse the count
-        if result and result.text:
-            try:
-                rotation_count = int(result.text.strip())
-            except (ValueError, AttributeError):
-                rotation_count = 0
+        try:
+            rotation_count = int(count_output) if count_output else 0
+        except ValueError:
+            rotation_count = 0
         
         # Get last timestamp if rotations exist
         if rotation_count > 0:
-            result_ts = dev.rpc.request_shell(
-                command=f"grep 'PEER SSH KEY ROTATION' {log_file} | tail -1"
-            )
-            if result_ts and result_ts.text:
-                parts = result_ts.text.strip().split()
+            cmd_last = f"grep 'PEER SSH KEY ROTATION' {log_file} | tail -1"
+            stdin, stdout, stderr = client.exec_command(cmd_last)
+            last_output = stdout.read().decode().strip()
+            if last_output:
+                parts = last_output.split()
                 if len(parts) >= 2:
                     last_timestamp = f"{parts[0]} {parts[1]}"
         
-        dev.close()
+        client.close()
         return rotation_count, last_timestamp, None
         
-    except ConnectError as e:
-        return 0, "N/A", f"Connect: {str(e)[:30]}"
-    except RpcTimeoutError:
-        return 0, "N/A", "Timeout"
+    except paramiko.ssh_exception.NoValidConnectionsError:
+        return 0, "N/A", f"No route to {device_ip}"
+    except paramiko.ssh_exception.AuthenticationException:
+        return 0, "N/A", "Auth failed"
     except Exception as e:
         return 0, "N/A", f"Error: {str(e)[:20]}"
 
