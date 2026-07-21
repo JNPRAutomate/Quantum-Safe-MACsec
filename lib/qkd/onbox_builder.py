@@ -519,6 +519,15 @@ def build_onbox_artifacts(devices, placeholder_json=False):
             outputs[name]["config_json"] = static_json
             outputs[name]["inventory_json"] = inventory_json
 
+            print(
+                f"  -> {device_runtime_dir.name}/qkd_onbox.py  "
+                f"(runtime script: KME key fetch, MACsec keychain install, SSH key rotation)\n"
+                f"  -> {device_runtime_dir.name}/qkd_onbox_config.json  "
+                f"(static config: KME endpoint, PKI profile, policy)\n"
+                f"  -> {device_runtime_dir.name}/qkd_onbox_inventory.json  "
+                f"({n_links} link(s): peer SAE IDs, interfaces, keychains)"
+            )
+
         elif mode == "static":
             # Static mode does not need qkd_onbox.py.
             # Keep empty output entry for backward compatibility.
