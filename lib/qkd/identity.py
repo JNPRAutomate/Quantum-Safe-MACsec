@@ -958,6 +958,8 @@ def install_peer_authorized_keys(devices):
                 print(
                     f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
                     f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
+                    f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) in Junos authorized-keys for user '{sync_target_user}'"
+                    f"\n       Sources: {', '.join(sorted(source_names)) if source_names else '(none)'}"
                 )
                 dev.open()
                 with Config(dev) as cu:
@@ -1215,7 +1217,7 @@ def check_onbox_embedded_config(device):
         if result.returncode != 0:
             failed.append((path, marker, result.stdout, result.stderr))
         else:
-            print(f"[OK] external runtime marker on {name}: path={path} marker={marker}")
+            print(f"[OK] on-box config check on {name}: {marker} found in {path}")
             print_if_verbose(result.stdout)
 
     if failed:
@@ -1228,11 +1230,11 @@ def check_onbox_embedded_config(device):
                 f"  stderr={stderr}"
             )
         raise RuntimeError(
-            f"external qkd_onbox JSON identity validation failed on {name}\n" + "\n".join(lines)
+            f"on-box JSON config validation failed on {name}: expected values not found in deployed JSON\n" + "\n".join(lines)
         )
 
     print(
-        f"[OK] external JSON identity on {name}: script_user={script_user} ssh_key={expected_key} peer_cmd_user={peer_cmd_user} peer_cmd_ssh_key={expected_peer_key}"
+        f"[OK] on-box JSON identity verified on {name}: script_user={script_user} ssh_key={expected_key} peer_cmd_user={peer_cmd_user} peer_cmd_ssh_key={expected_peer_key}"
     )
 
 
@@ -1265,9 +1267,9 @@ def check_onbox_runtime_policy_config(device):
         if result.returncode != 0:
             failed.append((path, label, marker, result.stdout, result.stderr))
         else:
-            print(f"[OK] external runtime marker on {name}: {label} ({path})")
+            print(f"[OK] on-box config check on {name}: {label} present in {path}")
             print_if_verbose(result.stdout)
-    print(f"[OK] external runtime CONFIG on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
+    print(f"[OK] on-box runtime config on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
     if failed:
         lines = []
         for path, label, marker, stdout, stderr in failed:
