@@ -41,7 +41,7 @@ def get_auth():
     password = getpass("Enter SSH password (same for all devices): ")
     return password
 
-def get_rotation_count(device, sae_id, password=None):
+def get_rotation_count(sae_id, password=None):
     """Connect to device and count PEER SSH KEY ROTATION events."""
     device_name, device_ip = DEVICES[sae_id]
     key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
