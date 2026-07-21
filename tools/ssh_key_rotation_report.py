@@ -8,6 +8,7 @@ Counts PEER SSH KEY ROTATION events from QKD rotation logs.
 import warnings
 import sys
 import os
+import argparse
 from pathlib import Path
 from getpass import getpass
 import time
@@ -46,7 +47,12 @@ def get_auth():
     password = getpass("Enter SSH password (same for all devices): ")
     return password
 
-def get_rotation_count(sae_id, password=None):
+def debug_print(msg, verbose):
+    """Print debug message only if verbose mode enabled."""
+    if verbose:
+        print(f"[DEBUG] {msg}", file=sys.stderr)
+
+def get_rotation_count(sae_id, password=None, verbose=False):
     """Connect to device via SSH and count PEER SSH KEY ROTATION events."""
     device_name, device_ip = DEVICES[sae_id]
     key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
@@ -94,7 +100,7 @@ def get_rotation_count(sae_id, password=None):
             output += chunk
             time.sleep(0.1)
         
-        print(f"[DEBUG] Device {device_ip}: Shell ready", file=sys.stderr)
+        debug_print(f"Device {device_ip}: Shell ready", verbose)
         
         # Now send grep command in Unix shell
         grep_cmd = f"grep -c 'PEER SSH KEY ROTATION' {log_file}\n"
@@ -103,7 +109,7 @@ def get_rotation_count(sae_id, password=None):
         
         # Read output
         output = shell.recv(4096).decode()
-        print(f"[DEBUG] Device {device_ip}: Raw output:\n{output}", file=sys.stderr)
+        debug_print(f"Device {device_ip}: Raw output:\n{output}", verbose)
         
         # Extract numeric value from output
         count_output = "0"
@@ -112,7 +118,7 @@ def get_rotation_count(sae_id, password=None):
                 count_output = line.strip()
                 break
         
-        print(f"[DEBUG] Count: '{count_output}'", file=sys.stderr)
+        debug_print(f"Count: '{count_output}'", verbose)
         
         # Check if grep returned an error (file not found)
         if "No such file" in count_output or "cannot open" in count_output:
@@ -130,9 +136,12 @@ def get_rotation_count(sae_id, password=None):
             time.sleep(0.5)
             
             ts_output = shell.recv(4096).decode()
-            # Find line with PEER SSH KEY ROTATION
+            debug_print(f"Device {device_ip}: Timestamp output:\n{ts_output}", verbose)
+            
+            # Find line with PEER SSH KEY ROTATION (should be YYYY-MM-DD HH:MM:SS ...)
             for line in ts_output.split('\n'):
                 if "PEER SSH KEY ROTATION" in line:
+                    # Extract date and time (first two whitespace-separated tokens)
                     parts = line.split()
                     if len(parts) >= 2:
                         last_timestamp = f"{parts[0]} {parts[1]}"
@@ -151,6 +160,17 @@ def get_rotation_count(sae_id, password=None):
         return 0, "N/A", f"Error: {str(e)[:20]}"
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="SSH Key Rotation Report - Collect rotation counts from all 11 Juniper devices"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose debug output"
+    )
+    args = parser.parse_args()
+    
     print("╔════════════════════════════════════════════════════════════════════════╗")
     print("║              SSH KEY ROTATION REPORT - ALL DEVICES                    ║")
     print(f"║                    {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}                          ║")
@@ -165,7 +185,7 @@ def main():
     
     for sae_id in sorted(DEVICES.keys()):
         device_name, device_ip = DEVICES[sae_id]
-        rotation_count, last_timestamp, error = get_rotation_count(sae_id, password)
+        rotation_count, last_timestamp, error = get_rotation_count(sae_id, password, args.verbose)
         
         # Format output
         status = f"│ Rotations: {rotation_count:2d} │ Last: {last_timestamp}"
