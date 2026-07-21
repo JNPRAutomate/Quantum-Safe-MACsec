@@ -235,9 +235,9 @@ links:
   ca_name: CA_ACX4_ACX5
   keychain_name: QKD_CA_ACX4_ACX5
 - id: ACX5-ACX1
-  node_a: ACX5
-  interface_a: et-0/0/2
-  node_b: ACX1
-  interface_b: et-2/0/2
+  node_a: ACX1
+  interface_a: et-2/0/2
+  node_b: ACX5
+  interface_b: et-0/0/2
   ca_name: CA_ACX5_ACX1
   keychain_name: QKD_CA_ACX5_ACX1
