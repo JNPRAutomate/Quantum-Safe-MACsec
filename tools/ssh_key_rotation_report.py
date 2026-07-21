@@ -140,7 +140,7 @@ def get_rotation_count(sae_id, password=None, verbose=False):
         debug_print(f"Device {device_ip}: Shell ready after {attempts} attempts", verbose)
         
         # Now send grep command in Unix shell using helper function
-        output = send_shell_command(shell, f"grep -c 'PEER SSH KEY ROTATION' {log_file}", verbose)
+        output = send_shell_command(shell, f"grep -c 'ROTATION COMPLETE' {log_file}", verbose)
         
         # Extract numeric value from output
         count_output = "0"
@@ -164,12 +164,12 @@ def get_rotation_count(sae_id, password=None, verbose=False):
         
         # Get last timestamp if rotations exist
         if rotation_count > 0:
-            ts_output = send_shell_command(shell, f"grep 'PEER SSH KEY ROTATION' {log_file} | tail -1", verbose)
+            ts_output = send_shell_command(shell, f"grep 'ROTATION COMPLETE' {log_file} | tail -1", verbose)
             debug_print(f"Device {device_ip}: Timestamp raw output:\n{ts_output}", verbose)
             
-            # Find line with PEER SSH KEY ROTATION (should be YYYY-MM-DD HH:MM:SS ...)
+            # Find line with ROTATION COMPLETE (should be YYYY-MM-DD HH:MM:SS ...)
             for line in ts_output.split('\n'):
-                if "PEER SSH KEY ROTATION" in line:
+                if "ROTATION COMPLETE" in line:
                     # Extract date and time (first two whitespace-separated tokens)
                     parts = line.split()
                     if len(parts) >= 2:
