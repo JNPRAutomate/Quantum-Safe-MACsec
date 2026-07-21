@@ -56,26 +56,38 @@ def debug_print(msg, verbose):
 def send_shell_command(shell, command, verbose=False):
     """Send command to shell and wait for prompt, returning output."""
     shell.send(command + "\n")
-    time.sleep(0.3)
+    time.sleep(0.2)
     
     output = ""
-    max_attempts = 20  # ~2 seconds with 0.1s sleep
+    max_attempts = 25
     attempts = 0
     
-    # Read until we see the shell prompt (%) indicating command completion
+    # Read until we see the shell prompt (%)
     while attempts < max_attempts:
         try:
             chunk = shell.recv(1024).decode()
             if chunk:
                 output += chunk
-                if "%" in output:
-                    break  # Command complete, prompt appeared
+                if "%" in chunk:  # Check in new chunk, not accumulated output
+                    break
         except socket.timeout:
             break
         except Exception:
             break
         time.sleep(0.1)
         attempts += 1
+    
+    # Flush any remaining buffer to prevent slowdown on next command
+    shell.settimeout(0.1)
+    try:
+        while True:
+            leftover = shell.recv(1024).decode()
+            if not leftover:
+                break
+            output += leftover
+    except (socket.timeout, Exception):
+        pass
+    shell.settimeout(5.0)  # Restore timeout
     
     debug_print(f"Shell output: {repr(output[:200])}...", verbose)
     return output
@@ -138,6 +150,17 @@ def get_rotation_count(sae_id, password=None, verbose=False):
             attempts += 1
         
         debug_print(f"Device {device_ip}: Shell ready after {attempts} attempts", verbose)
+        
+        # Flush buffer after shell entry to start clean
+        shell.settimeout(0.1)
+        try:
+            while True:
+                leftover = shell.recv(1024).decode()
+                if not leftover:
+                    break
+        except (socket.timeout, Exception):
+            pass
+        shell.settimeout(5.0)  # Restore timeout
         
         # Now send grep command in Unix shell using helper function
         output = send_shell_command(shell, f"grep -c 'ROTATION COMPLETE' {log_file}", verbose)
