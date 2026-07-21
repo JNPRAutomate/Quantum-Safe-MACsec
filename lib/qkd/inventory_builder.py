@@ -109,10 +109,14 @@ def generate_macsec_keys() -> Dict[str, str]:
 
     QKD mode does not use this because qkd_onbox.py installs and rotates
     authentication-key-chain entries at runtime.
+    
+    Per Juniper security best practices:
+    - CKN (Connectivity Association Key Name): 64 hex digits (32 bytes, 256-bit)
+    - CAK (Connectivity Association Key): 64 hex digits (32 bytes, 256-bit)
     """
     return {
-        "ckn": secrets.token_hex(8),
-        "cak": secrets.token_hex(16),
+        "ckn": secrets.token_hex(32),  # 64 hex digits = 256-bit
+        "cak": secrets.token_hex(32),  # 64 hex digits = 256-bit
     }
 
 

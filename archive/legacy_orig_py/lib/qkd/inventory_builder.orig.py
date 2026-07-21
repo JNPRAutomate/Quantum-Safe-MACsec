@@ -11,8 +11,8 @@ from lib.common.settings import CONFIG
 
 def generate_macsec_keys():
     return {
-        "ckn": secrets.token_hex(8),   # 64-bit
-        "cak": secrets.token_hex(16)   # 128-bit
+        "ckn": secrets.token_hex(32),   # 256-bit (64 hex digits)
+        "cak": secrets.token_hex(32)   # 256-bit (64 hex digits)
     }
 
 # ----------------------------------------
