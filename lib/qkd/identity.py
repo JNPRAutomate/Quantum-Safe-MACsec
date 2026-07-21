@@ -959,12 +959,21 @@ def install_peer_authorized_keys(devices):
                     f'set system login user {sync_target_user} authentication {key_type} "{key_line}"'
                     for key_type, key_line in desired_keys
                 ]
-                print(
-                    f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
-                    f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
-                    f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) in Junos authorized-keys for user '{sync_target_user}'"
-                    f"\n       Sources: {', '.join(sorted(source_names)) if source_names else '(none)'}"
-                )
+                sources_label = ', '.join(sorted(source_names)) if source_names else '(none)'
+                if set(configured_keys) == set(desired_keys):
+                    # Already in sync - one-liner, no need to show action detail
+                    print(
+                        f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
+                        f"keys={len(set_cmds)} sources={sources_label} attempt={attempt}/{max_attempts}"
+                    )
+                else:
+                    # Change needed - show what will be done
+                    print(
+                        f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
+                        f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
+                        f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) in Junos authorized-keys for user '{sync_target_user}'"
+                        f"\n       Sources: {sources_label}"
+                    )
                 dev.open()
                 with Config(dev) as cu:
                     for cmd in delete_cmds:
@@ -993,9 +1002,14 @@ def install_peer_authorized_keys(devices):
                 last_error = exc
                 if is_config_locked_error(exc) and attempt < max_attempts:
                     wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+                    # Extract just the lock holder line from the error, not the full XML trace
+                    err_str = str(exc)
+                    lock_line = next(
+                        (line.strip() for line in err_str.splitlines() if 'on since' in line or 'exclusive' in line or 'pid' in line),
+                        err_str[:120]
+                    )
                     print(
-                        f"[WARN] peer SSH key sync lock target={target} attempt={attempt}/{max_attempts} "
-                        f"wait={wait_seconds}s error={exc}"
+                        f"[WARN] peer SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
                     )
                     time.sleep(wait_seconds)
                     continue
