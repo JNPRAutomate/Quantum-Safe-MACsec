@@ -4,8 +4,8 @@
 # Collects PEER SSH KEY ROTATION COMPLETE counts from all 11 devices
 # Shows number of successful rotations per device + last rotation timestamp
 #
-
-set -e
+# Usage: sh tools/ssh_key_rotation_report.sh [password]
+#
 
 # Auto-detect workspace root (parent of tools directory)
 WORKSPACE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,11 +26,47 @@ declare -A DEVICES=(
     [011]="ACX5:100.123.170.205"
 )
 
+# SSH Helper function - tries key first, then password
+ssh_cmd() {
+    local key_path="$1"
+    local user="$2"
+    local host="$3"
+    local cmd="$4"
+    local password="$5"
+    
+    if [ -f "$key_path" ]; then
+        # Try with SSH key
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$key_path" "$user@$host" "$cmd" 2>/dev/null
+    elif [ -n "$password" ]; then
+        # Try with password (requires sshpass)
+        if command -v sshpass &> /dev/null; then
+            sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$host" "$cmd" 2>/dev/null
+        else
+            echo "ERROR: sshpass not installed, cannot use password auth" >&2
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
 echo "╔════════════════════════════════════════════════════════════════════════╗"
 echo "║              SSH KEY ROTATION REPORT - ALL DEVICES                    ║"
 echo "║                    $(date '+%Y-%m-%d %H:%M:%S')                          ║"
 echo "╚════════════════════════════════════════════════════════════════════════╝"
 echo ""
+
+# Check if password is provided as argument
+PASSWORD="${1:-}"
+
+# If no password provided, check if keys exist - if not, prompt for password
+if [ -z "$PASSWORD" ]; then
+    key_sample="certs/hierarchical_ca/juniper_pki/certs/sae-001/sae-001_id_ed25519"
+    if [ ! -f "$key_sample" ]; then
+        read -sp "Enter SSH password (same for all devices): " PASSWORD
+        echo ""
+    fi
+fi
 
 # Collect results
 TOTAL_ROTATIONS=0
@@ -41,26 +77,21 @@ for sae_id in 001 002 003 004 005 006 007 008 009 010 011; do
     device_name="${device_info%%:*}"
     device_ip="${device_info##*:}"
     
-    # Determine if MX or ACX for proper SSH key path
-    if [[ "$device_name" =~ ^MX ]]; then
-        key_path="certs/hierarchical_ca/juniper_pki/certs/sae-${sae_id}/sae-${sae_id}_id_ed25519"
-        user="labuser"
-    else
-        key_path="certs/hierarchical_ca/juniper_pki/certs/sae-${sae_id}/sae-${sae_id}_id_ed25519"
-        user="labuser"
-    fi
+    key_path="certs/hierarchical_ca/juniper_pki/certs/sae-${sae_id}/sae-${sae_id}_id_ed25519"
+    user="labuser"
     
     # Get rotation count and last timestamp
-    rotation_info=$(ssh -i "$key_path" "$user@$device_ip" \
-        "cd /var/home/macsec_user/qkd-state/logs/ && \
-         grep 'PEER SSH KEY ROTATION COMPLETE' qkd_ssh_rotation_sae-${sae_id}.log 2>/dev/null | tail -1" 2>/dev/null || echo "")
+    rotation_info=$(ssh_cmd "$key_path" "$user" "$device_ip" \
+        "grep 'PEER SSH KEY ROTATION COMPLETE' /var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log 2>/dev/null | tail -1" \
+        "$PASSWORD" 2>/dev/null || echo "")
     
     if [ -z "$rotation_info" ]; then
         rotation_count=0
         last_timestamp="N/A"
     else
-        rotation_count=$(ssh -i "$key_path" "$user@$device_ip" \
-            "grep -c 'PEER SSH KEY ROTATION COMPLETE' /var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log 2>/dev/null" 2>/dev/null || echo "0")
+        rotation_count=$(ssh_cmd "$key_path" "$user" "$device_ip" \
+            "grep -c 'PEER SSH KEY ROTATION COMPLETE' /var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log 2>/dev/null" \
+            "$PASSWORD" 2>/dev/null || echo "0")
         last_timestamp=$(echo "$rotation_info" | awk '{print $1, $2}')
     fi
     
@@ -73,6 +104,7 @@ for sae_id in 001 002 003 004 005 006 007 008 009 010 011; do
         DEVICES_WITH_ROTATIONS=$((DEVICES_WITH_ROTATIONS + 1))
     fi
 done
+
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════════════════╗"
