@@ -709,23 +709,10 @@ def clean_device(
             )
             peer_cleanup_failures = []
 
-            run_shell(
-                "config cleanup",
-                config_cleanup_cmd,
-                strict=True,
-            )
-
-            if dual_re:
-                re1_cfg_shell = f"cli -c 'configure; {config_body}; commit no-synchronize; exit'"
-                ok_re1_cfg = run_re1_cli(
-                    "re1 config cleanup",
-                    re1_cfg_shell,
-                )
-                if not ok_re1_cfg:
-                    peer_cleanup_failures.append("re1 config cleanup")
-
-            # Pre-cleanup: Try to remove user-owned files AS the script_user before removing the user.
-            # This is important for sticky bit directories like /var/tmp/ where only the owner can delete.
+            # Pre-cleanup FIRST: remove user-owned files AS the script_user BEFORE
+            # config cleanup deletes the user from Junos. Once the user is deleted
+            # from Junos config and committed, they can no longer login, making it
+            # impossible to delete files they own (sticky bit, restricted dirs, SSH keys).
             if script_user and script_user_pwd:
                 print(f"[{name}] attempting pre-cleanup as {script_user}", flush=True)
                 try:
@@ -758,6 +745,23 @@ def clean_device(
                     print(f"[{name}] pre-cleanup: unable to connect as {script_user}: {conn_exc}", flush=True)
             else:
                 print(f"[{name}] pre-cleanup: skipped (script_user={script_user}, has_pwd={bool(script_user_pwd)})", flush=True)
+
+            # Config cleanup AFTER pre-cleanup: delete users from Junos config.
+            # This must happen after pre-cleanup or macsec_user can no longer login.
+            run_shell(
+                "config cleanup",
+                config_cleanup_cmd,
+                strict=True,
+            )
+
+            if dual_re:
+                re1_cfg_shell = f"cli -c 'configure; {config_body}; commit no-synchronize; exit'"
+                ok_re1_cfg = run_re1_cli(
+                    "re1 config cleanup",
+                    re1_cfg_shell,
+                )
+                if not ok_re1_cfg:
+                    peer_cleanup_failures.append("re1 config cleanup")
 
             file_cleanup_output = run_shell(
                 "file/cert/runtime cleanup",
