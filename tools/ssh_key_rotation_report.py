@@ -82,8 +82,10 @@ def get_rotation_count(sae_id, password=None):
         
         # Count rotations - use bash -c to ensure shell execution
         cmd_count = f"/bin/bash -c \"grep -c 'PEER SSH KEY ROTATION' {log_file} 2>&1\""
+        print(f"[DEBUG] Device {device_ip}: {cmd_count}", file=sys.stderr)
         stdin, stdout, stderr = client.exec_command(cmd_count)
         count_output = stdout.read().decode().strip()
+        print(f"[DEBUG] Output: '{count_output}'", file=sys.stderr)
         
         # Check if grep returned an error (file not found)
         if "No such file" in count_output or "cannot open" in count_output:
