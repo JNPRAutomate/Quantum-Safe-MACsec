@@ -1,10 +1,8 @@
 #!/bin/bash
 #
-# SSH Key Rotation Report
+# SSH Key Rotation Report - Juniper Device Compatible
 # Collects PEER SSH KEY ROTATION COMPLETE counts from all 11 devices
-# Shows number of successful rotations per device + last rotation timestamp
-#
-# Usage: sh tools/ssh_key_rotation_report.sh [password]
+# Counts only ROTATION entries (excludes BOOTSTRAP)
 #
 
 # Auto-detect workspace root (parent of tools directory)
@@ -57,44 +55,43 @@ for sae_id in 001 002 003 004 005 006 007 008 009 010 011; do
     user="labuser"
     log_file="/var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log"
     
-    # Try to get rotation count via SSH
+    # Try to get rotation count via SSH using heredoc (works with Juniper CLI)
     rotation_count=0
     last_timestamp="N/A"
     
     if [ -f "$key_path" ]; then
-        # Use SSH key if available
-        result=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null \
-            -i "$key_path" "$user@$device_ip" \
-            "wc -l < '$log_file' 2>/dev/null || echo 0" 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$result" ] && [ "$result" != "0" ]; then
-            rotation_count=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null \
-                -i "$key_path" "$user@$device_ip" \
-                "grep -c 'PEER SSH KEY ROTATION COMPLETE' '$log_file' 2>/dev/null" 2>/dev/null || echo "0")
-            last_line=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null \
-                -i "$key_path" "$user@$device_ip" \
-                "tail -1 '$log_file' 2>/dev/null" 2>/dev/null)
+        # Use SSH key if available - use heredoc to bypass CLI parsing
+        result=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
+grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | wc -l
+SSHEOF
+)
+        rotation_count=$(echo "$result" | grep -oE '^[0-9]+' | head -1 || echo "0")
+        
+        if [ "$rotation_count" -gt 0 ]; then
+            last_line=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
+grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | tail -1
+SSHEOF
+)
             last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
         fi
     elif [ -n "$PASSWORD" ]; then
         # Use password if sshpass available
         if command -v sshpass &> /dev/null; then
-            result=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null \
-                "$user@$device_ip" \
-                "wc -l < '$log_file' 2>/dev/null || echo 0" 2>/dev/null)
-            if [ $? -eq 0 ] && [ -n "$result" ] && [ "$result" != "0" ]; then
-                rotation_count=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null \
-                    "$user@$device_ip" \
-                    "grep -c 'PEER SSH KEY ROTATION COMPLETE' '$log_file' 2>/dev/null" 2>/dev/null || echo "0")
-                last_line=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null \
-                    "$user@$device_ip" \
-                    "tail -1 '$log_file' 2>/dev/null" 2>/dev/null)
+            result=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
+grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | wc -l
+SSHEOF
+)
+            rotation_count=$(echo "$result" | grep -oE '^[0-9]+' | head -1 || echo "0")
+            
+            if [ "$rotation_count" -gt 0 ]; then
+                last_line=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
+grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | tail -1
+SSHEOF
+)
                 last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
             fi
         fi
     fi
-    
-    # Ensure rotation_count is numeric
-    rotation_count=$(echo "$rotation_count" | grep -oE '^[0-9]+' || echo "0")
     
     # Format output
     printf "%-8s %-15s │ Rotations: %2d │ Last: %s\n" \
@@ -116,7 +113,7 @@ echo "║                                                                       
 if [ "$DEVICES_WITH_ROTATIONS" -eq 11 ]; then
     echo "║ Status: ✅ ALL DEVICES SYNCHRONIZED                                    ║"
 elif [ "$DEVICES_WITH_ROTATIONS" -ge 8 ]; then
-    echo "║ Status: ⚠️  PARTIAL SYNCHRONIZATION - Check ACX devices                ║"
+    echo "║ Status: ⚠️  PARTIAL SYNCHRONIZATION - Check missing devices            ║"
 else
     echo "║ Status: ❌ CRITICAL - Multiple devices not synchronized               ║"
 fi
