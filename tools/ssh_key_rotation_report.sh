@@ -73,18 +73,27 @@ for sae_id in 001 002 003 004 005 006 007 008 009 010 011; do
     
     # If we have a valid SSH command, execute it
     if [ -n "$ssh_prefix" ]; then
-        # Execute the command to get rotation count
-        # Note: Juniper CLI requires 'start shell' to access Unix commands
-        cmd="$ssh_prefix $user@$device_ip 'start shell ; grep -c \"PEER SSH KEY ROTATION\" $log_file 2>/dev/null ; exit'"
-        result=$(eval "$cmd" 2>/dev/null || echo "0")
+        # Use heredoc for reliable Juniper CLI shell access (avoid hanging)
+        # The heredoc sends all commands at once, avoiding sync issues with eval
+        result=$(eval "$ssh_prefix $user@$device_ip" << 'EOFCMD' 2>/dev/null || echo "0"
+request shell
+grep -c "PEER SSH KEY ROTATION" /var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log
+exit
+EOFCMD
+)
         
-        # Extract numeric value safely - get last line (grep output after shell)
-        rotation_count=$(echo "$result" | tail -1 | grep -oE '^[0-9]+' || echo "0")
+        # Extract numeric value safely - filter for just numbers
+        rotation_count=$(echo "$result" | grep -oE '[0-9]+' | tail -1 || echo "0")
+        [ -z "$rotation_count" ] && rotation_count="0"
         
         # Get last timestamp if rotations found
         if [ "$rotation_count" -gt 0 ] 2>/dev/null; then
-            cmd_last="$ssh_prefix $user@$device_ip 'start shell ; grep \"PEER SSH KEY ROTATION\" $log_file 2>/dev/null | tail -1 ; exit'"
-            last_line=$(eval "$cmd_last" 2>/dev/null | grep "PEER SSH KEY ROTATION")
+            last_line=$(eval "$ssh_prefix $user@$device_ip" << EOFCMD2 2>/dev/null
+request shell
+grep "PEER SSH KEY ROTATION" /var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log | tail -1
+exit
+EOFCMD2
+)
             last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
         fi
     fi
