@@ -448,6 +448,9 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         shell = client.invoke_shell()
         shell.settimeout(5.0)
         
+        # Disable paging to avoid ---(more X%)--- prompts corrupting output
+        send_shell_command(shell, "set cli pager off", verbose=False)
+        
         # Get MACsec connections status
         macsec_output = send_shell_command(shell, "show security macsec connections", verbose=verbose)
         if verbose:
