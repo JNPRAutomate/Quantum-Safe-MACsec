@@ -126,39 +126,69 @@ def send_shell_command(shell, command, timeout=5.0, verbose=False):
     return output
 
 
-def parse_macsec_status(output):
-    """Parse MACsec status output to extract key metrics."""
+def parse_macsec_connections(output):
+    """Parse MACsec connections output to extract interface status."""
     status = {
         'interfaces': [],
-        'mka_sessions': 0,
-        'up': 0,
-        'transient': 0,
-        'down': 0,
+        'total_interfaces': 0,
+        'inuse': 0,
+        'standby': 0,
     }
     
     lines = output.split('\n')
     current_iface = None
     
     for line in lines:
-        line = line.strip()
+        line_stripped = line.strip()
         
-        # Look for interface lines
-        if 'Interface:' in line or 'iface:' in line.lower():
-            current_iface = line.split()[-1] if line.split() else None
-            if current_iface:
-                status['interfaces'].append(current_iface)
-                status['mka_sessions'] += 1
+        # Look for interface name lines
+        if 'Interface name:' in line:
+            current_iface = line.split('Interface name:')[-1].strip()
+            status['interfaces'].append(current_iface)
+            status['total_interfaces'] += 1
         
-        # Look for MKA session state
-        if 'MKA session state:' in line or 'state' in line.lower():
-            if 'Up' in line or 'established' in line.lower():
-                status['up'] += 1
-            elif 'transient' in line.lower():
-                status['transient'] += 1
-            elif 'down' in line.lower() or 'not found' in line.lower():
-                status['down'] += 1
+        # Look for secure channel status
+        if 'Status: inuse' in line:
+            status['inuse'] += 1
+        elif 'Status: standby' in line:
+            status['standby'] += 1
     
     return status
+
+
+def parse_mka_sessions(output):
+    """Parse MKA sessions output to extract session status."""
+    sessions = {
+        'total': 0,
+        'secured': 0,
+        'not_found': 0,
+        'peers_live': 0,
+        'peers_down': 0,
+    }
+    
+    lines = output.split('\n')
+    
+    for line in lines:
+        line_stripped = line.strip()
+        
+        # Count interface entries
+        if 'Interface name:' in line:
+            sessions['total'] += 1
+        
+        # Look for interface state
+        if 'Interface state:' in line:
+            if 'Secured' in line or 'Primary' in line:
+                sessions['secured'] += 1
+            elif 'Not found' in line or 'not found' in line:
+                sessions['not_found'] += 1
+        
+        # Count live peers
+        if 'Member identifier:' in line and '(live)' in line:
+            sessions['peers_live'] += 1
+        elif 'Hold time:' in line and 'down' in line.lower():
+            sessions['peers_down'] += 1
+    
+    return sessions
 
 
 def parse_key_status_from_log(log_content, sae_id):
@@ -208,6 +238,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
     
     health_data = {
         'macsec_status': {},
+        'mka_status': {},
         'key_status': {},
         'error': None,
     }
@@ -237,11 +268,19 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         else:
             return health_data
         
-        # Get MACsec status via CLI
+        # Get MACsec connections via CLI (no shell needed)
         shell = client.invoke_shell()
         shell.settimeout(5.0)
         
-        # Enter Unix shell
+        # Get MACsec connections status
+        macsec_output = send_shell_command(shell, "show security macsec connections", verbose=verbose)
+        health_data['macsec_status'] = parse_macsec_connections(macsec_output)
+        
+        # Get MKA sessions detail
+        mka_output = send_shell_command(shell, "show security mka sessions detail", verbose=verbose)
+        health_data['mka_status'] = parse_mka_sessions(mka_output)
+        
+        # Get key status from log tail (need to enter shell for this)
         shell.send("start shell\n")
         time.sleep(0.3)
         output = ""
@@ -255,27 +294,11 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 break
             time.sleep(0.1)
         
-        # Exit back to CLI
-        shell.send("exit\n")
-        time.sleep(0.2)
-        output = ""
-        while ">" not in output:
-            try:
-                chunk = shell.recv(1024).decode()
-                output += chunk
-            except socket.timeout:
-                break
-            except Exception:
-                break
-            time.sleep(0.1)
-        
-        # Get MACsec status
-        macsec_output = send_shell_command(shell, "show security macsec status", verbose=verbose)
-        health_data['macsec_status'] = parse_macsec_status(macsec_output)
-        
-        # Get key status from log tail
+        log_file = f"/var/home/macsec_user/qkd-state/logs/qkd_debug.log"
         log_output = send_shell_command(shell, f"tail -100 {log_file}", verbose=verbose)
         health_data['key_status'] = parse_key_status_from_log(log_output, sae_id)
+        
+        shell.close()
         
         shell.close()
         client.close()
@@ -293,13 +316,16 @@ def format_tunnel_status(health_data):
         return f"ERROR: {health_data['error']}"
     
     macsec = health_data.get('macsec_status', {})
+    mka = health_data.get('mka_status', {})
     keys = health_data.get('key_status', {})
     
-    # MKA session summary
-    mka_total = macsec.get('mka_sessions', 0)
-    mka_up = macsec.get('up', 0)
-    mka_transient = macsec.get('transient', 0)
-    mka_down = macsec.get('down', 0)
+    # MACsec and MKA summary
+    macsec_ifaces = macsec.get('total_interfaces', 0)
+    macsec_inuse = macsec.get('inuse', 0)
+    
+    mka_total = mka.get('total', 0)
+    mka_secured = mka.get('secured', 0)
+    mka_not_found = mka.get('not_found', 0)
     
     # Key summary - handle None values
     pending_stale = keys.get('pending_stale_count', 0)
@@ -311,11 +337,10 @@ def format_tunnel_status(health_data):
     pending_key_short = (pending_key[:8] if pending_key else 'None')
     
     # Status indicators
-    status = f"MKA: {mka_up}↑"
-    if mka_transient > 0:
-        status += f" {mka_transient}⟳"
-    if mka_down > 0:
-        status += f" {mka_down}↓"
+    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}✓ | MKA: {mka_secured}/{mka_total}✓"
+    
+    if mka_not_found > 0:
+        status += f" {mka_not_found}✗"
     
     status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
     
@@ -356,9 +381,10 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
             all_anomalies = []
             summary = {
                 'total_devices': 0,
-                'mka_up': 0,
-                'mka_transient': 0,
-                'mka_down': 0,
+                'macsec_interfaces': 0,
+                'macsec_inuse': 0,
+                'mka_secured': 0,
+                'mka_not_found': 0,
                 'stale_keys': 0,
             }
             
@@ -373,10 +399,13 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 # Update summary
                 summary['total_devices'] += 1
                 macsec = health.get('macsec_status', {})
-                summary['mka_up'] += macsec.get('up', 0)
-                summary['mka_transient'] += macsec.get('transient', 0)
-                summary['mka_down'] += macsec.get('down', 0)
+                mka = health.get('mka_status', {})
                 keys = health.get('key_status', {})
+                
+                summary['macsec_interfaces'] += macsec.get('total_interfaces', 0)
+                summary['macsec_inuse'] += macsec.get('inuse', 0)
+                summary['mka_secured'] += mka.get('secured', 0)
+                summary['mka_not_found'] += mka.get('not_found', 0)
                 summary['stale_keys'] += keys.get('pending_stale_count', 0)
                 
                 # Detect changes
@@ -388,18 +417,19 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
             print(f"\n{'─'*100}")
             print("📊 SUMMARY:")
             print(f"{'─'*100}")
-            print(f"MKA Sessions: {summary['mka_up']}↑  {summary['mka_transient']}⟳  {summary['mka_down']}↓")
+            print(f"MACsec Interfaces: {summary['macsec_inuse']}/{summary['macsec_interfaces']} inuse")
+            print(f"MKA Sessions: {summary['mka_secured']} secured | {summary['mka_not_found']} not found")
             print(f"Stale Keys: {summary['stale_keys']}")
             
             # Health assessment
-            if summary['mka_down'] == 0 and summary['stale_keys'] == 0:
+            if summary['mka_not_found'] == 0 and summary['stale_keys'] == 0:
                 print("Status: ✅ ALL TUNNELS HEALTHY")
-            elif summary['mka_down'] == 0:
+            elif summary['mka_not_found'] == 0:
                 print(f"Status: ⚠️  PENDING STALE KEYS - {summary['stale_keys']} key(s) becoming stale")
-            elif summary['mka_down'] > 0 and summary['mka_down'] <= 2:
-                print(f"Status: 🔴 TUNNEL ALERT - {summary['mka_down']} MKA session(s) DOWN")
+            elif summary['mka_not_found'] > 0 and summary['mka_not_found'] <= 2:
+                print(f"Status: 🔴 TUNNEL ALERT - {summary['mka_not_found']} MKA session(s) NOT FOUND")
             else:
-                print(f"Status: 🔴 CRITICAL - {summary['mka_down']} MKA session(s) DOWN, possible network partition")
+                print(f"Status: 🔴 CRITICAL - {summary['mka_not_found']} MKA session(s) NOT FOUND, possible network partition")
             
             # Print anomalies
             if all_anomalies:
@@ -409,11 +439,11 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 for change in all_anomalies:
                     print(f"[{change['timestamp']}] {change['device']}: State changed")
                     if isinstance(change['previous'], dict) and change['previous']:
-                        prev_mka = change['previous'].get('macsec_status', {}).get('up', 0)
+                        prev_mka = change['previous'].get('mka_status', {}).get('secured', 0)
                         prev_stale = change['previous'].get('key_status', {}).get('pending_stale_count', 0)
-                        curr_mka = change['current'].get('macsec_status', {}).get('up', 0)
+                        curr_mka = change['current'].get('mka_status', {}).get('secured', 0)
                         curr_stale = change['current'].get('key_status', {}).get('pending_stale_count', 0)
-                        print(f"  MKA: {prev_mka}↑ → {curr_mka}↑")
+                        print(f"  MKA: {prev_mka} → {curr_mka}")
                         if curr_stale > prev_stale:
                             print(f"  ⚠️  Stale keys increased: {prev_stale} → {curr_stale}")
             
