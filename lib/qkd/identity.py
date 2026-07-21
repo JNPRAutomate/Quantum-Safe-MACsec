@@ -489,7 +489,8 @@ def check_script_user_home_simple(device):
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"SCRIPT_USER home/.ssh check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print_device_output(name, result.stdout)
+    print(f"[OK] home/.ssh dir on {name}: {ssh_dir}")
+    print_if_verbose(result.stdout)
 
 
 def check_script_dirs_simple(device):
@@ -512,7 +513,8 @@ def check_script_dirs_simple(device):
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"script directory check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print_device_output(name, result.stdout)
+    print(f"[OK] script dirs on {name}: {op_script_dir} {event_script_dir} {cert_dir}")
+    print_if_verbose(result.stdout)
 
 
 def check_runtime_cleanup_simple(device):
@@ -689,7 +691,8 @@ def check_script_user_ssh_identity(device):
             f"Keys missing or not readable. Run bootstrap first.\n"
             f"stdout={result.stdout}\nstderr={result.stderr}"
         )
-    print_device_output(name, result.stdout)
+    print(f"[OK] SSH identity on {name}: {key_path} {peer_key_path}")
+    print_if_verbose(result.stdout)
 
     script_rotation_s, peer_rotation_s = load_rotation_thresholds()
     key_thresholds = {key_path: script_rotation_s}
@@ -749,8 +752,8 @@ def check_script_user_authorized_keys(device):
         result = ssh_deploy_cmd(device, cmd, timeout=30)
         if result.returncode != 0:
             raise RuntimeError(f"authorized_keys precheck failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-        print(f"[INFO] authorized_keys mutation skipped on {name}: deploy_user ({deploy_user}) equals script_user ({script_user})")
-        print_device_output(name, result.stdout)
+        print(f"[OK] authorized_keys on {name}: mutation skipped (deploy_user={deploy_user} == script_user)")
+        print_if_verbose(result.stdout)
         return
 
     cmd = (
@@ -764,7 +767,8 @@ def check_script_user_authorized_keys(device):
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"authorized_keys check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print_device_output(name, result.stdout)
+    print(f"[OK] authorized_keys on {name}: {auth_path}")
+    print_if_verbose(result.stdout)
 
 
 def check_script_user_can_read_private_key(device):
