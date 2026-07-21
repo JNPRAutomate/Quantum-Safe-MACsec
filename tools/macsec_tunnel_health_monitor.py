@@ -448,7 +448,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 def format_tunnel_status(health_data):
     """Format tunnel status for display."""
     if health_data.get('error'):
-        return f"ERROR: {health_data['error']}"
+        return f"🔴 ERROR: {health_data['error']}"
     
     macsec = health_data.get('macsec_status', {})
     mka = health_data.get('mka_status', {})
@@ -483,11 +483,11 @@ def format_tunnel_status(health_data):
     cak_mismatch_total = sum(s.get('cak_mismatch', 0) for s in mka_stats.values())
     icv_mismatch_total = sum(s.get('icv_mismatch', 0) for s in mka_stats.values())
     
-    # Status indicators
-    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}✓ | MKA: {mka_secured}/{mka_total}✓"
+    # Status indicators - ONLY show ✓ if things are actually working
+    macsec_status = "✓" if (macsec_ifaces > 0 and macsec_inuse == macsec_ifaces) else "✗"
+    mka_status = "✓" if (mka_total > 0 and mka_secured == mka_total and mka_not_found == 0) else "✗"
     
-    if mka_not_found > 0:
-        status += f" {mka_not_found}✗"
+    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status}"
     
     status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
     
@@ -592,16 +592,23 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
             print(f"ICV Mismatches (Crypto Failures): {summary['icv_mismatches']}")
             
             # Health assessment
-            if summary['mka_not_found'] == 0 and summary['stale_keys'] == 0 and summary['cak_mismatches'] == 0 and summary['icv_mismatches'] == 0:
-                print("Status: ✅ ALL TUNNELS HEALTHY")
-            elif summary['cak_mismatches'] > 0 or summary['icv_mismatches'] > 0:
-                print(f"Status: 🔴 KEY AGREEMENT FAILURE - CAK/ICV mismatches indicate peer key sync issues")
-            elif summary['mka_not_found'] == 0:
-                print(f"Status: ⚠️  PENDING STALE KEYS - {summary['stale_keys']} key(s) becoming stale")
-            elif summary['mka_not_found'] > 0 and summary['mka_not_found'] <= 2:
-                print(f"Status: 🔴 TUNNEL ALERT - {summary['mka_not_found']} MKA session(s) NOT FOUND")
-            else:
-                print(f"Status: 🔴 CRITICAL - {summary['mka_not_found']} MKA session(s) NOT FOUND, possible network partition")
+            macsec_health_percent = 0
+            if summary['macsec_interfaces'] > 0:
+                macsec_health_percent = (summary['macsec_inuse'] / summary['macsec_interfaces']) * 100
+            
+            if summary['total_devices'] > 0:
+                if summary['cak_mismatches'] > 0 or summary['icv_mismatches'] > 0:
+                    print(f"Status: 🔴 CRITICAL - KEY AGREEMENT FAILURE - CAK/ICV mismatches indicate peer key sync issues")
+                elif summary['mka_not_found'] > 0:
+                    print(f"Status: 🔴 CRITICAL - {summary['mka_not_found']} MKA session(s) NOT FOUND")
+                elif macsec_health_percent < 50:
+                    print(f"Status: 🔴 CRITICAL - Only {macsec_health_percent:.0f}% MACsec interfaces working ({summary['macsec_inuse']}/{summary['macsec_interfaces']})")
+                elif macsec_health_percent < 100:
+                    print(f"Status: ⚠️  DEGRADED - {macsec_health_percent:.0f}% MACsec interfaces working ({summary['macsec_inuse']}/{summary['macsec_interfaces']})")
+                elif summary['stale_keys'] > 0:
+                    print(f"Status: ⚠️  PENDING STALE KEYS - {summary['stale_keys']} key(s) becoming stale")
+                else:
+                    print("Status: ✅ ALL TUNNELS HEALTHY")
             
             # Print anomalies
             if all_anomalies:
@@ -618,7 +625,10 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                         secs = int(event_elapsed % 60)
                         event_elapsed_str = f"t{mins}:{secs:02d}={mins}m{secs}s"
                     
-                    print(f"[{change['timestamp']}] ({event_elapsed_str}) {change['device']}: State changed")
+                    # Get device name from SAE ID
+                    device_name, _, _ = DEVICES.get(change['device'], (change['device'], '', ''))
+                    
+                    print(f"[{change['timestamp']}] ({event_elapsed_str}) sae-{change['device']} ({device_name}): State changed")
                     if change['prev_mka'] != change['curr_mka']:
                         print(f"  MKA: {change['prev_mka']}✓ → {change['curr_mka']}✓")
                     if change['prev_stale'] != change['curr_stale']:
