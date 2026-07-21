@@ -1025,6 +1025,7 @@ def install_peer_authorized_keys(devices):
                     dev.close()
                 except Exception:
                     pass
+                time.sleep(3)
 
         if not success:
             failed_targets.append((target, str(last_error)))

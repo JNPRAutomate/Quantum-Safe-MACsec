@@ -898,7 +898,7 @@ def push_config(device_name, device, commands, base):
     finally:
         dev.close()
 
-    time.sleep(2)
+    time.sleep(10)
 
 
 # ----------------------------------------
