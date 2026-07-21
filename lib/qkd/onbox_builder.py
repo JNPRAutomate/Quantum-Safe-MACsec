@@ -493,7 +493,8 @@ def build_onbox_artifacts(devices, placeholder_json=False):
         if placeholder_json:
             print(f"Building shipment placeholder artifacts for {device_label} (mode={mode})")
         else:
-            print(f"Building onbox artifacts for {device_label} (mode={mode})")
+            n_links = len(device.get("links") or [])
+            print(f"Building on-box script + JSON config for {device_label} (mode={mode}, links={n_links})")
 
         outputs[name] = {}
 

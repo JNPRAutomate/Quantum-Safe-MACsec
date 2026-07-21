@@ -500,11 +500,17 @@ def generate_ssh_keys_for_script_user(
     key_comment = "qkd-orchestrator"
 
     def _verify_keys_present(dev_conn: Device, label: str) -> bool:
+        # Verify both existence AND validity of the key files:
+        # - test -r: file is readable (exists and has read permission)
+        # - ssh-keygen -l -f: file is a valid SSH key (not empty, not corrupted, correct format)
+        # Both public keys must pass ssh-keygen validation before we consider keys healthy.
         verify_cmd = (
             "test -r {key} && "
             "test -r {pub} && "
             "test -r {pkey} && "
             "test -r {ppub} && "
+            "ssh-keygen -l -f {pub} > /dev/null 2>&1 && "
+            "ssh-keygen -l -f {ppub} > /dev/null 2>&1 && "
             "echo __QKD_KEYS_OK__ && "
             "ls -l {key} {pub} {pkey} {ppub}"
         ).format(
@@ -548,6 +554,29 @@ def generate_ssh_keys_for_script_user(
         return _verify_keys_present(dev_conn, label)
 
     try:
+        # Step 0: Check if keys already exist and are valid. If so, skip generation entirely.
+        # This avoids unnecessary key rotation on repeated deploys, which would invalidate
+        # any peer authorized_keys that were already synchronized.
+        dev_as_script_user_check = Device(
+            host=str(dev.hostname),
+            user=script_user,
+            passwd=script_password,
+            port=dev.port,
+            gather_facts=False,
+        )
+        try:
+            dev_as_script_user_check.open()
+            if _verify_keys_present(dev_as_script_user_check, "existing"):
+                print("[%s] SSH keys already present for %s - skipping generation" % (name, script_user))
+                return True
+        except Exception:
+            pass  # Can't connect as script_user yet, proceed with generation
+        finally:
+            try:
+                dev_as_script_user_check.close()
+            except Exception:
+                pass
+
         # Step 1: Create SSH dir as deploy_user
         mkdir_cmd = "mkdir -p %s" % ssh_dir
         dev.rpc.request_shell_execute(command=mkdir_cmd)
