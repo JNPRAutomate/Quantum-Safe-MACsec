@@ -1705,7 +1705,7 @@ def ckn_from_key_id(key_id):
     return hashlib.sha256(key_id.encode()).hexdigest()
 
 
-def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
+def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True, commit_comment=None):
     if not entries:
         log("KEYCHAIN INSTALL BATCH EMPTY", "ERROR", iface, "MACSEC")
         return False
@@ -1763,7 +1763,11 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {format_start_time_cli(start_time)}")
 
     if commit:
-        cli_cmds.append("commit")
+        if commit_comment:
+            safe_comment = str(commit_comment).replace('"', '').replace("'", '')[:120]
+            cli_cmds.append(f'commit comment "{safe_comment}"')
+        else:
+            cli_cmds.append("commit")
     cli_cmds.append("exit")
     cmd = "; ".join(cli_cmds)
 
@@ -2681,7 +2685,8 @@ def run_slave_install_key_batch(batch_b64, iface):
             }
         )
 
-    if not install_keychain_batch(iface, install_entries, ca_name, keychain, commit=True):
+    if not install_keychain_batch(iface, install_entries, ca_name, keychain, commit=True,
+                                   commit_comment=f"QKD keychain install ca={ca_name} keys={len(install_entries)}"):
         record_kme_failure(peer, iface, state, "BATCH_INSTALL_FAILED")
         print("ERROR KEYCHAIN BATCH INSTALL FAIL")
         return False
@@ -3100,7 +3105,10 @@ def run_master():
 
         local_install_start_ms = now_ms()
         if batch_size > 1:
-            install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, commit=True)
+            gen_first = batch_records[0].get("generation", "?")
+            gen_last = batch_records[-1].get("generation", "?")
+            install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, commit=True,
+                                                commit_comment=f"QKD rotation {rotation} gen={gen_first}..{gen_last} ca={ca_name}")
             fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
             fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
         else:
