@@ -74,16 +74,17 @@ for sae_id in 001 002 003 004 005 006 007 008 009 010 011; do
     # If we have a valid SSH command, execute it
     if [ -n "$ssh_prefix" ]; then
         # Execute the command to get rotation count
-        cmd="$ssh_prefix $user@$device_ip \"grep -c 'PEER SSH KEY ROTATION' $log_file 2>/dev/null\""
+        # Note: Juniper CLI requires 'start shell' to access Unix commands
+        cmd="$ssh_prefix $user@$device_ip 'start shell ; grep -c \"PEER SSH KEY ROTATION\" $log_file 2>/dev/null ; exit'"
         result=$(eval "$cmd" 2>/dev/null || echo "0")
         
-        # Extract numeric value safely
-        rotation_count=$(echo "$result" | tail -1 | grep -oE '[0-9]+' || echo "0")
+        # Extract numeric value safely - get last line (grep output after shell)
+        rotation_count=$(echo "$result" | tail -1 | grep -oE '^[0-9]+' || echo "0")
         
         # Get last timestamp if rotations found
         if [ "$rotation_count" -gt 0 ] 2>/dev/null; then
-            cmd_last="$ssh_prefix $user@$device_ip \"grep 'PEER SSH KEY ROTATION' $log_file 2>/dev/null | tail -1\""
-            last_line=$(eval "$cmd_last" 2>/dev/null)
+            cmd_last="$ssh_prefix $user@$device_ip 'start shell ; grep \"PEER SSH KEY ROTATION\" $log_file 2>/dev/null | tail -1 ; exit'"
+            last_line=$(eval "$cmd_last" 2>/dev/null | grep "PEER SSH KEY ROTATION")
             last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
         fi
     fi
