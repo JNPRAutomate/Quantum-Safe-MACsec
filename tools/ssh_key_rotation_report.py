@@ -190,15 +190,17 @@ def get_rotation_count(sae_id, password=None, verbose=False):
             ts_output = send_shell_command(shell, f"grep 'ROTATION COMPLETE' {log_file} | tail -1", verbose)
             debug_print(f"Device {device_ip}: Timestamp raw output:\n{ts_output}", verbose)
             
-            # Find line with ROTATION COMPLETE (should be YYYY-MM-DD HH:MM:SS ...)
+            # Find line with actual timestamp (starts with YYYY-MM-DD, not command echo)
             for line in ts_output.split('\n'):
-                if "ROTATION COMPLETE" in line:
-                    # Extract date and time (first two whitespace-separated tokens)
+                line = line.strip()
+                # Skip empty lines and command echoes (look for date pattern YYYY-MM-DD)
+                if line and len(line) > 10 and line[0:4].isdigit() and line[4] == '-':
+                    # Extract date and time (first two tokens: YYYY-MM-DD HH:MM:SS)
                     parts = line.split()
-                    if len(parts) >= 2:
+                    if len(parts) >= 2 and '-' in parts[0]:
                         last_timestamp = f"{parts[0]} {parts[1]}"
                         debug_print(f"Extracted timestamp: {last_timestamp}", verbose)
-                    break
+                        break
         
         shell.close()
         
