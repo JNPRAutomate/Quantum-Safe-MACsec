@@ -10,6 +10,7 @@ import sys
 import os
 from pathlib import Path
 from getpass import getpass
+import time
 
 # Suppress cryptography deprecation warnings BEFORE importing paramiko
 warnings.filterwarnings("ignore")
@@ -80,12 +81,31 @@ def get_rotation_count(sae_id, password=None):
         else:
             return rotation_count, last_timestamp, "No auth"
         
-        # Count rotations - send command directly (may need shell entry on Juniper)
-        cmd_count = f"grep -c 'PEER SSH KEY ROTATION' {log_file} 2>&1"
-        print(f"[DEBUG] Device {device_ip}: {cmd_count}", file=sys.stderr)
-        stdin, stdout, stderr = client.exec_command(cmd_count)
-        count_output = stdout.read().decode().strip()
-        print(f"[DEBUG] Output: '{count_output}'", file=sys.stderr)
+        # Count rotations - use interactive shell (only way for Juniper devices)
+        shell = client.invoke_shell()
+        
+        # Send request shell command to enter Unix shell
+        shell.send("request shell\n")
+        time.sleep(0.5)  # Wait for shell prompt
+        
+        # Now send grep command
+        grep_cmd = f"grep -c 'PEER SSH KEY ROTATION' {log_file}\n"
+        shell.send(grep_cmd)
+        time.sleep(0.5)
+        
+        # Read output
+        output = shell.recv(4096).decode()
+        print(f"[DEBUG] Device {device_ip}: Raw output:\n{output}", file=sys.stderr)
+        
+        # Extract numeric value from output
+        for line in output.split('\n'):
+            if line.strip().isdigit():
+                count_output = line.strip()
+                break
+        else:
+            count_output = "0"
+        
+        print(f"[DEBUG] Count: '{count_output}'", file=sys.stderr)
         
         # Check if grep returned an error (file not found)
         if "No such file" in count_output or "cannot open" in count_output:
@@ -99,13 +119,17 @@ def get_rotation_count(sae_id, password=None):
         
         # Get last timestamp if rotations exist
         if rotation_count > 0:
-            cmd_last = f"grep 'PEER SSH KEY ROTATION' {log_file} 2>&1 | tail -1"
-            stdin, stdout, stderr = client.exec_command(cmd_last)
-            last_output = stdout.read().decode().strip()
-            if last_output:
-                parts = last_output.split()
-                if len(parts) >= 2:
-                    last_timestamp = f"{parts[0]} {parts[1]}"
+            shell.send(f"grep 'PEER SSH KEY ROTATION' {log_file} | tail -1\n")
+            time.sleep(0.5)
+            
+            ts_output = shell.recv(4096).decode()
+            # Find line with PEER SSH KEY ROTATION
+            for line in ts_output.split('\n'):
+                if "PEER SSH KEY ROTATION" in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        last_timestamp = f"{parts[0]} {parts[1]}"
+                    break
         
         client.close()
         return rotation_count, last_timestamp, None
