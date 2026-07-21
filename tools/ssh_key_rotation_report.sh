@@ -7,7 +7,8 @@
 
 set -e
 
-WORKSPACE_ROOT="/Users/aterren/Lavoro 2026/quantum 2026/newMACSEC39_ready_for_git"
+# Auto-detect workspace root (parent of tools directory)
+WORKSPACE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$WORKSPACE_ROOT"
 
 # Device mapping: sae_id -> (device_name, device_ip)
