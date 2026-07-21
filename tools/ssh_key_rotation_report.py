@@ -84,11 +84,19 @@ def get_rotation_count(sae_id, password=None):
         # Count rotations - use interactive shell (only way for Juniper devices)
         shell = client.invoke_shell()
         
-        # Send request shell command to enter Unix shell
-        shell.send("request shell\n")
-        time.sleep(0.5)  # Wait for shell prompt
+        # Send start shell command to enter Unix shell
+        shell.send("start shell\n")
         
-        # Now send grep command
+        # Wait for Unix shell prompt (%)
+        output = ""
+        while "%" not in output:
+            chunk = shell.recv(1024).decode()
+            output += chunk
+            time.sleep(0.1)
+        
+        print(f"[DEBUG] Device {device_ip}: Shell ready", file=sys.stderr)
+        
+        # Now send grep command in Unix shell
         grep_cmd = f"grep -c 'PEER SSH KEY ROTATION' {log_file}\n"
         shell.send(grep_cmd)
         time.sleep(0.5)
@@ -98,12 +106,11 @@ def get_rotation_count(sae_id, password=None):
         print(f"[DEBUG] Device {device_ip}: Raw output:\n{output}", file=sys.stderr)
         
         # Extract numeric value from output
+        count_output = "0"
         for line in output.split('\n'):
             if line.strip().isdigit():
                 count_output = line.strip()
                 break
-        else:
-            count_output = "0"
         
         print(f"[DEBUG] Count: '{count_output}'", file=sys.stderr)
         
@@ -130,6 +137,8 @@ def get_rotation_count(sae_id, password=None):
                     if len(parts) >= 2:
                         last_timestamp = f"{parts[0]} {parts[1]}"
                     break
+        
+        shell.close()
         
         client.close()
         return rotation_count, last_timestamp, None
