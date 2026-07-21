@@ -2097,7 +2097,7 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     # Both SET and DELETE use the full key_line value as-is.
     # Junos stores the complete line including type prefix and validates/matches on it.
     set_line = (
-        python3 qkd_orchestrator.py deploy --inventory config/inventory/input/ring_mx_acx_unified_link_driven.yml        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
+        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
     )
     upload_cmd = f"start shell command \"cat >{remote_set_path}\""
     apply_cmd = (
