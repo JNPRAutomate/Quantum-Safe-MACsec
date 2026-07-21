@@ -431,7 +431,8 @@ def check_deploy_user_access(device):
             f"stdout={result.stdout}\n"
             f"stderr={result.stderr}"
         )
-    print_device_output(name, result.stdout)
+    print(f"[OK] deploy user access on {name}: {deploy_user}")
+    print_if_verbose(result.stdout)
 
 
 def check_script_user_exists(device):
@@ -470,7 +471,8 @@ def check_script_user_exists(device):
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )
-    print_device_output(name, stdout)
+    print(f"[OK] script user on {name}: {script_user} exists")
+    print_if_verbose(stdout)
 
 
 def check_script_user_home_simple(device):
@@ -546,9 +548,11 @@ def check_runtime_cleanup_simple(device):
         "echo ### qkd-runtime-cleanup-done"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=60)
-    print_device_output(name, result.stdout)
     if result.returncode != 0:
         print(f"[WARN] runtime cleanup had non-fatal output on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+    else:
+        print(f"[OK] runtime state cleared on {name}: {state_dir}")
+    print_if_verbose(result.stdout)
 
 
 def check_shipment_preload_artifacts(device):
@@ -729,8 +733,8 @@ def check_script_user_ssh_identity(device):
                 f"stdout={rotate_result.stdout}\n"
                 f"stderr={rotate_result.stderr}"
             )
-        print_device_output(name, rotate_result.stdout)
         print(f"[OK] SSH key rotated on {name}: key={path}")
+        print_if_verbose(rotate_result.stdout)
 
 
 def check_script_user_authorized_keys(device):
@@ -783,7 +787,8 @@ def check_script_user_can_read_private_key(device):
     result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"SCRIPT_USER cannot read private key on {name} as {script_user}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print_device_output(name, result.stdout)
+    print(f"[OK] private key readable on {name}: {key_path}")
+    print_if_verbose(result.stdout)
 
 
 def check_script_user_atomic_write(device):
@@ -795,7 +800,8 @@ def check_script_user_atomic_write(device):
     result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"SCRIPT_USER atomic write failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print_device_output(name, result.stdout)
+    print(f"[OK] atomic write on {name}: {tmp_path} -> {test_path}")
+    print_if_verbose(result.stdout)
 
 
 def collect_script_user_public_keys(devices):
