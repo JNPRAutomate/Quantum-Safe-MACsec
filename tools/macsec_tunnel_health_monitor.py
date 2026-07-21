@@ -54,21 +54,45 @@ class MACsecTunnelState:
     
     def update(self, interface, state_data):
         """Update tunnel state and detect changes."""
-        self.previous_state[interface] = self.current_state.get(interface, {})
-        self.current_state[interface] = state_data
+        self.previous_state[interface] = self.current_state.get(interface, {}).copy()
+        self.current_state[interface] = state_data.copy()
         self.last_update = datetime.now()
         
-        # Detect state changes
-        if self.previous_state[interface] != state_data and self.previous_state[interface]:
-            change = {
-                'timestamp': self.last_update.isoformat(),
-                'device': self.device_id,
-                'interface': interface,
-                'previous': self.previous_state[interface],
-                'current': state_data,
-            }
-            self.anomalies.append(change)
-            return True
+        # Detect meaningful state changes (not just "0 -> 0")
+        if self.previous_state[interface]:
+            # Extract key metrics for comparison
+            prev_mka = self.previous_state[interface].get('mka_status', {}).get('secured', 0)
+            curr_mka = self.current_state[interface].get('mka_status', {}).get('secured', 0)
+            prev_stale = self.previous_state[interface].get('key_status', {}).get('pending_stale_count', 0)
+            curr_stale = self.current_state[interface].get('key_status', {}).get('pending_stale_count', 0)
+            prev_not_found = self.previous_state[interface].get('mka_status', {}).get('not_found', 0)
+            curr_not_found = self.current_state[interface].get('mka_status', {}).get('not_found', 0)
+            
+            # Extract CAK/ICV mismatches
+            prev_cak = sum(s.get('cak_mismatch', 0) for s in self.previous_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            curr_cak = sum(s.get('cak_mismatch', 0) for s in self.current_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            prev_icv = sum(s.get('icv_mismatch', 0) for s in self.previous_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            curr_icv = sum(s.get('icv_mismatch', 0) for s in self.current_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            
+            # Only flag if something actually changed
+            if prev_mka != curr_mka or prev_stale != curr_stale or prev_not_found != curr_not_found or prev_cak != curr_cak or prev_icv != curr_icv:
+                change = {
+                    'timestamp': self.last_update.isoformat(),
+                    'device': self.device_id,
+                    'interface': interface,
+                    'prev_mka': prev_mka,
+                    'curr_mka': curr_mka,
+                    'prev_stale': prev_stale,
+                    'curr_stale': curr_stale,
+                    'prev_not_found': prev_not_found,
+                    'curr_not_found': curr_not_found,
+                    'prev_cak': prev_cak,
+                    'curr_cak': curr_cak,
+                    'prev_icv': prev_icv,
+                    'curr_icv': curr_icv,
+                }
+                self.anomalies.append(change)
+                return True
         return False
     
     def get_anomalies(self, clear=True):
@@ -136,21 +160,33 @@ def parse_macsec_connections(output):
     }
     
     lines = output.split('\n')
-    current_iface = None
+    iface_map = {}  # interface_name -> best_status
     
     for line in lines:
-        line_stripped = line.strip()
-        
-        # Look for interface name lines
+        # Extract interface names - each appears once
         if 'Interface name:' in line:
-            current_iface = line.split('Interface name:')[-1].strip()
-            status['interfaces'].append(current_iface)
-            status['total_interfaces'] += 1
+            iface_name = line.split('Interface name:')[-1].strip()
+            if iface_name and iface_name not in iface_map:
+                status['interfaces'].append(iface_name)
+                status['total_interfaces'] += 1
+                iface_map[iface_name] = 'unknown'
         
-        # Look for secure channel status
-        if 'Status: inuse' in line:
+        # Track status for most recent interface
+        if 'Status: inuse' in line and status['interfaces']:
+            recent = status['interfaces'][-1]
+            # Prefer "inuse" over "standby"
+            if iface_map[recent] != 'inuse':
+                iface_map[recent] = 'inuse'
+        elif 'Status: standby' in line and status['interfaces']:
+            recent = status['interfaces'][-1]
+            if iface_map[recent] == 'unknown':
+                iface_map[recent] = 'standby'
+    
+    # Count final statuses
+    for iface_name, iface_status in iface_map.items():
+        if iface_status == 'inuse':
             status['inuse'] += 1
-        elif 'Status: standby' in line:
+        elif iface_status == 'standby':
             status['standby'] += 1
     
     return status
@@ -163,30 +199,37 @@ def parse_mka_sessions(output):
         'secured': 0,
         'not_found': 0,
         'peers_live': 0,
-        'peers_down': 0,
     }
     
     lines = output.split('\n')
+    seen_ifaces = set()
+    current_iface = None
+    current_state = None
     
     for line in lines:
-        line_stripped = line.strip()
-        
-        # Count interface entries
+        # Extract interface name
         if 'Interface name:' in line:
-            sessions['total'] += 1
+            current_iface = line.split('Interface name:')[-1].strip()
+            if current_iface and current_iface not in seen_ifaces:
+                sessions['total'] += 1
+                seen_ifaces.add(current_iface)
+                current_state = None
         
-        # Look for interface state
+        # Extract interface state
         if 'Interface state:' in line:
-            if 'Secured' in line or 'Primary' in line:
-                sessions['secured'] += 1
-            elif 'Not found' in line or 'not found' in line:
-                sessions['not_found'] += 1
+            if current_iface:
+                if 'Secured' in line or 'Primary' in line:
+                    if current_state != 'Secured':  # Only count once per interface
+                        sessions['secured'] += 1
+                        current_state = 'Secured'
+                elif 'Not found' in line or 'not found' in line:
+                    if current_state != 'Not found':  # Only count once per interface
+                        sessions['not_found'] += 1
+                        current_state = 'Not found'
         
         # Count live peers
         if 'Member identifier:' in line and '(live)' in line:
             sessions['peers_live'] += 1
-        elif 'Hold time:' in line and 'down' in line.lower():
-            sessions['peers_down'] += 1
     
     return sessions
 
@@ -230,6 +273,88 @@ def parse_key_status_from_log(log_content, sae_id):
     return key_status
 
 
+def parse_macsec_statistics(output):
+    """Parse MACsec statistics for traffic flow."""
+    stats = {
+        'interfaces': {},
+    }
+    
+    lines = output.split('\n')
+    current_iface = None
+    
+    for line in lines:
+        if 'Interface name:' in line:
+            current_iface = line.split('Interface name:')[-1].strip()
+            stats['interfaces'][current_iface] = {
+                'encrypted_packets': 0,
+                'encrypted_bytes': 0,
+                'accepted_packets': 0,
+                'decrypted_bytes': 0,
+            }
+        
+        if current_iface:
+            if 'Encrypted packets:' in line and 'transmitted' in lines[max(0, lines.index(line)-1)]:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['encrypted_packets'] = int(match.group(1))
+            
+            if 'Accepted packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['accepted_packets'] = int(match.group(1))
+    
+    return stats
+
+
+def parse_mka_statistics(output):
+    """Parse MKA statistics for error detection."""
+    stats = {
+        'interfaces': {},
+    }
+    
+    lines = output.split('\n')
+    current_iface = None
+    
+    for line in lines:
+        if 'Interface name:' in line:
+            current_iface = line.split('Interface name:')[-1].strip()
+            stats['interfaces'][current_iface] = {
+                'cak_mismatch': 0,
+                'icv_mismatch': 0,
+                'version_mismatch': 0,
+                'received_packets': 0,
+                'transmitted_packets': 0,
+            }
+        
+        if current_iface:
+            if 'CAK mismatch packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['cak_mismatch'] = int(match.group(1))
+            
+            if 'ICV mismatch packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['icv_mismatch'] = int(match.group(1))
+            
+            if 'Version mismatch packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['version_mismatch'] = int(match.group(1))
+            
+            if 'Received packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['received_packets'] = int(match.group(1))
+            
+            if 'Transmitted packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['transmitted_packets'] = int(match.group(1))
+    
+    return stats
+
+
 def get_macsec_health(sae_id, password=None, verbose=False):
     """Get MACsec tunnel health from a device."""
     device_name, device_ip, ring_ip = DEVICES[sae_id]
@@ -239,6 +364,8 @@ def get_macsec_health(sae_id, password=None, verbose=False):
     health_data = {
         'macsec_status': {},
         'mka_status': {},
+        'macsec_stats': {},
+        'mka_stats': {},
         'key_status': {},
         'error': None,
     }
@@ -280,6 +407,14 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         mka_output = send_shell_command(shell, "show security mka sessions detail", verbose=verbose)
         health_data['mka_status'] = parse_mka_sessions(mka_output)
         
+        # Get MACsec statistics
+        macsec_stats_output = send_shell_command(shell, "show security macsec statistics", verbose=verbose)
+        health_data['macsec_stats'] = parse_macsec_statistics(macsec_stats_output)
+        
+        # Get MKA statistics
+        mka_stats_output = send_shell_command(shell, "show security mka statistics", verbose=verbose)
+        health_data['mka_stats'] = parse_mka_statistics(mka_stats_output)
+        
         # Get key status from log tail (need to enter shell for this)
         shell.send("start shell\n")
         time.sleep(0.3)
@@ -295,7 +430,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             time.sleep(0.1)
         
         log_file = f"/var/home/macsec_user/qkd-state/logs/qkd_debug.log"
-        log_output = send_shell_command(shell, f"tail -100 {log_file}", verbose=verbose)
+        log_output = send_shell_command(shell, f"tail -500 {log_file}", verbose=verbose)
         health_data['key_status'] = parse_key_status_from_log(log_output, sae_id)
         
         shell.close()
@@ -318,6 +453,7 @@ def format_tunnel_status(health_data):
     macsec = health_data.get('macsec_status', {})
     mka = health_data.get('mka_status', {})
     keys = health_data.get('key_status', {})
+    mka_stats = health_data.get('mka_stats', {}).get('interfaces', {})
     
     # MACsec and MKA summary
     macsec_ifaces = macsec.get('total_interfaces', 0)
@@ -329,12 +465,23 @@ def format_tunnel_status(health_data):
     
     # Key summary - handle None values
     pending_stale = keys.get('pending_stale_count', 0)
-    active_key = keys.get('active_key_id') or 'None'
-    pending_key = keys.get('pending_key_id') or 'None'
+    active_key = keys.get('active_key_id')
+    pending_key = keys.get('pending_key_id')
     
-    # Safely slice keys
-    active_key_short = (active_key[:8] if active_key else 'None')
-    pending_key_short = (pending_key[:8] if pending_key else 'None')
+    # Safely slice keys - handle None and short UUIDs
+    if active_key and len(active_key) > 0:
+        active_key_short = active_key[:8]
+    else:
+        active_key_short = 'None'
+    
+    if pending_key and len(pending_key) > 0:
+        pending_key_short = pending_key[:8]
+    else:
+        pending_key_short = 'None'
+    
+    # Check for CAK mismatches (key agreement failures)
+    cak_mismatch_total = sum(s.get('cak_mismatch', 0) for s in mka_stats.values())
+    icv_mismatch_total = sum(s.get('icv_mismatch', 0) for s in mka_stats.values())
     
     # Status indicators
     status = f"MACsec: {macsec_inuse}/{macsec_ifaces}✓ | MKA: {mka_secured}/{mka_total}✓"
@@ -345,7 +492,13 @@ def format_tunnel_status(health_data):
     status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
     
     if pending_stale > 0:
-        status += f" | ⚠️ STALE: {pending_stale}"
+        status += f" | ⚠️  STALE: {pending_stale}"
+    
+    if cak_mismatch_total > 0:
+        status += f" | 🔴 CAK_MISMATCH: {cak_mismatch_total}"
+    
+    if icv_mismatch_total > 0:
+        status += f" | 🔴 ICV_MISMATCH: {icv_mismatch_total}"
     
     return status
 
@@ -353,9 +506,12 @@ def format_tunnel_status(health_data):
 def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=False):
     """Continuously monitor MACsec tunnel health."""
     
+    start_time_abs = datetime.now()
+    start_time_epoch = time.time()
+    
     print("\n" + "="*100)
     print("MACsec TUNNEL HEALTH MONITOR - CONTINUOUS MODE")
-    print(f"Duration: {duration}s | Poll Interval: {interval}s | Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Duration: {duration}s | Poll Interval: {interval}s | Start: {start_time_abs.strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*100)
     print()
     
@@ -372,9 +528,16 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
     try:
         while time.time() - start_time < duration:
             iteration += 1
-            now = datetime.now().strftime('%H:%M:%S')
+            now = datetime.now()
+            elapsed = time.time() - start_time
+            elapsed_str = f"t{int(elapsed)}={int(elapsed)}s"
+            if elapsed >= 60:
+                mins = int(elapsed // 60)
+                secs = int(elapsed % 60)
+                elapsed_str = f"t{mins}:{secs:02d}={mins}m{secs}s"
+            
             print(f"\n{'='*100}")
-            print(f"ROUND {iteration} at {now}")
+            print(f"ROUND {iteration} at {now.strftime('%H:%M:%S')} ({elapsed_str})")
             print(f"{'='*100}\n")
             
             # Collect health data from all devices
@@ -386,6 +549,8 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 'mka_secured': 0,
                 'mka_not_found': 0,
                 'stale_keys': 0,
+                'cak_mismatches': 0,
+                'icv_mismatches': 0,
             }
             
             for sae_id in sorted(DEVICES.keys()):
@@ -401,12 +566,15 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 macsec = health.get('macsec_status', {})
                 mka = health.get('mka_status', {})
                 keys = health.get('key_status', {})
+                mka_stats = health.get('mka_stats', {}).get('interfaces', {})
                 
                 summary['macsec_interfaces'] += macsec.get('total_interfaces', 0)
                 summary['macsec_inuse'] += macsec.get('inuse', 0)
                 summary['mka_secured'] += mka.get('secured', 0)
                 summary['mka_not_found'] += mka.get('not_found', 0)
                 summary['stale_keys'] += keys.get('pending_stale_count', 0)
+                summary['cak_mismatches'] += sum(s.get('cak_mismatch', 0) for s in mka_stats.values())
+                summary['icv_mismatches'] += sum(s.get('icv_mismatch', 0) for s in mka_stats.values())
                 
                 # Detect changes
                 tunnel_states[sae_id].update(f"device", health)
@@ -420,10 +588,14 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
             print(f"MACsec Interfaces: {summary['macsec_inuse']}/{summary['macsec_interfaces']} inuse")
             print(f"MKA Sessions: {summary['mka_secured']} secured | {summary['mka_not_found']} not found")
             print(f"Stale Keys: {summary['stale_keys']}")
+            print(f"CAK Mismatches (Key Agreement Issues): {summary['cak_mismatches']}")
+            print(f"ICV Mismatches (Crypto Failures): {summary['icv_mismatches']}")
             
             # Health assessment
-            if summary['mka_not_found'] == 0 and summary['stale_keys'] == 0:
+            if summary['mka_not_found'] == 0 and summary['stale_keys'] == 0 and summary['cak_mismatches'] == 0 and summary['icv_mismatches'] == 0:
                 print("Status: ✅ ALL TUNNELS HEALTHY")
+            elif summary['cak_mismatches'] > 0 or summary['icv_mismatches'] > 0:
+                print(f"Status: 🔴 KEY AGREEMENT FAILURE - CAK/ICV mismatches indicate peer key sync issues")
             elif summary['mka_not_found'] == 0:
                 print(f"Status: ⚠️  PENDING STALE KEYS - {summary['stale_keys']} key(s) becoming stale")
             elif summary['mka_not_found'] > 0 and summary['mka_not_found'] <= 2:
@@ -437,15 +609,26 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 print("⚠️  STATE CHANGES DETECTED:")
                 print(f"{'─'*100}")
                 for change in all_anomalies:
-                    print(f"[{change['timestamp']}] {change['device']}: State changed")
-                    if isinstance(change['previous'], dict) and change['previous']:
-                        prev_mka = change['previous'].get('mka_status', {}).get('secured', 0)
-                        prev_stale = change['previous'].get('key_status', {}).get('pending_stale_count', 0)
-                        curr_mka = change['current'].get('mka_status', {}).get('secured', 0)
-                        curr_stale = change['current'].get('key_status', {}).get('pending_stale_count', 0)
-                        print(f"  MKA: {prev_mka} → {curr_mka}")
-                        if curr_stale > prev_stale:
-                            print(f"  ⚠️  Stale keys increased: {prev_stale} → {curr_stale}")
+                    # Calculate elapsed time for this event
+                    event_timestamp = datetime.fromisoformat(change['timestamp'])
+                    event_elapsed = (event_timestamp - start_time_abs).total_seconds()
+                    event_elapsed_str = f"t{int(event_elapsed)}={int(event_elapsed)}s"
+                    if event_elapsed >= 60:
+                        mins = int(event_elapsed // 60)
+                        secs = int(event_elapsed % 60)
+                        event_elapsed_str = f"t{mins}:{secs:02d}={mins}m{secs}s"
+                    
+                    print(f"[{change['timestamp']}] ({event_elapsed_str}) {change['device']}: State changed")
+                    if change['prev_mka'] != change['curr_mka']:
+                        print(f"  MKA: {change['prev_mka']}✓ → {change['curr_mka']}✓")
+                    if change['prev_stale'] != change['curr_stale']:
+                        print(f"  ⚠️  Stale keys: {change['prev_stale']} → {change['curr_stale']}")
+                    if change['prev_not_found'] != change['curr_not_found']:
+                        print(f"  🔴 Not found: {change['prev_not_found']} → {change['curr_not_found']}")
+                    if change['prev_cak'] != change['curr_cak']:
+                        print(f"  🔴 CAK mismatch: {change['prev_cak']} → {change['curr_cak']}")
+                    if change['prev_icv'] != change['curr_icv']:
+                        print(f"  🔴 ICV mismatch: {change['prev_icv']} → {change['curr_icv']}")
             
             # Wait for next poll
             time.sleep(interval)
