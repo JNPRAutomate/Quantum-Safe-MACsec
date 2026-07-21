@@ -360,45 +360,48 @@ def parse_mka_statistics(output):
 
 
 def parse_lacp_interfaces(output):
-    """Parse LACP interfaces output to extract LAG/LACP status."""
+    """Parse LACP interfaces output to extract LAG/LACP status.
+    
+    Junos output format:
+        Aggregated interface: ae0
+            LACP state: ...
+              et-0/0/0   Actor   No  No  Yes Yes Yes Yes  Fast  Active
+            LACP protocol:
+              et-0/0/0   Current  Fast periodic  Collecting distributing
+    """
     lacp_status = {
         'total': 0,
         'up': 0,
         'down': 0,
-        'aggregating': 0,
         'interfaces': {},
     }
     
     lines = output.split('\n')
-    current_iface = None
+    current_lag = None
+    seen_lags = set()
     
     for line in lines:
-        # Extract interface name (e.g., "Interface: ae0")
-        if 'Interface:' in line:
-            current_iface = line.split('Interface:')[-1].strip()
-            if current_iface:
+        # Junos: "Aggregated interface: ae0"
+        if 'Aggregated interface:' in line:
+            current_lag = line.split('Aggregated interface:')[-1].strip()
+            if current_lag and current_lag not in seen_lags:
+                seen_lags.add(current_lag)
                 lacp_status['total'] += 1
-                lacp_status['interfaces'][current_iface] = {
-                    'state': 'unknown',
-                    'status': 'unknown',
-                }
+                lacp_status['interfaces'][current_lag] = {'state': 'unknown'}
         
-        # Extract LACP status/state
-        if current_iface and ('State:' in line or 'Status:' in line):
-            if 'State:' in line:
-                state_val = line.split('State:')[-1].strip().lower()
-                lacp_status['interfaces'][current_iface]['state'] = state_val
-                
-                if 'up' in state_val:
-                    lacp_status['up'] += 1
-                elif 'down' in state_val or 'disabled' in state_val:
-                    lacp_status['down'] += 1
-                elif 'aggregating' in state_val or 'collecting' in state_val:
-                    lacp_status['aggregating'] += 1
-            
-            if 'Status:' in line:
-                status_val = line.split('Status:')[-1].strip().lower()
-                lacp_status['interfaces'][current_iface]['status'] = status_val
+        # Check member port Mux state in LACP protocol section
+        # "Collecting distributing" = up, anything else = degraded
+        if current_lag and 'Collecting distributing' in line:
+            lacp_status['interfaces'][current_lag]['state'] = 'up'
+        elif current_lag and 'Defaulted' in line:
+            lacp_status['interfaces'][current_lag]['state'] = 'down'
+    
+    # Count up/down based on final state per LAG
+    for iface, data in lacp_status['interfaces'].items():
+        if data['state'] == 'up':
+            lacp_status['up'] += 1
+        else:
+            lacp_status['down'] += 1
     
     return lacp_status
 
@@ -541,29 +544,41 @@ def format_tunnel_status(health_data):
     else:
         pending_key_short = 'None'
     
-    # Check for CAK mismatches (key agreement failures)
+    # CAK/ICV mismatch - cumulative hardware counters (show delta if prev available)
     cak_mismatch_total = sum(s.get('cak_mismatch', 0) for s in mka_stats.values())
     icv_mismatch_total = sum(s.get('icv_mismatch', 0) for s in mka_stats.values())
+    prev_cak = health_data.get('_prev_cak_total', None)
+    prev_icv = health_data.get('_prev_icv_total', None)
     
     # Status indicators - ONLY show ✓ if things are actually working
     macsec_status = "✓" if (macsec_ifaces > 0 and macsec_inuse == macsec_ifaces) else "✗"
     mka_status = "✓" if (mka_total > 0 and mka_secured == mka_total and mka_not_found == 0) else "✗"
-    lacp_status = "✓" if (lacp_total > 0 and lacp_up == lacp_total and lacp_down == 0) else "✗"
+    lacp_indicator = "✓" if (lacp_total > 0 and lacp_up == lacp_total) else ("✗" if lacp_total > 0 else "-")
+    lacp_part = f"LACP: {lacp_up}/{lacp_total}{lacp_indicator}" if lacp_total > 0 else "LACP: n/a"
     
-    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | LACP: {lacp_up}/{lacp_total}{lacp_status}"
+    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | {lacp_part}"
     
     status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
     
     if pending_stale > 0:
         status += f" | ⚠️  STALE: {pending_stale}"
     
+    # Show CAK/ICV as delta per round (+N) rather than scary cumulative total
     if cak_mismatch_total > 0:
-        status += f" | 🔴 CAK_MISMATCH: {cak_mismatch_total}"
+        if prev_cak is not None and cak_mismatch_total > prev_cak:
+            delta = cak_mismatch_total - prev_cak
+            status += f" | 🔴 CAK+{delta}"
+        elif prev_cak is None:
+            status += f" | 🔴 CAK:{cak_mismatch_total}(total)"
     
     if icv_mismatch_total > 0:
-        status += f" | 🔴 ICV_MISMATCH: {icv_mismatch_total}"
+        if prev_icv is not None and icv_mismatch_total > prev_icv:
+            delta = icv_mismatch_total - prev_icv
+            status += f" | 🔴 ICV+{delta}"
+        elif prev_icv is None:
+            status += f" | 🔴 ICV:{icv_mismatch_total}(total)"
     
-    if lacp_down > 0:
+    if lacp_total > 0 and lacp_down > 0:
         status += f" | 🔴 LACP_DOWN: {lacp_down}"
     
     return status
@@ -583,8 +598,12 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
     
     # Initialize state tracking
     tunnel_states = {}
+    prev_cak_totals = {}  # Per-device previous CAK mismatch totals
+    prev_icv_totals = {}  # Per-device previous ICV mismatch totals
     for sae_id in DEVICES.keys():
         tunnel_states[sae_id] = MACsecTunnelState(sae_id)
+        prev_cak_totals[sae_id] = None
+        prev_icv_totals[sae_id] = None
     
     start_time = time.time()
     iteration = 0
@@ -615,13 +634,23 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 'mka_secured': 0,
                 'mka_not_found': 0,
                 'stale_keys': 0,
-                'cak_mismatches': 0,
-                'icv_mismatches': 0,
+                'cak_delta': 0,   # sum of NEW mismatches this round
+                'icv_delta': 0,
+                'cak_total': 0,   # cumulative (for first round display)
+                'icv_total': 0,
+                'first_round': iteration == 1,
             }
             
             for sae_id in sorted(DEVICES.keys()):
                 device_name, device_ip, ring_ip = DEVICES[sae_id]
                 health = get_macsec_health(sae_id, password, verbose)
+                
+                # Inject previous CAK/ICV totals for delta display
+                mka_stats_ifaces = health.get('mka_stats', {}).get('interfaces', {})
+                curr_cak = sum(s.get('cak_mismatch', 0) for s in mka_stats_ifaces.values())
+                curr_icv = sum(s.get('icv_mismatch', 0) for s in mka_stats_ifaces.values())
+                health['_prev_cak_total'] = prev_cak_totals[sae_id]
+                health['_prev_icv_total'] = prev_icv_totals[sae_id]
                 
                 # Print device status
                 status_str = format_tunnel_status(health)
@@ -632,15 +661,21 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 macsec = health.get('macsec_status', {})
                 mka = health.get('mka_status', {})
                 keys = health.get('key_status', {})
-                mka_stats = health.get('mka_stats', {}).get('interfaces', {})
                 
                 summary['macsec_interfaces'] += macsec.get('total_interfaces', 0)
                 summary['macsec_inuse'] += macsec.get('inuse', 0)
                 summary['mka_secured'] += mka.get('secured', 0)
                 summary['mka_not_found'] += mka.get('not_found', 0)
                 summary['stale_keys'] += keys.get('pending_stale_count', 0)
-                summary['cak_mismatches'] += sum(s.get('cak_mismatch', 0) for s in mka_stats.values())
-                summary['icv_mismatches'] += sum(s.get('icv_mismatch', 0) for s in mka_stats.values())
+                summary['cak_total'] += curr_cak
+                summary['icv_total'] += curr_icv
+                if prev_cak_totals[sae_id] is not None:
+                    summary['cak_delta'] += max(0, curr_cak - prev_cak_totals[sae_id])
+                    summary['icv_delta'] += max(0, curr_icv - prev_icv_totals[sae_id])
+                
+                # Save for next round delta
+                prev_cak_totals[sae_id] = curr_cak
+                prev_icv_totals[sae_id] = curr_icv
                 
                 # Detect changes
                 tunnel_states[sae_id].update(f"device", health)
@@ -654,8 +689,14 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
             print(f"MACsec Interfaces: {summary['macsec_inuse']}/{summary['macsec_interfaces']} inuse")
             print(f"MKA Sessions: {summary['mka_secured']} secured | {summary['mka_not_found']} not found")
             print(f"Stale Keys: {summary['stale_keys']}")
-            print(f"CAK Mismatches (Key Agreement Issues): {summary['cak_mismatches']}")
-            print(f"ICV Mismatches (Crypto Failures): {summary['icv_mismatches']}")
+            if summary['first_round']:
+                print(f"CAK Mismatches: {summary['cak_total']} (cumulative total - first round baseline)")
+                print(f"ICV Mismatches: {summary['icv_total']} (cumulative total - first round baseline)")
+            else:
+                cak_str = f"+{summary['cak_delta']} this round" if summary['cak_delta'] > 0 else "none this round"
+                icv_str = f"+{summary['icv_delta']} this round" if summary['icv_delta'] > 0 else "none this round"
+                print(f"CAK Mismatches: {cak_str} (total: {summary['cak_total']})")
+                print(f"ICV Mismatches: {icv_str} (total: {summary['icv_total']})")
             
             # Health assessment
             macsec_health_percent = 0
@@ -663,8 +704,8 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 macsec_health_percent = (summary['macsec_inuse'] / summary['macsec_interfaces']) * 100
             
             if summary['total_devices'] > 0:
-                if summary['cak_mismatches'] > 0 or summary['icv_mismatches'] > 0:
-                    print(f"Status: 🔴 CRITICAL - KEY AGREEMENT FAILURE - CAK/ICV mismatches indicate peer key sync issues")
+                if summary['cak_delta'] > 10 or summary['icv_delta'] > 0:
+                    print(f"Status: 🔴 CRITICAL - KEY AGREEMENT FAILURE - {summary['cak_delta']} new CAK mismatches this round")
                 elif summary['mka_not_found'] > 0:
                     print(f"Status: 🔴 CRITICAL - {summary['mka_not_found']} MKA session(s) NOT FOUND")
                 elif macsec_health_percent < 50:
