@@ -80,19 +80,16 @@ def get_rotation_count(sae_id, password=None):
         else:
             return rotation_count, last_timestamp, "No auth"
         
-        # Count rotations - check if file exists first
-        cmd_exists = f"[ -f {log_file} ] && echo 'EXISTS' || echo 'MISSING'"
-        stdin, stdout, stderr = client.exec_command(cmd_exists)
-        exists_result = stdout.read().decode().strip()
-        
-        if exists_result != "EXISTS":
-            client.close()
-            return 0, "N/A", "Log file missing"
-        
-        cmd_count = f"grep -c 'PEER SSH KEY ROTATION' {log_file}"
+        # Count rotations - try grep directly without checking first
+        # If file doesn't exist, grep will return error which we catch
+        cmd_count = f"grep -c 'PEER SSH KEY ROTATION' {log_file} 2>&1"
         stdin, stdout, stderr = client.exec_command(cmd_count)
         count_output = stdout.read().decode().strip()
-        stderr_output = stderr.read().decode().strip()
+        
+        # Check if grep returned an error (file not found)
+        if "No such file" in count_output or "cannot open" in count_output:
+            client.close()
+            return 0, "N/A", f"Log not found"
         
         try:
             rotation_count = int(count_output) if count_output else 0
