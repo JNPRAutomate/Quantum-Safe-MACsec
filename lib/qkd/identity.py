@@ -1076,9 +1076,9 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
-        if stdout.strip() and "error:" not in combined_low:
-            print(f"[OK] peer SSH {name} -> {peer_ip} as {peer_user}")
-            continue
+        # Success markers in uptime output (Junos MX/ACX style)
+        uptime_markers = ["current time:", "system booted:", "protocols started:", "last configured:"]
+        has_uptime_content = any(m in combined_low for m in uptime_markers)
 
         hard_fail_markers = [
             "permission denied",
@@ -1088,12 +1088,21 @@ def check_peer_ssh_from_device(device):
             "bad permissions",
             "private key",
         ]
-        if any(m in combined_low for m in hard_fail_markers):
+        is_auth_fail = any(m in combined_low for m in hard_fail_markers)
+
+        if is_auth_fail:
             raise RuntimeError(
                 f"peer SSH authentication failed from {name} to {peer_ip} as {peer_user}\n"
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )
+
+        # Accept if uptime content is present regardless of non-fatal XML warnings
+        # (e.g. "error: invalid xml tag" from Junos ACX command-handler is harmless)
+        if has_uptime_content or (stdout.strip() and "error:" not in combined_low):
+            print(f"[OK] peer SSH {name} -> {peer_ip} as {peer_user}")
+            print_if_verbose(stdout)
+            continue
 
         if "rpctimeouterror" in combined_low or "timeout" in combined_low:
             print(
