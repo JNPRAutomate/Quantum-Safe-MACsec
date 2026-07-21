@@ -221,10 +221,10 @@ links:
   ca_name: CA_ACX2_ACX3
   keychain_name: QKD_CA_ACX2_ACX3
 - id: ACX3-ACX4
-  node_a: ACX3
-  interface_a: et-2/0/2
-  node_b: ACX4
-  interface_b: et-0/0/2
+  node_a: ACX4
+  interface_a: et-0/0/2
+  node_b: ACX3
+  interface_b: et-2/0/2
   ca_name: CA_ACX3_ACX4
   keychain_name: QKD_CA_ACX3_ACX4
 - id: ACX4-ACX5
