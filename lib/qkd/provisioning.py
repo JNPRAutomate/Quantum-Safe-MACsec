@@ -571,10 +571,17 @@ def push_certs(dev, name, device, base=None):
     except Exception as exc:
         raise RuntimeError(f"[{name}] Failed to prepare remote cert dir {remote_dir}: {exc}")
 
+    files_to_copy = [
+        (local_cert, f"{remote_dir}/{local_cert.name}"),
+        (local_key,  f"{remote_dir}/{local_key.name}"),
+        (local_ca,   f"{remote_dir}/{local_ca.name}"),
+    ]
+    filenames = ", ".join(lf.name for lf, _ in files_to_copy)
+    print(f"[{name}] SCP certs -> {remote_dir}: {filenames}")
     with SCP(dev, progress=progress) as scp:
-        for local_file in (local_cert, local_key, local_ca):
-            remote_file = f"{remote_dir}/{local_file.name}"
-            print(f"[{name}] SCP {local_file} -> {remote_file}")
+        for local_file, remote_file in files_to_copy:
+            if DEBUG:
+                print(f"[{name}] SCP {local_file} -> {remote_file}")
             scp.put(str(local_file), remote_path=remote_file)
 
     verify_cmd = (
@@ -624,9 +631,10 @@ def rollback_candidate(dev, name):
     cu = Config(dev)
     try:
         cu.rollback(rb_id=0)
-        print(f"[{name}] Candidate rollback 0 complete")
+        if DEBUG:
+            print(f"[{name}] Candidate config cleared (rollback 0)")
     except Exception as exc:
-        print(f"[{name}] Candidate rollback 0 warning: {exc}")
+        print(f"[{name}] WARN candidate config clear failed: {exc}")
 
 
 # ----------------------------------------
