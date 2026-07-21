@@ -504,13 +504,16 @@ def generate_ssh_keys_for_script_user(
         # - test -r: file is readable (exists and has read permission)
         # - ssh-keygen -l -f: file is a valid SSH key (not empty, not corrupted, correct format)
         # Both public keys must pass ssh-keygen validation before we consider keys healthy.
+        # Note: do NOT redirect ssh-keygen output (no >/dev/null) - Junos BSD sh treats
+        # "> /dev/null 2>&1" as "Ambiguous output redirect" in some contexts.
+        # The extra output is harmless; only __QKD_KEYS_OK__ matters for the check.
         verify_cmd = (
             "test -r {key} && "
             "test -r {pub} && "
             "test -r {pkey} && "
             "test -r {ppub} && "
-            "ssh-keygen -l -f {pub} > /dev/null 2>&1 && "
-            "ssh-keygen -l -f {ppub} > /dev/null 2>&1 && "
+            "ssh-keygen -l -f {pub} && "
+            "ssh-keygen -l -f {ppub} && "
             "echo __QKD_KEYS_OK__ && "
             "ls -l {key} {pub} {pkey} {ppub}"
         ).format(
