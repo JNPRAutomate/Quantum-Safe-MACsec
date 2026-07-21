@@ -55,41 +55,36 @@ for sae_id in 001 002 003 004 005 006 007 008 009 010 011; do
     user="labuser"
     log_file="/var/home/macsec_user/qkd-state/logs/qkd_ssh_rotation_sae-${sae_id}.log"
     
-    # Try to get rotation count via SSH using heredoc (works with Juniper CLI)
     rotation_count=0
     last_timestamp="N/A"
     
+    # Determine SSH command prefix
     if [ -f "$key_path" ]; then
-        # Use SSH key if available - use heredoc to bypass CLI parsing
-        result=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
-grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | wc -l
-SSHEOF
-)
-        rotation_count=$(echo "$result" | grep -oE '^[0-9]+' | head -1 || echo "0")
-        
-        if [ "$rotation_count" -gt 0 ]; then
-            last_line=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
-grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | tail -1
-SSHEOF
-)
-            last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
-        fi
+        ssh_prefix="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $key_path"
     elif [ -n "$PASSWORD" ]; then
-        # Use password if sshpass available
         if command -v sshpass &> /dev/null; then
-            result=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
-grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | wc -l
-SSHEOF
-)
-            rotation_count=$(echo "$result" | grep -oE '^[0-9]+' | head -1 || echo "0")
-            
-            if [ "$rotation_count" -gt 0 ]; then
-                last_line=$(sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user@$device_ip" /bin/bash <<SSHEOF 2>/dev/null
-grep "PEER SSH KEY ROTATION" "$log_file" 2>/dev/null | tail -1
-SSHEOF
-)
-                last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
-            fi
+            ssh_prefix="sshpass -p '$PASSWORD' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5"
+        else
+            ssh_prefix=""
+        fi
+    else
+        ssh_prefix=""
+    fi
+    
+    # If we have a valid SSH command, execute it
+    if [ -n "$ssh_prefix" ]; then
+        # Execute the command to get rotation count
+        cmd="$ssh_prefix $user@$device_ip \"grep -c 'PEER SSH KEY ROTATION' $log_file 2>/dev/null\""
+        result=$(eval "$cmd" 2>/dev/null || echo "0")
+        
+        # Extract numeric value safely
+        rotation_count=$(echo "$result" | tail -1 | grep -oE '[0-9]+' || echo "0")
+        
+        # Get last timestamp if rotations found
+        if [ "$rotation_count" -gt 0 ] 2>/dev/null; then
+            cmd_last="$ssh_prefix $user@$device_ip \"grep 'PEER SSH KEY ROTATION' $log_file 2>/dev/null | tail -1\""
+            last_line=$(eval "$cmd_last" 2>/dev/null)
+            last_timestamp=$(echo "$last_line" | awk '{print $1, $2}')
         fi
     fi
     
@@ -97,7 +92,7 @@ SSHEOF
     printf "%-8s %-15s │ Rotations: %2d │ Last: %s\n" \
         "sae-$sae_id" "$device_name" "$rotation_count" "$last_timestamp"
     
-    if [ "$rotation_count" -gt 0 ]; then
+    if [ "$rotation_count" -gt 0 ] 2>/dev/null; then
         TOTAL_ROTATIONS=$((TOTAL_ROTATIONS + rotation_count))
         DEVICES_WITH_ROTATIONS=$((DEVICES_WITH_ROTATIONS + 1))
     fi
