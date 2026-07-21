@@ -452,43 +452,23 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         send_shell_command(shell, "set cli pager off", verbose=False)
         
         # Get MACsec connections status
-        macsec_output = send_shell_command(shell, "show security macsec connections | no-more", verbose=verbose)
-        if verbose:
-            print(f"[DEBUG] MACsec raw output ({len(macsec_output)} chars):")
-            print(macsec_output[:500])
-            print("...")
+        macsec_output = send_shell_command(shell, "show security macsec connections | no-more", verbose=False)
         health_data['macsec_status'] = parse_macsec_connections(macsec_output)
         
         # Get MKA sessions detail
-        mka_output = send_shell_command(shell, "show security mka sessions detail | no-more", verbose=verbose)
-        if verbose:
-            print(f"[DEBUG] MKA raw output ({len(mka_output)} chars):")
-            print(mka_output[:500])
-            print("...")
+        mka_output = send_shell_command(shell, "show security mka sessions detail | no-more", verbose=False)
         health_data['mka_status'] = parse_mka_sessions(mka_output)
         
         # Get MACsec statistics
-        macsec_stats_output = send_shell_command(shell, "show security macsec statistics | no-more", verbose=verbose)
-        if verbose:
-            print(f"[DEBUG] MACsec stats raw output ({len(macsec_stats_output)} chars):")
-            print(macsec_stats_output[:500])
-            print("...")
+        macsec_stats_output = send_shell_command(shell, "show security macsec statistics | no-more", verbose=False)
         health_data['macsec_stats'] = parse_macsec_statistics(macsec_stats_output)
         
         # Get MKA statistics
-        mka_stats_output = send_shell_command(shell, "show security mka statistics | no-more", verbose=verbose)
-        if verbose:
-            print(f"[DEBUG] MKA stats raw output ({len(mka_stats_output)} chars):")
-            print(mka_stats_output[:500])
-            print("...")
+        mka_stats_output = send_shell_command(shell, "show security mka statistics | no-more", verbose=False)
         health_data['mka_stats'] = parse_mka_statistics(mka_stats_output)
         
         # Get LACP interfaces status
-        lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=verbose)
-        if verbose:
-            print(f"[DEBUG] LACP raw output ({len(lacp_output)} chars):")
-            print(lacp_output[:500])
-            print("...")
+        lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=False)
         health_data['lacp_status'] = parse_lacp_interfaces(lacp_output)
         
         # Get key status from log tail (need to enter shell for this)
