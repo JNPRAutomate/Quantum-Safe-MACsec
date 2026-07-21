@@ -8,6 +8,7 @@ Counts PEER SSH KEY ROTATION events from QKD rotation logs.
 import warnings
 import sys
 import os
+import socket
 import argparse
 from pathlib import Path
 from getpass import getpass
@@ -52,6 +53,33 @@ def debug_print(msg, verbose):
     if verbose:
         print(f"[DEBUG] {msg}", file=sys.stderr)
 
+def send_shell_command(shell, command, verbose=False):
+    """Send command to shell and wait for prompt, returning output."""
+    shell.send(command + "\n")
+    time.sleep(0.3)
+    
+    output = ""
+    max_attempts = 20  # ~2 seconds with 0.1s sleep
+    attempts = 0
+    
+    # Read until we see the shell prompt (%) indicating command completion
+    while attempts < max_attempts:
+        try:
+            chunk = shell.recv(1024).decode()
+            if chunk:
+                output += chunk
+                if "%" in output:
+                    break  # Command complete, prompt appeared
+        except socket.timeout:
+            break
+        except Exception:
+            break
+        time.sleep(0.1)
+        attempts += 1
+    
+    debug_print(f"Shell output: {repr(output[:200])}...", verbose)
+    return output
+
 def get_rotation_count(sae_id, password=None, verbose=False):
     """Connect to device via SSH and count PEER SSH KEY ROTATION events."""
     device_name, device_ip = DEVICES[sae_id]
@@ -89,33 +117,37 @@ def get_rotation_count(sae_id, password=None, verbose=False):
         
         # Count rotations - use interactive shell (only way for Juniper devices)
         shell = client.invoke_shell()
+        shell.settimeout(5.0)  # Add timeout to prevent hanging on ACX devices
         
         # Send start shell command to enter Unix shell
         shell.send("start shell\n")
         
         # Wait for Unix shell prompt (%)
         output = ""
-        while "%" not in output:
-            chunk = shell.recv(1024).decode()
-            output += chunk
+        max_wait = 20
+        attempts = 0
+        while "%" not in output and attempts < max_wait:
+            try:
+                chunk = shell.recv(1024).decode()
+                output += chunk
+            except socket.timeout:
+                break
+            except Exception:
+                break
             time.sleep(0.1)
+            attempts += 1
         
-        debug_print(f"Device {device_ip}: Shell ready", verbose)
+        debug_print(f"Device {device_ip}: Shell ready after {attempts} attempts", verbose)
         
-        # Now send grep command in Unix shell
-        grep_cmd = f"grep -c 'PEER SSH KEY ROTATION' {log_file}\n"
-        shell.send(grep_cmd)
-        time.sleep(0.5)
-        
-        # Read output
-        output = shell.recv(4096).decode()
-        debug_print(f"Device {device_ip}: Raw output:\n{output}", verbose)
+        # Now send grep command in Unix shell using helper function
+        output = send_shell_command(shell, f"grep -c 'PEER SSH KEY ROTATION' {log_file}", verbose)
         
         # Extract numeric value from output
         count_output = "0"
         for line in output.split('\n'):
-            if line.strip().isdigit():
-                count_output = line.strip()
+            line = line.strip()
+            if line.isdigit():
+                count_output = line
                 break
         
         debug_print(f"Count: '{count_output}'", verbose)
@@ -132,11 +164,8 @@ def get_rotation_count(sae_id, password=None, verbose=False):
         
         # Get last timestamp if rotations exist
         if rotation_count > 0:
-            shell.send(f"grep 'PEER SSH KEY ROTATION' {log_file} | tail -1\n")
-            time.sleep(0.5)
-            
-            ts_output = shell.recv(4096).decode()
-            debug_print(f"Device {device_ip}: Timestamp output:\n{ts_output}", verbose)
+            ts_output = send_shell_command(shell, f"grep 'PEER SSH KEY ROTATION' {log_file} | tail -1", verbose)
+            debug_print(f"Device {device_ip}: Timestamp raw output:\n{ts_output}", verbose)
             
             # Find line with PEER SSH KEY ROTATION (should be YYYY-MM-DD HH:MM:SS ...)
             for line in ts_output.split('\n'):
@@ -145,6 +174,7 @@ def get_rotation_count(sae_id, password=None, verbose=False):
                     parts = line.split()
                     if len(parts) >= 2:
                         last_timestamp = f"{parts[0]} {parts[1]}"
+                        debug_print(f"Extracted timestamp: {last_timestamp}", verbose)
                     break
         
         shell.close()
