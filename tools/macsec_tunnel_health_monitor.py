@@ -150,7 +150,7 @@ def send_shell_command(shell, command, timeout=5.0, verbose=False):
     return output
 
 
-def parse_macsec_connections(output):
+def parse_macsec_connections(output, verbose=False):
     """Parse MACsec connections output to extract interface status."""
     status = {
         'interfaces': [],
@@ -170,6 +170,8 @@ def parse_macsec_connections(output):
                 status['interfaces'].append(iface_name)
                 status['total_interfaces'] += 1
                 iface_map[iface_name] = 'unknown'
+                if verbose:
+                    print(f"  [PARSE] Found interface: {iface_name}")
         
         # Track status for most recent interface
         if 'Status: inuse' in line and status['interfaces']:
@@ -177,17 +179,19 @@ def parse_macsec_connections(output):
             # Prefer "inuse" over "standby"
             if iface_map[recent] != 'inuse':
                 iface_map[recent] = 'inuse'
+                status['inuse'] += 1
+                if verbose:
+                    print(f"  [PARSE] {recent} -> inuse")
         elif 'Status: standby' in line and status['interfaces']:
             recent = status['interfaces'][-1]
             if iface_map[recent] == 'unknown':
                 iface_map[recent] = 'standby'
+                status['standby'] += 1
+                if verbose:
+                    print(f"  [PARSE] {recent} -> standby")
     
-    # Count final statuses
-    for iface_name, iface_status in iface_map.items():
-        if iface_status == 'inuse':
-            status['inuse'] += 1
-        elif iface_status == 'standby':
-            status['standby'] += 1
+    if verbose:
+        print(f"  [RESULT] MACsec: {status['total_interfaces']} interfaces, {status['inuse']} inuse, {status['standby']} standby")
     
     return status
 
@@ -355,6 +359,50 @@ def parse_mka_statistics(output):
     return stats
 
 
+def parse_lacp_interfaces(output):
+    """Parse LACP interfaces output to extract LAG/LACP status."""
+    lacp_status = {
+        'total': 0,
+        'up': 0,
+        'down': 0,
+        'aggregating': 0,
+        'interfaces': {},
+    }
+    
+    lines = output.split('\n')
+    current_iface = None
+    
+    for line in lines:
+        # Extract interface name (e.g., "Interface: ae0")
+        if 'Interface:' in line:
+            current_iface = line.split('Interface:')[-1].strip()
+            if current_iface:
+                lacp_status['total'] += 1
+                lacp_status['interfaces'][current_iface] = {
+                    'state': 'unknown',
+                    'status': 'unknown',
+                }
+        
+        # Extract LACP status/state
+        if current_iface and ('State:' in line or 'Status:' in line):
+            if 'State:' in line:
+                state_val = line.split('State:')[-1].strip().lower()
+                lacp_status['interfaces'][current_iface]['state'] = state_val
+                
+                if 'up' in state_val:
+                    lacp_status['up'] += 1
+                elif 'down' in state_val or 'disabled' in state_val:
+                    lacp_status['down'] += 1
+                elif 'aggregating' in state_val or 'collecting' in state_val:
+                    lacp_status['aggregating'] += 1
+            
+            if 'Status:' in line:
+                status_val = line.split('Status:')[-1].strip().lower()
+                lacp_status['interfaces'][current_iface]['status'] = status_val
+    
+    return lacp_status
+
+
 def get_macsec_health(sae_id, password=None, verbose=False):
     """Get MACsec tunnel health from a device."""
     device_name, device_ip, ring_ip = DEVICES[sae_id]
@@ -364,6 +412,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
     health_data = {
         'macsec_status': {},
         'mka_status': {},
+        'lacp_status': {},
         'macsec_stats': {},
         'mka_stats': {},
         'key_status': {},
@@ -401,19 +450,43 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         
         # Get MACsec connections status
         macsec_output = send_shell_command(shell, "show security macsec connections", verbose=verbose)
+        if verbose:
+            print(f"[DEBUG] MACsec raw output ({len(macsec_output)} chars):")
+            print(macsec_output[:500])
+            print("...")
         health_data['macsec_status'] = parse_macsec_connections(macsec_output)
         
         # Get MKA sessions detail
         mka_output = send_shell_command(shell, "show security mka sessions detail", verbose=verbose)
+        if verbose:
+            print(f"[DEBUG] MKA raw output ({len(mka_output)} chars):")
+            print(mka_output[:500])
+            print("...")
         health_data['mka_status'] = parse_mka_sessions(mka_output)
         
         # Get MACsec statistics
         macsec_stats_output = send_shell_command(shell, "show security macsec statistics", verbose=verbose)
+        if verbose:
+            print(f"[DEBUG] MACsec stats raw output ({len(macsec_stats_output)} chars):")
+            print(macsec_stats_output[:500])
+            print("...")
         health_data['macsec_stats'] = parse_macsec_statistics(macsec_stats_output)
         
         # Get MKA statistics
         mka_stats_output = send_shell_command(shell, "show security mka statistics", verbose=verbose)
+        if verbose:
+            print(f"[DEBUG] MKA stats raw output ({len(mka_stats_output)} chars):")
+            print(mka_stats_output[:500])
+            print("...")
         health_data['mka_stats'] = parse_mka_statistics(mka_stats_output)
+        
+        # Get LACP interfaces status
+        lacp_output = send_shell_command(shell, "show lacp interfaces", verbose=verbose)
+        if verbose:
+            print(f"[DEBUG] LACP raw output ({len(lacp_output)} chars):")
+            print(lacp_output[:500])
+            print("...")
+        health_data['lacp_status'] = parse_lacp_interfaces(lacp_output)
         
         # Get key status from log tail (need to enter shell for this)
         shell.send("start shell\n")
@@ -453,6 +526,7 @@ def format_tunnel_status(health_data):
     macsec = health_data.get('macsec_status', {})
     mka = health_data.get('mka_status', {})
     keys = health_data.get('key_status', {})
+    lacp = health_data.get('lacp_status', {})
     mka_stats = health_data.get('mka_stats', {}).get('interfaces', {})
     
     # MACsec and MKA summary
@@ -462,6 +536,11 @@ def format_tunnel_status(health_data):
     mka_total = mka.get('total', 0)
     mka_secured = mka.get('secured', 0)
     mka_not_found = mka.get('not_found', 0)
+    
+    # LACP summary
+    lacp_total = lacp.get('total', 0)
+    lacp_up = lacp.get('up', 0)
+    lacp_down = lacp.get('down', 0)
     
     # Key summary - handle None values
     pending_stale = keys.get('pending_stale_count', 0)
@@ -486,8 +565,9 @@ def format_tunnel_status(health_data):
     # Status indicators - ONLY show ✓ if things are actually working
     macsec_status = "✓" if (macsec_ifaces > 0 and macsec_inuse == macsec_ifaces) else "✗"
     mka_status = "✓" if (mka_total > 0 and mka_secured == mka_total and mka_not_found == 0) else "✗"
+    lacp_status = "✓" if (lacp_total > 0 and lacp_up == lacp_total and lacp_down == 0) else "✗"
     
-    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status}"
+    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | LACP: {lacp_up}/{lacp_total}{lacp_status}"
     
     status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
     
@@ -499,6 +579,9 @@ def format_tunnel_status(health_data):
     
     if icv_mismatch_total > 0:
         status += f" | 🔴 ICV_MISMATCH: {icv_mismatch_total}"
+    
+    if lacp_down > 0:
+        status += f" | 🔴 LACP_DOWN: {lacp_down}"
     
     return status
 
