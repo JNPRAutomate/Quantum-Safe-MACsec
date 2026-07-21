@@ -7,10 +7,14 @@ Counts PEER SSH KEY ROTATION events from QKD rotation logs.
 
 import sys
 import os
+import warnings
 from pathlib import Path
 from getpass import getpass
 import paramiko
 from datetime import datetime
+
+# Suppress cryptography deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Auto-detect workspace root
 WORKSPACE_ROOT = Path(__file__).parent.parent
@@ -24,11 +28,11 @@ DEVICES = {
     "004": ("MX4", "100.123.113.4"),
     "005": ("MX5", "100.123.113.3"),
     "006": ("MX6", "100.123.113.1"),
-    "007": ("ACX1", "100.123.170.207"),
-    "008": ("ACX2", "100.123.170.200"),
+    "007": ("ACX1", "100.123.170.202"),
+    "008": ("ACX2", "100.123.170.201"),
     "009": ("ACX3", "100.123.170.203"),
-    "010": ("ACX4", "100.123.170.204"),
-    "011": ("ACX5", "100.123.170.205"),
+    "010": ("ACX4", "100.123.182.2"),
+    "011": ("ACX5", "100.123.182.1"),
 }
 
 def get_auth():
@@ -75,10 +79,19 @@ def get_rotation_count(sae_id, password=None):
         else:
             return rotation_count, last_timestamp, "No auth"
         
-        # Count rotations
+        # Count rotations - check if file exists first
+        cmd_exists = f"[ -f {log_file} ] && echo 'EXISTS' || echo 'MISSING'"
+        stdin, stdout, stderr = client.exec_command(cmd_exists)
+        exists_result = stdout.read().decode().strip()
+        
+        if exists_result != "EXISTS":
+            client.close()
+            return 0, "N/A", "Log file missing"
+        
         cmd_count = f"grep -c 'PEER SSH KEY ROTATION' {log_file}"
         stdin, stdout, stderr = client.exec_command(cmd_count)
         count_output = stdout.read().decode().strip()
+        stderr_output = stderr.read().decode().strip()
         
         try:
             rotation_count = int(count_output) if count_output else 0
