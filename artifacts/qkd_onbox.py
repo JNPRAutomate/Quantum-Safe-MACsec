@@ -2291,6 +2291,26 @@ def auto_rotate_peer_ssh_key_if_due(links):
             )
             return False
 
+    # Pre-authorize new key for SCRIPT_USER on peer BEFORE the swap.
+    # After the swap, connecting as SCRIPT_USER uses the NEW key, so the peer's
+    # SCRIPT_USER authorized_keys must already accept it for cleanup to succeed.
+    for target in targets:
+        ok, stdout, stderr = apply_peer_public_key_on_remote(
+            target["peer_ip"],
+            PEER_CMD_SSH_KEY,
+            next_key_type,
+            next_key_line,
+            remove=False,
+            remote_user=SCRIPT_USER,
+            target_login_user=SCRIPT_USER,
+        )
+        if not ok:
+            log(
+                f"PEER SSH KEY ROTATION PRE-AUTH SCRIPT_USER WARN peer={target.get('peer')} peer_ip={target['peer_ip']} stderr={stderr} stdout={stdout}",
+                "WARN",
+                mode="SSHKEY",
+            )
+
     try:
         Path(next_key_path).replace(PEER_CMD_SSH_KEY)
         Path(next_pub_path).replace(current_pub_path)
@@ -2314,6 +2334,24 @@ def auto_rotate_peer_ssh_key_if_due(links):
             log(
                 f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} old_key_retained=True",
                 "ERROR",
+                mode="SSHKEY",
+            )
+
+    # Remove old key from SCRIPT_USER authorized_keys on peer (now using NEW key which was pre-authorized above)
+    for target in targets:
+        ok, _, _ = apply_peer_public_key_on_remote(
+            target["peer_ip"],
+            PEER_CMD_SSH_KEY,
+            current_key_type,
+            current_key_line,
+            remove=True,
+            remote_user=SCRIPT_USER,
+            target_login_user=SCRIPT_USER,
+        )
+        if not ok:
+            log(
+                f"PEER SSH KEY ROTATION CLEANUP SCRIPT_USER WARN peer={target.get('peer')} peer_ip={target['peer_ip']} old_key_retained=True",
+                "WARN",
                 mode="SSHKEY",
             )
 
