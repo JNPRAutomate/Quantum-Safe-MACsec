@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
 # Add repo root to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+BASE_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(BASE_DIR))
 
-from lib.common.loader import load_runtime_devices, filter_devices
+from lib.common.script_user_bootstrap import load_runtime_devices, filter_devices
 from jnpr.junos import Device
 from jnpr.junos.exception import ConnectError
 
