@@ -329,22 +329,41 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     try:
         data = json.loads(json_data_str)
         
-        # Extract active_key_id
+        # Debug: print available keys to understand JSON structure
+        if verbose:
+            print(f"[DEBUG] JSON keys available: {list(data.keys())}")
+        
+        # Try multiple possible field names for key IDs
+        # (in case qkd_onbox.py changed the naming)
+        
+        # Option 1: direct fields
         if 'active_key_id' in data and data['active_key_id']:
             key_status['active_key_id'] = data['active_key_id']
+        elif 'activeKeyId' in data and data['activeKeyId']:  # camelCase variant
+            key_status['active_key_id'] = data['activeKeyId']
+        elif 'active_id' in data and data['active_id']:  # short variant
+            key_status['active_key_id'] = data['active_id']
         
         # Extract pending_key_id  
         if 'pending_key_id' in data and data['pending_key_id']:
             key_status['pending_key_id'] = data['pending_key_id']
+        elif 'pendingKeyId' in data and data['pendingKeyId']:  # camelCase variant
+            key_status['pending_key_id'] = data['pendingKeyId']
+        elif 'pending_id' in data and data['pending_id']:  # short variant
+            key_status['pending_key_id'] = data['pending_id']
         
         # Count pending_keys array
         if 'pending_keys' in data and isinstance(data['pending_keys'], list):
             key_status['pending_stale_count'] = len(data['pending_keys'])
+            if verbose and data['pending_keys']:
+                print(f"[DEBUG] Pending keys: {data['pending_keys']}")
             
-    except json.JSONDecodeError:
-        pass
-    except Exception:
-        pass
+    except json.JSONDecodeError as e:
+        if verbose:
+            print(f"[DEBUG] JSON parse error: {str(e)[:100]}")
+    except Exception as e:
+        if verbose:
+            print(f"[DEBUG] Error parsing JSON: {str(e)[:100]}")
     
     return key_status
 
