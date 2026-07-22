@@ -41,6 +41,19 @@ def cleanup_device(
         print(f"[{name}] ERROR: no ip/mgmt_ip configured")
         return False
 
+    paths_to_remove = [
+        "/var/home/macsec_user",
+        "/var/home/etsi_peer_view",
+    ]
+
+    if dry_run:
+        print(f"[{name}] DRY-RUN connecting via {deploy_user}@{host}")
+        for path in paths_to_remove:
+            print(f"[{name}]   rm -rf {path}")
+        print(f"[{name}]   rm -f /var/db/scripts/op/*.json")
+        print(f"[{name}] DRY-RUN completed (no actual changes)")
+        return True
+
     print(f"[{name}] connecting via deploy user {deploy_user}@{host}")
 
     try:
@@ -53,32 +66,21 @@ def cleanup_device(
         )
         dev.open()
 
-        paths_to_remove = [
-            "/var/home/macsec_user",
-            "/var/home/etsi_peer_view",
-        ]
-
         for path in paths_to_remove:
-            if dry_run:
-                print(f"[{name}] DRY-RUN: rm -rf {path}")
-            else:
-                print(f"[{name}] removing {path}")
-                try:
-                    dev.rpc.request_shell_execute(command=f"rm -rf {path}")
-                    print(f"[{name}] OK removed {path}")
-                except Exception as e:
-                    print(f"[{name}] WARNING: failed to remove {path}: {e}")
+            print(f"[{name}] removing {path}")
+            try:
+                dev.rpc.request_shell_execute(command=f"rm -rf {path}")
+                print(f"[{name}] OK removed {path}")
+            except Exception as e:
+                print(f"[{name}] WARNING: failed to remove {path}: {e}")
 
         # Clean JSON state files from /var/db/scripts/op
-        if dry_run:
-            print(f"[{name}] DRY-RUN: rm -f /var/db/scripts/op/*.json")
-        else:
-            print(f"[{name}] cleaning /var/db/scripts/op/*.json")
-            try:
-                dev.rpc.request_shell_execute(command="rm -f /var/db/scripts/op/*.json")
-                print(f"[{name}] OK cleaned JSON files")
-            except Exception as e:
-                print(f"[{name}] WARNING: failed to clean JSON files: {e}")
+        print(f"[{name}] cleaning /var/db/scripts/op/*.json")
+        try:
+            dev.rpc.request_shell_execute(command="rm -f /var/db/scripts/op/*.json")
+            print(f"[{name}] OK cleaned JSON files")
+        except Exception as e:
+            print(f"[{name}] WARNING: failed to clean JSON files: {e}")
 
         dev.close()
         print(f"[{name}] cleanup completed successfully")
