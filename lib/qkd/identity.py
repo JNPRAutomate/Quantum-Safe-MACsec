@@ -814,7 +814,7 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         pub_keys_list: List of public key strings to write
     
     Uses dev.rpc.request_shell_execute (Junos RPC with system privileges).
-    Uses printf + shlex.quote() for safe key content handling in non-interactive shell.
+    Uses printf | dd (not >) for writing - shell redirect doesn't work in Junos RPC.
     """
     target_name = device_name(device)
     home_dir = f"/var/home/{username}"
@@ -832,12 +832,12 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     # Create content string with all keys joined by newlines
     keys_content = "\n".join(pub_keys_list)
     
-    # Build shell command using printf with shlex.quote() for safe escaping
-    # printf %s takes a single argument and prints it (no interpretation of flags like -e, -n)
+    # Build shell command using printf | dd (not > redirect which fails in Junos RPC)
+    # dd is more reliable than > in non-interactive Junos RPC shell
     shell_cmd = (
         f"mkdir -p {ssh_dir}; "
         f"rm -f {auth_keys_file}; "
-        f"printf %s {shlex.quote(keys_content)} > {auth_keys_file}; "
+        f"printf %s {shlex.quote(keys_content)} | dd of={auth_keys_file}; "
         f"chown {username}:{group} {ssh_dir} {auth_keys_file}; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {auth_keys_file}; "
@@ -853,14 +853,18 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         user = auth.get("username")
         password = auth.get("password")
         
+        print(f"[DEBUG] write_ssh_authorized_keys: target={target_name} user={username} keys={len(pub_keys_list)} host={host}")
+        
         if not user or not password:
             raise RuntimeError(f"missing auth for SSH key setup on {target_name}")
         
         dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
         dev.open()
         try:
+            print(f"[DEBUG] executing shell command on {target_name}...")
             # Use Junos RPC request_shell_execute (same as bootstrap)
             result = dev.rpc.request_shell_execute(command=shell_cmd)
+            print(f"[DEBUG] RPC returned, result={result}")
             # RPC returns XML, extract text
             if result is not None:
                 output = str(result).strip()
