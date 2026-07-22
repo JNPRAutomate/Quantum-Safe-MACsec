@@ -427,6 +427,8 @@ def build_runtime_qkd_policy(
     purge_on_kme_loss: Optional[bool] = None,
     purge_after_seconds: Optional[int] = None,
     batch_enabled: Optional[bool] = None,
+    script_user_rotation_seconds: Optional[int] = None,
+    peer_cmd_rotation_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     policy = copy.deepcopy(policy_template.get("qkd_policy", {}))
 
@@ -442,6 +444,8 @@ def build_runtime_qkd_policy(
         "purge_on_kme_loss": purge_on_kme_loss,
         "purge_after_seconds": purge_after_seconds,
         "batch_enabled": batch_enabled,
+        "script_user_rotation_seconds": script_user_rotation_seconds,
+        "peer_cmd_rotation_seconds": peer_cmd_rotation_seconds,
     }
 
     for key, value in overrides.items():

@@ -3,8 +3,8 @@ qkd_policy:
   batch_enabled: true
   interval_seconds: 60
 
-  script_user_rotation_seconds: 2592000
-  peer_cmd_rotation_seconds: 3600
+  script_user_rotation_seconds: 2592000 # macsec_user SSH key rotation (30 days)
+  peer_cmd_rotation_seconds: 3600 # etsi_peer_view SSH key rotation (1 hour)
 
   key_batch_size: 5
   max_installed_keys: 5
