@@ -918,6 +918,11 @@ def install_peer_authorized_keys(devices):
     max_attempts = 5
     retry_wait_seconds = [2, 4, 8, 12]
 
+    print("\n" + "="*70)
+    print("PHASE 1: etsi_peer_view SSH key synchronization (peer verification)")
+    print("="*70)
+    print("[*] Synchronizing etsi_peer_view SSH keys to authorized_keys...\n")
+
     def is_config_locked_error(exc):
         text = str(exc or "").lower()
         return (
@@ -1022,7 +1027,9 @@ def install_peer_authorized_keys(devices):
         except Exception as exc:
             failed_targets.append((target, str(exc)))
 
-    print("=== QKD peer SSH key sync summary ===")
+    print("\n" + "-"*70)
+    print("=== PHASE 1 Summary: etsi_peer_view SSH key sync ===")
+    print("-"*70)
     print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
     print(f"Synced targets: {len(synced_targets)}")
     if failed_targets:
@@ -1035,7 +1042,14 @@ def install_peer_authorized_keys(devices):
 
     # PHASE 2: Synchronize macsec_user SSH public keys (qkd_id_ed25519.pub) to Junos config
     # Same Junos config approach as Phase 1, but for macsec_user instead of etsi_peer_view
-    print("\n[*] Phase 2: Synchronizing macsec_user SSH keys to Junos config...")
+    print("\n" + "="*70)
+    print("PHASE 2: macsec_user SSH key synchronization (key installation)")
+    print("="*70)
+    print("[*] Synchronizing macsec_user SSH keys to authorized_keys...\n")
+    
+    # Reset counters for Phase 2
+    synced_targets = []
+    failed_targets = []
     
     # Collect macsec_user SSH public keys (qkd_id_ed25519.pub)
     script_pub_keys = {}
@@ -1060,8 +1074,7 @@ def install_peer_authorized_keys(devices):
             )
         script_pub_keys[name] = key
     
-    # PHASE 2: Synchronize macsec_user SSH public keys to authorized_keys
-    print("\n[*] Phase 2: Synchronizing macsec_user SSH keys to authorized_keys...")
+    # PHASE 2 (continued): Synchronize macsec_user SSH public keys to authorized_keys
     sync_user = qkd_script_user()  # macsec_user
     
     for device in devices:
@@ -1099,7 +1112,9 @@ def install_peer_authorized_keys(devices):
         except Exception as exc:
             failed_targets.append((target, str(exc)))
 
-    print("=== QKD macsec_user SSH key sync summary ===")
+    print("\n" + "-"*70)
+    print("=== PHASE 2 Summary: macsec_user SSH key sync ===")
+    print("-"*70)
     print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
     print(f"Synced targets: {len(synced_targets)}")
     if failed_targets:
