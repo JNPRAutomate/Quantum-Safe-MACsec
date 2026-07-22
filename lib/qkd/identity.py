@@ -928,6 +928,7 @@ def install_peer_authorized_keys(devices):
             continue
 
         source_names = linked_peer_sources(device)
+        source_names.add(target)  # Always include device itself so it can SSH to itself
         if not source_names:
             print(f"[WARN] no linked peer sources found for target={target}; peer authorized_keys will be cleared")
 
