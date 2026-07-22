@@ -609,6 +609,7 @@ def check_script_user_ssh_identity(device):
     device = normalize_device(device)
     name = device_name(device)
     script_user = qkd_script_user()
+    peer_user = qkd_peer_cmd_user(device)
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
     pub_path = qkd_ssh_public_key()
@@ -616,7 +617,10 @@ def check_script_user_ssh_identity(device):
     peer_pub_path = qkd_peer_cmd_ssh_public_key()
     key_type = str(QKD.get("SSH_KEY_TYPE", "ed25519")).strip().lower()
     key_bits = int(QKD.get("SSH_KEY_BITS", 4096))
-    key_comment = QKD.get("SSH_KEY_COMMENT", "qkd-orchestrator")
+    
+    # Generate device-aware key comments: user@device
+    key_comment = f"{script_user}@{name}"
+    peer_key_comment = f"{peer_user}@{name}"
 
     if key_type == "rsa":
         keygen_cmd = f"ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}"
@@ -626,9 +630,11 @@ def check_script_user_ssh_identity(device):
         raise ValueError(f"Unsupported SSH_KEY_TYPE={key_type}. Expected 'ed25519' or 'rsa'.")
 
     def keygen_cmd_for(path):
+        # Choose correct comment based on which key is being rotated
+        comment = peer_key_comment if path == peer_key_path else key_comment
         if key_type == "rsa":
-            return f"ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {path}"
-        return f"ssh-keygen -t ed25519 -N \"\" -C \"{key_comment}\" -f {path}"
+            return f"ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{comment}\" -f {path}"
+        return f"ssh-keygen -t ed25519 -N \"\" -C \"{comment}\" -f {path}"
 
     def load_rotation_thresholds():
         script_threshold = 30 * 24 * 3600
