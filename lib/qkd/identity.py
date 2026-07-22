@@ -888,8 +888,8 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     
     # Build shell command to write SSH keys
     # Use multiple echo statements to append each key (more reliable in Junos RPC context)
-    # First, create directory and remove old file
-    shell_cmd = f"mkdir -p {ssh_dir}; rm -f {auth_keys_file}; "
+    # First, create directory and forcefully remove old file (chmod first to ensure we can delete)
+    shell_cmd = f"mkdir -p {ssh_dir}; chmod 700 {ssh_dir} 2>/dev/null; chmod 666 {auth_keys_file} 2>/dev/null; rm -f {auth_keys_file}; "
     
     # Append each public key using echo >>
     for key_line in pub_keys_list:
