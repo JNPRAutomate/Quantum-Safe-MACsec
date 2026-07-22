@@ -608,40 +608,49 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         if verbose:
             print(f"\n[DEBUG] {sae_id}: Extracting key status from {qkd_state_dir}...")
         
-        # List JSON files
-        ls_output = send_shell_command(shell, f"ls {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
+        # List JSON files - try multiple approaches
+        ls_output = send_shell_command(shell, f"ls {qkd_state_dir}/qkd_db_*.json 2>&1", verbose=False)
+        
+        if verbose:
+            print(f"[DEBUG] ls output ({len(ls_output)} bytes): {ls_output[:200]}")
+        
         json_files = [f.strip() for f in ls_output.split('\n') if f.strip().endswith('.json')]
         
         if verbose:
-            print(f"[DEBUG] Found {len(json_files)} JSON files")
+            print(f"[DEBUG] Found {len(json_files)} JSON files: {json_files}")
+        
+        # If no files found, try alternative path
+        if not json_files:
+            alt_path = "/var/home/macsec_user/qkd-state"
+            ls_output = send_shell_command(shell, f"ls -la {alt_path}/", verbose=False)
+            if verbose:
+                print(f"[DEBUG] Directory listing for {alt_path}:")
+                for line in ls_output.split('\n')[:10]:
+                    print(f"[DEBUG]   {line}")
         
         # Read and parse first JSON file
         json_data_str = ""
+        all_json = ""
         if json_files:
             first_file = json_files[0]
+            if verbose:
+                print(f"[DEBUG] Reading first file: {first_file}")
             json_data_str = send_shell_command(shell, f"cat {first_file}", verbose=False)
             if verbose:
-                print(f"[DEBUG] Read file: {first_file.split('/')[-1]} ({len(json_data_str)} bytes)")
-        
-        # Count total pending keys across ALL files
-        total_pending = 0
-        if json_files:
-            all_json = ""
+                print(f"[DEBUG] Read {len(json_data_str)} bytes from {first_file.split('/')[-1]}")
+            
+            # Count total pending keys across ALL files
             for jfile in json_files:
                 file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
                 all_json += file_content + "\n"
             
-            # Count "generation" entries in pending_keys
-            total_pending = all_json.count('"generation"')
-            # But generation appears in both active and pending, so divide by 2 roughly
-            # Actually, let's just count pending_keys entries more carefully in parse function
             if verbose:
-                print(f"[DEBUG] Total 'generation' occurrences: {total_pending}")
+                print(f"[DEBUG] Total JSON data: {len(all_json)} bytes from {len(json_files)} files")
         
         # Parse with Python JSON parsing
         health_data['key_status'] = parse_key_status_via_python_json(
             json_data_str=json_data_str,
-            all_json_str=all_json if json_files else "",
+            all_json_str=all_json,
             verbose=verbose
         )
 
