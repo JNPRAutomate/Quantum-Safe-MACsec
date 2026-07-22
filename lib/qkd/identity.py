@@ -1187,9 +1187,6 @@ def install_peer_authorized_keys(devices):
         raise RuntimeError(
             f"failed to configure macsec_user SSH keys on: {', '.join(t for t, _ in failed_targets)}"
         )
-            "failed to configure peer SSH keys on: "
-            + ", ".join(target for target, _ in failed_targets)
-        )
 
 
 def check_peer_ssh_from_device(device):
