@@ -896,11 +896,13 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     keys_b64 = base64.b64encode(keys_content.encode()).decode()
     
     # Build POSIX sh command using base64 decode to avoid shell parsing nightmares
-    # CRITICAL: Clear immutable flags first, then remove directory (if owned by etsi_peer_view with 700)
+    # CRITICAL: Clear immutable flags on ALL files first (find -exec chflags 0),
+    # then remove directory. This ensures we can delete even if files have uchg/schg/noschg flags.
+    # Use || true to ensure command chain continues even if find fails (e.g. dir doesn't exist).
     # Start fresh as root, then chown/chmod at the end.
     # Use printf (not echo) to avoid adding unwanted newlines that break base64 decode
     inner_cmd = (
-        f"chflags -R nouchg,noschg {ssh_dir} 2>/dev/null; "
+        f"find {ssh_dir} -exec chflags 0 {{}} \\; 2>/dev/null || true; "
         f"rm -rf {ssh_dir}; "
         f"mkdir -p {ssh_dir}; "
         f"printf '%s' {keys_b64} | base64 -d | dd of={auth_keys_file}; "
