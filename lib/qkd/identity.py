@@ -1146,10 +1146,14 @@ def install_peer_authorized_keys(devices):
 
     # PHASE 2: Synchronize macsec_user SSH public keys (qkd_id_ed25519.pub) to Junos config
     # Same Junos config approach as Phase 1, but for macsec_user instead of etsi_peer_view
+    print("\n" + "═"*70)
+    print("═ DEPLOYING PHASE 2")
+    print("═"*70)
+    
     print("\n" + "█"*70)
-    print("█ PHASE 2: macsec_user SSH key synchronization (key installation)")
+    print("█ PHASE 2 START: macsec_user SSH key synchronization (key installation)")
     print("█"*70)
-    print("[*] Synchronizing macsec_user SSH keys to authorized_keys...\n")
+    print("  [*] Synchronizing macsec_user SSH keys to authorized_keys...\n")
     
     # Reset counters for Phase 2
     synced_targets = []
