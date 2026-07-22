@@ -1031,6 +1031,95 @@ def install_peer_authorized_keys(devices):
         if not success:
             failed_targets.append((target, str(last_error)))
 
+    # PHASE 2: Synchronize macsec_user SSH public keys (qkd_id_ed25519.pub) to authorized_keys file
+    # Via SSH file write (no Junos config), supports key rotation every 5 minutes without commits
+    print("\n[*] Phase 2: Synchronizing macsec_user SSH keys to authorized_keys file...")
+    
+    # Collect qkd_id_ed25519.pub (script_user SSH key) from all devices
+    script_ssh_pub_keys = {}
+    script_ssh_pub_path = qkd_ssh_public_key()
+    for device in devices:
+        name = device_name(device)
+        result = ssh_deploy_cmd(device, f"cat {script_ssh_pub_path}", timeout=20, include_failed_marker=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"failed to read script_user SSH public key on {name} path={script_ssh_pub_path}\n"
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+        key = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
+                key = line
+                break
+        if not key:
+            raise RuntimeError(
+                f"invalid script_user SSH public key on {name} path={script_ssh_pub_path}\nraw={result.stdout}"
+            )
+        script_ssh_pub_keys[name] = key
+    
+    # Synchronize to macsec_user authorized_keys file on each device
+    script_user = qkd_script_user()
+    auth_keys_path = qkd_authorized_keys()
+    
+    for device in devices:
+        target = device_name(device)
+        
+        # Build desired keys: peers + self
+        peer_sources = set()
+        for link in device.get("links", []) or []:
+            if not isinstance(link, dict):
+                continue
+            peer = link.get("peer")
+            if peer and peer in device_names:
+                peer_sources.add(str(peer))
+        peer_sources.add(target)  # Include device itself for self-SSH
+        
+        desired_keys = []
+        for source_name in sorted(peer_sources):
+            pub_key = script_ssh_pub_keys.get(source_name)
+            if not pub_key:
+                raise RuntimeError(
+                    f"missing script_user SSH public key source={source_name} target={target}"
+                )
+            desired_keys.append(pub_key)
+        
+        # Read current authorized_keys via SSH
+        result = ssh_deploy_cmd(
+            device,
+            f"cat {auth_keys_path}",
+            timeout=20,
+            include_failed_marker=False,
+        )
+        current_lines = []
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line and line.startswith("ssh-"):
+                    current_lines.append(line)
+        
+        current_keys_set = set(current_lines)
+        desired_keys_set = set(desired_keys)
+        
+        if current_keys_set == desired_keys_set:
+            print(f"[OK] macsec_user SSH keys already synced target={target} keys={len(desired_keys)}")
+            continue
+        
+        # Merge current (preserve orchestrator keys) with new desired keys
+        all_keys = sorted(set(current_lines) | desired_keys_set)
+        keys_content = "\n".join(all_keys)
+        if keys_content:
+            keys_content += "\n"
+        
+        # Write via SSH using heredoc
+        write_cmd = f"cat > {auth_keys_path} << 'KEYS_EOF'\n{keys_content}KEYS_EOF"
+        result = ssh_deploy_cmd(device, write_cmd, timeout=20, include_failed_marker=False)
+        if result.returncode != 0:
+            failed_targets.append((target, f"macsec_user authorized_keys write failed: {result.stderr}"))
+            continue
+        
+        print(f"[OK] macsec_user SSH keys synced target={target} keys={len(all_keys)}")
+
     print("=== QKD peer SSH key sync summary ===")
     print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
     print(f"Synced targets: {len(synced_targets)}")
