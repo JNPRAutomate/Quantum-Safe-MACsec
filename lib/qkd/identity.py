@@ -836,7 +836,29 @@ def collect_script_user_public_keys(devices):
 
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
-    pub_keys = collect_script_user_public_keys(devices)
+    # Collect BOTH types of keys:
+    # - qkd_peer_cmd_ed25519.pub for etsi_peer_view (read-only peer status)
+    # - qkd_id_ed25519.pub for macsec_user (device-to-device SSH for key install)
+    pub_keys_peer = collect_script_user_public_keys(devices)  # qkd_peer_cmd_ed25519.pub
+    
+    # Collect macsec_user SSH keys
+    pub_keys_script = {}
+    script_pub_path = qkd_ssh_public_key()
+    for device in devices:
+        name = device_name(device)
+        result = ssh_deploy_cmd(device, f"cat {script_pub_path}", timeout=20, include_failed_marker=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"failed to read script_user SSH public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        key = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
+                key = line
+                break
+        if not key:
+            raise RuntimeError(f"invalid script_user SSH public key on {name} path={script_pub_path}\nraw={result.stdout}")
+        pub_keys_script[name] = key
+    
     device_names = {device_name(d) for d in devices}
     max_attempts = 5
     retry_wait_seconds = [2, 4, 8, 12]
@@ -935,7 +957,7 @@ def install_peer_authorized_keys(devices):
         seen = set()
         desired_keys = []
         for source_name in sorted(source_names):
-            pub_key = pub_keys.get(source_name)
+            pub_key = pub_keys_peer.get(source_name)
             if not pub_key:
                 raise RuntimeError(
                     f"missing peer public key source={source_name} target={target}; run deploy/bootstrap on source first"
@@ -1017,6 +1039,118 @@ def install_peer_authorized_keys(devices):
                     )
                     print(
                         f"[WARN] peer SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                break
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+                time.sleep(3)
+
+        if not success:
+            failed_targets.append((target, str(last_error)))
+
+    # PHASE 1B: Sync macsec_user SSH keys (qkd_id_ed25519.pub) for device-to-device key installation
+    print("\n[*] Phase 1B: Synchronizing macsec_user SSH keys for device-to-device operations...")
+    
+    for device in devices:
+        target = device_name(device)
+        host = device_host(device)
+        auth = device.get("auth") or {}
+        user = auth.get("username")
+        password = auth.get("password")
+        if not user or not password:
+            failed_targets.append((target, "missing auth for macsec_user key sync"))
+            continue
+
+        source_names = linked_peer_sources(device)
+        source_names.add(target)  # Include device itself for self-SSH
+        
+        seen = set()
+        desired_keys = []
+        for source_name in sorted(source_names):
+            pub_key = pub_keys_script.get(source_name)
+            if not pub_key:
+                raise RuntimeError(
+                    f"missing script_user SSH public key source={source_name} target={target}; run deploy/bootstrap on source first"
+                )
+            key_type, key_line = parse_public_key(pub_key)
+            if not key_type or not key_line:
+                raise RuntimeError(
+                    f"invalid script_user SSH public key format source={source_name} target={target} raw={pub_key}"
+                )
+            marker = (key_type, key_line)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            desired_keys.append(marker)
+
+        success = False
+        last_error = None
+        macsec_user = qkd_script_user()
+
+        for attempt in range(1, max_attempts + 1):
+            dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
+            try:
+                configured_keys = collect_configured_peer_keys(device, macsec_user)
+                delete_cmds = [
+                    f'delete system login user {macsec_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in configured_keys
+                ]
+                set_cmds = [
+                    f'set system login user {macsec_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in desired_keys
+                ]
+                sources_label = ', '.join(sorted(source_names)) if source_names else '(none)'
+                if set(configured_keys) == set(desired_keys):
+                    print(
+                        f"[INFO] macsec_user SSH key sync target={target} "
+                        f"keys={len(set_cmds)} sources={sources_label} attempt={attempt}/{max_attempts}"
+                    )
+                else:
+                    print(
+                        f"[INFO] macsec_user SSH key sync target={target} "
+                        f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
+                        f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) for '{macsec_user}'"
+                        f"\n       Sources: {sources_label}"
+                    )
+                dev.open()
+                with Config(dev) as cu:
+                    for cmd in delete_cmds:
+                        try:
+                            cu.load(cmd, format="set", merge=True)
+                        except Exception as exc:
+                            if is_statement_not_found_warning(exc):
+                                continue
+                            raise
+                    for cmd in set_cmds:
+                        cu.load(cmd, format="set", merge=True)
+                    diff = cu.diff()
+                    if diff:
+                        cu.commit(comment=f"QKD sync macsec_user keys target={target}")
+                        print(f"[OK] macsec_user SSH keys committed target={target}")
+                    else:
+                        try:
+                            cu.rollback()
+                        except Exception:
+                            pass
+                        print(f"[OK] macsec_user SSH keys already synchronized target={target}")
+                success = True
+                break
+            except Exception as exc:
+                last_error = exc
+                if is_config_locked_error(exc) and attempt < max_attempts:
+                    wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+                    err_str = str(exc)
+                    lock_line = next(
+                        (line.strip() for line in err_str.splitlines() if 'on since' in line or 'exclusive' in line or 'pid' in line),
+                        err_str[:120]
+                    )
+                    print(
+                        f"[WARN] macsec_user key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
                     )
                     time.sleep(wait_seconds)
                     continue
