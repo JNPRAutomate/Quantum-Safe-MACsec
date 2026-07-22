@@ -1111,13 +1111,14 @@ def install_peer_authorized_keys(devices):
         if keys_content:
             keys_content += "\n"
         
-        # Write via SSH using cat + heredoc (no Python needed, avoids Junos operation not permitted)
-        # Build heredoc with all keys
-        cat_script = f"""cat > {auth_keys_path} << 'KEYS_EOF'
-{keys_content}KEYS_EOF
+        # Write via SSH using printf (works on both ACX bash and MX restricted shell)
+        # Escape newlines for printf -v syntax
+        escaped_content = keys_content.replace("\\", "\\\\").replace('"', '\\"')
+        escaped_content = escaped_content.replace("\n", "\\n")
+        write_script = f"""printf "{escaped_content}" > {auth_keys_path}
 chmod 600 {auth_keys_path}
 """
-        result = ssh_deploy_cmd(device, cat_script, timeout=20, include_failed_marker=False)
+        result = ssh_deploy_cmd(device, write_script, timeout=20, include_failed_marker=False)
         if result.returncode != 0:
             failed_targets.append((target, f"macsec_user authorized_keys write failed: {result.stderr}"))
             continue
