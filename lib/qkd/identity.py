@@ -814,34 +814,36 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         pub_keys_list: List of public key strings to write
     
     Uses dev.rpc.request_shell_execute (Junos RPC with system privileges).
-    Same approach as script_user_bootstrap.py build_ssh_fix_command.
+    Uses printf + shlex.quote() for safe key content handling in non-interactive shell.
     """
     target_name = device_name(device)
     home_dir = f"/var/home/{username}"
     ssh_dir = f"{home_dir}/.ssh"
     auth_keys_file = f"{ssh_dir}/authorized_keys"
     
-    # Build shell command sequence (same as bootstrap build_ssh_fix_command)
-    # All executed with system privileges via RPC
-    shell_cmd_parts = []
-    shell_cmd_parts.append(f"mkdir -p {ssh_dir}")
-    shell_cmd_parts.append(f"rm -f {auth_keys_file}")
+    # Determine correct group for chown (etsi_peer_view uses wheel, macsec_user uses staff)
+    if username == "etsi_peer_view":
+        group = "wheel"
+    elif username == "macsec_user":
+        group = "staff"
+    else:
+        group = "wheel"  # default
     
-    # Write each key (escape single quotes for shell safety)
-    for pub_key in pub_keys_list:
-        escaped_key = pub_key.replace("'", "'\\''")
-        shell_cmd_parts.append(f"echo '{escaped_key}' >> {auth_keys_file}")
+    # Create content string with all keys joined by newlines
+    keys_content = "\n".join(pub_keys_list)
     
-    # Fix permissions and ownership
-    shell_cmd_parts.append(f"chmod 600 {auth_keys_file}")
-    shell_cmd_parts.append(f"chmod 700 {ssh_dir}")
-    shell_cmd_parts.append(f"chown {username}:wheel {ssh_dir}")
-    shell_cmd_parts.append(f"chown {username}:wheel {auth_keys_file}")
-    shell_cmd_parts.append(f"ls -ld {ssh_dir}")
-    shell_cmd_parts.append(f"ls -l {auth_keys_file}")
-    
-    # Join all commands with semicolon (shell command sequence)
-    full_command = "; ".join(shell_cmd_parts)
+    # Build shell command using printf with shlex.quote() for safe escaping
+    # printf %s takes a single argument and prints it (no interpretation of flags like -e, -n)
+    shell_cmd = (
+        f"mkdir -p {ssh_dir}; "
+        f"rm -f {auth_keys_file}; "
+        f"printf %s {shlex.quote(keys_content)} > {auth_keys_file}; "
+        f"chown {username}:{group} {ssh_dir} {auth_keys_file}; "
+        f"chmod 700 {ssh_dir}; "
+        f"chmod 600 {auth_keys_file}; "
+        f"ls -ld {ssh_dir}; "
+        f"ls -l {auth_keys_file}"
+    )
     
     # Execute via Junos RPC with system privileges
     try:
@@ -858,7 +860,7 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         dev.open()
         try:
             # Use Junos RPC request_shell_execute (same as bootstrap)
-            result = dev.rpc.request_shell_execute(command=full_command)
+            result = dev.rpc.request_shell_execute(command=shell_cmd)
             # RPC returns XML, extract text
             if result is not None:
                 output = str(result).strip()
