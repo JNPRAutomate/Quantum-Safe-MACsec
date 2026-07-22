@@ -257,11 +257,9 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     }
     
     if not json_data_str:
-        if verbose:
-            print(f"[DEBUG] No JSON data to parse")
         return key_status
     
-    # CRITICAL: Extract ONLY the JSON part from shell output
+    # Extract ONLY the JSON part from shell output
     # Shell output may contain command echo, prompt, etc.
     # Find the first { and last } to extract pure JSON
     json_data_str = json_data_str.strip()
@@ -269,23 +267,15 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     # Find start of JSON (first '{')
     start_idx = json_data_str.find('{')
     if start_idx == -1:
-        if verbose:
-            print(f"[DEBUG] No JSON found in output (no opening brace)")
-            print(f"[DEBUG] Raw output: {json_data_str[:200]}")
         return key_status
     
     # Find end of JSON (last '}')
     end_idx = json_data_str.rfind('}')
     if end_idx == -1 or end_idx < start_idx:
-        if verbose:
-            print(f"[DEBUG] No JSON found in output (no closing brace)")
         return key_status
     
     # Extract pure JSON
     json_data_str = json_data_str[start_idx:end_idx+1]
-    
-    if verbose:
-        print(f"[DEBUG] Extracted JSON ({len(json_data_str)} bytes)")
     
     try:
         data = json.loads(json_data_str)
@@ -293,83 +283,19 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
         # Extract active_key_id
         if 'active_key_id' in data and data['active_key_id']:
             key_status['active_key_id'] = data['active_key_id']
-            if verbose:
-                print(f"[DEBUG] active_key_id: {key_status['active_key_id']}")
         
         # Extract pending_key_id  
         if 'pending_key_id' in data and data['pending_key_id']:
             key_status['pending_key_id'] = data['pending_key_id']
-            if verbose:
-                print(f"[DEBUG] pending_key_id: {key_status['pending_key_id']}")
         
         # Count pending_keys array
         if 'pending_keys' in data and isinstance(data['pending_keys'], list):
             key_status['pending_stale_count'] = len(data['pending_keys'])
-            if verbose:
-                print(f"[DEBUG] pending_keys count: {key_status['pending_stale_count']}")
-        
-        if verbose:
-            print(f"[DEBUG] Final key_status: {key_status}")
             
-    except json.JSONDecodeError as e:
-        if verbose:
-            print(f"[DEBUG] JSON parse error: {e}")
-            print(f"[DEBUG] Attempted to parse: {json_data_str[:150]}...")
-    except Exception as e:
-        if verbose:
-            print(f"[DEBUG] Error parsing key status: {e}")
-    
-    return key_status
-
-
-def parse_key_status_from_json_files_via_grep(grep_output, json_data, verbose=False):
-    """Parse key status from QKD state JSON files.
-    
-    FIXED: Uses grep to count actual pending_keys, and extracts active/pending IDs from JSON.
-    Command: sed -n '/\"pending_keys\"/,/\"pending_key_id\"/p' *.json | grep -c '\"generation\"'
-    
-    Each line with "generation" in the pending_keys section = 1 pending key
-    """
-    key_status = {
-        'active_key_id': None,
-        'pending_key_id': None,
-        'pending_stale_count': 0,  # Real pending keys counted by grep
-        'confirmed_count': 0,
-        'promoted_count': 0,
-        'error_count': 0,
-    }
-    
-    if verbose:
-        print(f"[DEBUG] parse_key_status_from_json_files_via_grep: processing {len(json_data)} bytes of JSON")
-    
-    # Extract active_key_id from JSON using grep
-    if json_data:
-        active_match = re.search(r'"active_key_id"\s*:\s*"([^"]+)"', json_data)
-        if active_match:
-            key_status['active_key_id'] = active_match.group(1)
-            if verbose:
-                print(f"[DEBUG] Found active_key_id: {key_status['active_key_id']}")
-        
-        # Extract pending_key_id from JSON (first one only)
-        pending_match = re.search(r'"pending_key_id"\s*:\s*"([^"]+)"', json_data)
-        if pending_match:
-            key_status['pending_key_id'] = pending_match.group(1)
-            if verbose:
-                print(f"[DEBUG] Found pending_key_id: {key_status['pending_key_id']}")
-    
-    # Parse the grep count output
-    try:
-        count = int(grep_output.strip()) if grep_output.strip().isdigit() else 0
-        key_status['pending_stale_count'] = count
-        if verbose:
-            print(f"[DEBUG] Pending keys count: {count}")
-    except ValueError:
-        if verbose:
-            print(f"[DEBUG] Could not parse count from: {grep_output}")
-        key_status['pending_stale_count'] = 0
-    
-    if verbose:
-        print(f"[DEBUG] Key status: active={key_status['active_key_id']}, pending={key_status['pending_key_id']}, count={key_status['pending_stale_count']}")
+    except json.JSONDecodeError:
+        pass
+    except Exception:
+        pass
     
     return key_status
 
@@ -632,9 +558,6 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         # Get key status from JSON state files - SIMPLE PYTHON PARSING
         qkd_state_dir = "/var/home/macsec_user/qkd-state"
         
-        if verbose:
-            print(f"\n[DEBUG] {sae_id}: Extracting key status from {qkd_state_dir}...")
-        
         # List JSON files using ls -la (parsing by Python, not shell wildcard)
         ls_output = send_shell_command(shell, f"ls -la {qkd_state_dir}/", verbose=False)
         
@@ -649,27 +572,17 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                     full_path = f"{qkd_state_dir}/{filename}"
                     json_files.append(full_path)
         
-        if verbose:
-            print(f"[DEBUG] Found {len(json_files)} JSON files: {json_files}")
-        
         # Read and parse first JSON file
         json_data_str = ""
         all_json = ""
         if json_files:
             first_file = json_files[0]
-            if verbose:
-                print(f"[DEBUG] Reading first file: {first_file}")
             json_data_str = send_shell_command(shell, f"cat {first_file}", verbose=False)
-            if verbose:
-                print(f"[DEBUG] Read {len(json_data_str)} bytes from {first_file.split('/')[-1]}")
             
-            # Count total pending keys across ALL files
+            # Read all files for combined analysis
             for jfile in json_files:
                 file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
                 all_json += file_content + "\n"
-            
-            if verbose:
-                print(f"[DEBUG] Total JSON data: {len(all_json)} bytes from {len(json_files)} files")
         
         # Parse with Python JSON parsing
         health_data['key_status'] = parse_key_status_via_python_json(
