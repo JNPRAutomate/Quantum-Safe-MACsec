@@ -804,6 +804,54 @@ def check_script_user_atomic_write(device):
     print_if_verbose(result.stdout)
 
 
+def write_ssh_authorized_keys(device, username, pub_keys_list):
+    """
+    Write SSH public keys to a user's authorized_keys file via shell commands.
+    
+    Args:
+        device: Device to connect to
+        username: Username (e.g., 'etsi_peer_view', 'macsec_user')
+        pub_keys_list: List of public key strings to write
+    
+    Executes via SSH as root/deploy user (not as the target user).
+    """
+    target_name = device_name(device)
+    home_dir = f"/var/home/{username}"
+    ssh_dir = f"{home_dir}/.ssh"
+    auth_keys_file = f"{ssh_dir}/authorized_keys"
+    
+    # Build shell commands to write keys
+    ssh_cmds = []
+    ssh_cmds.append(f"mkdir -p {ssh_dir}")
+    ssh_cmds.append(f"rm -f {auth_keys_file}")  # Clear old file
+    
+    # Write each key (escape single quotes for shell safety)
+    for pub_key in pub_keys_list:
+        escaped_key = pub_key.replace("'", "'\\''")
+        ssh_cmds.append(f"echo '{escaped_key}' >> {auth_keys_file}")
+    
+    # Fix permissions (required for SSH to accept authorized_keys)
+    ssh_cmds.append(f"chmod 600 {auth_keys_file}")
+    ssh_cmds.append(f"chmod 700 {ssh_dir}")
+    ssh_cmds.append(f"chown -R {username}:wheel {ssh_dir} 2>/dev/null || true")
+    
+    # Execute all commands via SSH as deploy user
+    try:
+        for cmd in ssh_cmds:
+            result = ssh_deploy_cmd(device, cmd, timeout=20)
+            # Ignore permission errors on chown/chmod (may not be available on all platforms)
+            if result.returncode != 0 and not any(x in cmd for x in ["chown", "chmod"]):
+                raise RuntimeError(
+                    f"failed to execute SSH key setup on {target_name}: {cmd}\n"
+                    f"stderr={result.stderr}\nstdout={result.stdout}"
+                )
+        print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
+        return True
+    except Exception as exc:
+        print(f"[ERROR] SSH key write failed for {username} on {target_name}: {exc}")
+        raise
+
+
 def collect_script_user_public_keys(devices):
     devices = normalize_devices(devices)
     pub_keys = {}
