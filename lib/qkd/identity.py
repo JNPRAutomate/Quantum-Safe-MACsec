@@ -806,48 +806,76 @@ def check_script_user_atomic_write(device):
 
 def write_ssh_authorized_keys(device, username, pub_keys_list):
     """
-    Write SSH public keys to a user's authorized_keys file.
+    Write SSH public keys to a user's authorized_keys file using Junos RPC with privileges.
     
     Args:
-        device: Device to connect to
+        device: Device to connect to (PyEZ Device object)
         username: Username (e.g., 'etsi_peer_view', 'macsec_user')
         pub_keys_list: List of public key strings to write
     
-    Executes via ssh_script_user_onbox_cmd (as macsec_user with super-user privileges).
-    This allows proper file ownership and permissions management.
+    Uses dev.rpc.request_shell_execute (Junos RPC with system privileges).
+    Same approach as script_user_bootstrap.py build_ssh_fix_command.
     """
     target_name = device_name(device)
     home_dir = f"/var/home/{username}"
     ssh_dir = f"{home_dir}/.ssh"
     auth_keys_file = f"{ssh_dir}/authorized_keys"
     
-    # Build shell commands to write keys (executed as macsec_user with super-user privileges)
-    shell_cmds = []
-    shell_cmds.append(f"mkdir -p {ssh_dir}")
-    shell_cmds.append(f"rm -f {auth_keys_file}")  # Clear old file (works because macsec_user is super-user)
+    # Build shell command sequence (same as bootstrap build_ssh_fix_command)
+    # All executed with system privileges via RPC
+    shell_cmd_parts = []
+    shell_cmd_parts.append(f"mkdir -p {ssh_dir}")
+    shell_cmd_parts.append(f"rm -f {auth_keys_file}")
     
     # Write each key (escape single quotes for shell safety)
     for pub_key in pub_keys_list:
         escaped_key = pub_key.replace("'", "'\\''")
-        shell_cmds.append(f"echo '{escaped_key}' >> {auth_keys_file}")
+        shell_cmd_parts.append(f"echo '{escaped_key}' >> {auth_keys_file}")
     
-    # Fix permissions and ownership (macsec_user can do this as super-user)
-    shell_cmds.append(f"chmod 600 {auth_keys_file}")
-    shell_cmds.append(f"chmod 700 {ssh_dir}")
-    shell_cmds.append(f"chown {username}:wheel {ssh_dir}")
-    shell_cmds.append(f"chown {username}:wheel {auth_keys_file}")
+    # Fix permissions and ownership
+    shell_cmd_parts.append(f"chmod 600 {auth_keys_file}")
+    shell_cmd_parts.append(f"chmod 700 {ssh_dir}")
+    shell_cmd_parts.append(f"chown {username}:wheel {ssh_dir}")
+    shell_cmd_parts.append(f"chown {username}:wheel {auth_keys_file}")
+    shell_cmd_parts.append(f"ls -ld {ssh_dir}")
+    shell_cmd_parts.append(f"ls -l {auth_keys_file}")
     
-    # Execute all shell commands as macsec_user (super-user via ssh_script_user_onbox_cmd)
+    # Join all commands with semicolon (shell command sequence)
+    full_command = "; ".join(shell_cmd_parts)
+    
+    # Execute via Junos RPC with system privileges
     try:
-        for cmd in shell_cmds:
-            result = ssh_script_user_onbox_cmd(device, cmd, timeout=20)
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"failed to execute SSH key setup on {target_name}: {cmd}\n"
-                    f"stderr={result.stderr}\nstdout={result.stdout}"
-                )
-        print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
-        return True
+        # Connect to device if needed
+        host = device_host(device)
+        auth = device.get("auth") or {}
+        user = auth.get("username")
+        password = auth.get("password")
+        
+        if not user or not password:
+            raise RuntimeError(f"missing auth for SSH key setup on {target_name}")
+        
+        dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
+        dev.open()
+        try:
+            # Use Junos RPC request_shell_execute (same as bootstrap)
+            result = dev.rpc.request_shell_execute(command=full_command)
+            # RPC returns XML, extract text
+            if result:
+                output = str(result).strip()
+                if output and output not in ["<output/>", ""]:
+                    print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
+                    if "Permission denied" not in output and "error" not in output.lower():
+                        print(f"     Output: {output[:200]}")
+                    else:
+                        raise RuntimeError(f"shell execution error: {output}")
+                else:
+                    print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
+            return True
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
     except Exception as exc:
         print(f"[ERROR] SSH key write failed for {username} on {target_name}: {exc}")
         raise
