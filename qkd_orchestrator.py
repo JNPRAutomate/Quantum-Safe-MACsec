@@ -300,6 +300,8 @@ def parse_args():
     create.add_argument("--key-ttl", type=int, default=None)
     create.add_argument("--purge-on-kme-loss", action="store_true", default=None)
     create.add_argument("--purge-after", type=int, default=None)
+    create.add_argument("--script-user-rotation-seconds", type=int, default=None)
+    create.add_argument("--peer-cmd-rotation-seconds", type=int, default=None)
 
     create.add_argument(
         "--batch-mode",
@@ -1016,6 +1018,8 @@ def handle_create(args):
         purge_on_kme_loss=args.purge_on_kme_loss,
         purge_after_seconds=args.purge_after,
         batch_enabled=args.batch_enabled,
+        script_user_rotation_seconds=args.script_user_rotation_seconds,
+        peer_cmd_rotation_seconds=args.peer_cmd_rotation_seconds,
     )
 
     runtime_devices = load_runtime_devices()
