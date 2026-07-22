@@ -887,24 +887,67 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     keys_content = "\n".join(pub_keys_list)
     
     # Build shell command to write SSH keys
-    # Use multiple echo statements to append each key (more reliable in Junos RPC context)
-    # First, create directory and truncate old file (don't use rm which might fail)
-    # Use dd to truncate file safely, avoiding permission issues
-    shell_cmd = f"mkdir -p {ssh_dir}; dd if=/dev/null of={auth_keys_file} 2>/dev/null || true; "
+    # CRITICAL ISSUE: echo >> may not work in Junos RPC context
+    # Using printf | dd or cat heredoc instead
     
-    # Append each public key using echo >>
-    for key_line in pub_keys_list:
-        # Escape single quotes in the key for shell safety
-        safe_key = key_line.replace("'", "'\\''")
-        shell_cmd += f"echo '{safe_key}' >> {auth_keys_file}; "
+    # Build the keys content - one key per line
+    keys_lines = []
+    for i, key_line in enumerate(pub_keys_list):
+        # Use shlex.quote for proper shell escaping (safer than manual quote replacement)
+        import shlex
+        safe_key = shlex.quote(key_line)
+        keys_lines.append(f"  printf {safe_key}")
     
-    # Set correct permissions and ownership
+    # Build diagnostic command FIRST to understand what's happening
+    # Start with complete diagnostics BEFORE attempting write
+    shell_cmd = (
+        f"echo '=== PRE-WRITE DIAGNOSTICS ==='; "
+        f"echo 'SSH dir: {ssh_dir}'; "
+        f"ls -la {home_dir}/.ssh 2>&1 || echo '[NOT EXISTS] {home_dir}/.ssh'; "
+        f"echo ''; "
+        f"echo '=== STEP 1: Create directory ==='; "
+        f"mkdir -p {ssh_dir}; "
+        f"ls -la {ssh_dir}; "
+        f"echo ''; "
+        f"echo '=== STEP 2: Check if we can write ==='; "
+        f"touch {auth_keys_file}.test 2>&1 && echo '[OK] Can touch files' || echo '[FAIL] Cannot touch'; "
+        f"rm -f {auth_keys_file}.test; "
+        f"echo ''; "
+        f"echo '=== STEP 3: Truncate file ==='; "
+        f"dd if=/dev/null of={auth_keys_file} 2>&1; "
+        f"ls -lh {auth_keys_file}; "
+        f"wc -c {auth_keys_file}; "
+        f"echo ''; "
+    )
+    
+    # Now append keys one by one and show output after each
+    for i, key_line in enumerate(pub_keys_list):
+        # Use printf with newline to append (safer than echo)
+        import shlex
+        safe_key = shlex.quote(key_line)
+        shell_cmd += (
+            f"echo '[KEY {i+1}/{len(pub_keys_list)}] Appending...'; "
+            f"printf %s\\\\n {safe_key} >> {auth_keys_file} 2>&1; "
+            f"wc -c {auth_keys_file}; "
+        )
+    
+    # Final verification
     shell_cmd += (
-        f"chown {username}:{group} {ssh_dir} {auth_keys_file}; "
+        f"echo ''; "
+        f"echo '=== FINAL FILE STATE ==='; "
+        f"ls -lh {auth_keys_file}; "
+        f"echo '[Line count:]'; wc -l {auth_keys_file}; "
+        f"echo '[Byte count:]'; wc -c {auth_keys_file}; "
+        f"echo '[First 3 lines:]'; head -3 {auth_keys_file}; "
+        f"echo ''; "
+        f"echo '=== STEP 4: Fix permissions ==='; "
+        f"chown {username}:{group} {ssh_dir} {auth_keys_file} 2>&1; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {auth_keys_file}; "
-        f"echo '[VERIFY] File size and perms:'; ls -lh {auth_keys_file}; "
-        f"echo '[VERIFY] Line count:'; wc -l {auth_keys_file}"
+        f"echo ''; "
+        f"echo '=== FINAL PERMS ==='; "
+        f"ls -ld {ssh_dir}; "
+        f"ls -la {auth_keys_file}; "
     )
     
     # Execute via Junos RPC with system privileges
@@ -916,6 +959,7 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         password = auth.get("password")
         
         print(f"[DEBUG] write_ssh_authorized_keys: target={target_name} user={username} keys={len(pub_keys_list)} host={host}")
+        print(f"[DEBUG] Shell command length: {len(shell_cmd)} chars")
         
         if not user or not password:
             raise RuntimeError(f"missing auth for SSH key setup on {target_name}")
@@ -923,10 +967,11 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
         dev.open()
         try:
-            print(f"[DEBUG] executing shell command on {target_name}...")
+            print(f"[DEBUG] Executing RPC request_shell_execute on {target_name}...")
             # Use Junos RPC request_shell_execute (same as bootstrap)
             result = dev.rpc.request_shell_execute(command=shell_cmd)
-            print(f"[DEBUG] RPC returned")
+            print(f"[DEBUG] RPC returned, type={type(result)}")
+            
             # RPC returns XML element, extract text properly
             if result is not None:
                 # Get text from XML element - result is ElementTree element
@@ -946,31 +991,63 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
                             output = match.group(1).strip()
                 
                 if output:
-                    # Show all output lines for verification
+                    print(f"\n{'='*70}")
+                    print(f"[RPC_OUTPUT] from {target_name}/{username}:")
+                    print(f"{'='*70}")
+                    # Show EVERY line without filtering
                     output_lines = output.split('\n')
-                    for line in output_lines:
-                        if line.strip():
-                            print(f"[DEBUG] >>> {line}")
+                    for line_num, line in enumerate(output_lines, 1):
+                        print(f"{line_num:3d}: {line}")
+                    print(f"{'='*70}\n")
                     
-                    # Check for success indicators
-                    if "rw-------" in output and f"{username}" in output:
-                        print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys) - VERIFIED")
+                    # Check for critical failures
+                    if "wc: " in output and "No such file" in output:
+                        raise RuntimeError(f"authorized_keys file was NOT created: {output}")
+                    
+                    # Extract byte/line counts from wc output
+                    file_bytes = None
+                    file_lines = None
+                    for line in output_lines:
+                        if "[Byte count:]" in line:
+                            # Next line should be the byte count
+                            idx = output_lines.index(line)
+                            if idx + 1 < len(output_lines):
+                                next_line = output_lines[idx + 1]
+                                parts = next_line.split()
+                                if parts:
+                                    try:
+                                        file_bytes = int(parts[0])
+                                    except:
+                                        pass
+                        if "[Line count:]" in line:
+                            idx = output_lines.index(line)
+                            if idx + 1 < len(output_lines):
+                                next_line = output_lines[idx + 1]
+                                parts = next_line.split()
+                                if parts:
+                                    try:
+                                        file_lines = int(parts[0])
+                                    except:
+                                        pass
+                    
+                    print(f"[PARSED] File bytes: {file_bytes}, File lines: {file_lines}")
+                    
+                    if file_bytes == 0:
+                        print(f"[ERROR] File is EMPTY (0 bytes) - echo >> is not working!")
+                        raise RuntimeError(f"authorized_keys file is 0 bytes - shell redirection failed!")
+                    
+                    if file_lines and file_lines == len(pub_keys_list):
+                        print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({file_lines} keys verified)")
                         return True
                     
-                    # Check for errors
-                    if "error" in output.lower() or "failed" in output.lower():
-                        raise RuntimeError(f"shell execution error: {output}")
-                    
-                    print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
+                    print(f"[OK] SSH authorized_keys written for {username} on {target_name}")
                     return True
                 else:
-                    # No output but command executed - likely success
-                    print(f"[DEBUG] RPC command executed successfully (no output)")
-                    print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
-                    return True
+                    print(f"[WARN] RPC command executed but returned NO OUTPUT")
+                    return False
             else:
                 print(f"[WARN] SSH authorized_keys write on {target_name} - RPC returned None")
-            return True
+            return False
         finally:
             try:
                 dev.close()
