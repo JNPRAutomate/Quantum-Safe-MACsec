@@ -151,6 +151,55 @@ def send_shell_command(shell, command, timeout=5.0, verbose=False):
     return output
 
 
+def reset_mka_statistics(password=None, verbose=False):
+    """Reset MKA statistics counters on all devices for clean baseline."""
+    print("[*] Resetting MKA statistics on all devices...")
+    for sae_id in DEVICES.keys():
+        device_name, device_ip, ring_ip = DEVICES[sae_id]
+        key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
+        
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            if Path(key_path).exists():
+                client.connect(
+                    device_ip,
+                    username="labuser",
+                    key_filename=key_path,
+                    timeout=5,
+                    look_for_keys=False,
+                    allow_agent=False
+                )
+            elif password:
+                client.connect(
+                    device_ip,
+                    username="labuser",
+                    password=password,
+                    timeout=5,
+                    look_for_keys=False,
+                    allow_agent=False
+                )
+            else:
+                continue
+            
+            shell = client.invoke_shell()
+            shell.settimeout(3.0)
+            
+            # Send clear command
+            send_shell_command(shell, "clear security mka statistics", verbose=False)
+            
+            shell.close()
+            client.close()
+            if verbose:
+                print(f"  ✓ {device_name} - statistics cleared")
+        except Exception as e:
+            if verbose:
+                print(f"  ✗ {device_name} - error: {str(e)[:50]}")
+    
+    print()
+
+
 def parse_macsec_connections(output, verbose=False):
     """Parse MACsec connections output to extract interface status."""
     status = {
@@ -708,6 +757,9 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
     start_time = time.time()
     iteration = 0
     
+    # Reset MKA statistics on all devices for clean baseline
+    reset_mka_statistics(password, verbose)
+    
     print("[*] Monitoring MACsec tunnel health...\n")
     
     try:
@@ -749,6 +801,13 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 mka_stats_ifaces = health.get('mka_stats', {}).get('interfaces', {})
                 curr_cak = sum(s.get('cak_mismatch', 0) for s in mka_stats_ifaces.values())
                 curr_icv = sum(s.get('icv_mismatch', 0) for s in mka_stats_ifaces.values())
+                
+                # RESET BASELINE on first round (every script restart)
+                # This makes delta start from 0, not cumulative device uptime
+                if prev_cak_totals[sae_id] is None:
+                    prev_cak_totals[sae_id] = curr_cak
+                    prev_icv_totals[sae_id] = curr_icv
+                
                 health['_prev_cak_total'] = prev_cak_totals[sae_id]
                 health['_prev_icv_total'] = prev_icv_totals[sae_id]
                 
