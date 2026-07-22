@@ -804,6 +804,60 @@ def check_script_user_atomic_write(device):
     print_if_verbose(result.stdout)
 
 
+def remove_ssh_keys_from_junos_config(device, username):
+    """
+    Remove all SSH keys from Junos configuration for a user.
+    This is necessary because Junos SSH daemon prioritizes config keys over authorized_keys file.
+    
+    Args:
+        device: Device to connect to (PyEZ Device object)
+        username: Username (e.g., 'etsi_peer_view', 'macsec_user')
+    
+    Returns:
+        True if successful or no changes needed
+    
+    Raises:
+        RuntimeError if deletion fails
+    """
+    target_name = device_name(device)
+    try:
+        host = device_host(device)
+        auth = device.get("auth") or {}
+        user = auth.get("username")
+        password = auth.get("password")
+        
+        if not user or not password:
+            raise RuntimeError(f"missing auth for removing SSH keys on {target_name}")
+        
+        dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
+        dev.open()
+        try:
+            # Delete ALL ssh-ed25519 keys for this user from Junos config
+            # This ensures Junos SSH daemon will use authorized_keys file, not config keys
+            delete_cmd = f"delete system login user {username} authentication ssh-ed25519"
+            print(f"[DEBUG] removing Junos config SSH keys for {username} on {target_name}...")
+            
+            with Config(dev, mode='dynamic') as cu:
+                cu.load(f"delete system login user {username} authentication ssh-ed25519", format='set')
+                cu.commit()
+            
+            print(f"[OK] removed Junos config SSH keys for {username} on {target_name}")
+            return True
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        # If user doesn't have SSH keys in config, this is OK (not an error)
+        if "unknown hierarchy" in str(exc).lower():
+            print(f"[OK] no SSH keys in config for {username} on {target_name} (not configured)")
+            return True
+        print(f"[WARN] failed to remove SSH keys from config for {username} on {target_name}: {exc}")
+        # Continue anyway - authorized_keys file might still work
+        return True
+
+
 def write_ssh_authorized_keys(device, username, pub_keys_list):
     """
     Write SSH public keys to a user's authorized_keys file using Junos RPC with privileges.
@@ -1028,6 +1082,10 @@ def install_peer_authorized_keys(devices):
         )
         
         try:
+            # Step 1: Remove SSH keys from Junos config (they override authorized_keys)
+            remove_ssh_keys_from_junos_config(device, sync_target_user)
+            
+            # Step 2: Write SSH keys to authorized_keys file
             write_ssh_authorized_keys(device, sync_target_user, desired_pub_keys)
             synced_targets.append(target)
         except Exception as exc:
