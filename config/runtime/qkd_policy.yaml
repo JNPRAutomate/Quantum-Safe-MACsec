@@ -2,7 +2,13 @@ qkd_policy:
   rekey_enabled: true
   batch_enabled: true
   interval_seconds: 60
-  script_user_rotation_seconds: 2592000
+  # v3.3.2 SSH Key Rotation Settings:
+  # - script_user_rotation_seconds (macsec_user): DISABLED (-1) to maintain peer SSH sync stability
+  #   Reason: Phase 2 SSH key sync caused asymmetry (peer A -> B works, B -> A fails)
+  #   Impact: macsec_user key is now static throughout deployment lifecycle
+  #   TODO: Re-enable when Phase 2 SSH sync issue is resolved
+  # - peer_cmd_rotation_seconds (etsi_peer_view): 3600s (1 hour) - continues to rotate
+  script_user_rotation_seconds: -1
   peer_cmd_rotation_seconds: 3600
   key_batch_size: 5
   max_installed_keys: 5
