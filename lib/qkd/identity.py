@@ -1107,17 +1107,21 @@ def install_peer_authorized_keys(devices):
         
         # Merge current (preserve orchestrator keys) with new desired keys
         all_keys = sorted(set(current_lines) | desired_keys_set)
-        keys_content = "\n".join(all_keys)
-        if keys_content:
-            keys_content += "\n"
         
-        # Write via SSH using printf (works on both ACX bash and MX restricted shell)
-        # Escape newlines for printf -v syntax
-        escaped_content = keys_content.replace("\\", "\\\\").replace('"', '\\"')
-        escaped_content = escaped_content.replace("\n", "\\n")
-        write_script = f"""printf "{escaped_content}" > {auth_keys_path}
-chmod 600 {auth_keys_path}
-"""
+        if not all_keys:
+            print(f"[OK] macsec_user SSH keys already synced target={target} keys=0")
+            continue
+        
+        # Write via SSH using multiple echo commands (simple, no escaping issues)
+        # First remove old file, then append each key
+        commands = [f"rm -f {auth_keys_path}"]
+        for key in all_keys:
+            # Escape single quotes by closing quote, adding escaped quote, reopening quote
+            escaped_key = key.replace("'", "'\\''")
+            commands.append(f"echo '{escaped_key}' >> {auth_keys_path}")
+        commands.append(f"chmod 600 {auth_keys_path}")
+        
+        write_script = "\n".join(commands)
         result = ssh_deploy_cmd(device, write_script, timeout=20, include_failed_marker=False)
         if result.returncode != 0:
             failed_targets.append((target, f"macsec_user authorized_keys write failed: {result.stderr}"))
