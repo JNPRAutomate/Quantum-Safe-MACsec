@@ -17,6 +17,7 @@ import time
 import threading
 import re
 import json
+import yaml
 from pathlib import Path
 from getpass import getpass
 from datetime import datetime
@@ -28,6 +29,17 @@ import paramiko
 # Auto-detect workspace root
 WORKSPACE_ROOT = Path(__file__).parent.parent
 os.chdir(WORKSPACE_ROOT)
+
+# Load topology to get per-device interfaces
+TOPOLOGY_FILE = WORKSPACE_ROOT / "config/runtime/topology.yaml"
+TOPOLOGY = {}
+try:
+    with open(TOPOLOGY_FILE) as f:
+        topo_data = yaml.safe_load(f)
+        if topo_data and 'nodes' in topo_data:
+            TOPOLOGY = topo_data['nodes']
+except Exception as e:
+    print(f"Warning: Could not load topology: {e}", file=sys.stderr)
 
 # Device mapping: sae_id -> (device_name, device_ip, ring_ip)
 DEVICES = {
@@ -494,7 +506,7 @@ def parse_mka_statistics(output):
     return stats
 
 
-def parse_admin_status(output):
+def parse_admin_status(output, device_name=None):
     """Parse interface admin status from 'show interfaces terse'.
     
     Output format:
@@ -502,9 +514,17 @@ def parse_admin_status(output):
         ae0                      up   up
         ae1                      up   up
     
-    Returns dict of admin_down interfaces (not operationally up).
+    If device_name provided, filter to only interfaces in topology.
+    Returns dict: {iface_name: (admin_status, oper_status)}
     """
-    admin_down = []
+    # Get expected interfaces from topology if available
+    expected_ifaces = set()
+    if device_name and device_name in TOPOLOGY:
+        dev_config = TOPOLOGY[device_name]
+        if 'interfaces' in dev_config:
+            expected_ifaces = set(dev_config['interfaces'])
+    
+    iface_status = {}
     lines = output.split('\n')
     
     for line in lines:
@@ -515,16 +535,14 @@ def parse_admin_status(output):
         parts = line.split()
         if len(parts) >= 3:
             iface_name = parts[0]
-            # Format: "interface_name admin_status oper_status"
-            # We want interfaces where oper_status is 'down'
-            oper_status = parts[-1].strip()
             admin_status = parts[-2].strip()
+            oper_status = parts[-1].strip()
             
-            # If operationally down, record it (could be admin or link down)
-            if oper_status == 'down' and (iface_name.startswith('et-') or iface_name.startswith('ae')):
-                admin_down.append((iface_name, admin_status, oper_status))
+            # Only track interfaces from topology
+            if expected_ifaces and iface_name in expected_ifaces:
+                iface_status[iface_name] = (admin_status, oper_status)
     
-    return admin_down
+    return iface_status
 
 
 def parse_lacp_interfaces(output):
@@ -584,7 +602,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         'macsec_status': {},
         'mka_status': {},
         'lacp_status': {},
-        'admin_down': [],  # NEW: Track operationally down interfaces
+        'admin_down': {},  # NEW: Track interface statuses from topology (iface -> (admin, oper))
         'macsec_stats': {},
         'mka_stats': {},
         'key_status': {},
@@ -645,7 +663,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         
         # Get interface admin status (to detect admin-down vs operational-down)
         ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
-        health_data['admin_down'] = parse_admin_status(ifaces_output)
+        health_data['admin_down'] = parse_admin_status(ifaces_output, device_name=device_name)
         
         # Get key status from JSON state files (FIXED: was reading log artifacts)
         shell.send("start shell\n")
@@ -784,11 +802,21 @@ def format_tunnel_status(health_data):
         elif prev_icv is None:
             status += f" | 🔴 ICV:{icv_mismatch_total}(total)"
     
-    # Show admin-down interfaces first (priority over LACP_DOWN)
-    admin_down = health_data.get('admin_down', [])
-    if admin_down:
-        down_ifaces = ", ".join([f"{iface}" for iface, _, _ in admin_down])
-        status += f" | 🔴 ADMIN_DOWN: {down_ifaces}"
+    # Show interface statuses from topology (admin/operational)
+    admin_status_dict = health_data.get('admin_down', {})
+    if admin_status_dict:
+        # Separate up and down interfaces
+        up_ifaces = []
+        down_ifaces = []
+        for iface, (admin, oper) in sorted(admin_status_dict.items()):
+            if oper == 'down':
+                down_ifaces.append(f"{iface} {admin}/{oper}")
+            else:
+                up_ifaces.append(f"{iface} {admin}/{oper}")
+        
+        # Show only down interfaces (up ones are expected)
+        if down_ifaces:
+            status += f" | 🔴 DOWN: {', '.join(down_ifaces)}"
     elif lacp_total > 0 and lacp_down > 0:
         status += f" | 🔴 LACP_DOWN: {lacp_down}"
     
