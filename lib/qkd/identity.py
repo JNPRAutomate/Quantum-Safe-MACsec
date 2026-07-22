@@ -1111,19 +1111,13 @@ def install_peer_authorized_keys(devices):
         if keys_content:
             keys_content += "\n"
         
-        # Write via SSH using Python (more robust than bash)
-        # Python escapes are safer for complex content
-        keys_lines_python = repr(all_keys)  # Python list representation
-        python_script = f"""python3 << 'PYTHON_EOF'
-import os
-auth_keys = '{auth_keys_path}'
-keys = {keys_lines_python}
-with open(auth_keys, 'w') as f:
-    f.write('\\n'.join(keys) + '\\n')
-os.chmod(auth_keys, 0o600)
-PYTHON_EOF
+        # Write via SSH using cat + heredoc (no Python needed, avoids Junos operation not permitted)
+        # Build heredoc with all keys
+        cat_script = f"""cat > {auth_keys_path} << 'KEYS_EOF'
+{keys_content}KEYS_EOF
+chmod 600 {auth_keys_path}
 """
-        result = ssh_deploy_cmd(device, python_script, timeout=20, include_failed_marker=False)
+        result = ssh_deploy_cmd(device, cat_script, timeout=20, include_failed_marker=False)
         if result.returncode != 0:
             failed_targets.append((target, f"macsec_user authorized_keys write failed: {result.stderr}"))
             continue
