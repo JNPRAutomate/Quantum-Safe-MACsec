@@ -1149,6 +1149,22 @@ def install_peer_authorized_keys(devices):
                         except Exception:
                             pass
                         print(f"[OK] macsec_user SSH keys already synchronized target={target}")
+                
+                # Fix SSH directory and authorized_keys permissions (required for SSH auth to work)
+                # After Junos config commit, the authorized_keys file needs correct permissions
+                try:
+                    chmod_cmds = [
+                        "chmod 700 /var/home/macsec_user/.ssh",
+                        "chmod 600 /var/home/macsec_user/.ssh/authorized_keys"
+                    ]
+                    for chmod_cmd in chmod_cmds:
+                        result = ssh_deploy_cmd(device, chmod_cmd, timeout=10)
+                        if result.returncode != 0:
+                            print(f"[WARN] macsec_user SSH permissions fix failed on {target}: {result.stderr}")
+                    print(f"[OK] macsec_user SSH directory/key permissions fixed target={target}")
+                except Exception as exc:
+                    print(f"[WARN] macsec_user SSH permissions fix exception on {target}: {exc}")
+                
                 synced_targets.append(target)
                 success = True
                 break
