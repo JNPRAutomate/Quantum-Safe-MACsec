@@ -238,11 +238,14 @@ def parse_mka_sessions(output):
     return sessions
 
 
-def parse_key_status_from_json_files(shell_output):
+def parse_key_status_from_json_files(shell_output, verbose=False):
     """Parse key status from QKD state JSON files (actual state, not log artifacts).
     
     FIXED: Previously counted historical "PENDING STALE DROP" log entries.
     Now reads actual pending_keys[] arrays from qkd_db_*.json files.
+    
+    Note: JSON files may contain nested objects, so we split by "}\n{" pattern
+    to extract complete JSON blocks correctly.
     """
     import json
     
@@ -256,13 +259,42 @@ def parse_key_status_from_json_files(shell_output):
         'pending_keys_by_interface': {},  # New: track per-interface pending keys
     }
     
-    # Parse JSON files from shell output (ls + cat output)
-    json_blocks = re.findall(r'\{.*?"generation".*?\}', shell_output, re.DOTALL)
+    if verbose:
+        print(f"[DEBUG] parse_key_status_from_json_files: received {len(shell_output)} bytes")
+    
+    # Split by "}\n{" to extract individual JSON objects
+    # This handles nested structures correctly
+    parts = shell_output.split('}\n{')
+    json_blocks = []
+    
+    for i, part in enumerate(parts):
+        # Reconstruct JSON blocks
+        if i == 0:
+            block = part  # First block may start with {
+        else:
+            block = '{' + part  # Re-add opening brace for subsequent blocks
+        
+        if i < len(parts) - 1:
+            block = block + '}'  # Re-add closing brace for all but last
+        
+        if block.strip():
+            json_blocks.append(block)
+    
+    if verbose:
+        print(f"[DEBUG] Found {len(json_blocks)} JSON blocks after split")
     
     total_pending = 0
-    for json_block in json_blocks:
+    for idx, json_block in enumerate(json_blocks):
         try:
+            # Clean up whitespace
+            json_block = json_block.strip()
+            if not json_block or not json_block.startswith('{'):
+                continue
+            
             data = json.loads(json_block)
+            
+            if verbose:
+                print(f"[DEBUG] JSON block {idx}: ca_name={data.get('ca_name')}, pending={len(data.get('pending_keys', []))}")
             
             # Track active key
             if data.get('active_key_id'):
@@ -284,11 +316,16 @@ def parse_key_status_from_json_files(shell_output):
             if health.get('degraded'):
                 key_status['error_count'] += 1
                 
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as e:
             # Skip malformed JSON blocks
+            if verbose:
+                print(f"[DEBUG] JSON parse error on block {idx}: {str(e)[:50]}")
             pass
     
     key_status['pending_stale_count'] = total_pending
+    
+    if verbose:
+        print(f"[DEBUG] Final pending_stale_count: {total_pending}")
     
     return key_status
 
@@ -552,7 +589,17 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         qkd_state_dir = "/var/home/macsec_user/qkd-state"
         json_list_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null || echo 'No JSON files'", verbose=False)
         
+        # Read all qkd_db_*.json files from state directory
+        qkd_state_dir = "/var/home/macsec_user/qkd-state"
+        json_list_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null || echo 'No JSON files'", verbose=verbose)
+        
+        if verbose:
+            print(f"[{sae_id}] JSON list output: {json_list_output[:200]}")
+        
         json_files = [f.strip() for f in json_list_output.split('\n') if f.strip().endswith('.json')]
+        
+        if verbose:
+            print(f"[{sae_id}] Found {len(json_files)} JSON files: {json_files}")
         
         # Read each JSON file and concatenate content
         json_content = ""
@@ -560,7 +607,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             file_output = send_shell_command(shell, f"cat {json_file}", verbose=False)
             json_content += file_output + "\n"
         
-        health_data['key_status'] = parse_key_status_from_json_files(json_content)
+        health_data['key_status'] = parse_key_status_from_json_files(json_content, verbose=verbose)
 
         
         shell.close()
