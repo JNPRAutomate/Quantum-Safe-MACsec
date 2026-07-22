@@ -860,7 +860,7 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
             # Use Junos RPC request_shell_execute (same as bootstrap)
             result = dev.rpc.request_shell_execute(command=full_command)
             # RPC returns XML, extract text
-            if result:
+            if result is not None:
                 output = str(result).strip()
                 if output and output not in ["<output/>", ""]:
                     print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
