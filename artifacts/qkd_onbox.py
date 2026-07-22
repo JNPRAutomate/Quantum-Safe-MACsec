@@ -2097,44 +2097,48 @@ def apply_peer_public_key_on_remote(peer_ip, ssh_key_path, key_type, key_line, r
     action = "delete" if remove else "set"
     ssh_remote_user = remote_user or PEER_CMD_USER or SCRIPT_USER
     login_user = target_login_user or PEER_CMD_USER or SCRIPT_USER
-    remote_set_path = f"/var/tmp/qkd_peer_auth_{login_user}.set"
-    # Both SET and DELETE use the full key_line value as-is.
-    # Junos stores the complete line including type prefix and validates/matches on it.
-    set_line = (
-        f"{action} system login user {login_user} authentication {key_type} \"{key_line}\"\n"
-    )
-    upload_cmd = f"start shell command \"cat >{remote_set_path}\""
-    apply_cmd = (
-        f"start shell command \"cli -c 'configure private; load set {remote_set_path}; commit and-quit'\""
-    )
-    cleanup_cmd = f"start shell command \"rm -f {remote_set_path}\""
-    retry_wait_seconds = [2, 4, 8]
-    for attempt in range(1, len(retry_wait_seconds) + 2):
-        ok, stdout, stderr = ssh_remote_exec(
-            peer_ip,
-            ssh_key_path,
-            upload_cmd,
-            mode_ctx="MASTER",
-            timeout=30,
-            remote_user=ssh_remote_user,
-            stdin_text=set_line,
+    
+    # v3.3.2: Use authorized_keys file instead of Junos config
+    # This allows etsi_peer_view SSH key rotation without config commits
+    # Each rotation replaces the old key with the new one in authorized_keys
+    auth_keys_path = f"/var/home/{login_user}/.ssh/authorized_keys"
+    
+    if action == "delete":
+        # Remove specific key from authorized_keys
+        remove_cmd = (
+            f"grep -v '^{re.escape(key_line)}$' {auth_keys_path} > /tmp/auth_temp && "
+            f"mv /tmp/auth_temp {auth_keys_path} && "
+            f"chmod 600 {auth_keys_path}"
         )
-        if not ok:
-            return ok, stdout, stderr
-        ok, stdout, stderr = ssh_remote_exec(peer_ip, ssh_key_path, apply_cmd, mode_ctx="MASTER", timeout=30, remote_user=ssh_remote_user)
-        if ok:
-            ssh_remote_exec(peer_ip, ssh_key_path, cleanup_cmd, mode_ctx="MASTER", timeout=15, remote_user=ssh_remote_user)
-            return ok, stdout, stderr
-        if attempt >= len(retry_wait_seconds) + 1 or not ssh_remote_lock_error(stdout, stderr):
-            return ok, stdout, stderr
-        wait_seconds = retry_wait_seconds[attempt - 1]
-        log(
-            f"PEER SSH KEY ROTATION REMOTE LOCK peer={peer_ip} remote_user={ssh_remote_user} target_login_user={login_user} action={action} attempt={attempt}/{len(retry_wait_seconds) + 1} wait={wait_seconds}s",
-            "ERROR",
-            mode="SSHKEY",
+        upload_cmd = f"start shell command \"{remove_cmd}\""
+        apply_cmd = None  # No separate apply step for delete
+    else:
+        # Add action: Remove ALL old SSH keys, then add the new one
+        # This ensures only the most recent key is in authorized_keys
+        upload_cmd = (
+            f"start shell command \"grep -v '^ssh-' {auth_keys_path} > /tmp/auth_temp; "
+            f"echo '{key_line}' >> /tmp/auth_temp; "
+            f"mv /tmp/auth_temp {auth_keys_path}; "
+            f"chmod 600 {auth_keys_path}\""
         )
-        time.sleep(wait_seconds)
-    return False, "", "remote lock retry exhausted"
+        apply_cmd = None  # No separate commit step with authorized_keys
+    
+    cleanup_cmd = "start shell command \"rm -f /tmp/auth_temp\""
+    # Execute the authorized_keys update (no retry needed for file operations)
+    ok, stdout, stderr = ssh_remote_exec(
+        peer_ip,
+        ssh_key_path,
+        upload_cmd,
+        mode_ctx="MASTER",
+        timeout=30,
+        remote_user=ssh_remote_user,
+    )
+    if ok:
+        # Cleanup temp file
+        ssh_remote_exec(peer_ip, ssh_key_path, cleanup_cmd, mode_ctx="MASTER", timeout=15, remote_user=ssh_remote_user)
+        return ok, stdout, stderr
+    
+    return ok, stdout, stderr
 
 
 def validate_peer_ssh_key_on_remote(peer_ip, ssh_key_path):
