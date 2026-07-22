@@ -261,6 +261,32 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
             print(f"[DEBUG] No JSON data to parse")
         return key_status
     
+    # CRITICAL: Extract ONLY the JSON part from shell output
+    # Shell output may contain command echo, prompt, etc.
+    # Find the first { and last } to extract pure JSON
+    json_data_str = json_data_str.strip()
+    
+    # Find start of JSON (first '{')
+    start_idx = json_data_str.find('{')
+    if start_idx == -1:
+        if verbose:
+            print(f"[DEBUG] No JSON found in output (no opening brace)")
+            print(f"[DEBUG] Raw output: {json_data_str[:200]}")
+        return key_status
+    
+    # Find end of JSON (last '}')
+    end_idx = json_data_str.rfind('}')
+    if end_idx == -1 or end_idx < start_idx:
+        if verbose:
+            print(f"[DEBUG] No JSON found in output (no closing brace)")
+        return key_status
+    
+    # Extract pure JSON
+    json_data_str = json_data_str[start_idx:end_idx+1]
+    
+    if verbose:
+        print(f"[DEBUG] Extracted JSON ({len(json_data_str)} bytes)")
+    
     try:
         data = json.loads(json_data_str)
         
@@ -288,6 +314,7 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     except json.JSONDecodeError as e:
         if verbose:
             print(f"[DEBUG] JSON parse error: {e}")
+            print(f"[DEBUG] Attempted to parse: {json_data_str[:150]}...")
     except Exception as e:
         if verbose:
             print(f"[DEBUG] Error parsing key status: {e}")
