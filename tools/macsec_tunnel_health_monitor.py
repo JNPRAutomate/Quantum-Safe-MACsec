@@ -30,16 +30,33 @@ import paramiko
 WORKSPACE_ROOT = Path(__file__).parent.parent
 os.chdir(WORKSPACE_ROOT)
 
-# Load topology to get per-device interfaces
-TOPOLOGY_FILE = WORKSPACE_ROOT / "config/runtime/topology.yaml"
-TOPOLOGY = {}
-try:
-    with open(TOPOLOGY_FILE) as f:
-        topo_data = yaml.safe_load(f)
-        if topo_data and 'nodes' in topo_data:
-            TOPOLOGY = topo_data['nodes']
-except Exception as e:
-    print(f"Warning: Could not load topology: {e}", file=sys.stderr)
+
+def get_device_interfaces_from_qkd_inventory(shell):
+    """Read interfaces from device's qkd_onbox_inventory.json (source of truth).
+    
+    Returns set of interface names, or empty set if file not found.
+    """
+    try:
+        inv_path = "/var/db/scripts/op/qkd_onbox_inventory.json"
+        inv_output = send_shell_command(shell, f"cat {inv_path}", verbose=False)
+        
+        # Extract JSON from shell output
+        inv_output = inv_output.strip()
+        start_idx = inv_output.find('{')
+        end_idx = inv_output.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_str = inv_output[start_idx:end_idx+1]
+            inv_data = json.loads(json_str)
+            
+            # Extract interfaces from inventory structure
+            if 'interfaces' in inv_data:
+                return set(inv_data['interfaces'])
+            elif 'macsec_interfaces' in inv_data:
+                return set(inv_data['macsec_interfaces'])
+    except Exception:
+        pass
+    
+    return set()
 
 # Device mapping: sae_id -> (device_name, device_ip, ring_ip)
 DEVICES = {
@@ -506,7 +523,7 @@ def parse_mka_statistics(output):
     return stats
 
 
-def parse_admin_status(output, device_name=None):
+def parse_admin_status(output, expected_ifaces=None):
     """Parse interface admin status from 'show interfaces terse'.
     
     Output format:
@@ -514,16 +531,9 @@ def parse_admin_status(output, device_name=None):
         ae0                      up   up
         ae1                      up   up
     
-    If device_name provided, filter to only interfaces in topology.
+    If expected_ifaces provided (set of interface names), filter to only those.
     Returns dict: {iface_name: (admin_status, oper_status)}
     """
-    # Get expected interfaces from topology if available
-    expected_ifaces = set()
-    if device_name and device_name in TOPOLOGY:
-        dev_config = TOPOLOGY[device_name]
-        if 'interfaces' in dev_config:
-            expected_ifaces = set(dev_config['interfaces'])
-    
     iface_status = {}
     lines = output.split('\n')
     
@@ -538,7 +548,7 @@ def parse_admin_status(output, device_name=None):
             admin_status = parts[-2].strip()
             oper_status = parts[-1].strip()
             
-            # Only track interfaces from topology
+            # Only track interfaces from expected set
             if expected_ifaces and iface_name in expected_ifaces:
                 iface_status[iface_name] = (admin_status, oper_status)
     
@@ -661,9 +671,12 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=False)
         health_data['lacp_status'] = parse_lacp_interfaces(lacp_output)
         
+        # Get expected interfaces from device's qkd_onbox_inventory.json
+        device_ifaces = get_device_interfaces_from_qkd_inventory(shell)
+        
         # Get interface admin status (to detect admin-down vs operational-down)
         ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
-        health_data['admin_down'] = parse_admin_status(ifaces_output, device_name=device_name)
+        health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
         
         # Get key status from JSON state files (FIXED: was reading log artifacts)
         shell.send("start shell\n")
