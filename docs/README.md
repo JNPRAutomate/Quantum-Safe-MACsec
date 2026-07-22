@@ -35,11 +35,12 @@ Use this as the starting point for GitHub readers:
 1. `docs/qkd/ARCHITECTURE.md`
 2. `docs/kme/ARCHITECTURE.md`
 3. `docs/pqc/THEORY_AND_STANDARDS.md`
-4. `docs/qkd/CLI_REFERENCE.md`
-5. `docs/kme/CLI_REFERENCE.md`
-6. `docs/pqc/GLOSSARY.md`
-7. `docs/qkd/qkd_onbox_runtime_lld.md`
-8. `docs/qkd/CERT_MANAGER.md`
+4. `docs/SSH_KEY_ARCHITECTURE.md` - Two-channel SSH architecture (etsi_peer_view + macsec_user)
+5. `docs/qkd/CLI_REFERENCE.md`
+6. `docs/kme/CLI_REFERENCE.md`
+7. `docs/pqc/GLOSSARY.md`
+8. `docs/qkd/qkd_onbox_runtime_lld.md`
+9. `docs/qkd/CERT_MANAGER.md`
 
 ## Consolidated Navigation and Assembly
 
