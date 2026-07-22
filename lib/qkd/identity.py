@@ -806,42 +806,41 @@ def check_script_user_atomic_write(device):
 
 def write_ssh_authorized_keys(device, username, pub_keys_list):
     """
-    Write SSH public keys to a user's authorized_keys file via Junos shell commands.
+    Write SSH public keys to a user's authorized_keys file.
     
     Args:
         device: Device to connect to
         username: Username (e.g., 'etsi_peer_view', 'macsec_user')
         pub_keys_list: List of public key strings to write
     
-    Uses 'request system shell' which executes with elevated privileges (works on Junos MX/ACX).
+    Executes via ssh_script_user_onbox_cmd (as macsec_user with super-user privileges).
+    This allows proper file ownership and permissions management.
     """
     target_name = device_name(device)
     home_dir = f"/var/home/{username}"
     ssh_dir = f"{home_dir}/.ssh"
     auth_keys_file = f"{ssh_dir}/authorized_keys"
     
-    # Build shell commands to write keys (use request system shell for privilege escalation)
+    # Build shell commands to write keys (executed as macsec_user with super-user privileges)
     shell_cmds = []
     shell_cmds.append(f"mkdir -p {ssh_dir}")
-    shell_cmds.append(f"rm -f {auth_keys_file}")  # Clear old file
+    shell_cmds.append(f"rm -f {auth_keys_file}")  # Clear old file (works because macsec_user is super-user)
     
-    # Write each key (escape single quotes and shell special chars)
+    # Write each key (escape single quotes for shell safety)
     for pub_key in pub_keys_list:
         escaped_key = pub_key.replace("'", "'\\''")
         shell_cmds.append(f"echo '{escaped_key}' >> {auth_keys_file}")
     
-    # Fix permissions and ownership
+    # Fix permissions and ownership (macsec_user can do this as super-user)
     shell_cmds.append(f"chmod 600 {auth_keys_file}")
     shell_cmds.append(f"chmod 700 {ssh_dir}")
     shell_cmds.append(f"chown {username}:wheel {ssh_dir}")
     shell_cmds.append(f"chown {username}:wheel {auth_keys_file}")
     
-    # Execute all shell commands via "request system shell" (privilege escalation on Junos)
+    # Execute all shell commands as macsec_user (super-user via ssh_script_user_onbox_cmd)
     try:
         for cmd in shell_cmds:
-            # Use 'request system shell' for commands that need privileges
-            junos_cmd = f"request system shell command \"{cmd}\""
-            result = ssh_deploy_cmd(device, junos_cmd, timeout=20)
+            result = ssh_script_user_onbox_cmd(device, cmd, timeout=20)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"failed to execute SSH key setup on {target_name}: {cmd}\n"
