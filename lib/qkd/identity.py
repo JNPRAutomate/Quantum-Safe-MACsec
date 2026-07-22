@@ -867,9 +867,14 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         username: Username (e.g., 'etsi_peer_view', 'macsec_user')
         pub_keys_list: List of public key strings to write
     
-    Uses dev.rpc.request_shell_execute (Junos RPC with system privileges).
-    Uses printf | dd (not >) for writing - shell redirect doesn't work in Junos RPC.
+    CRITICAL FIX:
+    - Junos RPC executes through csh which rejects shell redirects like 2>&1
+    - Use base64 encoding to avoid all shell quoting issues
+    - Force /bin/sh -c explicitly to bypass csh entirely
     """
+    import shlex
+    import base64
+    
     target_name = device_name(device)
     home_dir = f"/var/home/{username}"
     ssh_dir = f"{home_dir}/.ssh"
@@ -883,83 +888,37 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     else:
         group = "wheel"  # default
     
-    # Create content string with all keys joined by newlines
+    # Build all keys as newline-separated string
     keys_content = "\n".join(pub_keys_list)
     
-    # Build shell command to write SSH keys
-    # CRITICAL ISSUE: echo >> may not work in Junos RPC context
-    # Using printf | dd or cat heredoc instead
+    # Encode to base64 to avoid ALL shell quoting issues (newlines, special chars, etc)
+    keys_b64 = base64.b64encode(keys_content.encode()).decode()
     
-    # Build the keys content - one key per line
-    keys_lines = []
-    for i, key_line in enumerate(pub_keys_list):
-        # Use shlex.quote for proper shell escaping (safer than manual quote replacement)
-        import shlex
-        safe_key = shlex.quote(key_line)
-        keys_lines.append(f"  printf {safe_key}")
-    
-    # Build diagnostic command FIRST to understand what's happening
-    # Start with complete diagnostics BEFORE attempting write
-    shell_cmd = (
-        f"echo '=== PRE-WRITE DIAGNOSTICS ==='; "
-        f"echo 'SSH dir: {ssh_dir}'; "
-        f"ls -la {home_dir}/.ssh 2>&1 || echo '[NOT EXISTS] {home_dir}/.ssh'; "
+    # Build POSIX sh command using base64 decode to avoid shell parsing nightmares
+    inner_cmd = (
+        f"test -d {ssh_dir} || mkdir {ssh_dir}; "
+        f"echo {keys_b64} | base64 -d | dd of={auth_keys_file}; "
         f"echo ''; "
-        f"echo '=== STEP 1: Create directory ==='; "
-        f"mkdir -p {ssh_dir}; "
-        f"ls -la {ssh_dir}; "
+        f"echo '[VERIFY] Byte count:'; wc -c {auth_keys_file}; "
+        f"echo '[VERIFY] Line count:'; wc -l {auth_keys_file}; "
         f"echo ''; "
-        f"echo '=== STEP 2: Check if we can write ==='; "
-        f"touch {auth_keys_file}.test 2>&1 && echo '[OK] Can touch files' || echo '[FAIL] Cannot touch'; "
-        f"rm -f {auth_keys_file}.test; "
-        f"echo ''; "
-        f"echo '=== STEP 3: Truncate file ==='; "
-        f"dd if=/dev/null of={auth_keys_file} 2>&1; "
-        f"ls -lh {auth_keys_file}; "
-        f"wc -c {auth_keys_file}; "
-        f"echo ''; "
-    )
-    
-    # Now append keys one by one and show output after each
-    for i, key_line in enumerate(pub_keys_list):
-        # Use printf with newline to append (safer than echo)
-        import shlex
-        safe_key = shlex.quote(key_line)
-        shell_cmd += (
-            f"echo '[KEY {i+1}/{len(pub_keys_list)}] Appending...'; "
-            f"printf %s\\\\n {safe_key} >> {auth_keys_file} 2>&1; "
-            f"wc -c {auth_keys_file}; "
-        )
-    
-    # Final verification
-    shell_cmd += (
-        f"echo ''; "
-        f"echo '=== FINAL FILE STATE ==='; "
-        f"ls -lh {auth_keys_file}; "
-        f"echo '[Line count:]'; wc -l {auth_keys_file}; "
-        f"echo '[Byte count:]'; wc -c {auth_keys_file}; "
-        f"echo '[First 3 lines:]'; head -3 {auth_keys_file}; "
-        f"echo ''; "
-        f"echo '=== STEP 4: Fix permissions ==='; "
-        f"chown {username}:{group} {ssh_dir} {auth_keys_file} 2>&1; "
+        f"chown {username}:{group} {ssh_dir} {auth_keys_file}; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {auth_keys_file}; "
-        f"echo ''; "
-        f"echo '=== FINAL PERMS ==='; "
-        f"ls -ld {ssh_dir}; "
-        f"ls -la {auth_keys_file}; "
+        f"echo '[VERIFY] Final:'; ls -l {auth_keys_file}"
     )
+    
+    # Wrap in /bin/sh -c to force POSIX shell (not csh which has "Ambiguous output redirect")
+    shell_cmd = f"/bin/sh -c {shlex.quote(inner_cmd)}"
     
     # Execute via Junos RPC with system privileges
     try:
-        # Connect to device if needed
         host = device_host(device)
         auth = device.get("auth") or {}
         user = auth.get("username")
         password = auth.get("password")
         
         print(f"[DEBUG] write_ssh_authorized_keys: target={target_name} user={username} keys={len(pub_keys_list)} host={host}")
-        print(f"[DEBUG] Shell command length: {len(shell_cmd)} chars")
         
         if not user or not password:
             raise RuntimeError(f"missing auth for SSH key setup on {target_name}")
@@ -967,87 +926,86 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
         dev.open()
         try:
-            print(f"[DEBUG] Executing RPC request_shell_execute on {target_name}...")
-            # Use Junos RPC request_shell_execute (same as bootstrap)
+            print(f"[DEBUG] Executing RPC (base64 encoded + /bin/sh -c wrapper)...")
             result = dev.rpc.request_shell_execute(command=shell_cmd)
-            print(f"[DEBUG] RPC returned, type={type(result)}")
             
-            # RPC returns XML element, extract text properly
+            # Extract output from XML element
+            output = ""
             if result is not None:
-                # Get text from XML element - result is ElementTree element
-                output = ""
                 if hasattr(result, 'text') and result.text:
                     output = result.text.strip()
                 elif hasattr(result, 'itertext'):
                     output = "".join(result.itertext()).strip()
                 else:
-                    # Fallback: convert to string and look for actual content
                     output_str = str(result)
                     if "<output>" in output_str:
-                        # Extract text between XML tags
                         import re
                         match = re.search(r'<output>(.*?)</output>', output_str, re.DOTALL)
                         if match:
                             output = match.group(1).strip()
+            
+            if output:
+                print(f"\n{'='*70}")
+                print(f"[RPC_OUTPUT] from {target_name}/{username}:")
+                print(f"{'='*70}")
+                output_lines = output.split('\n')
+                for line_num, line in enumerate(output_lines, 1):
+                    print(f"{line_num:3d}: {line}")
+                print(f"{'='*70}\n")
                 
-                if output:
-                    print(f"\n{'='*70}")
-                    print(f"[RPC_OUTPUT] from {target_name}/{username}:")
-                    print(f"{'='*70}")
-                    # Show EVERY line without filtering
-                    output_lines = output.split('\n')
-                    for line_num, line in enumerate(output_lines, 1):
-                        print(f"{line_num:3d}: {line}")
-                    print(f"{'='*70}\n")
-                    
-                    # Check for critical failures
-                    if "wc: " in output and "No such file" in output:
-                        raise RuntimeError(f"authorized_keys file was NOT created: {output}")
-                    
-                    # Extract byte/line counts from wc output
-                    file_bytes = None
-                    file_lines = None
+                # CHECK FOR FATAL ERRORS IMMEDIATELY (before assuming success)
+                if "Ambiguous output redirect" in output:
+                    raise RuntimeError(f"FATAL: csh rejected shell syntax: {output}")
+                if "permission denied" in output.lower() or "operation not permitted" in output.lower():
+                    raise RuntimeError(f"FATAL: permission error: {output}")
+                
+                # Parse file size from wc output
+                file_bytes = None
+                file_lines = None
+                for i, line in enumerate(output_lines):
+                    if "[VERIFY] Byte count:" in line and i + 1 < len(output_lines):
+                        parts = output_lines[i + 1].strip().split()
+                        if parts:
+                            try:
+                                file_bytes = int(parts[0])
+                            except ValueError:
+                                pass
+                    if "[VERIFY] Line count:" in line and i + 1 < len(output_lines):
+                        parts = output_lines[i + 1].strip().split()
+                        if parts:
+                            try:
+                                file_lines = int(parts[0])
+                            except ValueError:
+                                pass
+                
+                # Also try to parse dd output: "73 bytes transferred"
+                if file_bytes is None:
                     for line in output_lines:
-                        if "[Byte count:]" in line:
-                            # Next line should be the byte count
-                            idx = output_lines.index(line)
-                            if idx + 1 < len(output_lines):
-                                next_line = output_lines[idx + 1]
-                                parts = next_line.split()
-                                if parts:
-                                    try:
-                                        file_bytes = int(parts[0])
-                                    except:
-                                        pass
-                        if "[Line count:]" in line:
-                            idx = output_lines.index(line)
-                            if idx + 1 < len(output_lines):
-                                next_line = output_lines[idx + 1]
-                                parts = next_line.split()
-                                if parts:
-                                    try:
-                                        file_lines = int(parts[0])
-                                    except:
-                                        pass
-                    
-                    print(f"[PARSED] File bytes: {file_bytes}, File lines: {file_lines}")
-                    
-                    if file_bytes == 0:
-                        print(f"[ERROR] File is EMPTY (0 bytes) - echo >> is not working!")
-                        raise RuntimeError(f"authorized_keys file is 0 bytes - shell redirection failed!")
-                    
-                    if file_lines and file_lines == len(pub_keys_list):
-                        print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({file_lines} keys verified)")
-                        return True
-                    
-                    print(f"[OK] SSH authorized_keys written for {username} on {target_name}")
-                    return True
-                else:
-                    print(f"[WARN] RPC command executed but returned NO OUTPUT")
-                    return False
+                        if "bytes" in line and ("transferred" in line or "written" in line):
+                            parts = line.split()
+                            try:
+                                file_bytes = int(parts[0])
+                                break
+                            except (ValueError, IndexError):
+                                pass
+                
+                print(f"[PARSED] File bytes: {file_bytes}, File lines: {file_lines}, Expected keys: {len(pub_keys_list)}")
+                
+                # STRICT SUCCESS CHECK: file must have content
+                if file_bytes is None:
+                    print(f"[ERROR] Could not parse file size from output!")
+                    raise RuntimeError(f"authorized_keys write failed: could not parse file size")
+                
+                if file_bytes == 0:
+                    print(f"[ERROR] authorized_keys is empty (0 bytes)!")
+                    raise RuntimeError(f"authorized_keys write failed: file is empty")
+                
+                print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({file_bytes} bytes, {len(pub_keys_list)} keys)")
+                return True
             else:
-                print(f"[WARN] SSH authorized_keys write on {target_name} - RPC returned None")
-            return False
+                print(f"[WARN] RPC returned no output")
+                return False
+                
         finally:
             try:
                 dev.close()
