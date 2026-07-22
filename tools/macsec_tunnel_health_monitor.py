@@ -475,6 +475,39 @@ def parse_mka_statistics(output):
     return stats
 
 
+def parse_admin_status(output):
+    """Parse interface admin status from 'show interfaces terse'.
+    
+    Output format:
+        et-0/0/6                up   down
+        ae0                      up   up
+        ae1                      up   up
+    
+    Returns dict of admin_down interfaces (not operationally up).
+    """
+    admin_down = []
+    lines = output.split('\n')
+    
+    for line in lines:
+        # Skip empty lines and headers
+        if not line.strip() or 'Physical interface' in line:
+            continue
+        
+        parts = line.split()
+        if len(parts) >= 3:
+            iface_name = parts[0]
+            # Format: "interface_name admin_status oper_status"
+            # We want interfaces where oper_status is 'down'
+            oper_status = parts[-1].strip()
+            admin_status = parts[-2].strip()
+            
+            # If operationally down, record it (could be admin or link down)
+            if oper_status == 'down' and (iface_name.startswith('et-') or iface_name.startswith('ae')):
+                admin_down.append((iface_name, admin_status, oper_status))
+    
+    return admin_down
+
+
 def parse_lacp_interfaces(output):
     """Parse LACP interfaces output to extract LAG/LACP status.
     
@@ -532,6 +565,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         'macsec_status': {},
         'mka_status': {},
         'lacp_status': {},
+        'admin_down': [],  # NEW: Track operationally down interfaces
         'macsec_stats': {},
         'mka_stats': {},
         'key_status': {},
@@ -589,6 +623,10 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         # Get LACP interfaces status
         lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=False)
         health_data['lacp_status'] = parse_lacp_interfaces(lacp_output)
+        
+        # Get interface admin status (to detect admin-down vs operational-down)
+        ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
+        health_data['admin_down'] = parse_admin_status(ifaces_output)
         
         # Get key status from JSON state files (FIXED: was reading log artifacts)
         shell.send("start shell\n")
@@ -727,7 +765,12 @@ def format_tunnel_status(health_data):
         elif prev_icv is None:
             status += f" | 🔴 ICV:{icv_mismatch_total}(total)"
     
-    if lacp_total > 0 and lacp_down > 0:
+    # Show admin-down interfaces first (priority over LACP_DOWN)
+    admin_down = health_data.get('admin_down', [])
+    if admin_down:
+        down_ifaces = ", ".join([f"{iface}" for iface, _, _ in admin_down])
+        status += f" | 🔴 ADMIN_DOWN: {down_ifaces}"
+    elif lacp_total > 0 and lacp_down > 0:
         status += f" | 🔴 LACP_DOWN: {lacp_down}"
     
     return status
