@@ -284,3 +284,166 @@ ssh -i ~/.ssh/qkd_id_ed25519 macsec_user@127.0.0.1 \
 - SSH sync implementation: [lib/qkd/identity.py](lib/qkd/identity.py) - `install_peer_authorized_keys()`
 - Key rotation logic: [artifacts/qkd_onbox.py](artifacts/qkd_onbox.py) - `master_links` filtering and SSH trigger
 - Topology definition: [config/inventory/input/ring_mx_acx_unified_link_driven.yml](config/inventory/input/ring_mx_acx_unified_link_driven.yml) - `node_a`/`node_b` role assignment
+
+---
+
+## Implementation Updates (v3.3.1)
+
+### Phase 1 & Phase 2: Identical Peer-Based Key Synchronization
+
+As of v3.3.1, **Phase 1 (etsi_peer_view) and Phase 2 (macsec_user) now use IDENTICAL patterns**:
+
+**Phase 1: etsi_peer_view SSH Keys via Junos Config**
+```python
+# PHASE 1: install_peer_authorized_keys()
+# 1. Collect qkd_peer_cmd_ed25519.pub from all devices
+# 2. For each device:
+#    - Identify linked peers via topology: linked_peer_sources(device)
+#    - Add device itself: source_names.add(target)
+#    - Remove old SSH keys from Junos config
+#    - Install new keys via: set system login user etsi_peer_view authentication ssh-ed25519 "<key>"
+#    - Commit with retry logic (config lock handling)
+```
+
+**Phase 2: macsec_user SSH Keys via Junos Config (NEW)**
+```python
+# PHASE 2: install_peer_authorized_keys()
+# 1. Collect qkd_id_ed25519.pub from all devices
+# 2. For each device:
+#    - Identify linked peers via topology: linked_peer_sources(device)
+#    - Add device itself: source_names.add(target)
+#    - Remove old SSH keys from Junos config
+#    - Install new keys via: set system login user macsec_user authentication ssh-ed25519 "<key>"
+#    - Commit with retry logic (config lock handling)
+```
+
+**Key Difference**:
+- **Phase 1**: Uses `qkd_peer_cmd_ed25519.pub` (read-only peer status channel)
+- **Phase 2**: Uses `qkd_id_ed25519.pub` (key installation channel)
+
+**Benefits**:
+- ✅ Both channels have keys from ONLY topological peers (not entire fleet)
+- ✅ Device has its own key in config (for self-SSH operations)
+- ✅ Consistent Junos config-based approach (no shell execution workarounds)
+- ✅ Retry logic with exponential backoff for config lock errors
+- ✅ Benign "statement not found" warnings ignored automatically
+
+### Parametrized Key Rotation via CLI
+
+SSH key rotation thresholds can now be overridden via CLI arguments during deploy:
+
+```bash
+# Default: 30 days for macsec_user, 1 hour for etsi_peer_view (from qkd_policy.yaml)
+python3 qkd_orchestrator.py deploy --devices MX1,MX2,... --skip-predeploy-validation
+
+# Override at CLI:
+python3 qkd_orchestrator.py deploy --devices MX1,MX2,... \
+  --script-user-rotation-seconds 2592000 \    # 30 days for macsec_user
+  --peer-cmd-rotation-seconds 3600 \          # 1 hour for etsi_peer_view
+  --skip-predeploy-validation
+```
+
+**Implementation**:
+- Lines 297-300 in `qkd_orchestrator.py`: Added `--script-user-rotation-seconds` and `--peer-cmd-rotation-seconds` args
+- Line 1012-1014: Pass rotation parameters to `build_runtime_qkd_policy()`
+- `lib/qkd/inventory_builder.py` lines 442-451: CLI parameters override YAML defaults
+- `config/runtime/qkd_policy.yaml`: Contains default rotation values
+
+**Behavior**:
+- If key age >= threshold: SSH key is regenerated automatically during deploy
+- Regeneration includes key comment update (see below)
+- Threshold can be set to 0 to force always rotate, or to very large value to disable
+
+### Device-Aware SSH Key Comments (Traceability)
+
+SSH key comments now follow `{user}@{device}` format for easy identification:
+
+**Before**:
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHYrvaQ3tHTTmMAYCXk4Cp6Cos6OfNwM5NUl3CmA3O4c qkd-orchestrator
+```
+
+**After** (when keys are regenerated):
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHYrvaQ3tHTTmMAYCXk4Cp6Cos6OfNwM5NUl3CmA3O4c etsi_peer_view@mx1
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtscUk2LdNprjysbt3wNEtwumMKz1w0b1uMgWfiyv1R macsec_user@mx1
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINhr4Lb7XmUVjx4MEks7ocjqnLbolEZ4r5j2NPyPEenZ macsec_user@acx1
+```
+
+**Benefits**:
+- ✅ Instantly know which user and device generated the key
+- ✅ Trace key origin in multi-device deployments
+- ✅ Simplifies debugging key permission issues
+
+**Implementation**:
+- `check_script_user_ssh_identity()` in `lib/qkd/identity.py` lines 606-608:
+  ```python
+  key_comment = f"{script_user}@{name}"
+  peer_key_comment = f"{peer_user}@{name}"
+  ```
+- When keys are rotated, `keygen_cmd_for()` uses the device-aware comment
+- Comment is part of SSH key metadata (not secret)
+
+### Junos Config-Based Approach (Not Shell-Based)
+
+**Why Not Shell**:
+Junos PyEZ `request_shell_execute()` uses FreeBSD `csh`, which rejects POSIX shell syntax:
+- ❌ `>>` (append redirect) → "Ambiguous output redirect"
+- ❌ `2>&1` (stderr redirect) → "Ambiguous output redirect"
+- ❌ Complex shell quoting with base64 encoding still fails on permission errors
+
+**Solution**: Use Junos `Config` class instead:
+```python
+with Config(dev) as cu:
+    cu.load(f'delete system login user {user} authentication ssh-ed25519 "<key>"', format="set")
+    cu.load(f'set system login user {user} authentication ssh-ed25519 "<key>"', format="set")
+    cu.commit(comment="QKD sync peer authorized keys")
+```
+
+**Benefits**:
+- ✅ Native Junos API (no shell execution workarounds)
+- ✅ Atomic config commits with single transaction
+- ✅ Automatic rollback on errors
+- ✅ Config lock retry logic with exponential backoff
+- ✅ Proper error handling for infrastructure constraints
+
+**Archived Alternatives** (for reference):
+- `archive/lib_qkd_identity_shell_attempt_backup.py`: Contains failed shell-based approach
+  - Includes: base64 encoding, `/bin/sh -c` wrapper, numeric GID 20, find -exec chflags, || true
+  - Status: Deprecated (permission errors persisted despite all workarounds)
+
+### Validation Results (MX1 - 2026-07-22)
+
+After deploying v3.3.1:
+
+**Phase 1 Output**:
+- ✅ etsi_peer_view: 1 active key in Junos config
+- ✅ authorized_keys file: Populated (non-zero bytes)
+- ✅ File permissions: 600 (etsi_peer_view:staff)
+
+**Phase 2 Output**:
+- ✅ macsec_user: 3 keys in Junos config (peer links + self)
+- ✅ authorized_keys file: Populated (non-zero bytes)
+- ✅ File permissions: 600 (macsec_user:staff)
+- ✅ Device-to-peer SSH authentication: Works
+- ✅ Device-to-self SSH authentication: Works
+
+**Example Configuration on MX1**:
+```
+user etsi_peer_view {
+    authentication {
+        ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAziUVFQo7Tsjo3XwfMqdv1ZzGFixWF9/vlt6ZU4r0aQ qkd-orchestrator";
+    }
+}
+user macsec_user {
+    authentication {
+        ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICf/0mqdaF4bgP1ObeNBDla2NOB/RfuMHaPk/eWY6Qhp qkd-orchestrator";
+        ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtscUk2LdNprjysbt3wNEtwumMKz1w0b1uMgWfiyv1R qkd-orchestrator";
+        ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINhr4Lb7XmUVjx4MEks7ocjqnLbolEZ4r5j2NPyPEenZ qkd-orchestrator";
+    }
+}
+```
+
+**Notes**:
+- Comments still show "qkd-orchestrator" (generated before v3.3.1 device-aware comment feature)
+- Will update to "user@device" format during next key rotation (1 hour for peer_cmd, 30 days for script_user)
