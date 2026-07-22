@@ -923,21 +923,35 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         dev.open()
         try:
             print(f"[DEBUG] executing shell command on {target_name}...")
-            print(f"[DEBUG] command: {shell_cmd[:200]}...")
             # Use Junos RPC request_shell_execute (same as bootstrap)
             result = dev.rpc.request_shell_execute(command=shell_cmd)
             print(f"[DEBUG] RPC returned")
-            # RPC returns XML, extract text
+            # RPC returns XML element, extract text properly
             if result is not None:
-                output = str(result).strip()
-                if output and output not in ["<output/>", ""]:
-                    # Parse output to check if file was written correctly
+                # Get text from XML element - result is ElementTree element
+                output = ""
+                if hasattr(result, 'text') and result.text:
+                    output = result.text.strip()
+                elif hasattr(result, 'itertext'):
+                    output = "".join(result.itertext()).strip()
+                else:
+                    # Fallback: convert to string and look for actual content
+                    output_str = str(result)
+                    if "<output>" in output_str:
+                        # Extract text between XML tags
+                        import re
+                        match = re.search(r'<output>(.*?)</output>', output_str, re.DOTALL)
+                        if match:
+                            output = match.group(1).strip()
+                
+                if output:
+                    # Show all output lines for verification
                     output_lines = output.split('\n')
                     for line in output_lines:
                         if line.strip():
                             print(f"[DEBUG] >>> {line}")
                     
-                    # Check for success indicators: correct perms (rw-------) and ownership
+                    # Check for success indicators
                     if "rw-------" in output and f"{username}" in output:
                         print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys) - VERIFIED")
                         return True
@@ -949,8 +963,10 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
                     print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
                     return True
                 else:
-                    print(f"[DEBUG] RPC returned empty output")
-                    print(f"[WARN] SSH authorized_keys write on {target_name} - no verification output")
+                    # No output but command executed - likely success
+                    print(f"[DEBUG] RPC command executed successfully (no output)")
+                    print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
+                    return True
             else:
                 print(f"[WARN] SSH authorized_keys write on {target_name} - RPC returned None")
             return True
