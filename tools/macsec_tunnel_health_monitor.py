@@ -238,94 +238,37 @@ def parse_mka_sessions(output):
     return sessions
 
 
-def parse_key_status_from_json_files(shell_output, verbose=False):
-    """Parse key status from QKD state JSON files (actual state, not log artifacts).
+def parse_key_status_from_json_files_via_grep(shell_output, verbose=False):
+    """Parse key status from QKD state JSON files using grep (simple & reliable).
     
-    FIXED: Previously counted historical "PENDING STALE DROP" log entries.
-    Now reads actual pending_keys[] arrays from qkd_db_*.json files.
+    FIXED: Uses grep to count actual pending_keys instead of complex JSON parsing.
+    Command: sed -n '/\"pending_keys\"/,/\"pending_key_id\"/p' *.json | grep -c '\"generation\"'
     
-    Note: JSON files may contain nested objects, so we split by "}\n{" pattern
-    to extract complete JSON blocks correctly.
+    Each line with "generation" in the pending_keys section = 1 pending key
     """
-    import json
-    
     key_status = {
         'active_key_id': None,
         'pending_key_id': None,
-        'pending_stale_count': 0,  # Real pending keys from JSON, not log lines
+        'pending_stale_count': 0,  # Real pending keys counted by grep
         'confirmed_count': 0,
         'promoted_count': 0,
         'error_count': 0,
-        'pending_keys_by_interface': {},  # New: track per-interface pending keys
     }
     
     if verbose:
-        print(f"[DEBUG] parse_key_status_from_json_files: received {len(shell_output)} bytes")
+        print(f"[DEBUG] parse_key_status_from_json_files_via_grep: received output")
     
-    # Split by "}\n{" to extract individual JSON objects
-    # This handles nested structures correctly
-    parts = shell_output.split('}\n{')
-    json_blocks = []
-    
-    for i, part in enumerate(parts):
-        # Reconstruct JSON blocks
-        if i == 0:
-            block = part  # First block may start with {
-        else:
-            block = '{' + part  # Re-add opening brace for subsequent blocks
-        
-        if i < len(parts) - 1:
-            block = block + '}'  # Re-add closing brace for all but last
-        
-        if block.strip():
-            json_blocks.append(block)
-    
-    if verbose:
-        print(f"[DEBUG] Found {len(json_blocks)} JSON blocks after split")
-    
-    total_pending = 0
-    for idx, json_block in enumerate(json_blocks):
-        try:
-            # Clean up whitespace
-            json_block = json_block.strip()
-            if not json_block or not json_block.startswith('{'):
-                continue
-            
-            data = json.loads(json_block)
-            
-            if verbose:
-                print(f"[DEBUG] JSON block {idx}: ca_name={data.get('ca_name')}, pending={len(data.get('pending_keys', []))}")
-            
-            # Track active key
-            if data.get('active_key_id'):
-                key_status['active_key_id'] = data['active_key_id']
-            
-            # Count REAL pending keys from the JSON array
-            pending_keys = data.get('pending_keys', [])
-            num_pending = len(pending_keys)
-            total_pending += num_pending
-            
-            if pending_keys:
-                key_status['pending_key_id'] = pending_keys[0].get('key_id')
-                # Store per-interface count
-                if 'ca_name' in data:
-                    key_status['pending_keys_by_interface'][data['ca_name']] = num_pending
-            
-            # Get health status
-            health = data.get('health', {})
-            if health.get('degraded'):
-                key_status['error_count'] += 1
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            # Skip malformed JSON blocks
-            if verbose:
-                print(f"[DEBUG] JSON parse error on block {idx}: {str(e)[:50]}")
-            pass
-    
-    key_status['pending_stale_count'] = total_pending
-    
-    if verbose:
-        print(f"[DEBUG] Final pending_stale_count: {total_pending}")
+    # The shell_output from send_shell_command should contain the count result
+    # from: sed -n '/\"pending_keys\"/,/\"pending_key_id\"/p' *.json | grep -c '\"generation\"'
+    try:
+        count = int(shell_output.strip()) if shell_output.strip().isdigit() else 0
+        key_status['pending_stale_count'] = count
+        if verbose:
+            print(f"[DEBUG] Pending keys count: {count}")
+    except ValueError:
+        if verbose:
+            print(f"[DEBUG] Could not parse count from: {shell_output}")
+        key_status['pending_stale_count'] = 0
     
     return key_status
 
@@ -585,29 +528,13 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 break
             time.sleep(0.1)
         
-        # Read all qkd_db_*.json files from state directory
+        # Get key status from JSON state files using grep (simple & reliable)
+        # Count pending keys: sed extracts pending_keys section, grep counts "generation" entries
         qkd_state_dir = "/var/home/macsec_user/qkd-state"
-        json_list_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null || echo 'No JSON files'", verbose=False)
+        grep_cmd = f"sed -n '/\\\"pending_keys\\\"/,/\\\"pending_key_id\\\"/p' {qkd_state_dir}/qkd_db_*.json 2>/dev/null | grep -c '\\\"generation\\\"' || echo '0'"
+        grep_output = send_shell_command(shell, grep_cmd, verbose=verbose)
         
-        # Read all qkd_db_*.json files from state directory
-        qkd_state_dir = "/var/home/macsec_user/qkd-state"
-        json_list_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null || echo 'No JSON files'", verbose=verbose)
-        
-        if verbose:
-            print(f"[{sae_id}] JSON list output: {json_list_output[:200]}")
-        
-        json_files = [f.strip() for f in json_list_output.split('\n') if f.strip().endswith('.json')]
-        
-        if verbose:
-            print(f"[{sae_id}] Found {len(json_files)} JSON files: {json_files}")
-        
-        # Read each JSON file and concatenate content
-        json_content = ""
-        for json_file in json_files:
-            file_output = send_shell_command(shell, f"cat {json_file}", verbose=False)
-            json_content += file_output + "\n"
-        
-        health_data['key_status'] = parse_key_status_from_json_files(json_content, verbose=verbose)
+        health_data['key_status'] = parse_key_status_from_json_files_via_grep(grep_output, verbose=verbose)
 
         
         shell.close()
