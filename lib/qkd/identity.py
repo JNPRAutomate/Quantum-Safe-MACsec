@@ -880,13 +880,14 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     ssh_dir = f"{home_dir}/.ssh"
     auth_keys_file = f"{ssh_dir}/authorized_keys"
     
-    # Determine correct group for chown (both use staff on Junos)
+    # Determine correct group for chown (use numeric GID for Junos)
+    # etsi_peer_view = staff (GID 20), macsec_user = staff (GID 20)
     if username == "etsi_peer_view":
-        group = "staff"
+        group = "20"  # staff group GID
     elif username == "macsec_user":
-        group = "staff"
+        group = "20"  # staff group GID
     else:
-        group = "staff"  # default
+        group = "20"  # default
     
     # Build all keys as newline-separated string
     keys_content = "\n".join(pub_keys_list)
@@ -895,12 +896,14 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     keys_b64 = base64.b64encode(keys_content.encode()).decode()
     
     # Build POSIX sh command using base64 decode to avoid shell parsing nightmares
-    # CRITICAL: Remove existing .ssh dir first - if it's owned by etsi_peer_view with 700,
-    # root cannot write into it. Start fresh as root, then chown/chmod at the end.
+    # CRITICAL: Clear immutable flags first, then remove directory (if owned by etsi_peer_view with 700)
+    # Start fresh as root, then chown/chmod at the end.
+    # Use printf (not echo) to avoid adding unwanted newlines that break base64 decode
     inner_cmd = (
+        f"chflags -R nouchg,noschg {ssh_dir} 2>/dev/null; "
         f"rm -rf {ssh_dir}; "
         f"mkdir -p {ssh_dir}; "
-        f"echo {keys_b64} | base64 -d | dd of={auth_keys_file}; "
+        f"printf '%s' {keys_b64} | base64 -d | dd of={auth_keys_file}; "
         f"echo ''; "
         f"echo '[VERIFY] Byte count:'; wc -c {auth_keys_file}; "
         f"echo '[VERIFY] Line count:'; wc -l {auth_keys_file}; "
