@@ -608,25 +608,22 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         if verbose:
             print(f"\n[DEBUG] {sae_id}: Extracting key status from {qkd_state_dir}...")
         
-        # List JSON files - try multiple approaches
-        ls_output = send_shell_command(shell, f"ls {qkd_state_dir}/qkd_db_*.json 2>&1", verbose=False)
+        # List JSON files using ls -la (parsing by Python, not shell wildcard)
+        ls_output = send_shell_command(shell, f"ls -la {qkd_state_dir}/", verbose=False)
         
-        if verbose:
-            print(f"[DEBUG] ls output ({len(ls_output)} bytes): {ls_output[:200]}")
-        
-        json_files = [f.strip() for f in ls_output.split('\n') if f.strip().endswith('.json')]
+        # Parse directory listing to find .json files
+        json_files = []
+        for line in ls_output.split('\n'):
+            if '.json' in line and 'qkd_db_' in line:
+                # Extract filename from ls output: "-rw-r--r--  1 user group size date time filename"
+                parts = line.split()
+                if len(parts) >= 9:
+                    filename = parts[-1]
+                    full_path = f"{qkd_state_dir}/{filename}"
+                    json_files.append(full_path)
         
         if verbose:
             print(f"[DEBUG] Found {len(json_files)} JSON files: {json_files}")
-        
-        # If no files found, try alternative path
-        if not json_files:
-            alt_path = "/var/home/macsec_user/qkd-state"
-            ls_output = send_shell_command(shell, f"ls -la {alt_path}/", verbose=False)
-            if verbose:
-                print(f"[DEBUG] Directory listing for {alt_path}:")
-                for line in ls_output.split('\n')[:10]:
-                    print(f"[DEBUG]   {line}")
         
         # Read and parse first JSON file
         json_data_str = ""
