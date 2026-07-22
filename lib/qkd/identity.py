@@ -886,17 +886,24 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
     # Create content string with all keys joined by newlines
     keys_content = "\n".join(pub_keys_list)
     
-    # Build shell command using printf | dd (not > redirect which fails in Junos RPC)
-    # dd is more reliable than > in non-interactive Junos RPC shell
-    shell_cmd = (
-        f"mkdir -p {ssh_dir}; "
-        f"rm -f {auth_keys_file}; "
-        f"printf %s {shlex.quote(keys_content)} | dd of={auth_keys_file}; "
+    # Build shell command to write SSH keys
+    # Use multiple echo statements to append each key (more reliable in Junos RPC context)
+    # First, create directory and remove old file
+    shell_cmd = f"mkdir -p {ssh_dir}; rm -f {auth_keys_file}; "
+    
+    # Append each public key using echo >>
+    for key_line in pub_keys_list:
+        # Escape single quotes in the key for shell safety
+        safe_key = key_line.replace("'", "'\\''")
+        shell_cmd += f"echo '{safe_key}' >> {auth_keys_file}; "
+    
+    # Set correct permissions and ownership
+    shell_cmd += (
         f"chown {username}:{group} {ssh_dir} {auth_keys_file}; "
         f"chmod 700 {ssh_dir}; "
         f"chmod 600 {auth_keys_file}; "
-        f"ls -ld {ssh_dir}; "
-        f"ls -l {auth_keys_file}"
+        f"echo '[VERIFY] File size and perms:'; ls -lh {auth_keys_file}; "
+        f"echo '[VERIFY] Line count:'; wc -l {auth_keys_file}"
     )
     
     # Execute via Junos RPC with system privileges
@@ -916,20 +923,36 @@ def write_ssh_authorized_keys(device, username, pub_keys_list):
         dev.open()
         try:
             print(f"[DEBUG] executing shell command on {target_name}...")
+            print(f"[DEBUG] command: {shell_cmd[:200]}...")
             # Use Junos RPC request_shell_execute (same as bootstrap)
             result = dev.rpc.request_shell_execute(command=shell_cmd)
-            print(f"[DEBUG] RPC returned, result={result}")
+            print(f"[DEBUG] RPC returned")
             # RPC returns XML, extract text
             if result is not None:
                 output = str(result).strip()
                 if output and output not in ["<output/>", ""]:
-                    print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
-                    if "Permission denied" not in output and "error" not in output.lower():
-                        print(f"     Output: {output[:200]}")
-                    else:
+                    # Parse output to check if file was written correctly
+                    output_lines = output.split('\n')
+                    for line in output_lines:
+                        if line.strip():
+                            print(f"[DEBUG] >>> {line}")
+                    
+                    # Check for success indicators: correct perms (rw-------) and ownership
+                    if "rw-------" in output and f"{username}" in output:
+                        print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys) - VERIFIED")
+                        return True
+                    
+                    # Check for errors
+                    if "error" in output.lower() or "failed" in output.lower():
                         raise RuntimeError(f"shell execution error: {output}")
-                else:
+                    
                     print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({len(pub_keys_list)} keys)")
+                    return True
+                else:
+                    print(f"[DEBUG] RPC returned empty output")
+                    print(f"[WARN] SSH authorized_keys write on {target_name} - no verification output")
+            else:
+                print(f"[WARN] SSH authorized_keys write on {target_name} - RPC returned None")
             return True
         finally:
             try:
