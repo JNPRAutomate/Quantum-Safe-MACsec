@@ -1037,11 +1037,11 @@ def install_peer_authorized_keys(devices):
         if not success:
             failed_targets.append((target, str(last_error)))
 
-    # PHASE 2: Synchronize macsec_user ACTIVE SSH key (qkd_id_ed25519.pub) to Junos config
-    # Same pattern as Phase 1 (etsi_peer_view): ONE active key in config, other link-specific keys in authorized_keys only
-    print("\n[*] Phase 2: Synchronizing macsec_user active SSH key to Junos config...")
+    # PHASE 2: Synchronize macsec_user SSH public keys (qkd_id_ed25519.pub) to Junos config
+    # Identical pattern as Phase 1, but for macsec_user instead of etsi_peer_view
+    print("\n[*] Phase 2: Synchronizing macsec_user SSH keys to Junos config...")
     
-    # Collect macsec_user ACTIVE SSH public key (qkd_id_ed25519.pub) from each device
+    # Collect macsec_user SSH public keys (qkd_id_ed25519.pub)
     script_pub_keys = {}
     script_pub_path = qkd_ssh_public_key()
     for device in devices:
@@ -1049,7 +1049,7 @@ def install_peer_authorized_keys(devices):
         result = ssh_deploy_cmd(device, f"cat {script_pub_path}", timeout=20, include_failed_marker=False)
         if result.returncode != 0:
             raise RuntimeError(
-                f"failed to read macsec_user active SSH public key on {name} path={script_pub_path}\n"
+                f"failed to read macsec_user SSH public key on {name} path={script_pub_path}\n"
                 f"stdout={result.stdout}\nstderr={result.stderr}"
             )
         key = None
@@ -1060,45 +1060,54 @@ def install_peer_authorized_keys(devices):
                 break
         if not key:
             raise RuntimeError(
-                f"invalid macsec_user active SSH public key on {name} path={script_pub_path}\nraw={result.stdout}"
+                f"invalid macsec_user SSH public key on {name} path={script_pub_path}\nraw={result.stdout}"
             )
         script_pub_keys[name] = key
     
-    # Synchronize ONLY the active macsec_user key to Junos config (NOT link-specific keys)
-    # Link-specific keys remain in authorized_keys file only
+    # Synchronize to macsec_user in Junos config on each device (same loop as Phase 1, different user)
     sync_user = qkd_script_user()  # macsec_user
     
     for device in devices:
         target = device_name(device)
-        host = device_host(device)
-        auth = device.get("auth") or {}
-        user = auth.get("username")
-        password = auth.get("password")
         
-        if not user or not password:
-            failed_targets.append((target, "missing auth for macsec_user SSH key sync"))
-            continue
+        # Build desired keys: peers + self (EXACT SAME PATTERN AS PHASE 1)
+        peer_sources = set()
+        for link in device.get("links", []) or []:
+            if not isinstance(link, dict):
+                continue
+            peer = link.get("peer")
+            if peer and peer in device_names:
+                peer_sources.add(str(peer))
+        peer_sources.add(target)  # Include device itself
         
-        # Only ONE active key for macsec_user in config (not per-link keys)
-        pub_key = script_pub_keys.get(target)
-        if not pub_key:
-            raise RuntimeError(
-                f"missing macsec_user active SSH public key on {target}"
-            )
-        
-        key_type, key_line = parse_public_key(pub_key)
-        if not key_type or not key_line:
-            raise RuntimeError(
-                f"invalid macsec_user active SSH public key format on {target} raw={pub_key}"
-            )
-        
-        # Desired keys: only the ONE active key
-        desired_keys = [(key_type, key_line)]
+        desired_keys = []
+        for source_name in sorted(peer_sources):
+            pub_key = script_pub_keys.get(source_name)
+            if not pub_key:
+                raise RuntimeError(
+                    f"missing macsec_user SSH public key source={source_name} target={target}"
+                )
+            key_type, key_line = parse_public_key(pub_key)
+            if not key_type or not key_line:
+                raise RuntimeError(
+                    f"invalid macsec_user SSH public key format source={source_name} target={target} raw={pub_key}"
+                )
+            marker = (key_type, key_line)
+            desired_keys.append(marker)
         
         success = False
         last_error = None
         
         for attempt in range(1, max_attempts + 1):
+            host = device_host(device)
+            auth = device.get("auth") or {}
+            user = auth.get("username")
+            password = auth.get("password")
+            
+            if not user or not password:
+                failed_targets.append((target, "missing auth for macsec_user SSH key sync"))
+                break
+            
             dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
             try:
                 configured_keys = collect_configured_peer_keys(device, sync_user)
@@ -1110,20 +1119,21 @@ def install_peer_authorized_keys(devices):
                     f'set system login user {sync_user} authentication {key_type} "{key_line}"'
                     for key_type, key_line in desired_keys
                 ]
-                
+                sources_label = ', '.join(sorted(peer_sources)) if peer_sources else '(none)'
                 if set(configured_keys) == set(desired_keys):
+                    # Already in sync - one-liner, no need to show action detail
                     print(
-                        f"[INFO] macsec_user active SSH key sync target={target} "
-                        f"attempt={attempt}/{max_attempts}"
+                        f"[INFO] macsec_user SSH key sync target={target} sync_target_user={sync_user} "
+                        f"keys={len(set_cmds)} sources={sources_label} attempt={attempt}/{max_attempts}"
                     )
                 else:
+                    # Change needed - show what will be done
                     print(
-                        f"[INFO] macsec_user active SSH key sync target={target} "
-                        f"configured_keys={len(configured_keys)} desired_keys=1 attempt={attempt}/{max_attempts}"
-                        f"\n       Action: replace {len(configured_keys)} current key(s) with ONE active macsec_user key in Junos config"
-                        f"\n       Note: Link-specific macsec_user keys remain in authorized_keys only"
+                        f"[INFO] macsec_user SSH key sync target={target} sync_target_user={sync_user} "
+                        f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
+                        f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) in Junos config for user '{sync_user}'"
+                        f"\n       Sources: {sources_label}"
                     )
-                
                 dev.open()
                 with Config(dev) as cu:
                     for cmd in delete_cmds:
@@ -1137,15 +1147,14 @@ def install_peer_authorized_keys(devices):
                         cu.load(cmd, format="set", merge=True)
                     diff = cu.diff()
                     if diff:
-                        cu.commit(comment=f"QKD sync macsec_user active key target={target}")
-                        print(f"[OK] macsec_user active SSH key committed target={target}")
+                        cu.commit(comment=f"QKD sync macsec_user authorized keys target={target}")
+                        print(f"[OK] macsec_user SSH keys committed target={target} sync_target_user={sync_user}")
                     else:
                         try:
                             cu.rollback()
                         except Exception:
                             pass
-                        print(f"[OK] macsec_user active SSH key already synchronized target={target}")
-                
+                        print(f"[OK] macsec_user SSH keys already synchronized target={target} sync_target_user={sync_user}")
                 synced_targets.append(target)
                 success = True
                 break
@@ -1153,13 +1162,14 @@ def install_peer_authorized_keys(devices):
                 last_error = exc
                 if is_config_locked_error(exc) and attempt < max_attempts:
                     wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+                    # Extract just the lock holder line from the error, not the full XML trace
                     err_str = str(exc)
                     lock_line = next(
                         (line.strip() for line in err_str.splitlines() if 'on since' in line or 'exclusive' in line or 'pid' in line),
                         err_str[:120]
                     )
                     print(
-                        f"[WARN] macsec_user active SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
+                        f"[WARN] macsec_user SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
                     )
                     time.sleep(wait_seconds)
                     continue
@@ -1170,11 +1180,11 @@ def install_peer_authorized_keys(devices):
                 except Exception:
                     pass
                 time.sleep(3)
-        
-        if not success:
-            failed_targets.append((target, f"macsec_user active SSH key sync failed: {last_error}"))
 
-    print("=== QKD macsec_user SSH key sync summary ===")
+        if not success:
+            failed_targets.append((target, str(last_error)))
+
+    print("=== QKD SSH key sync summary ===")
     print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
     print(f"Synced targets: {len(synced_targets)}")
     if failed_targets:
@@ -1182,7 +1192,7 @@ def install_peer_authorized_keys(devices):
         for target, error in failed_targets:
             print(f"- {target}: {error}")
         raise RuntimeError(
-            f"failed to configure macsec_user active SSH key on: {', '.join(t for t, _ in failed_targets)}"
+            f"failed to configure SSH keys on: {', '.join(t for t, _ in failed_targets)}"
         )
 
 
