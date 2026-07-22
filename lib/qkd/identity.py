@@ -804,226 +804,6 @@ def check_script_user_atomic_write(device):
     print_if_verbose(result.stdout)
 
 
-def remove_ssh_keys_from_junos_config(device, username):
-    """
-    Remove all SSH keys from Junos configuration for a user.
-    This is necessary because Junos SSH daemon prioritizes config keys over authorized_keys file.
-    
-    Args:
-        device: Device to connect to (PyEZ Device object)
-        username: Username (e.g., 'etsi_peer_view', 'macsec_user')
-    
-    Returns:
-        True if successful or no changes needed
-    
-    Raises:
-        RuntimeError if deletion fails
-    """
-    target_name = device_name(device)
-    try:
-        host = device_host(device)
-        auth = device.get("auth") or {}
-        user = auth.get("username")
-        password = auth.get("password")
-        
-        if not user or not password:
-            raise RuntimeError(f"missing auth for removing SSH keys on {target_name}")
-        
-        dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
-        dev.open()
-        try:
-            # Delete ALL ssh-ed25519 keys for this user from Junos config
-            # This ensures Junos SSH daemon will use authorized_keys file, not config keys
-            delete_cmd = f"delete system login user {username} authentication ssh-ed25519"
-            print(f"[DEBUG] removing Junos config SSH keys for {username} on {target_name}...")
-            
-            with Config(dev, mode='dynamic') as cu:
-                cu.load(f"delete system login user {username} authentication ssh-ed25519", format='set')
-                cu.commit()
-            
-            print(f"[OK] removed Junos config SSH keys for {username} on {target_name}")
-            return True
-        finally:
-            try:
-                dev.close()
-            except Exception:
-                pass
-    except Exception as exc:
-        # If user doesn't have SSH keys in config, this is OK (not an error)
-        if "unknown hierarchy" in str(exc).lower():
-            print(f"[OK] no SSH keys in config for {username} on {target_name} (not configured)")
-            return True
-        print(f"[WARN] failed to remove SSH keys from config for {username} on {target_name}: {exc}")
-        # Continue anyway - authorized_keys file might still work
-        return True
-
-
-def write_ssh_authorized_keys(device, username, pub_keys_list):
-    """
-    Write SSH public keys to a user's authorized_keys file using Junos RPC with privileges.
-    
-    Args:
-        device: Device to connect to (PyEZ Device object)
-        username: Username (e.g., 'etsi_peer_view', 'macsec_user')
-        pub_keys_list: List of public key strings to write
-    
-    CRITICAL FIX:
-    - Junos RPC executes through csh which rejects shell redirects like 2>&1
-    - Use base64 encoding to avoid all shell quoting issues
-    - Force /bin/sh -c explicitly to bypass csh entirely
-    """
-    import shlex
-    import base64
-    
-    target_name = device_name(device)
-    home_dir = f"/var/home/{username}"
-    ssh_dir = f"{home_dir}/.ssh"
-    auth_keys_file = f"{ssh_dir}/authorized_keys"
-    
-    # Determine correct group for chown (use numeric GID for Junos)
-    # etsi_peer_view = staff (GID 20), macsec_user = staff (GID 20)
-    if username == "etsi_peer_view":
-        group = "20"  # staff group GID
-    elif username == "macsec_user":
-        group = "20"  # staff group GID
-    else:
-        group = "20"  # default
-    
-    # Build all keys as newline-separated string
-    keys_content = "\n".join(pub_keys_list)
-    
-    # Encode to base64 to avoid ALL shell quoting issues (newlines, special chars, etc)
-    keys_b64 = base64.b64encode(keys_content.encode()).decode()
-    
-    # Build POSIX sh command using base64 decode to avoid shell parsing nightmares
-    # CRITICAL: Clear immutable flags on ALL files first (find -exec chflags 0),
-    # then remove directory. This ensures we can delete even if files have uchg/schg/noschg flags.
-    # Use || true to ensure command chain continues even if find fails (e.g. dir doesn't exist).
-    # Start fresh as root, then chown/chmod at the end.
-    # Use printf (not echo) to avoid adding unwanted newlines that break base64 decode
-    inner_cmd = (
-        f"find {ssh_dir} -exec chflags 0 {{}} \\; 2>/dev/null || true; "
-        f"rm -rf {ssh_dir}; "
-        f"mkdir -p {ssh_dir}; "
-        f"printf '%s' {keys_b64} | base64 -d | dd of={auth_keys_file}; "
-        f"echo ''; "
-        f"echo '[VERIFY] Byte count:'; wc -c {auth_keys_file}; "
-        f"echo '[VERIFY] Line count:'; wc -l {auth_keys_file}; "
-        f"echo ''; "
-        f"chown -R {username}:{group} {ssh_dir}; "
-        f"chmod 700 {ssh_dir}; "
-        f"chmod 600 {auth_keys_file}; "
-        f"echo '[VERIFY] Final:'; ls -l {auth_keys_file}"
-    )
-    
-    # Wrap in /bin/sh -c to force POSIX shell (not csh which has "Ambiguous output redirect")
-    shell_cmd = f"/bin/sh -c {shlex.quote(inner_cmd)}"
-    
-    # Execute via Junos RPC with system privileges
-    try:
-        host = device_host(device)
-        auth = device.get("auth") or {}
-        user = auth.get("username")
-        password = auth.get("password")
-        
-        print(f"[DEBUG] write_ssh_authorized_keys: target={target_name} user={username} keys={len(pub_keys_list)} host={host}")
-        
-        if not user or not password:
-            raise RuntimeError(f"missing auth for SSH key setup on {target_name}")
-        
-        dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
-        dev.open()
-        try:
-            print(f"[DEBUG] Executing RPC (base64 encoded + /bin/sh -c wrapper)...")
-            result = dev.rpc.request_shell_execute(command=shell_cmd)
-            
-            # Extract output from XML element
-            output = ""
-            if result is not None:
-                if hasattr(result, 'text') and result.text:
-                    output = result.text.strip()
-                elif hasattr(result, 'itertext'):
-                    output = "".join(result.itertext()).strip()
-                else:
-                    output_str = str(result)
-                    if "<output>" in output_str:
-                        import re
-                        match = re.search(r'<output>(.*?)</output>', output_str, re.DOTALL)
-                        if match:
-                            output = match.group(1).strip()
-            
-            if output:
-                print(f"\n{'='*70}")
-                print(f"[RPC_OUTPUT] from {target_name}/{username}:")
-                print(f"{'='*70}")
-                output_lines = output.split('\n')
-                for line_num, line in enumerate(output_lines, 1):
-                    print(f"{line_num:3d}: {line}")
-                print(f"{'='*70}\n")
-                
-                # CHECK FOR FATAL ERRORS IMMEDIATELY (before assuming success)
-                if "Ambiguous output redirect" in output:
-                    raise RuntimeError(f"FATAL: csh rejected shell syntax: {output}")
-                if "permission denied" in output.lower() or "operation not permitted" in output.lower():
-                    raise RuntimeError(f"FATAL: permission error: {output}")
-                
-                # Parse file size from wc output
-                file_bytes = None
-                file_lines = None
-                for i, line in enumerate(output_lines):
-                    if "[VERIFY] Byte count:" in line and i + 1 < len(output_lines):
-                        parts = output_lines[i + 1].strip().split()
-                        if parts:
-                            try:
-                                file_bytes = int(parts[0])
-                            except ValueError:
-                                pass
-                    if "[VERIFY] Line count:" in line and i + 1 < len(output_lines):
-                        parts = output_lines[i + 1].strip().split()
-                        if parts:
-                            try:
-                                file_lines = int(parts[0])
-                            except ValueError:
-                                pass
-                
-                # Also try to parse dd output: "73 bytes transferred"
-                if file_bytes is None:
-                    for line in output_lines:
-                        if "bytes" in line and ("transferred" in line or "written" in line):
-                            parts = line.split()
-                            try:
-                                file_bytes = int(parts[0])
-                                break
-                            except (ValueError, IndexError):
-                                pass
-                
-                print(f"[PARSED] File bytes: {file_bytes}, File lines: {file_lines}, Expected keys: {len(pub_keys_list)}")
-                
-                # STRICT SUCCESS CHECK: file must have content
-                if file_bytes is None:
-                    print(f"[ERROR] Could not parse file size from output!")
-                    raise RuntimeError(f"authorized_keys write failed: could not parse file size")
-                
-                if file_bytes == 0:
-                    print(f"[ERROR] authorized_keys is empty (0 bytes)!")
-                    raise RuntimeError(f"authorized_keys write failed: file is empty")
-                
-                print(f"[OK] SSH authorized_keys written for {username} on {target_name} ({file_bytes} bytes, {len(pub_keys_list)} keys)")
-                return True
-            else:
-                print(f"[WARN] RPC returned no output")
-                return False
-                
-        finally:
-            try:
-                dev.close()
-            except Exception:
-                pass
-    except Exception as exc:
-        print(f"[ERROR] SSH key write failed for {username} on {target_name}: {exc}")
-        raise
-
-
 def collect_script_user_public_keys(devices):
     devices = normalize_devices(devices)
     pub_keys = {}
@@ -1060,11 +840,6 @@ def install_peer_authorized_keys(devices):
     device_names = {device_name(d) for d in devices}
     max_attempts = 5
     retry_wait_seconds = [2, 4, 8, 12]
-
-    print("\n" + "█"*70)
-    print("█ PHASE 1: etsi_peer_view SSH key synchronization (peer verification)")
-    print("█"*70)
-    print("[*] Synchronizing etsi_peer_view SSH keys to authorized_keys...\n")
 
     def is_config_locked_error(exc):
         text = str(exc or "").lower()
@@ -1141,68 +916,126 @@ def install_peer_authorized_keys(devices):
 
     for device in devices:
         target = device_name(device)
-        sync_target_user = qkd_peer_cmd_user()  # etsi_peer_view
-        
-        source_names = linked_peer_sources(device)
-        source_names.add(target)  # Always include device itself
-        if not source_names:
-            print(f"[WARN] no linked peer sources found for target={target}; peer authorized_keys will be empty")
+        # Cross-device QKD actions (install-key/status) execute as SCRIPT_USER.
+        # Keep peer transport keys synchronized on SCRIPT_USER across the fleet.
+        sync_target_user = qkd_script_user()
+        host = device_host(device)
+        auth = device.get("auth") or {}
+        user = auth.get("username")
+        password = auth.get("password")
+        if not user or not password:
+            failed_targets.append((target, "missing auth for peer key sync"))
+            continue
 
-        # Collect desired keys as list of pub_key strings
-        desired_pub_keys = []
+        source_names = linked_peer_sources(device)
+        source_names.add(target)  # Always include device itself so it can SSH to itself
+        if not source_names:
+            print(f"[WARN] no linked peer sources found for target={target}; peer authorized_keys will be cleared")
+
+        seen = set()
+        desired_keys = []
         for source_name in sorted(source_names):
             pub_key = pub_keys.get(source_name)
             if not pub_key:
                 raise RuntimeError(
                     f"missing peer public key source={source_name} target={target}; run deploy/bootstrap on source first"
                 )
-            desired_pub_keys.append(pub_key)
-        
-        sources_label = ', '.join(sorted(source_names)) if source_names else '(none)'
-        print(
-            f"[INFO] peer SSH key sync target={target} user={sync_target_user} "
-            f"keys={len(desired_pub_keys)} sources={sources_label}"
-        )
-        
-        try:
-            # Step 1: Remove SSH keys from Junos config (they override authorized_keys)
-            remove_ssh_keys_from_junos_config(device, sync_target_user)
-            
-            # Step 2: Write SSH keys to authorized_keys file
-            write_ssh_authorized_keys(device, sync_target_user, desired_pub_keys)
-            synced_targets.append(target)
-        except Exception as exc:
-            failed_targets.append((target, str(exc)))
+            key_type, key_line = parse_public_key(pub_key)
+            if not key_type or not key_line:
+                raise RuntimeError(
+                    f"invalid peer public key format source={source_name} target={target} raw={pub_key}"
+                )
+            marker = (key_type, key_line)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            desired_keys.append(marker)
 
-    print("\n" + "█"*70)
-    print("█ PHASE 1 COMPLETE: etsi_peer_view SSH key sync")
-    print("█"*70)
-    print(f"  Result: {'✅ OK' if not failed_targets else '❌ FAILED'}")
-    print(f"  Synced targets: {len(synced_targets)}/11")
-    if failed_targets:
-        print(f"  Failed targets: {len(failed_targets)}")
-        for target, error in failed_targets:
-            print(f"  - {target}: {error}")
-        raise RuntimeError(
-            f"failed to configure peer SSH keys on: {', '.join(t for t, _ in failed_targets)}"
-        )
+        success = False
+        last_error = None
 
-    # PHASE 2: Synchronize macsec_user SSH public keys (qkd_id_ed25519.pub) to Junos config
-    # Same Junos config approach as Phase 1, but for macsec_user instead of etsi_peer_view
-    print("\n" + "═"*70)
-    print("═ DEPLOYING PHASE 2")
-    print("═"*70)
+        for attempt in range(1, max_attempts + 1):
+            dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
+            try:
+                configured_keys = collect_configured_peer_keys(device, sync_target_user)
+                delete_cmds = [
+                    f'delete system login user {sync_target_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in configured_keys
+                ]
+                set_cmds = [
+                    f'set system login user {sync_target_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in desired_keys
+                ]
+                sources_label = ', '.join(sorted(source_names)) if source_names else '(none)'
+                if set(configured_keys) == set(desired_keys):
+                    # Already in sync - one-liner, no need to show action detail
+                    print(
+                        f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
+                        f"keys={len(set_cmds)} sources={sources_label} attempt={attempt}/{max_attempts}"
+                    )
+                else:
+                    # Change needed - show what will be done
+                    print(
+                        f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
+                        f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
+                        f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) in Junos authorized-keys for user '{sync_target_user}'"
+                        f"\n       Sources: {sources_label}"
+                    )
+                dev.open()
+                with Config(dev) as cu:
+                    for cmd in delete_cmds:
+                        try:
+                            cu.load(cmd, format="set", merge=True)
+                        except Exception as exc:
+                            if is_statement_not_found_warning(exc):
+                                continue
+                            raise
+                    for cmd in set_cmds:
+                        cu.load(cmd, format="set", merge=True)
+                    diff = cu.diff()
+                    if diff:
+                        cu.commit(comment=f"QKD sync peer authorized keys target={target}")
+                        print(f"[OK] peer SSH keys committed target={target} sync_target_user={sync_target_user}")
+                    else:
+                        try:
+                            cu.rollback()
+                        except Exception:
+                            pass
+                        print(f"[OK] peer SSH keys already synchronized target={target} sync_target_user={sync_target_user}")
+                synced_targets.append(target)
+                success = True
+                break
+            except Exception as exc:
+                last_error = exc
+                if is_config_locked_error(exc) and attempt < max_attempts:
+                    wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+                    # Extract just the lock holder line from the error, not the full XML trace
+                    err_str = str(exc)
+                    lock_line = next(
+                        (line.strip() for line in err_str.splitlines() if 'on since' in line or 'exclusive' in line or 'pid' in line),
+                        err_str[:120]
+                    )
+                    print(
+                        f"[WARN] peer SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                break
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+                time.sleep(3)
+
+        if not success:
+            failed_targets.append((target, str(last_error)))
+
+    # PHASE 2: Synchronize macsec_user ACTIVE SSH key (qkd_id_ed25519.pub) to Junos config
+    # Same pattern as Phase 1 (etsi_peer_view): ONE active key in config, other link-specific keys in authorized_keys only
+    print("\n[*] Phase 2: Synchronizing macsec_user active SSH key to Junos config...")
     
-    print("\n" + "█"*70)
-    print("█ PHASE 2 START: macsec_user SSH key synchronization (key installation)")
-    print("█"*70)
-    print("  [*] Synchronizing macsec_user SSH keys to authorized_keys...\n")
-    
-    # Reset counters for Phase 2
-    synced_targets = []
-    failed_targets = []
-    
-    # Collect macsec_user SSH public keys (qkd_id_ed25519.pub)
+    # Collect macsec_user ACTIVE SSH public key (qkd_id_ed25519.pub) from each device
     script_pub_keys = {}
     script_pub_path = qkd_ssh_public_key()
     for device in devices:
@@ -1210,7 +1043,7 @@ def install_peer_authorized_keys(devices):
         result = ssh_deploy_cmd(device, f"cat {script_pub_path}", timeout=20, include_failed_marker=False)
         if result.returncode != 0:
             raise RuntimeError(
-                f"failed to read macsec_user SSH public key on {name} path={script_pub_path}\n"
+                f"failed to read macsec_user active SSH public key on {name} path={script_pub_path}\n"
                 f"stdout={result.stdout}\nstderr={result.stderr}"
             )
         key = None
@@ -1221,59 +1054,129 @@ def install_peer_authorized_keys(devices):
                 break
         if not key:
             raise RuntimeError(
-                f"invalid macsec_user SSH public key on {name} path={script_pub_path}\nraw={result.stdout}"
+                f"invalid macsec_user active SSH public key on {name} path={script_pub_path}\nraw={result.stdout}"
             )
         script_pub_keys[name] = key
     
-    # PHASE 2 (continued): Synchronize macsec_user SSH public keys to authorized_keys
+    # Synchronize ONLY the active macsec_user key to Junos config (NOT link-specific keys)
+    # Link-specific keys remain in authorized_keys file only
     sync_user = qkd_script_user()  # macsec_user
     
     for device in devices:
         target = device_name(device)
+        host = device_host(device)
+        auth = device.get("auth") or {}
+        user = auth.get("username")
+        password = auth.get("password")
         
-        # Build desired keys: peers + self
-        peer_sources = set()
-        for link in device.get("links", []) or []:
-            if not isinstance(link, dict):
-                continue
-            peer = link.get("peer")
-            if peer and peer in device_names:
-                peer_sources.add(str(peer))
-        peer_sources.add(target)  # Include device itself
+        if not user or not password:
+            failed_targets.append((target, "missing auth for macsec_user SSH key sync"))
+            continue
         
-        # Collect desired keys as list of pub_key strings
-        desired_pub_keys = []
-        for source_name in sorted(peer_sources):
-            pub_key = script_pub_keys.get(source_name)
-            if not pub_key:
-                raise RuntimeError(
-                    f"missing macsec_user SSH public key source={source_name} target={target}"
-                )
-            desired_pub_keys.append(pub_key)
+        # Only ONE active key for macsec_user in config (not per-link keys)
+        pub_key = script_pub_keys.get(target)
+        if not pub_key:
+            raise RuntimeError(
+                f"missing macsec_user active SSH public key on {target}"
+            )
         
-        sources_label = ', '.join(sorted(peer_sources)) if peer_sources else '(none)'
-        print(
-            f"[INFO] macsec_user SSH key sync target={target} user={sync_user} "
-            f"keys={len(desired_pub_keys)} sources={sources_label}"
-        )
+        key_type, key_line = parse_public_key(pub_key)
+        if not key_type or not key_line:
+            raise RuntimeError(
+                f"invalid macsec_user active SSH public key format on {target} raw={pub_key}"
+            )
         
-        try:
-            write_ssh_authorized_keys(device, sync_user, desired_pub_keys)
-            synced_targets.append(target)
-        except Exception as exc:
-            failed_targets.append((target, str(exc)))
+        # Desired keys: only the ONE active key
+        desired_keys = [(key_type, key_line)]
+        
+        success = False
+        last_error = None
+        
+        for attempt in range(1, max_attempts + 1):
+            dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
+            try:
+                configured_keys = collect_configured_peer_keys(device, sync_user)
+                delete_cmds = [
+                    f'delete system login user {sync_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in configured_keys
+                ]
+                set_cmds = [
+                    f'set system login user {sync_user} authentication {key_type} "{key_line}"'
+                    for key_type, key_line in desired_keys
+                ]
+                
+                if set(configured_keys) == set(desired_keys):
+                    print(
+                        f"[INFO] macsec_user active SSH key sync target={target} "
+                        f"attempt={attempt}/{max_attempts}"
+                    )
+                else:
+                    print(
+                        f"[INFO] macsec_user active SSH key sync target={target} "
+                        f"configured_keys={len(configured_keys)} desired_keys=1 attempt={attempt}/{max_attempts}"
+                        f"\n       Action: replace {len(configured_keys)} current key(s) with ONE active macsec_user key in Junos config"
+                        f"\n       Note: Link-specific macsec_user keys remain in authorized_keys only"
+                    )
+                
+                dev.open()
+                with Config(dev) as cu:
+                    for cmd in delete_cmds:
+                        try:
+                            cu.load(cmd, format="set", merge=True)
+                        except Exception as exc:
+                            if is_statement_not_found_warning(exc):
+                                continue
+                            raise
+                    for cmd in set_cmds:
+                        cu.load(cmd, format="set", merge=True)
+                    diff = cu.diff()
+                    if diff:
+                        cu.commit(comment=f"QKD sync macsec_user active key target={target}")
+                        print(f"[OK] macsec_user active SSH key committed target={target}")
+                    else:
+                        try:
+                            cu.rollback()
+                        except Exception:
+                            pass
+                        print(f"[OK] macsec_user active SSH key already synchronized target={target}")
+                
+                synced_targets.append(target)
+                success = True
+                break
+            except Exception as exc:
+                last_error = exc
+                if is_config_locked_error(exc) and attempt < max_attempts:
+                    wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
+                    err_str = str(exc)
+                    lock_line = next(
+                        (line.strip() for line in err_str.splitlines() if 'on since' in line or 'exclusive' in line or 'pid' in line),
+                        err_str[:120]
+                    )
+                    print(
+                        f"[WARN] macsec_user active SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                break
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+                time.sleep(3)
+        
+        if not success:
+            failed_targets.append((target, f"macsec_user active SSH key sync failed: {last_error}"))
 
-    print("\n" + "█"*70)
-    print("█ PHASE 2 COMPLETE: macsec_user SSH key sync")
-    print("█"*70)
-    print(f"  Result: {'✅ OK' if not failed_targets else '❌ FAILED'}")
-    print(f"  Synced targets: {len(synced_targets)}/11")
+    print("=== QKD macsec_user SSH key sync summary ===")
+    print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
+    print(f"Synced targets: {len(synced_targets)}")
     if failed_targets:
-        print(f"  Failed targets: {len(failed_targets)}")
+        print(f"Failed targets: {len(failed_targets)}")
         for target, error in failed_targets:
-            print(f"  - {target}: {error}")
+            print(f"- {target}: {error}")
         raise RuntimeError(
-            f"failed to configure macsec_user SSH keys on: {', '.join(t for t, _ in failed_targets)}"
+            f"failed to configure macsec_user active SSH key on: {', '.join(t for t, _ in failed_targets)}"
         )
 
 
