@@ -1237,7 +1237,8 @@ def handle_deploy(args):
     # prevents runtime master->peer bootstrap from depending on a later
     # postdeploy-only step, and keeps peer SSH working even if a subsequent
     # device hits a provisioning failure.
-    if not args.shipment_preload:
+    # Skip this if we're already deploying to all devices (to avoid redundant sync)
+    if not args.shipment_preload and len(devices) < len(all_runtime_devices):
         install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
