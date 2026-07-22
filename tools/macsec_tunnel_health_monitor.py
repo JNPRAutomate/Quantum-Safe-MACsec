@@ -238,10 +238,10 @@ def parse_mka_sessions(output):
     return sessions
 
 
-def parse_key_status_from_json_files_via_grep(shell_output, verbose=False):
-    """Parse key status from QKD state JSON files using grep (simple & reliable).
+def parse_key_status_from_json_files_via_grep(grep_output, json_data="", verbose=False):
+    """Parse key status from QKD state JSON files.
     
-    FIXED: Uses grep to count actual pending_keys instead of complex JSON parsing.
+    FIXED: Uses grep to count actual pending_keys, and extracts active/pending IDs from JSON.
     Command: sed -n '/\"pending_keys\"/,/\"pending_key_id\"/p' *.json | grep -c '\"generation\"'
     
     Each line with "generation" in the pending_keys section = 1 pending key
@@ -256,19 +256,36 @@ def parse_key_status_from_json_files_via_grep(shell_output, verbose=False):
     }
     
     if verbose:
-        print(f"[DEBUG] parse_key_status_from_json_files_via_grep: received output")
+        print(f"[DEBUG] parse_key_status_from_json_files_via_grep: processing {len(json_data)} bytes of JSON")
     
-    # The shell_output from send_shell_command should contain the count result
-    # from: sed -n '/\"pending_keys\"/,/\"pending_key_id\"/p' *.json | grep -c '\"generation\"'
+    # Extract active_key_id from JSON using grep
+    if json_data:
+        active_match = re.search(r'"active_key_id"\s*:\s*"([^"]+)"', json_data)
+        if active_match:
+            key_status['active_key_id'] = active_match.group(1)
+            if verbose:
+                print(f"[DEBUG] Found active_key_id: {key_status['active_key_id']}")
+        
+        # Extract pending_key_id from JSON (first one only)
+        pending_match = re.search(r'"pending_key_id"\s*:\s*"([^"]+)"', json_data)
+        if pending_match:
+            key_status['pending_key_id'] = pending_match.group(1)
+            if verbose:
+                print(f"[DEBUG] Found pending_key_id: {key_status['pending_key_id']}")
+    
+    # Parse the grep count output
     try:
-        count = int(shell_output.strip()) if shell_output.strip().isdigit() else 0
+        count = int(grep_output.strip()) if grep_output.strip().isdigit() else 0
         key_status['pending_stale_count'] = count
         if verbose:
             print(f"[DEBUG] Pending keys count: {count}")
     except ValueError:
         if verbose:
-            print(f"[DEBUG] Could not parse count from: {shell_output}")
+            print(f"[DEBUG] Could not parse count from: {grep_output}")
         key_status['pending_stale_count'] = 0
+    
+    if verbose:
+        print(f"[DEBUG] Key status: active={key_status['active_key_id']}, pending={key_status['pending_key_id']}, count={key_status['pending_stale_count']}")
     
     return key_status
 
@@ -531,10 +548,36 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         # Get key status from JSON state files using grep (simple & reliable)
         # Count pending keys: sed extracts pending_keys section, grep counts "generation" entries
         qkd_state_dir = "/var/home/macsec_user/qkd-state"
-        grep_cmd = f"sed -n '/\\\"pending_keys\\\"/,/\\\"pending_key_id\\\"/p' {qkd_state_dir}/qkd_db_*.json 2>/dev/null | grep -c '\\\"generation\\\"' || echo '0'"
-        grep_output = send_shell_command(shell, grep_cmd, verbose=verbose)
         
-        health_data['key_status'] = parse_key_status_from_json_files_via_grep(grep_output, verbose=verbose)
+        if verbose:
+            print(f"\n[DEBUG] {sae_id}: Extracting key status from {qkd_state_dir}...")
+        
+        # Step 1: Read first JSON file to get active_key_id and pending_key_id
+        first_file_cmd = f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null | head -1"
+        first_file = send_shell_command(shell, first_file_cmd, verbose=False).strip()
+        
+        if verbose:
+            print(f"[DEBUG] First JSON file: {first_file}")
+        
+        json_data = ""
+        if first_file:
+            json_data = send_shell_command(shell, f"cat {first_file}", verbose=False)
+            if verbose:
+                print(f"[DEBUG] JSON file size: {len(json_data)} bytes")
+        
+        # Step 2: Count pending keys with grep
+        grep_cmd = f"sed -n '/\\\"pending_keys\\\"/,/\\\"pending_key_id\\\"/p' {qkd_state_dir}/qkd_db_*.json 2>/dev/null | grep -c '\\\"generation\\\"' || echo '0'"
+        grep_output = send_shell_command(shell, grep_cmd, verbose=False).strip()
+        
+        if verbose:
+            print(f"[DEBUG] Grep count result: {grep_output}")
+        
+        # Step 3: Parse with combined data
+        health_data['key_status'] = parse_key_status_from_json_files_via_grep(
+            grep_output=grep_output, 
+            json_data=json_data, 
+            verbose=verbose
+        )
 
         
         shell.close()
