@@ -238,8 +238,67 @@ def parse_mka_sessions(output):
     return sessions
 
 
+def parse_key_status_from_json_files(shell_output):
+    """Parse key status from QKD state JSON files (actual state, not log artifacts).
+    
+    FIXED: Previously counted historical "PENDING STALE DROP" log entries.
+    Now reads actual pending_keys[] arrays from qkd_db_*.json files.
+    """
+    import json
+    
+    key_status = {
+        'active_key_id': None,
+        'pending_key_id': None,
+        'pending_stale_count': 0,  # Real pending keys from JSON, not log lines
+        'confirmed_count': 0,
+        'promoted_count': 0,
+        'error_count': 0,
+        'pending_keys_by_interface': {},  # New: track per-interface pending keys
+    }
+    
+    # Parse JSON files from shell output (ls + cat output)
+    json_blocks = re.findall(r'\{.*?"generation".*?\}', shell_output, re.DOTALL)
+    
+    total_pending = 0
+    for json_block in json_blocks:
+        try:
+            data = json.loads(json_block)
+            
+            # Track active key
+            if data.get('active_key_id'):
+                key_status['active_key_id'] = data['active_key_id']
+            
+            # Count REAL pending keys from the JSON array
+            pending_keys = data.get('pending_keys', [])
+            num_pending = len(pending_keys)
+            total_pending += num_pending
+            
+            if pending_keys:
+                key_status['pending_key_id'] = pending_keys[0].get('key_id')
+                # Store per-interface count
+                if 'ca_name' in data:
+                    key_status['pending_keys_by_interface'][data['ca_name']] = num_pending
+            
+            # Get health status
+            health = data.get('health', {})
+            if health.get('degraded'):
+                key_status['error_count'] += 1
+                
+        except (json.JSONDecodeError, ValueError):
+            # Skip malformed JSON blocks
+            pass
+    
+    key_status['pending_stale_count'] = total_pending
+    
+    return key_status
+
+
 def parse_key_status_from_log(log_content, sae_id):
-    """Parse key status from QKD log file."""
+    """DEPRECATED: Parse key status from QKD log file.
+    
+    NOTE: This function counts historical log entries and should not be used.
+    Use parse_key_status_from_json_files() instead to read actual state.
+    """
     key_status = {
         'active_key_id': None,
         'pending_key_id': None,
@@ -262,6 +321,7 @@ def parse_key_status_from_log(log_content, sae_id):
             if match:
                 key_status['pending_key_id'] = match.group(1)
         
+        # NOTE: This counts historical entries, not actual state
         if 'PENDING STALE DROP' in line:
             key_status['pending_stale_count'] += 1
         
@@ -474,7 +534,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=False)
         health_data['lacp_status'] = parse_lacp_interfaces(lacp_output)
         
-        # Get key status from log tail (need to enter shell for this)
+        # Get key status from JSON state files (FIXED: was reading log artifacts)
         shell.send("start shell\n")
         time.sleep(0.3)
         output = ""
@@ -488,9 +548,20 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 break
             time.sleep(0.1)
         
-        log_file = f"/var/home/macsec_user/qkd-state/logs/qkd_debug.log"
-        log_output = send_shell_command(shell, f"tail -500 {log_file}", verbose=verbose)
-        health_data['key_status'] = parse_key_status_from_log(log_output, sae_id)
+        # Read all qkd_db_*.json files from state directory
+        qkd_state_dir = "/var/home/macsec_user/qkd-state"
+        json_list_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null || echo 'No JSON files'", verbose=False)
+        
+        json_files = [f.strip() for f in json_list_output.split('\n') if f.strip().endswith('.json')]
+        
+        # Read each JSON file and concatenate content
+        json_content = ""
+        for json_file in json_files:
+            file_output = send_shell_command(shell, f"cat {json_file}", verbose=False)
+            json_content += file_output + "\n"
+        
+        health_data['key_status'] = parse_key_status_from_json_files(json_content)
+
         
         shell.close()
         
