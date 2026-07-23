@@ -1109,15 +1109,6 @@ def install_peer_authorized_keys(devices):
 
 def check_peer_ssh_from_device(device):
     device = normalize_device(device)
-    
-    # Skip peer SSH checks when rotation is disabled (no peer keys synchronized)
-    _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
-    _peer_rotation_secs = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600))
-    _peer_rotation_enabled = _peer_rotation_secs > 0
-    
-    if not _peer_rotation_enabled:
-        return
-    
     name = device_name(device)
     peer_user = qkd_peer_cmd_user(device)
     key_path = qkd_peer_cmd_ssh_private_key()
@@ -1680,21 +1671,7 @@ def validate_all_devices_postdeploy(devices):
 
     # Ensure peer command keys are present via Junos login configuration before
     # running matrix SSH authentication checks.
-    # Skip if peer SSH key rotation is disabled (keys are static, no sync needed).
-    _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
-    _peer_rotation_secs = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600))
-    _peer_rotation_enabled = _peer_rotation_secs > 0
-    
-    if _peer_rotation_enabled:
-        install_peer_authorized_keys(devices)
-    else:
-        # Even though we don't sync, clean any stale/malformed lines from previous runs
-        for device in devices:
-            try:
-                clean_peer_authorized_keys_file(device)
-            except Exception as exc:
-                name = device_name(device)
-                print(f"[WARN] failed to clean authorized_keys on {name}: {exc}")
+    install_peer_authorized_keys(devices)
 
     failed = []
     for index, device in enumerate(devices, start=1):
