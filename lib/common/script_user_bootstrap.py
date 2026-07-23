@@ -349,7 +349,16 @@ def build_ssh_fix_command(script_user: str) -> str:
     )
 
 
-def run_shell_fix(dev: Device, name: str, script_user: str) -> bool:
+def run_shell_fix(dev: Device, name: str, script_user: str, deploy_user: str) -> bool:
+    # Non-privileged bootstrap users cannot reliably repair another user's
+    # home/.ssh ownership on all Junos variants.
+    if deploy_user not in ("root", script_user):
+        print(
+            "[%s] INFO ssh home fix skipped: deploy user %s is not privileged for %s home ownership repair" %
+            (name, deploy_user, script_user)
+        )
+        return True
+
     command = build_ssh_fix_command(script_user)
     try:
         result = dev.rpc.request_shell_execute(command=command)
@@ -442,7 +451,7 @@ def bootstrap_script_user_on_device(
             except Exception:
                 pass
 
-        if not run_shell_fix(dev, name, script_user):
+        if not run_shell_fix(dev, name, script_user, deploy_user):
             print(
                 "[%s] WARN ssh home fix did not complete; continuing because this can be platform-specific on Junos" %
                 name

@@ -1,6 +1,7 @@
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 from jnpr.junos.utils.scp import SCP
+from jnpr.junos.exception import ConfigLoadError
 
 import yaml
 import time
@@ -99,6 +100,23 @@ def rpc_text(rsp):
     except Exception:
         pass
     return str(rsp).strip()
+
+
+def _is_config_db_lock_error(exc):
+    text = str(exc).lower()
+    return (
+        "configuration database locked by" in text
+        or "configuration database locked" in text
+        or "exclusive [edit]" in text
+    )
+
+
+def _lock_error_hint(exc):
+    text = str(exc)
+    for line in text.splitlines():
+        if "configuration database locked by" in line.lower():
+            return line.strip()
+    return "configuration database locked"
 
 
 # ----------------------------------------
@@ -682,19 +700,42 @@ def push_config(device_name, device, commands, base, devices_dict=None):
                 print(f"[{device_name}] WARN failed to apply peer SSH authorized-keys config: {exc}")
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
-        with Config(dev) as cu:
-            for cmd in commands:
-                cmd = cmd.strip()
-                if not cmd or cmd.startswith("#"):
-                    continue
-                cu.load(cmd, format="set")
+        max_lock_retries = 6
+        lock_retry_delay_s = 5
+        for attempt in range(1, max_lock_retries + 2):
+            try:
+                with Config(dev) as cu:
+                    for cmd in commands:
+                        cmd = cmd.strip()
+                        if not cmd or cmd.startswith("#"):
+                            continue
+                        cu.load(cmd, format="set")
 
-            if cu.diff():
-                print(f"[{device_name}] Applying config")
-                commit_safely(dev, cu, device_name, sync=True)
-                print(f"[{device_name}] Commit OK")
-            else:
-                print(f"[{device_name}] No changes")
+                    if cu.diff():
+                        print(f"[{device_name}] Applying config")
+                        commit_safely(dev, cu, device_name, sync=True)
+                        print(f"[{device_name}] Commit OK")
+                    else:
+                        print(f"[{device_name}] No changes")
+                break
+            except ConfigLoadError as exc:
+                if _is_config_db_lock_error(exc) and attempt <= max_lock_retries:
+                    print(
+                        f"[{device_name}] WARN candidate config DB lock detected ({_lock_error_hint(exc)}). "
+                        f"Retry {attempt}/{max_lock_retries} in {lock_retry_delay_s}s..."
+                    )
+                    time.sleep(lock_retry_delay_s)
+                    continue
+                raise
+            except Exception as exc:
+                if _is_config_db_lock_error(exc) and attempt <= max_lock_retries:
+                    print(
+                        f"[{device_name}] WARN config DB lock during apply ({_lock_error_hint(exc)}). "
+                        f"Retry {attempt}/{max_lock_retries} in {lock_retry_delay_s}s..."
+                    )
+                    time.sleep(lock_retry_delay_s)
+                    continue
+                raise
 
     finally:
         dev.close()

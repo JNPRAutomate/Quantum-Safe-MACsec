@@ -20,3 +20,4 @@ Use this as the starting point for GitHub readers:
 6. `docs/pqc/GLOSSARY.md`
 7. `docs/qkd/qkd_onbox_runtime_lld.md`
 8. `docs/qkd/CERT_MANAGER.md`
+9. `docs/qkd/ROOT_BOOTSTRAP_METHOD_2.md`
