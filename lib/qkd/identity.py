@@ -1580,9 +1580,9 @@ def validate_all_devices_postdeploy(devices):
     for device in devices:
         check_script_user_ssh_identity(device)
 
-    # Ensure peer command keys are present via Junos login configuration before
-    # running matrix SSH authentication checks.
-    install_peer_authorized_keys(devices)
+    # NOTE: Peer authorized-keys were already configured via Junos during phase 4 (provisioning).
+    # In postdeploy, we only test if they work; we don't reapply them (that would fail from HelperVM
+    # which has no NETCONF access to MX devices).
 
     failed = []
     for index, device in enumerate(devices, start=1):
