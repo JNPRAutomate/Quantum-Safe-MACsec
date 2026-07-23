@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 import argparse
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -444,7 +445,7 @@ def run_scp(log, name, src, dst):
 # Onbox deploy
 # ---------------------------------------------------------------------------
 
-def deploy_onbox(log, devices, artifacts):
+def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None):
     """
     Deploy qkd_onbox.py to Junos devices using SCRIPT_USER/admin as source of truth.
 
@@ -455,7 +456,7 @@ def deploy_onbox(log, devices, artifacts):
       - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
     """
 
-    script_user = QKD.get("SCRIPT_USER", "admin")
+    resolved_script_user = script_user or QKD.get("SCRIPT_USER", "admin")
     script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -476,13 +477,16 @@ def deploy_onbox(log, devices, artifacts):
     if not isinstance(secrets, dict):
         secrets = {}
 
-    script_password = (
-        secrets.get("script_password")
+    resolved_script_password = (
+        script_password
+        or os.getenv("QKD_SCRIPT_PASSWORD")
+        or secrets.get("script_password")
         or secrets.get("admin_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
         or secrets.get("default_password")
     )
 
-    if not script_password:
+    if not resolved_script_password:
         raise RuntimeError(
             "Cannot deploy ONBOX as SCRIPT_USER/admin because no password was found. "
             "Expected one of secrets.script_password, secrets.admin_password, "
@@ -546,8 +550,8 @@ def deploy_onbox(log, devices, artifacts):
         for port in (830, 22):
             dev = Device(
                 host=host,
-                user=script_user,
-                passwd=str(script_password),
+                user=resolved_script_user,
+                passwd=str(resolved_script_password),
                 port=port,
                 gather_facts=False,
             )
@@ -564,7 +568,7 @@ def deploy_onbox(log, devices, artifacts):
                     pass
 
         raise RuntimeError(
-            f"Unable to open device {host} as {script_user}: {last_error}"
+            f"Unable to open device {host} as {resolved_script_user}: {last_error}"
         )
 
     def install_on_active_re(dev):
@@ -647,7 +651,7 @@ def deploy_onbox(log, devices, artifacts):
             return
 
         log.info(
-            f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {script_user}"
+            f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {resolved_script_user}"
         )
 
         for path in (remote_op, remote_event, legacy_op, legacy_event):
@@ -671,7 +675,7 @@ def deploy_onbox(log, devices, artifacts):
         if not script.exists():
             raise FileNotFoundError(f"[{name}] Missing onbox script artifact: {script}")
 
-        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {script_user} =====")
+        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
 
         dev = open_device_as_script_user(ip)
 
@@ -950,6 +954,43 @@ def handle_deploy(args):
 
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
+    inventory_base = load_inventory_base()
+    secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    bootstrap_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or secrets.get("default_user")
+        or None
+    )
+    bootstrap_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+        or None
+    )
+
+    script_user = (
+        os.getenv("QKD_SCRIPT_USER")
+        or secrets.get("script_user")
+        or secrets.get("default_user")
+        or QKD.get("SCRIPT_USER")
+        or "admin"
+    )
+    script_password = (
+        os.getenv("QKD_SCRIPT_PASSWORD")
+        or secrets.get("script_password")
+        or secrets.get("admin_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+        or None
+    )
 
     if args.preview or args.dry_run:
         print_step_banner(
@@ -987,6 +1028,8 @@ def handle_deploy(args):
         bootstrap_script_users(
             devices=devices,
             repo_root=BASE_DIR,
+            deploy_user=bootstrap_user,
+            deploy_password=bootstrap_password,
             dry_run=True,
         )
         print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
@@ -999,10 +1042,18 @@ def handle_deploy(args):
         "Ensure script user credentials and SSH runtime prerequisites are ready.",
     )
     if not args.skip_script_user_bootstrap:
+        if bootstrap_user and bootstrap_password:
+            print(f"Bootstrap auth source: inventory_base user={bootstrap_user}")
+        else:
+            print("Bootstrap auth source: unresolved")
         ok, failed = bootstrap_script_users(
             devices=devices,
             repo_root=BASE_DIR,
+            deploy_user=bootstrap_user,
+            deploy_password=bootstrap_password,
             dry_run=False,
+            # Deploy must fail fast if privileged bootstrap credentials are missing.
+            skip_if_no_deploy_password=False,
         )
         if failed:
             raise RuntimeError(
@@ -1011,6 +1062,29 @@ def handle_deploy(args):
     else:
         print("[SKIP] script-user bootstrap skipped by CLI option")
     print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
+
+    if not script_password:
+        raise RuntimeError(
+            "Missing script-user credentials for deploy. Set one of "
+            "QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
+            "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
+        )
+
+    QKD["SCRIPT_USER"] = script_user
+    if bootstrap_user:
+        QKD["DEPLOY_USER"] = bootstrap_user
+
+    for name, device in devices.items():
+        if not isinstance(device, dict):
+            continue
+        auth = device.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+            device["auth"] = auth
+        auth["username"] = script_user
+        auth["password"] = script_password
+        device["script_user"] = script_user
+    print(f"Deploy auth source: inventory_base script_user={script_user}")
 
     print_step_banner(
         "2/6",
@@ -1047,7 +1121,7 @@ def handle_deploy(args):
         "START",
         "Copy and install qkd_onbox.py on target devices (including dual-RE sync).",
     )
-    deploy_onbox(log, devices, artifacts)
+    deploy_onbox(log, devices, artifacts, script_user=script_user, script_password=script_password)
     print_step_banner("4/6", "ONBOX FILE DEPLOY", "END")
 
     print_step_banner(
@@ -1062,6 +1136,7 @@ def handle_deploy(args):
         preview=False,
         ssh_key=args.ssh_key,
         debug=args.debug,
+        devices=devices,
     )
     print_step_banner("5/6", "QKD PROVISIONING", "END")
 
@@ -1082,6 +1157,44 @@ def handle_deploy(args):
 
 def handle_validate(args):
     devices = load_runtime_devices()
+    inventory_base = load_inventory_base()
+    secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    QKD["SCRIPT_USER"] = (
+        os.getenv("QKD_SCRIPT_USER")
+        or secrets.get("script_user")
+        or secrets.get("default_user")
+        or QKD.get("SCRIPT_USER")
+        or "admin"
+    )
+
+    resolved_script_password = (
+        os.getenv("QKD_SCRIPT_PASSWORD")
+        or secrets.get("script_password")
+        or secrets.get("admin_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+    )
+
+    if not resolved_script_password:
+        raise RuntimeError(
+            "Missing script-user credentials for validate. Set one of "
+            "QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
+            "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
+        )
+
+    for _, device in devices.items():
+        if not isinstance(device, dict):
+            continue
+        auth = device.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+            device["auth"] = auth
+        auth["username"] = QKD["SCRIPT_USER"]
+        auth["password"] = resolved_script_password
+
     QKD["VALIDATE_VERBOSE"] = bool(args.verbose)
 
     print("=== QKD validation ===")
