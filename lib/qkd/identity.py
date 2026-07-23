@@ -335,29 +335,6 @@ def ssh_cmd(device, command, user, timeout=30):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
 
 
-def ssh_cmd_stdin(device, command, user, stdin_data, timeout=30):
-    """Execute SSH command with stdin data. Returns (returncode, stdout, stderr)."""
-    host = device_host(device)
-    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
-    deploy_key = device.get("orchestrator_ssh_key") or device.get("deploy_ssh_key")
-    if deploy_key:
-        cmd.extend(["-i", deploy_key, "-o", "IdentitiesOnly=yes"])
-    cmd.extend([f"{user}@{host}", command])
-    
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = proc.communicate(input=stdin_data.encode() if isinstance(stdin_data, str) else stdin_data, timeout=timeout)
-        return proc.returncode, stdout.decode() if stdout else "", stderr.decode() if stderr else ""
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise RuntimeError(f"SSH command timeout after {timeout}s: {' '.join(cmd)}")
-
-
 def deploy_auth_user(device):
     device = normalize_device(device)
     auth = device.get("auth") or {}
@@ -951,50 +928,32 @@ def install_peer_authorized_keys(devices):
                     f"keys={len(desired_keys)} sources={sources_label} attempt={attempt}/{max_attempts}"
                 )
                 
-                # v3.3.2+: Write authorized_keys file via SSH stdin to avoid Junos file write restrictions
-                # This allows SSH to use file-based auth (etsi_peer_view can SSH to peers)
-                # instead of config-based auth which is not accessible to SSH clients
+                # v3.3.2+: Write authorized_keys file via shell printf with escaped newlines
+                # Avoids heredoc issues and shell quoting problems
                 auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
                 auth_keys_content = '\n'.join([f"{key_type} {key_line}" for key_type, key_line in desired_keys])
                 if auth_keys_content and not auth_keys_content.endswith('\n'):
                     auth_keys_content += '\n'
                 
-                # Step 1: Create .ssh directory
-                setup_cmd = f"mkdir -p /var/home/{sync_target_user}/.ssh"
-                result = ssh_deploy_cmd(device, setup_cmd, timeout=10, include_failed_marker=True)
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"failed to create .ssh directory target={target} path=/var/home/{sync_target_user}/.ssh\n"
-                        f"stdout={result.stdout}\nstderr={result.stderr}"
-                    )
+                # Escape content for printf: replace newlines with \n, escape backslashes
+                escaped_content = auth_keys_content.replace('\\', '\\\\').replace('\n', '\\n')
                 
-                # Step 2: Write authorized_keys file via SSH stdin + cat
-                # This bypasses Junos file write permission checks
-                deploy_user = deploy_auth_user(device)
+                # Build single-line command with printf
                 write_cmd = (
-                    f"cat > {auth_keys_path} && "
+                    f"mkdir -p /var/home/{sync_target_user}/.ssh && "
+                    f"printf '{escaped_content}' > {auth_keys_path} && "
                     f"chmod 600 {auth_keys_path} && "
                     f"chown {sync_target_user}:{sync_target_user} {auth_keys_path} && "
                     f"echo OK"
                 )
                 
-                returncode, stdout, stderr = ssh_cmd_stdin(device, write_cmd, deploy_user, auth_keys_content, timeout=20)
+                result = ssh_deploy_cmd(device, write_cmd, timeout=20, include_failed_marker=True)
                 
-                if returncode != 0:
+                if result.returncode != 0 or 'OK' not in result.stdout:
                     raise RuntimeError(
                         f"failed to write authorized_keys target={target} path={auth_keys_path}\n"
-                        f"stdout={stdout}\n"
-                        f"stderr={stderr}"
-                    )
-                
-                print(f"[OK] peer SSH keys synchronized target={target} sync_target_user={sync_target_user} path={auth_keys_path}")
-                synced_targets.append(target)
-                
-                if ssh_proc.returncode != 0:
-                    raise RuntimeError(
-                        f"failed to write authorized_keys target={target} path={auth_keys_path}\n"
-                        f"stdout={proc_stdout.decode()}\n"
-                        f"stderr={proc_stderr.decode()}"
+                        f"stdout={result.stdout}\n"
+                        f"stderr={result.stderr}"
                     )
                 
                 print(f"[OK] peer SSH keys synchronized target={target} sync_target_user={sync_target_user} path={auth_keys_path}")
