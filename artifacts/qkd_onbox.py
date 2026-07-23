@@ -2011,9 +2011,9 @@ def do_enc(peer_sae):
 
 
 def do_dec(peer_sae, key_id, kme_ip=None, kme_port=None):
-    if not kme_ip:
+    if kme_ip is None:
         kme_ip = KME_IP
-    if not kme_port:
+    if kme_port is None:
         kme_port = KME_PORT
     
     for i in range(max(1, DEC_RETRY)):
@@ -2757,6 +2757,10 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
 
     dec_start_ms = now_ms()
     customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
+    
+    # DEBUG: Print link content
+    log(f"DEBUG LINK peer_kme_ip={link.get('peer_kme_ip')} peer_kme_port={link.get('peer_kme_port')}", "DEBUG", iface, "SLAVE")
+    
     key = do_dec(link["peer_sae"], key_id, link.get("peer_kme_ip"), link.get("peer_kme_port"))
     dec_latency_ms = elapsed_ms(dec_start_ms)
 
