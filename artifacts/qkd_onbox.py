@@ -2844,13 +2844,17 @@ def bootstrap_keychain_link(link, force=False):
 
 def run_master():
     links = managed_links()
+    master_links = [link for link in links if link.get("role") == "master"]
+
     if not ensure_peer_ssh_key_bootstrap(links):
-        log("PEER SSH KEY BOOTSTRAP FAILED -> EXIT CURRENT MASTER CYCLE", "ERROR", mode="SSHKEY")
-        return
+        if master_links:
+            log("PEER SSH KEY BOOTSTRAP FAILED -> EXIT CURRENT MASTER CYCLE", "ERROR", mode="SSHKEY")
+            return
+        else:
+            log("PEER SSH KEY BOOTSTRAP FAILED -> WARN ONLY (no master links on this device)", "WARN", mode="SSHKEY")
     if not auto_rotate_peer_ssh_key_if_due(links):
         log("PEER SSH KEY ROTATION FAILED -> KEEP CURRENT KEY", "ERROR", mode="SSHKEY")
 
-    master_links = [link for link in links if link.get("role") == "master"]
     if not master_links:
         return
 
