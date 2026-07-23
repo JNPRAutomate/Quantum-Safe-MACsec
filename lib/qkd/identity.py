@@ -446,7 +446,6 @@ def check_script_user_ssh_identity(device):
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}; "
-        f"chmod 700 {ssh_dir} >/dev/null 2>&1 || true; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
         f"ls -l {key_path}; "
@@ -464,12 +463,13 @@ def check_script_user_authorized_keys(device):
     ssh_dir = qkd_ssh_dir()
     pub_path = qkd_ssh_public_key()
     auth_path = qkd_authorized_keys()
+    tmp_path = f"{auth_path}.tmp"
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -s {pub_path}; "
-        f"touch {auth_path}; "
-        f"grep -q -F -f {pub_path} {auth_path} || cat {pub_path} >> {auth_path}; "
-        f"chmod 600 {auth_path}; "
+        f"cp {pub_path} {tmp_path}; "
+        f"chmod 600 {tmp_path}; "
+        f"mv -f {tmp_path} {auth_path}; "
         f"ls -l {auth_path}"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=30)
