@@ -936,29 +936,50 @@ def install_peer_authorized_keys(devices):
                 if auth_keys_content and not auth_keys_content.endswith('\n'):
                     auth_keys_content += '\n'
                 
-                # Build SSH command to write authorized_keys file
-                # Use base64 encoding to avoid shell escaping issues with special characters in keys
-                import base64
-                auth_keys_b64 = base64.b64encode(auth_keys_content.encode()).decode()
-                cat_cmd = (
-                    f"mkdir -p /var/home/{sync_target_user}/.ssh && "
-                    f"echo '{auth_keys_b64}' | base64 -d > {auth_keys_path} && "
-                    f"chmod 600 {auth_keys_path}"
-                )
+                # v3.3.2+: Write via stdin pipe to avoid shell quoting and permission issues
+                # Steps:
+                #   1. Create .ssh directory on target
+                #   2. Pipe authorized_keys content via stdin to 'cat > file'
+                #   3. Set ownership and permissions
+                # This approach:
+                #   - Avoids shell escaping of key data
+                #   - Avoids Junos permission checks on direct writes
+                #   - Works with any key format/length
+                import subprocess
+                deploy_user = qkd_script_user()
+                script_key = qkd_script_ssh_private_key()
                 
-                # Execute via SSH as script_user (macsec_user, has shell access)
-                result = ssh_deploy_cmd(
-                    device,
-                    cat_cmd,
-                    timeout=20,
-                    include_failed_marker=True,
-                )
-                
+                # Step 1: Create .ssh directory
+                setup_cmd = f"mkdir -p /var/home/{sync_target_user}/.ssh && ls -ld /var/home/{sync_target_user}/.ssh"
+                result = ssh_deploy_cmd(device, setup_cmd, timeout=10, include_failed_marker=True)
                 if result.returncode != 0:
                     raise RuntimeError(
+                        f"failed to create .ssh directory target={target} path=/var/home/{sync_target_user}/.ssh\n"
+                        f"stdout={result.stdout}\nstderr={result.stderr}"
+                    )
+                
+                # Step 2: Write authorized_keys via stdin pipe
+                # This avoids any shell quoting issues with SSH key data
+                write_cmd = (
+                    f"cat > {auth_keys_path} && "
+                    f"chmod 600 {auth_keys_path} && "
+                    f"chown {sync_target_user}:{sync_target_user} {auth_keys_path}"
+                )
+                
+                ssh_proc = subprocess.Popen(
+                    ['ssh', '-i', script_key, f'{deploy_user}@{host}', write_cmd],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=20,
+                )
+                proc_stdout, proc_stderr = ssh_proc.communicate(input=auth_keys_content.encode())
+                
+                if ssh_proc.returncode != 0:
+                    raise RuntimeError(
                         f"failed to write authorized_keys target={target} path={auth_keys_path}\n"
-                        f"stdout={result.stdout}\n"
-                        f"stderr={result.stderr}"
+                        f"stdout={proc_stdout.decode()}\n"
+                        f"stderr={proc_stderr.decode()}"
                     )
                 
                 print(f"[OK] peer SSH keys synchronized target={target} sync_target_user={sync_target_user} path={auth_keys_path}")
