@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -138,7 +139,8 @@ def get_script_user(inventory_base: Dict[str, Any], override: Optional[str] = No
 
     secrets = _secrets_block(inventory_base)
     return str(
-        secrets.get("script_user")
+        os.getenv("QKD_SCRIPT_USER")
+        or secrets.get("script_user")
         or QKD.get("SCRIPT_USER")
         or "admin"
     )
@@ -150,15 +152,18 @@ def get_script_password(inventory_base: Dict[str, Any], override: Optional[str] 
 
     secrets = _secrets_block(inventory_base)
     value = (
-        secrets.get("script_password")
+        os.getenv("QKD_SCRIPT_PASSWORD")
+        or secrets.get("script_password")
         or secrets.get("admin_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
         or secrets.get("default_password")
     )
 
     if not value:
         raise ValueError(
             "Cannot determine SCRIPT_USER password. Expected one of "
-            "secrets.script_password, secrets.admin_password, or secrets.default_password "
+            "QKD_SCRIPT_PASSWORD, secrets.script_password, secrets.admin_password, "
+            "QKD_DEFAULT_PASSWORD, or secrets.default_password "
             "in inventory_base.yaml, or pass --script-password."
         )
 
@@ -171,7 +176,10 @@ def get_deploy_user(inventory_base: Dict[str, Any], override: Optional[str] = No
 
     secrets = _secrets_block(inventory_base)
     return str(
-        secrets.get("deploy_user")
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or secrets.get("default_user")
         or QKD.get("DEPLOY_USER")
         or "root"
     )
@@ -186,8 +194,12 @@ def get_deploy_password_from_config(
 
     secrets = _secrets_block(inventory_base)
     value = (
-        secrets.get("deploy_password")
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
         or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
     )
 
     return str(value) if value else None

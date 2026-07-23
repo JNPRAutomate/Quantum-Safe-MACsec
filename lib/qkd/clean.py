@@ -187,7 +187,6 @@ def clean_device(name, device, full_macsec=False):
                 paths.extend(
                     [
                         f"/var/tmp/qkd_db_{peer}_{safe_iface}.json",
-                        f"/var/tmp/qkd_debug_{sae}_{safe_iface}.log",
                         f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_install-key.lock",
                         f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_status.lock",
                     ]
@@ -204,6 +203,7 @@ def clean_device(name, device, full_macsec=False):
         runtime_paths = runtime_tmp_paths()
         soft_runtime_paths = [
             "/var/tmp/qkd_debug.log",
+            "/var/tmp/qkd_debug_*.log",
         ]
         config_cmds = [
             "delete event-options generate-event QKD_TIMER",
