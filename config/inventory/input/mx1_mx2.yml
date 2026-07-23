@@ -1,0 +1,32 @@
+topology: links
+platform: mixed
+mode: qkd
+pki_profile: hierarchical_ca
+devices:
+- name: MX1
+  hostname: mx301-p1
+  platform: mx
+  ip: 100.123.113.151
+  kme:
+    ip: 100.123.252.10
+    port: 8443
+  interfaces:
+  - et-0/0/0
+- name: MX2
+  hostname: mx301-p2
+  platform: mx
+  ip: 100.123.113.152
+  kme:
+    ip: 100.123.252.11
+    port: 8443
+  interfaces:
+  - et-0/0/0
+
+links:
+- id: MX1-MX2
+  node_a: MX1
+  interface_a: et-0/0/0
+  node_b: MX2
+  interface_b: et-0/0/0
+  ca_name: CA_MX1_MX2
+  keychain_name: QKD_CA_MX1_MX2
