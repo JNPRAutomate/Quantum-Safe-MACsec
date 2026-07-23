@@ -1140,7 +1140,7 @@ def mka_confirms_key(iface, key_id, generation=None):
         latest_an = fields.get("latest_sak_an")
         previous_an = fields.get("previous_sak_an")
         log(
-            f"MKA KEY CONFIRMED key_id={key_id} ckn={expected_ckn} cak_name={cak_name} key_number={key_number} "
+            f"MKA KEY CONFIRMED key_id={key_id} key_number={key_number} "
             f"latest_sak_an={latest_an} previous_sak_an={previous_an}",
             "INFO",
             iface,
@@ -1169,9 +1169,9 @@ def mka_confirms_key(iface, key_id, generation=None):
         return True
 
     log(
-        f"MKA KEY NOT CONFIRMED key_id={key_id} secured={secured} ckn_match={ckn_match} expected_ckn={expected_ckn} "
-        f"mka_cak_name={cak_name} key_number={key_number} interface_state={fields.get('interface_state')} "
-        f"mka_suspended={fields.get('mka_suspended')} mka_block={mka_block}",
+        f"MKA KEY NOT CONFIRMED key_id={key_id} secured={secured} ckn_match={ckn_match} "
+        f"key_number={key_number} interface_state={fields.get('interface_state')} "
+        f"mka_suspended={fields.get('mka_suspended')}",
         "INFO",
         iface,
         "MKA",
