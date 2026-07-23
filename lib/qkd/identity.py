@@ -927,8 +927,9 @@ def install_peer_authorized_keys(devices):
     for device in devices:
         target = device_name(device)
         # Cross-device QKD actions (install-key/status) execute as SCRIPT_USER.
-        # Keep peer transport keys synchronized on SCRIPT_USER across the fleet.
-        sync_target_user = qkd_script_user()
+        # But peer transport keys are synchronized for PEER_CMD_USER (etsi_peer_view) across the fleet.
+        # etsi_peer_view needs these keys to authenticate and transport key-id batches from master to slave.
+        sync_target_user = qkd_peer_cmd_user()
         host = device_host(device)
         auth = device.get("auth") or {}
         user = auth.get("username")
