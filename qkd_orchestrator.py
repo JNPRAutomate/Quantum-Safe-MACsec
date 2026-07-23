@@ -593,18 +593,53 @@ def deploy_onbox(log, devices, artifacts):
         """
 
         def copy_to_peer_re(src_path):
-            errors = []
-            for re_name in ("re0", "re1"):
-                cmd = f"file copy {src_path} {re_name}:{src_path}"
+            peer_payloads = [
+                f"cli -c 'file copy re0:{src_path} {src_path}'",
+                f"cli -c 'file copy re1:{src_path} {src_path}'",
+                f"cli -c 'file copy {src_path} {src_path}'",
+            ]
+
+            candidates = []
+            for payload in peer_payloads:
+                escaped = payload.replace('"', '\\"')
+                candidates.extend(
+                    [
+                        f'request routing-engine execute command "{escaped}" routing-engine other',
+                        f'request routing-engine execute command "{escaped}" routing-engine backup',
+                        f'request routing-engine execute command "{escaped}" routing-engine re1',
+                        f'request routing-engine execute other command "{escaped}"',
+                        f'request routing-engine execute re1 command "{escaped}"',
+                    ]
+                )
+
+            last_output = ""
+
+            for cmd in candidates:
                 output = run_cli(dev, cmd, strict=False)
-                low = (output or "").lower()
-                if not any(marker in low for marker in ["permission denied", "put-file failed", "could not send local copy", "error:", "operation-failed", "login incorrect"]):
-                    return
-                errors.append(f"target={re_name} output={output}")
+                last_output = output or ""
+                low = last_output.lower()
+
+                if (
+                    "permission denied" in low
+                    or "put-file failed" in low
+                    or "could not send local copy" in low
+                    or "operation-failed" in low
+                    or "syntax error" in low
+                    or "unknown command" in low
+                    or "command not found" in low
+                    or "could not connect to re1" in low
+                    or "cannot connect to other re" in low
+                    or "login incorrect" in low
+                    or "error:" in low
+                ):
+                    continue
+
+                return
+
             raise RuntimeError(
                 f"[{name}] RE peer ONBOX sync failed as {script_user}\n"
                 f"source={src_path}\n"
-                + "\n".join(errors)
+                f"last_output={last_output}"
             )
 
         if not is_dual_re(dev):
