@@ -446,7 +446,7 @@ def check_script_user_ssh_identity(device):
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}; "
-        f"chmod 700 {ssh_dir}; "
+        f"chmod 700 {ssh_dir} >/dev/null 2>&1 || true; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
         f"ls -l {key_path}; "
