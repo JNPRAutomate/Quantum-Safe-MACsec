@@ -928,22 +928,28 @@ def install_peer_authorized_keys(devices):
                     f"keys={len(desired_keys)} sources={sources_label} attempt={attempt}/{max_attempts}"
                 )
                 
-                # v3.3.2+: Write authorized_keys file via tee + printf (avoids > redirect permission issues on Junos)
-                # tee has different permission handling than shell redirect and works better on restricted filesystems
+                # v3.3.3+: Write authorized_keys via tmp file + mv (avoids permission issues on Junos).
+                # On Junos, authorized_keys is owned by root:wheel (644); the deploy user only has
+                # directory-level write (sticky+group). tee/redirect fail on the file itself, but
+                # mv from /tmp succeeds because the directory grants write.  Also, etsi_peer_view
+                # has no matching group, so chown must use the user-only form (no :group).
                 auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
-                auth_keys_content = '\n'.join([f"{key_type} {key_line}" for key_type, key_line in desired_keys])
+                tmp_path = f"/tmp/authorized_keys_{sync_target_user}.tmp"
+                # key_line already contains the full line (type + key + comment); do NOT prepend key_type again
+                auth_keys_content = '\n'.join([key_line for key_type, key_line in desired_keys])
                 if auth_keys_content and not auth_keys_content.endswith('\n'):
                     auth_keys_content += '\n'
                 
-                # Escape content for printf: replace newlines with \n, escape backslashes
+                # Escape content for printf: replace backslashes first, then newlines
                 escaped_content = auth_keys_content.replace('\\', '\\\\').replace('\n', '\\n')
                 
-                # Build single-line command with printf | tee (more permissive than > on Junos)
+                # Write to /tmp then mv atomically into place; chown user-only (no group on Junos)
                 write_cmd = (
                     f"mkdir -p /var/home/{sync_target_user}/.ssh && "
-                    f"printf '{escaped_content}' | tee {auth_keys_path} >/dev/null && "
+                    f"printf '{escaped_content}' > {tmp_path} && "
+                    f"mv {tmp_path} {auth_keys_path} && "
                     f"chmod 600 {auth_keys_path} && "
-                    f"chown {sync_target_user}:{sync_target_user} {auth_keys_path} && "
+                    f"chown {sync_target_user} {auth_keys_path} && "
                     f"echo OK"
                 )
                 
