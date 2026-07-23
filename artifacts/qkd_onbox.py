@@ -3415,6 +3415,15 @@ def main():
         log("MASTER SKIPPED while disabled", "INFO", mode="CONFIG")
         sys.exit(0)
 
+    # Check if this device has any master links before acquiring global lock.
+    # Slave-only devices should exit immediately without holding lock,
+    # so they don't block the master when it sends SSH commands.
+    links = managed_links()
+    master_links = [link for link in links if link.get("role") == "master"]
+    if not master_links:
+        log("NO MASTER LINKS ON THIS DEVICE -> SKIP MASTER MODE", "INFO", mode="CONFIG")
+        sys.exit(0)
+
     if not acquire_lock():
         log("MASTER LOCK BUSY -> EXIT", "ERROR", mode="MASTER")
         sys.exit(1)
