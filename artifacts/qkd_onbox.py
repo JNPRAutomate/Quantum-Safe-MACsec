@@ -2189,7 +2189,7 @@ def ensure_peer_ssh_key_bootstrap(links):
             return False
 
         log(
-            f"PEER SSH KEY BOOTSTRAP APPLY peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER}",
+            f"PEER SSH KEY BOOTSTRAP APPLY peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER}",
             "WARN",
             mode="SSHKEY",
         )
@@ -2199,12 +2199,12 @@ def ensure_peer_ssh_key_bootstrap(links):
             current_key_type,
             current_key_line,
             remove=False,
-            remote_user=SCRIPT_USER,
+            remote_user=PEER_CMD_USER,
             target_login_user=PEER_CMD_USER,
         )
         if not ok:
             log(
-                f"PEER SSH KEY BOOTSTRAP APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                f"PEER SSH KEY BOOTSTRAP APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
                 "ERROR",
                 mode="SSHKEY",
             )
@@ -2278,12 +2278,12 @@ def auto_rotate_peer_ssh_key_if_due(links):
             next_key_type,
             next_key_line,
             remove=False,
-            remote_user=SCRIPT_USER,
+            remote_user=PEER_CMD_USER,
             target_login_user=PEER_CMD_USER,
         )
         if not ok:
             log(
-                f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
                 "ERROR",
                 mode="SSHKEY",
             )
@@ -2335,12 +2335,12 @@ def auto_rotate_peer_ssh_key_if_due(links):
             current_key_type,
             current_key_line,
             remove=True,
-            remote_user=SCRIPT_USER,
+            remote_user=PEER_CMD_USER,
             target_login_user=PEER_CMD_USER,
         )
         if not ok:
             log(
-                f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={SCRIPT_USER} target_login_user={PEER_CMD_USER} old_key_retained=True",
+                f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} old_key_retained=True",
                 "ERROR",
                 mode="SSHKEY",
             )
