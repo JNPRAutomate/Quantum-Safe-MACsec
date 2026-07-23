@@ -1254,22 +1254,10 @@ def handle_deploy(args):
         validate_all_devices(devices, phase="predeploy", shipment_aware=True)
         phase_end(1, "All devices validated")
 
-    # Skip peer SSH key sync when rotation is disabled (keys are static, no sync needed).
-    _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
-    _peer_rotation_enabled = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600)) > 0
-
-    # Ensure peer transport keys are synchronized before provisioning. This
-    # prevents runtime master->peer bootstrap from depending on a later
-    # postdeploy-only step, and keeps peer SSH working even if a subsequent
-    # device hits a provisioning failure.
-    # Skip this if we're already deploying to all devices (to avoid redundant sync)
-    if not args.shipment_preload and len(devices) < len(all_runtime_devices):
-        phase_start(2, "PEER SSH KEY SYNCHRONIZATION", f"(scoped to {len(devices)} devices)")
-        install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
-        phase_end(2, "Peer SSH keys synchronized")
-    else:
-        phase_start(2, "PEER SSH KEY SYNCHRONIZATION", "SKIPPED (deploying all devices)")
-        phase_end(2, "Phase 2 skipped")
+    # Phase 2 (peer SSH key sync) removed: redundant with Phase 4.
+    # Phase 4 (provisioning) now applies peer SSH config via Junos in configure_qkd_scripts().
+    # Old shell-based phase 2 couldn't support scoped deploys (tried to connect to out-of-scope peers).
+    # Junos config in phase 4 is applied to all in-scope devices only.
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
