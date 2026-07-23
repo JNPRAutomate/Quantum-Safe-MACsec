@@ -1162,14 +1162,67 @@ def acquire_action_lock(iface, action):
         log(f"ACTION LOCK ACQUIRED action={action} iface={iface} pid={pid} lock={path}", "INFO", iface, "LOCK")
         return True
     except FileExistsError:
+        # Check if lock is stale by:
+        # 1. Reading the PID and checking if process still exists (kill -0)
+        # 2. Checking age (120s timeout for safety)
+        owner_pid = None
+        try:
+            if owner_file.exists():
+                owner_pid = int(owner_file.read_text().strip())
+        except Exception:
+            owner_pid = None
+        
+        # If we know the owner PID, check if process exists with kill -0
+        if owner_pid is not None:
+            try:
+                os.kill(owner_pid, 0)  # signal 0 checks existence without sending signal
+                # Process still exists, lock is valid
+                log(f"ACTION LOCK EXISTS action={action} iface={iface} owner_pid={owner_pid} -> exit", "ERROR", iface, "LOCK")
+                return False
+            except ProcessLookupError:
+                # Process doesn't exist, lock is stale
+                log(f"STALE ACTION LOCK FOUND action={action} iface={iface} owner_pid={owner_pid} (process not found) -> removing", "ERROR", iface, "LOCK")
+                try:
+                    if path.is_dir():
+                        for child in path.iterdir():
+                            try:
+                                child.unlink()
+                            except Exception:
+                                pass
+                        path.rmdir()
+                    else:
+                        path.unlink()
+                except Exception as e:
+                    log(f"STALE ACTION LOCK REMOVE FAILED action={action} error={str(e)}", "ERROR", iface, "LOCK")
+                    return False
+                try:
+                    path.mkdir(mode=0o700)
+                    try:
+                        owner_file.write_text(pid)
+                        (path / "time").write_text(str(int(time.time())))
+                    except Exception:
+                        pass
+                    log(f"ACTION LOCK ACQUIRED AFTER STALE REMOVE action={action} iface={iface} pid={pid} lock={path}", "INFO", iface, "LOCK")
+                    return True
+                except Exception as e:
+                    log(f"ACTION LOCK CREATE AFTER STALE REMOVE FAILED action={action} error={str(e)}", "ERROR", iface, "LOCK")
+                    return False
+            except (OSError, PermissionError):
+                # Signal failed, assume process exists
+                log(f"ACTION LOCK EXISTS action={action} iface={iface} owner_pid={owner_pid} (kill check failed) -> exit", "ERROR", iface, "LOCK")
+                return False
+        
+        # Fallback: check age if we couldn't read/verify owner PID
         try:
             age = time.time() - path.stat().st_mtime
         except Exception:
             log(f"ACTION LOCK EXISTS AND STAT FAILED action={action}", "ERROR", iface, "LOCK")
             return False
+        
         if age < 120:
-            log(f"ACTION LOCK EXISTS action={action} iface={iface} age={int(age)} pid={pid} -> exit", "ERROR", iface, "LOCK")
+            log(f"ACTION LOCK EXISTS action={action} iface={iface} age={int(age)} -> exit", "ERROR", iface, "LOCK")
             return False
+        
         log(f"STALE ACTION LOCK FOUND action={action} iface={iface} age={int(age)} -> removing", "ERROR", iface, "LOCK")
         try:
             if path.is_dir():
