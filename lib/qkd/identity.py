@@ -946,6 +946,9 @@ def install_peer_authorized_keys(devices):
                 # Step 1 (as macsec_user via request_shell_execute): write content to /tmp
                 # Step 2 (as root via cli -> start shell): mv/chmod/chown — needs root for
                 #   chown to etsi_peer_view and to replace sticky-bit-protected files
+                # NOTE: request_shell_execute runs in csh on Junos. csh does NOT support \"
+                # inside "..." strings. Use single quotes for the cli -c argument, and
+                # double quotes only for the inner start shell command argument.
                 inner_shell_cmd = (
                     f"mv {tmp_path} {auth_keys_path} && "
                     f"chmod 600 {auth_keys_path} && "
@@ -955,7 +958,7 @@ def install_peer_authorized_keys(devices):
                 write_cmd = (
                     f"mkdir -p /var/home/{sync_target_user}/.ssh && "
                     f"printf '{escaped_content}' > {tmp_path} && "
-                    f"cli -c {junos_cli_quote('start shell command ' + junos_cli_quote(inner_shell_cmd))}"
+                    f"cli -c 'start shell command \"{inner_shell_cmd}\"'"
                 )
                 
                 result = ssh_deploy_cmd(device, write_cmd, timeout=30, include_failed_marker=False)
