@@ -851,17 +851,6 @@ def install_peer_authorized_keys(devices):
     max_attempts = 5
     retry_wait_seconds = [2, 4, 8, 12]
 
-    def is_config_locked_error(exc):
-        text = str(exc or "").lower()
-        return (
-            "configuration database locked by" in text
-            or "exclusive [edit]" in text
-        )
-
-    def is_statement_not_found_warning(exc):
-        text = str(exc or "").lower()
-        return "statement not found" in text
-
     def linked_peer_sources(target_device):
         """
         Return source device names that are expected to open peer SSH sessions
@@ -886,40 +875,6 @@ def install_peer_authorized_keys(devices):
         if key_type.startswith("ssh-") or key_type.startswith("ecdsa-"):
             return key_type, key_line
         return None, None
-
-    def collect_configured_peer_keys(device, peer_user):
-        result = ssh_deploy_cmd(
-            device,
-            f"cli -c 'show configuration system login user {peer_user} | display set'",
-            timeout=20,
-            include_failed_marker=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"failed to read configured peer SSH keys target={device_name(device)} peer_cmd_user={peer_user}\n"
-                f"stdout={result.stdout}\n"
-                f"stderr={result.stderr}"
-            )
-
-        configured = []
-        seen = set()
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            match = re.search(
-                r'^set system login user \S+ authentication (ssh-[^ ]+|ecdsa-[^ ]+) "([^"]+)"$',
-                line,
-            )
-            if not match:
-                continue
-            key_type = match.group(1).strip()
-            key_line = match.group(2).strip()
-            marker = (key_type, key_line)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            configured.append(marker)
-
-        return configured
 
     synced_targets = []
     failed_targets = []
@@ -966,78 +921,62 @@ def install_peer_authorized_keys(devices):
         last_error = None
 
         for attempt in range(1, max_attempts + 1):
-            dev = Device(host=host, user=user, passwd=password, port=22, gather_facts=False)
             try:
-                configured_keys = collect_configured_peer_keys(device, sync_target_user)
-                delete_cmds = [
-                    f'delete system login user {sync_target_user} authentication {key_type} "{key_line}"'
-                    for key_type, key_line in configured_keys
-                ]
-                set_cmds = [
-                    f'set system login user {sync_target_user} authentication {key_type} "{key_line}"'
-                    for key_type, key_line in desired_keys
-                ]
                 sources_label = ', '.join(sorted(source_names)) if source_names else '(none)'
-                if set(configured_keys) == set(desired_keys):
-                    # Already in sync - one-liner, no need to show action detail
-                    print(
-                        f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
-                        f"keys={len(set_cmds)} sources={sources_label} attempt={attempt}/{max_attempts}"
+                print(
+                    f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
+                    f"keys={len(desired_keys)} sources={sources_label} attempt={attempt}/{max_attempts}"
+                )
+                
+                # v3.3.2+: Write authorized_keys file directly via SSH, not via Junos config
+                # This allows SSH to use file-based auth (etsi_peer_view can SSH to peers)
+                # instead of config-based auth which is not accessible to SSH clients
+                auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
+                auth_keys_content = '\n'.join([f"{key_type} {key_line}" for key_type, key_line in desired_keys])
+                if auth_keys_content and not auth_keys_content.endswith('\n'):
+                    auth_keys_content += '\n'
+                
+                # Build SSH command to write authorized_keys file
+                # Use base64 encoding to avoid shell escaping issues with special characters in keys
+                import base64
+                auth_keys_b64 = base64.b64encode(auth_keys_content.encode()).decode()
+                cat_cmd = (
+                    f"mkdir -p /var/home/{sync_target_user}/.ssh && "
+                    f"echo '{auth_keys_b64}' | base64 -d > {auth_keys_path} && "
+                    f"chmod 600 {auth_keys_path}"
+                )
+                
+                # Execute via SSH as script_user (macsec_user, has shell access)
+                result = ssh_deploy_cmd(
+                    device,
+                    cat_cmd,
+                    timeout=20,
+                    include_failed_marker=True,
+                )
+                
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"failed to write authorized_keys target={target} path={auth_keys_path}\n"
+                        f"stdout={result.stdout}\n"
+                        f"stderr={result.stderr}"
                     )
-                else:
-                    # Change needed - show what will be done
-                    print(
-                        f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
-                        f"configured_keys={len(configured_keys)} desired_keys={len(set_cmds)} attempt={attempt}/{max_attempts}"
-                        f"\n       Action: replace {len(configured_keys)} current key(s) with {len(set_cmds)} expected key(s) in Junos authorized-keys for user '{sync_target_user}'"
-                        f"\n       Sources: {sources_label}"
-                    )
-                dev.open()
-                with Config(dev) as cu:
-                    for cmd in delete_cmds:
-                        try:
-                            cu.load(cmd, format="set", merge=True)
-                        except Exception as exc:
-                            if is_statement_not_found_warning(exc):
-                                continue
-                            raise
-                    for cmd in set_cmds:
-                        cu.load(cmd, format="set", merge=True)
-                    diff = cu.diff()
-                    if diff:
-                        cu.commit(comment=f"QKD sync peer authorized keys target={target}")
-                        print(f"[OK] peer SSH keys committed target={target} sync_target_user={sync_target_user}")
-                    else:
-                        try:
-                            cu.rollback()
-                        except Exception:
-                            pass
-                        print(f"[OK] peer SSH keys already synchronized target={target} sync_target_user={sync_target_user}")
+                
+                print(f"[OK] peer SSH keys synchronized target={target} sync_target_user={sync_target_user} path={auth_keys_path}")
                 synced_targets.append(target)
                 success = True
                 break
+                
             except Exception as exc:
                 last_error = exc
-                if is_config_locked_error(exc) and attempt < max_attempts:
+                # Retry on any error (no lock-specific error handling needed for file writes)
+                if attempt < max_attempts:
                     wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
-                    # Extract just the lock holder line from the error, not the full XML trace
-                    err_str = str(exc)
-                    lock_line = next(
-                        (line.strip() for line in err_str.splitlines() if 'on since' in line or 'exclusive' in line or 'pid' in line),
-                        err_str[:120]
-                    )
                     print(
-                        f"[WARN] peer SSH key sync target={target}: config locked (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {lock_line}"
+                        f"[WARN] peer SSH key sync target={target}: write failed (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {str(exc)[:120]}"
                     )
                     time.sleep(wait_seconds)
                     continue
                 break
-            finally:
-                try:
-                    dev.close()
-                except Exception:
-                    pass
-                time.sleep(3)
 
         if not success:
             failed_targets.append((target, str(last_error)))
