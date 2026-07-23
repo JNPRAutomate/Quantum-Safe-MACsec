@@ -2229,6 +2229,14 @@ def ensure_peer_ssh_key_bootstrap(links):
 
 
 def auto_rotate_peer_ssh_key_if_due(links):
+    """
+    Autonomous SSH key rotation for etsi_peer_view user (runtime, every 10 minutes).
+    
+    Called from run_master() every 60 seconds. If current key is > 10 minutes old,
+    regenerate it and notify one-hop peers to update their authorized_keys.
+    
+    Uses new SSH action 'update-peer-authorized-keys' (no shell required).
+    """
     peer_age = ssh_key_age_seconds(PEER_CMD_SSH_KEY)
     threshold = peer_cmd_rotation_seconds()
     if peer_age is None or peer_age < threshold:
@@ -2248,10 +2256,12 @@ def auto_rotate_peer_ssh_key_if_due(links):
 
     targets = peer_rotation_targets(links)
     if not targets:
+        log(f"PEER SSH KEY ROTATION SKIP reason=NO_TARGETS", "INFO", mode="SSHKEY")
         return True
 
     next_key_path, next_pub_path = generate_next_peer_ssh_keypair()
     if not next_key_path or not next_pub_path:
+        log(f"PEER SSH KEY ROTATION GENERATE FAIL", "ERROR", mode="SSHKEY")
         return False
 
     try:
@@ -2271,54 +2281,38 @@ def auto_rotate_peer_ssh_key_if_due(links):
         mode="SSHKEY",
     )
 
+    # Phase 1: Broadcast new public key to all one-hop peers via SSH action
+    # Each peer receives the action 'update-peer-authorized-keys' and updates their
+    # /var/home/etsi_peer_view/.ssh/authorized_keys locally without needing shell access
+    broadcast_failed = False
     for target in targets:
-        ok, stdout, stderr = apply_peer_public_key_on_remote(
+        ok = send_peer_authorized_keys_update(
             target["peer_ip"],
-            PEER_CMD_SSH_KEY,
             next_key_type,
             next_key_line,
-            remove=False,
-            remote_user=PEER_CMD_USER,
-            target_login_user=PEER_CMD_USER,
+            peer_id=DEVICE
         )
         if not ok:
             log(
-                f"PEER SSH KEY ROTATION APPLY FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
+                f"PEER SSH KEY ROTATION BROADCAST FAIL peer={target.get('peer')} peer_ip={target['peer_ip']}",
                 "ERROR",
                 mode="SSHKEY",
             )
-            return False
+            broadcast_failed = True
+            # Continue broadcasting to other peers even if one fails
+    
+    if broadcast_failed:
+        log(f"PEER SSH KEY ROTATION BROADCAST FAILED FOR SOME PEERS -> ABORT", "ERROR", mode="SSHKEY")
+        # Clean up the generated key files
+        try:
+            Path(next_key_path).unlink()
+            Path(next_pub_path).unlink()
+        except Exception:
+            pass
+        return False
 
-    for target in targets:
-        ok, stdout, stderr = validate_peer_ssh_key_on_remote(target["peer_ip"], next_key_path)
-        if not ok:
-            log(
-                f"PEER SSH KEY ROTATION VALIDATE FAIL peer={target.get('peer')} peer_ip={target['peer_ip']} peer_cmd_user={PEER_CMD_USER} stderr={stderr} stdout={stdout}",
-                "ERROR",
-                mode="SSHKEY",
-            )
-            return False
-
-    # Pre-authorize new key for SCRIPT_USER on peer BEFORE the swap.
-    # After the swap, connecting as SCRIPT_USER uses the NEW key, so the peer's
-    # SCRIPT_USER authorized_keys must already accept it for cleanup to succeed.
-    for target in targets:
-        ok, stdout, stderr = apply_peer_public_key_on_remote(
-            target["peer_ip"],
-            PEER_CMD_SSH_KEY,
-            next_key_type,
-            next_key_line,
-            remove=False,
-            remote_user=SCRIPT_USER,
-            target_login_user=SCRIPT_USER,
-        )
-        if not ok:
-            log(
-                f"PEER SSH KEY ROTATION PRE-AUTH SCRIPT_USER WARN peer={target.get('peer')} peer_ip={target['peer_ip']} stderr={stderr} stdout={stdout}",
-                "WARN",
-                mode="SSHKEY",
-            )
-
+    # Phase 2: Swap local keys only after all peers have been notified
+    # This ensures that the new key is active on all peers before we start using it
     try:
         Path(next_key_path).replace(PEER_CMD_SSH_KEY)
         Path(next_pub_path).replace(current_pub_path)
@@ -2328,46 +2322,67 @@ def auto_rotate_peer_ssh_key_if_due(links):
         log(f"PEER SSH KEY ROTATION SWAP FAIL error={str(e)}", "ERROR", mode="SSHKEY")
         return False
 
-    for target in targets:
-        ok, _, _ = apply_peer_public_key_on_remote(
-            target["peer_ip"],
-            PEER_CMD_SSH_KEY,
-            current_key_type,
-            current_key_line,
-            remove=True,
-            remote_user=PEER_CMD_USER,
-            target_login_user=PEER_CMD_USER,
-        )
-        if not ok:
-            log(
-                f"PEER SSH KEY ROTATION CLEANUP WARN peer={target.get('peer')} peer_ip={target['peer_ip']} remote_user={PEER_CMD_USER} target_login_user={PEER_CMD_USER} old_key_retained=True",
-                "ERROR",
-                mode="SSHKEY",
-            )
-
-    # Remove old key from SCRIPT_USER authorized_keys on peer (now using NEW key which was pre-authorized above)
-    for target in targets:
-        ok, _, _ = apply_peer_public_key_on_remote(
-            target["peer_ip"],
-            PEER_CMD_SSH_KEY,
-            current_key_type,
-            current_key_line,
-            remove=True,
-            remote_user=SCRIPT_USER,
-            target_login_user=SCRIPT_USER,
-        )
-        if not ok:
-            log(
-                f"PEER SSH KEY ROTATION CLEANUP SCRIPT_USER WARN peer={target.get('peer')} peer_ip={target['peer_ip']} old_key_retained=True",
-                "WARN",
-                mode="SSHKEY",
-            )
-
     log(
-        f"PEER SSH KEY ROTATION COMPLETE ssh_key={PEER_CMD_SSH_KEY} targets={len(targets)}",
+        f"PEER SSH KEY ROTATION COMPLETE ssh_key={PEER_CMD_SSH_KEY} targets={len(targets)} old_key_age_seconds={peer_age}",
         "INFO",
         mode="SSHKEY",
     )
+    return True
+
+
+def send_peer_authorized_keys_update(peer_ip, key_type, key_line, peer_id=None):
+    """
+    Send SSH command to remote peer to update their etsi_peer_view authorized_keys.
+    
+    Used during runtime autonomous SSH key rotation (every 10 minutes).
+    No lock needed - authorized_keys update is idempotent and doesn't affect keychains.
+    
+    Args:
+        peer_ip: IP of the peer
+        key_type: SSH key type (e.g., "ssh-ed25519")
+        key_line: Full public key line
+        peer_id: Name/ID of the peer sending the key (for logging and identification)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    # Escape special characters in key_line for shell safety
+    key_line_safe = shlex.quote(key_line)
+    
+    cmd = f"op qkd_onbox.py action update-peer-authorized-keys peer-id {shlex.quote(peer_id or DEVICE)} peer-key-type {shlex.quote(key_type)} peer-key-line {key_line_safe}"
+
+    log(f"SSH UPDATE-AUTHKEYS peer={peer_ip} peer_id={peer_id} cmd_length={len(cmd)}", "INFO", mode="SSHKEY")
+
+    ssh_cmd = [
+        "ssh",
+        "-i", PEER_CMD_SSH_KEY,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+        f"{PEER_CMD_USER}@{peer_ip}",
+        cmd,
+    ]
+    
+    try:
+        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except subprocess.TimeoutExpired:
+        log(f"SSH UPDATE-AUTHKEYS TIMEOUT peer={peer_ip}", "ERROR", mode="SSHKEY")
+        return False
+    except Exception as e:
+        log(f"SSH UPDATE-AUTHKEYS ERROR peer={peer_ip} error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    log(f"SSH UPDATE-AUTHKEYS RC={result.returncode} peer={peer_ip}", "INFO", mode="SSHKEY")
+    
+    if result.returncode != 0:
+        combined = f"{stdout}\n{stderr}"
+        failure_markers = ["ERROR", "Traceback", "PermissionError"]
+        if any(marker in combined for marker in failure_markers):
+            log(f"SSH UPDATE-AUTHKEYS FAIL peer={peer_ip} stderr={stderr} stdout={stdout}", "ERROR", mode="SSHKEY")
+            return False
+    
     return True
 
 
@@ -2506,6 +2521,9 @@ def parse_slave():
     generation = None
     start_time = None
     batch_b64 = None
+    peer_id = None
+    peer_key_type = None
+    peer_key_line = None
 
     for i, a in enumerate(sys.argv):
         a = a.lstrip("-")
@@ -2524,12 +2542,84 @@ def parse_slave():
             start_time = sys.argv[i + 1]
         elif a == "batch-b64" and i + 1 < len(sys.argv):
             batch_b64 = sys.argv[i + 1]
-    return action, key_id, iface, generation, start_time, batch_b64
+        elif a == "peer-id" and i + 1 < len(sys.argv):
+            peer_id = sys.argv[i + 1]
+        elif a == "peer-key-type" and i + 1 < len(sys.argv):
+            peer_key_type = sys.argv[i + 1]
+        elif a == "peer-key-line" and i + 1 < len(sys.argv):
+            peer_key_line = sys.argv[i + 1]
+    return action, key_id, iface, generation, start_time, batch_b64, peer_id, peer_key_type, peer_key_line
 
 
 # ----------------------------
 # SLAVE ACTION HANDLERS
 # ----------------------------
+
+def run_slave_update_peer_authorized_keys(peer_id, peer_key_type, peer_key_line):
+    """
+    Runtime SSH key rotation action: Update /var/home/etsi_peer_view/.ssh/authorized_keys
+    with a new public key from a peer.
+    
+    Called by remote peers (via SSH) to update their public key in local authorized_keys.
+    No shell access needed - operates on authorized_keys file directly.
+    
+    Args:
+        peer_id: Name of the peer sending the key (e.g., "MX1")
+        peer_key_type: Key type (e.g., "ssh-ed25519")
+        peer_key_line: Full public key line (e.g., "ssh-ed25519 AAAAB3NzaC1...")
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    auth_keys_dir = f"/var/home/{PEER_CMD_USER}/.ssh"
+    auth_keys_path = f"{auth_keys_dir}/authorized_keys"
+    
+    try:
+        # Ensure .ssh directory exists
+        Path(auth_keys_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Read current authorized_keys (if it exists)
+        existing_lines = []
+        if Path(auth_keys_path).exists():
+            try:
+                existing_lines = Path(auth_keys_path).read_text().strip().split('\n')
+                existing_lines = [line.strip() for line in existing_lines if line.strip()]
+            except Exception as e:
+                log(f"UPDATE PEER AUTHKEYS READ FAIL path={auth_keys_path} error={str(e)}", "ERROR", mode="SSHKEY")
+                return False
+        
+        # Mark the new key with peer_id as a comment for later identification
+        # Format: ssh-ed25519 AAAAB3... # qkd-peer:MX1
+        peer_marker = f"# qkd-peer:{peer_id}"
+        new_key_line = f"{peer_key_line} {peer_marker}"
+        
+        # Remove any existing key from this peer, then add the new one
+        updated_lines = []
+        found_existing = False
+        for line in existing_lines:
+            if f"qkd-peer:{peer_id}" not in line:
+                updated_lines.append(line)
+            else:
+                found_existing = True
+                log(f"UPDATE PEER AUTHKEYS REPLACE peer={peer_id}", "INFO", mode="SSHKEY")
+        
+        # Add the new key
+        updated_lines.append(new_key_line)
+        
+        # Write back to file
+        content = '\n'.join(updated_lines)
+        if content and not content.endswith('\n'):
+            content += '\n'
+        Path(auth_keys_path).write_text(content)
+        Path(auth_keys_path).chmod(0o600)
+        
+        log(f"UPDATE PEER AUTHKEYS OK peer={peer_id} key_type={peer_key_type} path={auth_keys_path}", "INFO", mode="SSHKEY")
+        return True
+        
+    except Exception as e:
+        log(f"UPDATE PEER AUTHKEYS FAIL peer={peer_id} error={str(e)}", "ERROR", mode="SSHKEY")
+        return False
+
 
 def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     if not start_time:
@@ -3244,7 +3334,7 @@ def main():
         print(f"ERROR UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain")
         sys.exit(1)
 
-    action, key_id, iface, generation, start_time, batch_b64 = parse_slave()
+    action, key_id, iface, generation, start_time, batch_b64, peer_id, peer_key_type, peer_key_line = parse_slave()
 
     if action:
         if not config_enabled() and action != "status":
@@ -3300,6 +3390,14 @@ def main():
                     release_lock()
             finally:
                 release_action_lock(iface, action)
+            sys.exit(0 if ok else 1)
+
+        if action == "update-peer-authorized-keys":
+            if not peer_id or not peer_key_type or not peer_key_line:
+                log("INVALID UPDATE-PEER-AUTHORIZED-KEYS ARGUMENTS", "ERROR", mode="SSHKEY")
+                print("ERROR INVALID UPDATE-PEER-AUTHORIZED-KEYS ARGUMENTS")
+                sys.exit(1)
+            ok = run_slave_update_peer_authorized_keys(peer_id, peer_key_type, peer_key_line)
             sys.exit(0 if ok else 1)
 
         log(f"UNKNOWN ACTION action={action}", "ERROR")
