@@ -2010,11 +2010,16 @@ def do_enc(peer_sae):
     return data["key_ID"], data["key"]
 
 
-def do_dec(peer_sae, key_id):
+def do_dec(peer_sae, key_id, kme_ip=None, kme_port=None):
+    if not kme_ip:
+        kme_ip = KME_IP
+    if not kme_port:
+        kme_port = KME_PORT
+    
     for i in range(max(1, DEC_RETRY)):
-        log(f"DEC TRY {i} key_id={key_id}", "DEBUG", mode="SLAVE")
+        log(f"DEC TRY {i} key_id={key_id} kme={kme_ip}:{kme_port}", "DEBUG", mode="SLAVE")
         try:
-            url = kme_url(peer_sae, "dec_keys", f"?key_ID={key_id}&key_size={QKD_KEY_SIZE}")
+            url = f"https://{kme_ip}:{kme_port}/api/v1/keys/{peer_sae}/dec_keys?key_ID={key_id}&key_size={QKD_KEY_SIZE}"
             r = requests.get(url, cert=(CERT, KEY), verify=CA, timeout=5)
             if r.status_code != 200:
                 log(f"DEC HTTP status={r.status_code} key_id={key_id}", "DEBUG", mode="SLAVE")
@@ -2752,7 +2757,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
 
     dec_start_ms = now_ms()
     customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
-    key = do_dec(link["peer_sae"], key_id)
+    key = do_dec(link["peer_sae"], key_id, link.get("peer_kme_ip"), link.get("peer_kme_port"))
     dec_latency_ms = elapsed_ms(dec_start_ms)
 
     if not key:
@@ -2864,7 +2869,7 @@ def run_slave_install_key_batch(batch_b64, iface):
         rotation = rotation_id_for(iface, generation, key_id)
         customer_event("PEER_INSTALL_REQUEST", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, start_time=start_time)
         customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
-        key = do_dec(link["peer_sae"], key_id)
+        key = do_dec(link["peer_sae"], key_id, link.get("peer_kme_ip"), link.get("peer_kme_port"))
         if not key:
             record_kme_failure(peer, iface, state, "DEC_FAILED")
             print(f"ERROR DEC FAILED key_id={key_id}")
