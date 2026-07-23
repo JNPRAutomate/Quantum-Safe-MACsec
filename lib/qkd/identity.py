@@ -926,25 +926,26 @@ def clean_peer_authorized_keys_file(device):
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
     
-    # First pass: clean any malformed/stale lines from previous deployments
-    for device in devices:
-        try:
-            clean_peer_authorized_keys_file(device)
-        except Exception as exc:
-            name = device_name(device)
-            print(f"[WARN] failed to clean authorized_keys on {name}: {exc}")
+    # Use Junos configuration (set system login user ... authorized-keys) instead of shell scripts
+    # This avoids sticky-bit, ownership, and root-escalation problems entirely.
+    install_peer_authorized_keys_via_junos_config(devices)
+
+
+def install_peer_authorized_keys_via_junos_config(devices):
+    """
+    Install peer SSH authorized keys via Junos system login configuration.
+    This is much cleaner than trying to write /var/home/.ssh/authorized_keys via shell.
     
+    Example config:
+      set system login user etsi_peer_view authorized-keys "ssh-ed25519 AAA... etsi_peer_view@MX1"
+      set system login user etsi_peer_view authorized-keys "ssh-ed25519 AAA... etsi_peer_view@MX2"
+    """
+    devices = normalize_devices(devices)
     pub_keys = collect_script_user_public_keys(devices)
     device_names = {device_name(d) for d in devices}
-    max_attempts = 5
-    retry_wait_seconds = [2, 4, 8, 12]
-
+    peer_cmd_user = qkd_peer_cmd_user()
+    
     def linked_peer_sources(target_device):
-        """
-        Return source device names that are expected to open peer SSH sessions
-        towards target_device. We scope authorized keys to direct topology peers
-        instead of installing keys from the entire fleet.
-        """
         sources = set()
         for link in target_device.get("links", []) or []:
             if not isinstance(link, dict):
@@ -953,149 +954,59 @@ def install_peer_authorized_keys(devices):
             if peer and peer in device_names:
                 sources.add(str(peer))
         return sources
-
-    def parse_public_key(line):
-        key_line = (line or "").strip()
-        parts = key_line.split()
-        if len(parts) < 2:
-            return None, None
-        key_type = parts[0].strip()
-        if key_type.startswith("ssh-") or key_type.startswith("ecdsa-"):
-            return key_type, key_line
-        return None, None
-
+    
     synced_targets = []
     failed_targets = []
-
+    
     for device in devices:
         target = device_name(device)
-        # Cross-device QKD actions (install-key/status) execute as SCRIPT_USER.
-        # But peer transport keys are synchronized for PEER_CMD_USER (etsi_peer_view) across the fleet.
-        # etsi_peer_view needs these keys to authenticate and transport key-id batches from master to slave.
-        sync_target_user = qkd_peer_cmd_user()
         host = device_host(device)
-        auth = device.get("auth") or {}
-        user = auth.get("username")
-        password = auth.get("password")
-        if not user or not password:
-            failed_targets.append((target, "missing auth for peer key sync"))
-            continue
-
+        
         source_names = linked_peer_sources(device)
-        source_names.add(target)  # Always include device itself so it can SSH to itself
+        source_names.add(target)  # Always include self
+        
         if not source_names:
-            print(f"[WARN] no linked peer sources found for target={target}; peer authorized_keys will be cleared")
-
-        seen = set()
-        desired_keys = []
-        for source_name in sorted(source_names):
-            pub_key = pub_keys.get(source_name)
-            if not pub_key:
-                raise RuntimeError(
-                    f"missing peer public key source={source_name} target={target}; run deploy/bootstrap on source first"
-                )
-            key_type, key_line = parse_public_key(pub_key)
-            if not key_type or not key_line:
-                raise RuntimeError(
-                    f"invalid peer public key format source={source_name} target={target} raw={pub_key}"
-                )
-            marker = (key_type, key_line)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            desired_keys.append(marker)
-
-        success = False
-        last_error = None
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                sources_label = ', '.join(sorted(source_names)) if source_names else '(none)'
-                print(
-                    f"[INFO] peer SSH key sync target={target} sync_target_user={sync_target_user} "
-                    f"keys={len(desired_keys)} sources={sources_label} attempt={attempt}/{max_attempts}"
-                )
-                
-                # v3.3.4+: Two-stage write using cli start shell for root context.
-                # request_shell_execute via NETCONF runs as the authenticated user (macsec_user),
-                # not root. macsec_user cannot chown to etsi_peer_view, and sticky bit prevents
-                # mv-replacing files owned by another user. Wrapping the file operations with
-                # 'cli -c "start shell command ..."' escalates to root via Junos CLI (super-user class).
-                auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
-                tmp_path = f"/tmp/authorized_keys_{sync_target_user}.tmp"
-                # key_line already contains the full line (type + key + comment); do NOT prepend key_type again
-                auth_keys_content = '\n'.join([key_line for key_type, key_line in desired_keys])
-                if auth_keys_content and not auth_keys_content.endswith('\n'):
-                    auth_keys_content += '\n'
-                
-                # Escape content for printf: backslashes, newlines, and single quotes
-                # For use in printf '{content}', we need to escape all three:
-                # - backslash: \ -> \\
-                # - newline: \n (printf interprets)
-                # - quote: ' -> '\'' (close quote, escaped quote, open quote)
-                escaped_content = (
-                    auth_keys_content
-                    .replace('\\', '\\\\')      # backslash
-                    .replace('\n', '\\n')       # newline
-                    .replace("'", "'\\''")      # single quote
-                )
-                
-                # Step 1 (as macsec_user via request_shell_execute): write content to /tmp
-                # Step 2 (as root via cli -> start shell): mv/chmod/chown — needs root for
-                #   chown to etsi_peer_view and to replace sticky-bit-protected files
-                # NOTE: request_shell_execute runs in csh on Junos. csh does NOT support \"
-                # inside "..." strings. Use single quotes for the cli -c argument, and
-                # double quotes only for the inner start shell command argument.
-                inner_shell_cmd = (
-                    f"mv {tmp_path} {auth_keys_path} && "
-                    f"chmod 600 {auth_keys_path} && "
-                    f"chown {sync_target_user} {auth_keys_path} && "
-                    f"echo OK"
-                )
-                write_cmd = (
-                    f"mkdir -p /var/home/{sync_target_user}/.ssh && "
-                    f"printf '{escaped_content}' > {tmp_path} && "
-                    f"cli -c 'start shell command \"{inner_shell_cmd}\"'"
-                )
-                
-                result = ssh_deploy_cmd(device, write_cmd, timeout=30, include_failed_marker=False)
-                
-                if 'OK' not in result.stdout:
+            print(f"[WARN] no linked peer sources found for target={target}; skipping peer authorized-keys config")
+            continue
+        
+        try:
+            # Collect desired keys
+            desired_keys = []
+            for source_name in sorted(source_names):
+                pub_key = pub_keys.get(source_name)
+                if not pub_key:
                     raise RuntimeError(
-                        f"failed to write authorized_keys target={target} path={auth_keys_path}\n"
-                        f"stdout={result.stdout}\n"
-                        f"stderr={result.stderr}"
+                        f"missing peer public key source={source_name} target={target}; run deploy/bootstrap on source first"
                     )
-                
-                print(f"[OK] peer SSH keys synchronized target={target} sync_target_user={sync_target_user} path={auth_keys_path}")
-                synced_targets.append(target)
-                success = True
-                break
-                
-            except Exception as exc:
-                last_error = exc
-                # Retry on any error (no lock-specific error handling needed for file writes)
-                if attempt < max_attempts:
-                    wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
-                    print(
-                        f"[WARN] peer SSH key sync target={target}: write failed (attempt={attempt}/{max_attempts}, retry in {wait_seconds}s) — {str(exc)[:120]}"
-                    )
-                    time.sleep(wait_seconds)
-                    continue
-                break
-
-        if not success:
-            failed_targets.append((target, str(last_error)))
-
-    # PHASE 2: DISABLED - macsec_user SSH key rotation disabled (v3.3.2)
-    # Reason: Investigation showed Phase 2 caused SSH key sync asymmetry (ACX1 -> ACX2 works, but ACX2 -> ACX1 fails)
-    # This caused state files to remain in PENDING status on some devices.
-    # Solution: Maintain macsec_user SSH key static (no rotation) to keep peer SSH synchronized.
-    # Only etsi_peer_view (Phase 1) rotates.
-    # TODO: Revisit Phase 2 when core SSH sync issue is resolved.
-    print("\n[*] Phase 2: SKIPPED - macsec_user SSH key rotation is disabled (v3.3.2)")
-
-    print("=== QKD SSH key sync summary ===")
+                # pub_key is the full line (type + key + comment) — use as-is
+                desired_keys.append(pub_key)
+            
+            # Build config commands
+            config_lines = []
+            for key_line in desired_keys:
+                # Escape quotes in the key
+                escaped_key = key_line.replace('"', '\\"')
+                config_lines.append(f"set system login user {peer_cmd_user} authorized-keys \"{escaped_key}\"")
+            
+            print(
+                f"[INFO] peer SSH key config target={target} user={peer_cmd_user} "
+                f"keys={len(desired_keys)} sources={', '.join(sorted(source_names))}"
+            )
+            
+            # Connect and apply config
+            with Device(host=host, **device.get("auth", {})) as dev:
+                with Config(dev, mode='private') as conf:
+                    for cmd in config_lines:
+                        conf.load(cmd, format='set')
+                    conf.commit()
+            
+            print(f"[OK] peer SSH keys configured target={target} user={peer_cmd_user} path=system.login.user")
+            synced_targets.append(target)
+            
+        except Exception as exc:
+            failed_targets.append((target, str(exc)))
+    
+    print("\n=== QKD SSH key sync summary ===")
     print(f"Result: {'OK' if not failed_targets else 'FAILED'}")
     print(f"Synced targets: {len(synced_targets)}")
     if failed_targets:
