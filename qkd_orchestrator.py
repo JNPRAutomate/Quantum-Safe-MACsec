@@ -1099,10 +1099,16 @@ def handle_deploy(args):
     devices = all_runtime_devices
 
     def peer_sync_scope(selected_devices, full_inventory):
+        """
+        Return devices to sync peer SSH keys for.
+        Only include peers that are ALSO in the current deploy scope.
+        Exclude peers that are defined but not being deployed now.
+        """
         scoped = {}
         selected_names = set(selected_devices.keys())
         peer_names = set()
 
+        # Collect peer names from selected devices
         for device in selected_devices.values():
             if not isinstance(device, dict):
                 continue
@@ -1113,7 +1119,11 @@ def handle_deploy(args):
                 if peer:
                     peer_names.add(str(peer))
 
-        for name in sorted(selected_names | peer_names):
+        # Only include peers that are ALSO in the selected devices being deployed
+        # Do NOT include peers that are not in the current deploy scope
+        peers_to_include = peer_names & selected_names
+
+        for name in sorted(selected_names | peers_to_include):
             device = full_inventory.get(name)
             if isinstance(device, dict):
                 scoped[name] = device
