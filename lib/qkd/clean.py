@@ -1,5 +1,6 @@
 # qkd_clean.py
 
+import os
 import yaml
 import shutil
 from lxml import etree
@@ -561,6 +562,45 @@ def handle_clean(args):
             print("Using inventory_base devices")
         else:
             print("No devices found anywhere -> skipping remote device cleanup")
+
+    inventory_base = load_inventory_base()
+    secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    clean_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or "root"
+    )
+
+    clean_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+    )
+
+    if not clean_password:
+        raise RuntimeError(
+            "Missing clean credentials. Set QKD_BOOTSTRAP_PASSWORD (recommended) or "
+            "configure one of secrets.bootstrap_password/deploy_password/root_password/default_password."
+        )
+
+    for _, device in devices.items():
+        if not isinstance(device, dict):
+            continue
+        auth = device.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+            device["auth"] = auth
+        auth["username"] = clean_user
+        auth["password"] = clean_password
+
+    print(f"Remote clean auth user = {clean_user}")
 
     failed = []
 
