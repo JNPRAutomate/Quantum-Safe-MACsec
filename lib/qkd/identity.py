@@ -928,8 +928,8 @@ def install_peer_authorized_keys(devices):
                     f"keys={len(desired_keys)} sources={sources_label} attempt={attempt}/{max_attempts}"
                 )
                 
-                # v3.3.2+: Write authorized_keys file via shell printf with escaped newlines
-                # Avoids heredoc issues and shell quoting problems
+                # v3.3.2+: Write authorized_keys file via tee + printf (avoids > redirect permission issues on Junos)
+                # tee has different permission handling than shell redirect and works better on restricted filesystems
                 auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
                 auth_keys_content = '\n'.join([f"{key_type} {key_line}" for key_type, key_line in desired_keys])
                 if auth_keys_content and not auth_keys_content.endswith('\n'):
@@ -938,10 +938,10 @@ def install_peer_authorized_keys(devices):
                 # Escape content for printf: replace newlines with \n, escape backslashes
                 escaped_content = auth_keys_content.replace('\\', '\\\\').replace('\n', '\\n')
                 
-                # Build single-line command with printf
+                # Build single-line command with printf | tee (more permissive than > on Junos)
                 write_cmd = (
                     f"mkdir -p /var/home/{sync_target_user}/.ssh && "
-                    f"printf '{escaped_content}' > {auth_keys_path} && "
+                    f"printf '{escaped_content}' | tee {auth_keys_path} >/dev/null && "
                     f"chmod 600 {auth_keys_path} && "
                     f"chown {sync_target_user}:{sync_target_user} {auth_keys_path} && "
                     f"echo OK"
