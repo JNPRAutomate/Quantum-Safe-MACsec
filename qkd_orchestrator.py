@@ -1362,6 +1362,12 @@ def handle_deploy(args):
         print("PHASE 6 COMPLETE: All devices validated")
         print("="*80 + "\n")
 
+    from datetime import datetime
+    deploy_end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("="*80)
+    print(f"DEPLOY COMPLETED at {deploy_end_time} UTC")
+    print("="*80 + "\n")
+
 
 # ---------------------------------------------------------------------------
 # VALIDATE HANDLER
