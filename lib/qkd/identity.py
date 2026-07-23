@@ -230,6 +230,31 @@ def ssh_deploy_cmd(device, command, timeout=30, include_failed_marker=True):
     )
 
 
+def pyez_cli_cmd(device, command, timeout=60, include_failed_marker=True):
+    device = normalize_device(device)
+    name = device_name(device)
+    host = device_host(device)
+    auth = device.get("auth") or {}
+    user = auth.get("username")
+    passwd = auth.get("password")
+    if not user or not passwd:
+        return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
+    dev = Device(host=host, user=user, passwd=passwd, port=22, timeout=timeout)
+    try:
+        dev.open()
+        rsp = dev.rpc.cli(command, format="text")
+        text = rpc_output_to_text(rsp)
+        has_error = shell_output_has_error(text, include_failed_marker=include_failed_marker)
+        return CommandResult(1 if has_error else 0, text.strip(), "")
+    except Exception as e:
+        return CommandResult(1, "", str(e))
+    finally:
+        try:
+            dev.close()
+        except Exception:
+            pass
+
+
 def ssh_cmd(device, command, user, timeout=30):
     host = device_host(device)
     cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
@@ -460,15 +485,32 @@ def check_script_user_ssh_identity(device):
 def check_script_user_authorized_keys(device):
     device = normalize_device(device)
     name = device_name(device)
+    script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     pub_path = qkd_ssh_public_key()
     auth_path = qkd_authorized_keys()
     tmp_path = f"{auth_path}.tmp"
+    owner_result = ssh_deploy_cmd(device, f"ls -l {auth_path}", timeout=20, include_failed_marker=False)
+    owner_line = (owner_result.stdout or "").strip()
+    if owner_result.returncode == 0 and owner_line:
+        owner_fields = owner_line.split()
+        if len(owner_fields) >= 4 and owner_fields[2] != script_user:
+            delete_result = pyez_cli_cmd(device, f"file delete {auth_path}", timeout=30, include_failed_marker=False)
+            if delete_result.returncode != 0:
+                raise RuntimeError(
+                    f"authorized_keys cleanup failed on {name}\n"
+                    f"expected_owner={script_user}\n"
+                    f"found={owner_line}\n"
+                    f"stdout={delete_result.stdout}\n"
+                    f"stderr={delete_result.stderr}\n"
+                    f"hint=repair with deploy/root credentials via lib/common/script_user_bootstrap.py --ask-deploy-password"
+                )
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -s {pub_path}; "
         f"cp {pub_path} {tmp_path}; "
         f"chmod 600 {tmp_path}; "
+        f"test ! -e {auth_path} || rm -f {auth_path}; "
         f"mv -f {tmp_path} {auth_path}; "
         f"ls -l {auth_path}"
     )
