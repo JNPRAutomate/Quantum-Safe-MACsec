@@ -965,15 +965,14 @@ def install_peer_authorized_keys(devices):
                     ssh_cmd_array.extend(["-i", deploy_key, "-o", "IdentitiesOnly=yes"])
                 ssh_cmd_array.extend([f"{deploy_user}@{host}", write_cmd])
                 
-                # Execute with stdin
+                # Execute with stdin (timeout goes in communicate, not Popen)
                 ssh_proc = subprocess.Popen(
                     ssh_cmd_array,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    timeout=20,
                 )
-                proc_stdout, proc_stderr = ssh_proc.communicate(input=auth_keys_content.encode())
+                proc_stdout, proc_stderr = ssh_proc.communicate(input=auth_keys_content.encode(), timeout=20)
                 
                 if ssh_proc.returncode != 0:
                     raise RuntimeError(
