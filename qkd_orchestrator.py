@@ -1227,11 +1227,21 @@ def handle_deploy(args):
         print(f"Deploy auth source: inventory_base script_user={script_user}")
 
     if args.shipment_preload:
-        print("Shipment preload mode: predeploy validation skipped (SCRIPT_USER may not exist yet).")
+        print("\n" + "="*80)
+        print("PHASE 1: PREDEPLOY VALIDATION - SKIPPED (Shipment preload mode)")
+        print("="*80 + "\n")
     elif args.skip_predeploy_validation:
-        print("Skipping predeploy validation (--skip-predeploy-validation flag set).")
+        print("\n" + "="*80)
+        print("PHASE 1: PREDEPLOY VALIDATION - SKIPPED (flag set)")
+        print("="*80 + "\n")
     else:
+        print("\n" + "="*80)
+        print("PHASE 1: PREDEPLOY VALIDATION")
+        print("="*80 + "\n")
         validate_all_devices(devices, phase="predeploy", shipment_aware=True)
+        print("\n" + "="*80)
+        print("PHASE 1 COMPLETE: All devices validated")
+        print("="*80 + "\n")
 
     # Ensure peer transport keys are synchronized before provisioning. This
     # prevents runtime master->peer bootstrap from depending on a later
@@ -1239,7 +1249,13 @@ def handle_deploy(args):
     # device hits a provisioning failure.
     # Skip this if we're already deploying to all devices (to avoid redundant sync)
     if not args.shipment_preload and len(devices) < len(all_runtime_devices):
+        print("="*80)
+        print("PHASE 2: PEER SSH KEY SYNCHRONIZATION")
+        print("="*80 + "\n")
         install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
+        print("\n" + "="*80)
+        print("PHASE 2 COMPLETE: Peer SSH keys synchronized")
+        print("="*80 + "\n")
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
@@ -1289,6 +1305,9 @@ def handle_deploy(args):
         else:
             print("Shipment preload auth source: runtime device auth fallback")
 
+    print("="*80)
+    print("PHASE 3: ON-BOX SCRIPT DEPLOYMENT")
+    print("="*80 + "\n")
     deploy_onbox(
         log,
         devices,
@@ -1297,11 +1316,17 @@ def handle_deploy(args):
         preferred_password=deploy_password,
         require_script_user=not args.shipment_preload,
     )
+    print("\n" + "="*80)
+    print("PHASE 3 COMPLETE: On-box scripts deployed")
+    print("="*80 + "\n")
 
     if args.shipment_preload:
         print("Shipment preload completed: qkd_onbox.py + placeholder JSON installed; runtime feature remains inactive until customer deploy.")
         return
 
+    print("="*80)
+    print("PHASE 4: QKD CONFIGURATION & PROVISIONING")
+    print("="*80 + "\n")
     run_provisioning(
         log=log,
         dry_run=False,
@@ -1310,15 +1335,32 @@ def handle_deploy(args):
         debug=args.debug,
         devices=devices,
     )
+    print("\n" + "="*80)
+    print("PHASE 4 COMPLETE: QKD configuration applied")
+    print("="*80 + "\n")
 
     # Always synchronize peer command authorized keys during deploy so
     # runtime master->peer install-key does not depend on postdeploy validation.
+    print("="*80)
+    print("PHASE 5: FINAL PEER SSH KEY SYNCHRONIZATION")
+    print("="*80 + "\n")
     install_peer_authorized_keys(all_runtime_devices)
+    print("\n" + "="*80)
+    print("PHASE 5 COMPLETE: Final peer SSH keys synchronized")
+    print("="*80 + "\n")
 
     if args.skip_postdeploy_validation:
-        print("Skipping postdeploy validation (--skip-postdeploy-validation flag set).")
+        print("="*80)
+        print("PHASE 6: POSTDEPLOY VALIDATION - SKIPPED (flag set)")
+        print("="*80 + "\n")
     else:
+        print("="*80)
+        print("PHASE 6: POSTDEPLOY VALIDATION")
+        print("="*80 + "\n")
         validate_all_devices(devices, phase="postdeploy")
+        print("\n" + "="*80)
+        print("PHASE 6 COMPLETE: All devices validated")
+        print("="*80 + "\n")
 
 
 # ---------------------------------------------------------------------------
