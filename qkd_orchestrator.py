@@ -36,6 +36,7 @@ from lib.common.config import (
     resolve_inventory,
     load_runtime_pki_profile,
     load_qkd_policy_template,
+    load_runtime_qkd_policy,
 )
 from lib.common.script_user_bootstrap import bootstrap_script_users
 from lib.qkd.inventory_builder import (
@@ -1243,15 +1244,25 @@ def handle_deploy(args):
         validate_all_devices(devices, phase="predeploy", shipment_aware=True)
         phase_end(1, "All devices validated")
 
+    # Skip peer SSH key sync when rotation is disabled (keys are static, no sync needed).
+    _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
+    _peer_rotation_enabled = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600)) > 0
+
     # Ensure peer transport keys are synchronized before provisioning. This
     # prevents runtime master->peer bootstrap from depending on a later
     # postdeploy-only step, and keeps peer SSH working even if a subsequent
     # device hits a provisioning failure.
     # Skip this if we're already deploying to all devices (to avoid redundant sync)
-    if not args.shipment_preload and len(devices) < len(all_runtime_devices):
+    if not _peer_rotation_enabled:
+        phase_start(2, "PEER SSH KEY SYNCHRONIZATION", "SKIPPED (peer_cmd_rotation disabled)")
+        phase_end(2, "Phase 2 skipped")
+    elif not args.shipment_preload and len(devices) < len(all_runtime_devices):
         phase_start(2, "PEER SSH KEY SYNCHRONIZATION", f"(scoped to {len(devices)} devices)")
         install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
         phase_end(2, "Peer SSH keys synchronized")
+    else:
+        phase_start(2, "PEER SSH KEY SYNCHRONIZATION", "SKIPPED (deploying all devices)")
+        phase_end(2, "Phase 2 skipped")
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
@@ -1329,9 +1340,13 @@ def handle_deploy(args):
 
     # Always synchronize peer command authorized keys during deploy so
     # runtime master->peer install-key does not depend on postdeploy validation.
-    phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", f"({len(all_runtime_devices)} total devices)")
-    install_peer_authorized_keys(all_runtime_devices)
-    phase_end(5, "Final peer SSH keys synchronized")
+    if not _peer_rotation_enabled:
+        phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", "SKIPPED (peer_cmd_rotation disabled)")
+        phase_end(5, "Phase 5 skipped")
+    else:
+        phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", f"({len(all_runtime_devices)} total devices)")
+        install_peer_authorized_keys(all_runtime_devices)
+        phase_end(5, "Final peer SSH keys synchronized")
 
     if args.skip_postdeploy_validation:
         phase_start(6, "POSTDEPLOY VALIDATION", "SKIPPED (flag set)")
