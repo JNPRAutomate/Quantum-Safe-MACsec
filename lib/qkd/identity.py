@@ -1012,6 +1012,15 @@ def install_peer_authorized_keys(devices):
 
 def check_peer_ssh_from_device(device):
     device = normalize_device(device)
+    
+    # Skip peer SSH checks when rotation is disabled (no peer keys synchronized)
+    _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
+    _peer_rotation_secs = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600))
+    _peer_rotation_enabled = _peer_rotation_secs > 0
+    
+    if not _peer_rotation_enabled:
+        return
+    
     name = device_name(device)
     peer_user = qkd_peer_cmd_user(device)
     key_path = qkd_peer_cmd_ssh_private_key()
