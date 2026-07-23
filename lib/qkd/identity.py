@@ -497,14 +497,17 @@ def check_script_user_authorized_keys(device):
         if len(owner_fields) >= 4 and owner_fields[2] != script_user:
             delete_result = pyez_cli_cmd(device, f"file delete {auth_path}", timeout=30, include_failed_marker=False)
             if delete_result.returncode != 0:
-                raise RuntimeError(
-                    f"authorized_keys cleanup failed on {name}\n"
+                # On some MX images this file is root-owned/immutable from historical runs.
+                # Do not hard-fail predeploy if we cannot replace it as SCRIPT_USER.
+                print(
+                    f"[WARN] authorized_keys cleanup not permitted on {name}; continuing with config-based peer SSH auth\n"
                     f"expected_owner={script_user}\n"
                     f"found={owner_line}\n"
                     f"stdout={delete_result.stdout}\n"
                     f"stderr={delete_result.stderr}\n"
-                    f"hint=repair with deploy/root credentials via lib/common/script_user_bootstrap.py --ask-deploy-password"
+                    f"hint=optional repair with deploy/root credentials via lib/common/script_user_bootstrap.py --ask-deploy-password"
                 )
+                return
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -s {pub_path}; "

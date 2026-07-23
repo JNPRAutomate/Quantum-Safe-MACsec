@@ -356,6 +356,28 @@ def run_shell_fix(dev: Device, name: str, script_user: str) -> bool:
         text = _rpc_text(result).strip()
         if text:
             print("[%s] ssh home fix output:\n%s" % (name, text))
+
+        low = text.lower()
+        error_markers = [
+            "permission denied",
+            "operation not permitted",
+            "invalid user",
+            "no such file or directory",
+            "cannot access",
+            "cannot create directory",
+            "cannot touch",
+        ]
+        if any(marker in low for marker in error_markers):
+            print(
+                "[%s] FAIL ssh home fix: insufficient privileges or invalid runtime user state for %s" %
+                (name, script_user)
+            )
+            print(
+                "[%s] hint: bootstrap user must be able to repair %s/.ssh ownership and permissions" %
+                (name, script_user)
+            )
+            return False
+
         return True
     except Exception as exc:
         print("[%s] FAIL ssh home fix: %s" % (name, exc))
