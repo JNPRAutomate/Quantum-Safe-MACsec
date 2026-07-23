@@ -2425,7 +2425,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         if not failed:
             return True
 
-        lock_busy = "RUNTIME CONFIG LOCK BUSY" in combined and action in ("install-key", "install-key-batch")
+        lock_busy = ("RUNTIME CONFIG LOCK BUSY" in combined or "ACTION LOCK BUSY" in combined) and action in ("install-key", "install-key-batch")
         if lock_busy and attempt < max_attempts:
             wait_seconds = retry_wait_seconds[min(attempt - 1, len(retry_wait_seconds) - 1)]
             log(
