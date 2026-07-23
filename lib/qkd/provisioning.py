@@ -957,17 +957,24 @@ def run_provisioning(log=None, dry_run=False, preview=False, ssh_key=None, debug
     else:
         devices_to_process = loaded_devices
 
+    # Count devices to process for progress tracking
+    deployable_count = sum(1 for n, d in devices_to_process.items() if not should_skip_device(n, d))
+    device_idx = 0
+
     for name, device in devices_to_process.items():
         if should_skip_device(name, device):
             continue
 
+        device_idx += 1
         platform_cfg = load_platform(device["platform"])
         macsec = device.get("macsec", {})
 
         if "cak" in macsec and "ckn" in macsec:
+            print(f"  [{device_idx}/{deployable_count}] {name}: Configuring STATIC MACsec")
             print(f"[{name}] STATIC MACsec detected")
             commands = build_macsec_static(device, platform_cfg)
         else:
+            print(f"  [{device_idx}/{deployable_count}] {name}: Building QKD configuration...")
             commands = build_device_config(
                 device_name=name,
                 device=device,
@@ -987,3 +994,4 @@ def run_provisioning(log=None, dry_run=False, preview=False, ssh_key=None, debug
             continue
 
         push_config(name, device, commands, base)
+        print(f"  [{device_idx}/{deployable_count}] ✓ {name} configuration complete")

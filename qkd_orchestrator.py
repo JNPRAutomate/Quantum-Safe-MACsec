@@ -765,6 +765,10 @@ def deploy_onbox(
 
         log.info(f"[{name}] Peer RE ONBOX sync completed")
 
+    # Count deployable devices for progress tracking
+    deployable_count = sum(1 for d in devices.items() if d[1].get("managed") is not False and d[0] in artifacts)
+    device_idx = 0
+
     for name, device in devices.items():
         if device.get("managed") is False:
             log.info(f"[{name}] Skipping unmanaged device")
@@ -774,8 +778,10 @@ def deploy_onbox(
             log.info(f"[{name}] No onbox artifact entry -> skipping")
             continue
 
+        device_idx += 1
         ip = device["ip"]
         hostname = device.get("hostname", name)
+        print(f"  [{device_idx}/{deployable_count}] Deploying to {name} ({ip})...")
 
         script = Path(artifacts[name]["script"])
         static_json = Path(artifacts[name]["config_json"])
@@ -826,9 +832,11 @@ def deploy_onbox(
             sync_to_re1_if_needed(dev, name)
 
             log.info(f"[{name}] ONBOX deploy OK (script immutable mode {script_mode}, json mode {json_mode})")
+            print(f"  [{device_idx}/{deployable_count}] ✓ {name} ONBOX deploy complete")
 
         except Exception as exc:
             log.error(f"[{name}] DEPLOY FAILED -> {exc}")
+            print(f"  [{device_idx}/{deployable_count}] ✗ {name} ONBOX deploy FAILED")
             raise
 
         finally:
@@ -1227,21 +1235,13 @@ def handle_deploy(args):
         print(f"Deploy auth source: inventory_base script_user={script_user}")
 
     if args.shipment_preload:
-        print("\n" + "="*80)
-        print("PHASE 1: PREDEPLOY VALIDATION - SKIPPED (Shipment preload mode)")
-        print("="*80 + "\n")
+        phase_start(1, "PREDEPLOY VALIDATION", "SKIPPED (Shipment preload mode)")
     elif args.skip_predeploy_validation:
-        print("\n" + "="*80)
-        print("PHASE 1: PREDEPLOY VALIDATION - SKIPPED (flag set)")
-        print("="*80 + "\n")
+        phase_start(1, "PREDEPLOY VALIDATION", "SKIPPED (flag set)")
     else:
-        print("\n" + "="*80)
-        print("PHASE 1: PREDEPLOY VALIDATION")
-        print("="*80 + "\n")
+        phase_start(1, "PREDEPLOY VALIDATION")
         validate_all_devices(devices, phase="predeploy", shipment_aware=True)
-        print("\n" + "="*80)
-        print("PHASE 1 COMPLETE: All devices validated")
-        print("="*80 + "\n")
+        phase_end(1, "All devices validated")
 
     # Ensure peer transport keys are synchronized before provisioning. This
     # prevents runtime master->peer bootstrap from depending on a later
@@ -1249,13 +1249,9 @@ def handle_deploy(args):
     # device hits a provisioning failure.
     # Skip this if we're already deploying to all devices (to avoid redundant sync)
     if not args.shipment_preload and len(devices) < len(all_runtime_devices):
-        print("="*80)
-        print("PHASE 2: PEER SSH KEY SYNCHRONIZATION")
-        print("="*80 + "\n")
+        phase_start(2, "PEER SSH KEY SYNCHRONIZATION", f"(scoped to {len(devices)} devices)")
         install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
-        print("\n" + "="*80)
-        print("PHASE 2 COMPLETE: Peer SSH keys synchronized")
-        print("="*80 + "\n")
+        phase_end(2, "Peer SSH keys synchronized")
 
     # Rebuild on-box artifacts at deploy time to guarantee script + JSON consistency.
     # Shipment preload mode keeps JSON files present but intentionally unpopulated.
@@ -1305,9 +1301,7 @@ def handle_deploy(args):
         else:
             print("Shipment preload auth source: runtime device auth fallback")
 
-    print("="*80)
-    print("PHASE 3: ON-BOX SCRIPT DEPLOYMENT")
-    print("="*80 + "\n")
+    phase_start(3, "ON-BOX SCRIPT DEPLOYMENT", f"({len(devices)} devices)")
     deploy_onbox(
         log,
         devices,
@@ -1316,17 +1310,13 @@ def handle_deploy(args):
         preferred_password=deploy_password,
         require_script_user=not args.shipment_preload,
     )
-    print("\n" + "="*80)
-    print("PHASE 3 COMPLETE: On-box scripts deployed")
-    print("="*80 + "\n")
+    phase_end(3, "On-box scripts deployed")
 
     if args.shipment_preload:
         print("Shipment preload completed: qkd_onbox.py + placeholder JSON installed; runtime feature remains inactive until customer deploy.")
         return
 
-    print("="*80)
-    print("PHASE 4: QKD CONFIGURATION & PROVISIONING")
-    print("="*80 + "\n")
+    phase_start(4, "QKD CONFIGURATION & PROVISIONING", f"({len(devices)} devices)")
     run_provisioning(
         log=log,
         dry_run=False,
@@ -1335,32 +1325,20 @@ def handle_deploy(args):
         debug=args.debug,
         devices=devices,
     )
-    print("\n" + "="*80)
-    print("PHASE 4 COMPLETE: QKD configuration applied")
-    print("="*80 + "\n")
+    phase_end(4, "QKD configuration applied")
 
     # Always synchronize peer command authorized keys during deploy so
     # runtime master->peer install-key does not depend on postdeploy validation.
-    print("="*80)
-    print("PHASE 5: FINAL PEER SSH KEY SYNCHRONIZATION")
-    print("="*80 + "\n")
+    phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", f"({len(all_runtime_devices)} total devices)")
     install_peer_authorized_keys(all_runtime_devices)
-    print("\n" + "="*80)
-    print("PHASE 5 COMPLETE: Final peer SSH keys synchronized")
-    print("="*80 + "\n")
+    phase_end(5, "Final peer SSH keys synchronized")
 
     if args.skip_postdeploy_validation:
-        print("="*80)
-        print("PHASE 6: POSTDEPLOY VALIDATION - SKIPPED (flag set)")
-        print("="*80 + "\n")
+        phase_start(6, "POSTDEPLOY VALIDATION", "SKIPPED (flag set)")
     else:
-        print("="*80)
-        print("PHASE 6: POSTDEPLOY VALIDATION")
-        print("="*80 + "\n")
+        phase_start(6, "POSTDEPLOY VALIDATION", f"({len(devices)} devices)")
         validate_all_devices(devices, phase="postdeploy")
-        print("\n" + "="*80)
-        print("PHASE 6 COMPLETE: All devices validated")
-        print("="*80 + "\n")
+        phase_end(6, "All devices validated")
 
     from datetime import datetime
     deploy_end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1397,6 +1375,26 @@ def handle_validate(args):
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
+
+
+def phase_start(phase_num, title, details=""):
+    """Print consistent phase start separator."""
+    width = 80
+    print("\n" + "=" * width)
+    print(f"PHASE {phase_num}: {title}")
+    if details:
+        print(f"           {details}")
+    print("=" * width + "\n")
+
+
+def phase_end(phase_num, title, details=""):
+    """Print consistent phase end separator."""
+    width = 80
+    print("\n" + "=" * width)
+    print(f"PHASE {phase_num} COMPLETE: {title}")
+    if details:
+        print(f"             {details}")
+    print("=" * width + "\n")
 
 
 def main():
