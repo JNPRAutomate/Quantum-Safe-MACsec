@@ -328,6 +328,8 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     key_status = {
         'active_key_id': None,
         'pending_key_id': None,
+        'active_count': 0,
+        'pending_count': 0,
         'pending_stale_count': 0,
         'confirmed_count': 0,
         'promoted_count': 0,
@@ -368,10 +370,13 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
         # Option 1: direct fields
         if 'active_key_id' in data and data['active_key_id']:
             key_status['active_key_id'] = data['active_key_id']
+            key_status['active_count'] = 1
         elif 'activeKeyId' in data and data['activeKeyId']:  # camelCase variant
             key_status['active_key_id'] = data['activeKeyId']
+            key_status['active_count'] = 1
         elif 'active_id' in data and data['active_id']:  # short variant
             key_status['active_key_id'] = data['active_id']
+            key_status['active_count'] = 1
         
         # Extract pending_key_id  
         if 'pending_key_id' in data and data['pending_key_id']:
@@ -383,6 +388,7 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
         
         # Count pending_keys array
         if 'pending_keys' in data and isinstance(data['pending_keys'], list):
+            key_status['pending_count'] = len(data['pending_keys'])
             key_status['pending_stale_count'] = len(data['pending_keys'])
             if verbose and data['pending_keys']:
                 print(f"[DEBUG] Pending keys: {data['pending_keys']}")
@@ -711,6 +717,8 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         aggregated_key_status = {
             'active_key_id': None,
             'pending_key_id': None,
+            'active_count': 0,
+            'pending_count': 0,
             'pending_stale_count': 0,
             'confirmed_count': 0,
             'promoted_count': 0,
@@ -730,6 +738,9 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
             if not aggregated_key_status['pending_key_id'] and parsed.get('pending_key_id'):
                 aggregated_key_status['pending_key_id'] = parsed.get('pending_key_id')
+
+            aggregated_key_status['active_count'] += int(parsed.get('active_count', 0) or 0)
+            aggregated_key_status['pending_count'] += int(parsed.get('pending_count', 0) or 0)
 
             aggregated_key_status['pending_stale_count'] += int(parsed.get('pending_stale_count', 0) or 0)
 
@@ -774,6 +785,8 @@ def format_tunnel_status(health_data):
     
     # Key summary - handle None values
     pending_stale = keys.get('pending_stale_count', 0)
+    active_count = keys.get('active_count', 0)
+    pending_count = keys.get('pending_count', 0)
     active_key = keys.get('active_key_id')
     pending_key = keys.get('pending_key_id')
     
@@ -802,7 +815,7 @@ def format_tunnel_status(health_data):
     
     status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | {lacp_part}"
     
-    status += f" | Active: {active_key_short} | Pending: {pending_key_short}"
+    status += f" | Active: {active_key_short}({active_count}) | Pending: {pending_key_short}({pending_count})"
     
     if pending_stale > 0:
         status += f" | ⚠️  STALE: {pending_stale}"
