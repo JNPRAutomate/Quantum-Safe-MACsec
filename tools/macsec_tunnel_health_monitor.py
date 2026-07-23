@@ -692,41 +692,48 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 break
             time.sleep(0.1)
         
-        # Get key status from JSON state files - SIMPLE PYTHON PARSING
-        qkd_state_dir = "/var/home/macsec_user/qkd-state"
-        
-        # List JSON files using ls -la (parsing by Python, not shell wildcard)
-        ls_output = send_shell_command(shell, f"ls -la {qkd_state_dir}/", verbose=False)
-        
-        # Parse directory listing to find .json files
+        # Get key status from JSON state files.
+        # Current qkd_onbox runtime stores state in /var/tmp (legacy fallback kept).
+        qkd_state_dirs = ["/var/tmp", "/var/home/macsec_user/qkd-state"]
+
         json_files = []
-        for line in ls_output.split('\n'):
-            if '.json' in line and 'qkd_db_' in line:
-                # Extract filename from ls output: "-rw-r--r--  1 user group size date time filename"
-                parts = line.split()
-                if len(parts) >= 9:
-                    filename = parts[-1]
-                    full_path = f"{qkd_state_dir}/{filename}"
-                    json_files.append(full_path)
-        
-        # Read and parse first JSON file
-        json_data_str = ""
-        all_json = ""
-        if json_files:
-            first_file = json_files[0]
-            json_data_str = send_shell_command(shell, f"cat {first_file}", verbose=False)
-            
-            # Read all files for combined analysis
-            for jfile in json_files:
-                file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
-                all_json += file_content + "\n"
-        
-        # Parse with Python JSON parsing
-        health_data['key_status'] = parse_key_status_via_python_json(
-            json_data_str=json_data_str,
-            all_json_str=all_json,
-            verbose=verbose
-        )
+        for qkd_state_dir in qkd_state_dirs:
+            ls_output = send_shell_command(shell, f"ls -la {qkd_state_dir}/", verbose=False)
+            for line in ls_output.split('\n'):
+                if '.json' in line and 'qkd_db_' in line:
+                    parts = line.split()
+                    if len(parts) >= 9:
+                        filename = parts[-1]
+                        full_path = f"{qkd_state_dir}/{filename}"
+                        if full_path not in json_files:
+                            json_files.append(full_path)
+
+        aggregated_key_status = {
+            'active_key_id': None,
+            'pending_key_id': None,
+            'pending_stale_count': 0,
+            'confirmed_count': 0,
+            'promoted_count': 0,
+            'error_count': 0,
+        }
+
+        for jfile in json_files:
+            file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
+            parsed = parse_key_status_via_python_json(
+                json_data_str=file_content,
+                all_json_str=file_content,
+                verbose=verbose,
+            )
+
+            if not aggregated_key_status['active_key_id'] and parsed.get('active_key_id'):
+                aggregated_key_status['active_key_id'] = parsed.get('active_key_id')
+
+            if not aggregated_key_status['pending_key_id'] and parsed.get('pending_key_id'):
+                aggregated_key_status['pending_key_id'] = parsed.get('pending_key_id')
+
+            aggregated_key_status['pending_stale_count'] += int(parsed.get('pending_stale_count', 0) or 0)
+
+        health_data['key_status'] = aggregated_key_status
 
         
         shell.close()

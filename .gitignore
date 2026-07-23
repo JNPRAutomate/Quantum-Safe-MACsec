@@ -29,6 +29,9 @@ dist/
 # KME runtime
 certs/
 
+# Generated QKD runtime artifacts (local only)
+config/runtime/
+
 # Legacy local backups (keep archived legacy snapshots tracked)
 *.orig.py
 !archive/legacy_orig_py/**/*.orig.py
