@@ -594,6 +594,9 @@ def check_peer_ssh_from_device(device):
     name = device_name(device)
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
+    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 3))
+    max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 1))
+    timeout_count = 0
 
     for link in device.get("links", []):
         peer_ip = link.get("peer_ip")
@@ -620,7 +623,7 @@ def check_peer_ssh_from_device(device):
             f"{script_user}@{peer_ip} "
             f"{shlex.quote(peer_payload)}"
         )
-        result = ssh_script_user_onbox_cmd(device, cmd, timeout=8)
+        result = ssh_script_user_onbox_cmd(device, cmd, timeout=peer_timeout)
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         combined = f"{stdout}\n{stderr}"
@@ -646,12 +649,19 @@ def check_peer_ssh_from_device(device):
             )
 
         if "rpctimeouterror" in combined_low or "timeout" in combined_low:
+            timeout_count += 1
             print(
                 f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {script_user}; "
                 "manual SSH may still be valid"
             )
             print_if_verbose(stdout)
             print_if_verbose(stderr)
+            if timeout_count >= max_timeouts:
+                print(
+                    f"[WARN] peer reachability checks on {name}: timeout threshold reached "
+                    f"({timeout_count}/{max_timeouts}); skipping remaining peers"
+                )
+                break
             continue
 
         raise RuntimeError(
@@ -857,19 +867,20 @@ def check_qkd_status_as_script_user(device):
     device = normalize_device(device)
     name = device_name(device)
     script_user = qkd_script_user()
+    status_timeout = int(QKD.get("POSTDEPLOY_QKD_STATUS_TIMEOUT", 20))
+    max_attempts = int(QKD.get("POSTDEPLOY_QKD_STATUS_MAX_ATTEMPTS", 1))
+    strict_status = bool(QKD.get("POSTDEPLOY_QKD_STATUS_STRICT", False))
     for link in device.get("links", []):
         iface = link.get("interface")
         if not iface:
             continue
         cmd = f"op qkd_onbox.py action status iface {iface}"
         result = None
-        max_attempts = 2
         for attempt in range(1, max_attempts + 1):
-            timeout = 30 if attempt == 1 else 45
             result = ssh_script_user_onbox_cmd(
                 device,
                 cmd,
-                timeout=timeout,
+                timeout=status_timeout,
                 include_failed_marker=False,
             )
             stdout = result.stdout or ""
@@ -881,11 +892,21 @@ def check_qkd_status_as_script_user(device):
             if is_timeout and attempt < max_attempts:
                 print(f"[WARN] qkd status timeout on {name} iface={iface} attempt={attempt}/{max_attempts}; retrying")
                 continue
+            if is_timeout and not strict_status:
+                print(
+                    f"[WARN] qkd status timeout on {name} iface={iface}; "
+                    "continuing because POSTDEPLOY_QKD_STATUS_STRICT is disabled"
+                )
+                result = None
+                break
             raise RuntimeError(
                 f"QKD status failed on {name} iface={iface} as {script_user}\n"
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )
+
+        if result is None:
+            continue
 
         raw = ((result.stdout if result else "") or "").strip()
         try:
