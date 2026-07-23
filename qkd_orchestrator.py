@@ -918,7 +918,7 @@ def handle_create(args):
     script_user = QKD["SCRIPT_USER"]
     peer_cmd_user = (
         ((base.get("secrets") or {}).get("peer_cmd_user") if isinstance(base.get("secrets"), dict) else None)
-        or QKD.get("PEER_CMD_USER", "etsi_peer_view")
+        or QKD.get("PEER_CMD_USER", "macsec_user")
     )
 
     secrets = base.get("secrets", {})

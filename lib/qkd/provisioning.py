@@ -723,7 +723,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     from lib.qkd.identity import collect_script_user_public_keys, qkd_peer_cmd_user
     
     secrets = base.get("secrets", {})
-    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "etsi_peer_view")
+    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "macsec_user")
     
     # Convert devices dict to list for collect_script_user_public_keys
     all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
