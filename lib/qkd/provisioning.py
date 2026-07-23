@@ -755,11 +755,17 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         if not pub_key:
             print(f"[{device_name}] WARN missing peer SSH key from {source_name}")
             continue
-        # pub_key is full line: "ssh-ed25519 AAA... comment"
-        # Junos expects the full format as the authentication value: "ssh-ed25519 <base64> <comment>"
+        # pub_key is full line: "ssh-ed25519 AAAAC3... comment"
+        # Junos requires full format including ssh-ed25519 prefix as the value
+        # Extract key type prefix (ssh-ed25519, ssh-rsa, ecdsa-sha2-nistp256, etc)
+        parts = pub_key.split(None, 1)  # Split on first whitespace
+        if len(parts) != 2:
+            print(f"[{device_name}] WARN malformed peer SSH key from {source_name}: {pub_key}")
+            continue
+        key_type, key_rest = parts
         # Escape quotes for set command
         escaped_key = pub_key.replace('"', '\\"')
-        config_lines.append(f"set system login user {peer_cmd_user} authentication \"{escaped_key}\"")
+        config_lines.append(f"set system login user {peer_cmd_user} authentication {key_type} \"{escaped_key}\"")
     
     if not config_lines:
         print(f"[{device_name}] No valid peer SSH keys to configure")
