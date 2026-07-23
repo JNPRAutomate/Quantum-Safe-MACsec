@@ -928,11 +928,11 @@ def install_peer_authorized_keys(devices):
                     f"keys={len(desired_keys)} sources={sources_label} attempt={attempt}/{max_attempts}"
                 )
                 
-                # v3.3.3+: Write authorized_keys via tmp file + mv (avoids permission issues on Junos).
-                # On Junos, authorized_keys is owned by root:wheel (644); the deploy user only has
-                # directory-level write (sticky+group). tee/redirect fail on the file itself, but
-                # mv from /tmp succeeds because the directory grants write.  Also, etsi_peer_view
-                # has no matching group, so chown must use the user-only form (no :group).
+                # v3.3.4+: Two-stage write using cli start shell for root context.
+                # request_shell_execute via NETCONF runs as the authenticated user (macsec_user),
+                # not root. macsec_user cannot chown to etsi_peer_view, and sticky bit prevents
+                # mv-replacing files owned by another user. Wrapping the file operations with
+                # 'cli -c "start shell command ..."' escalates to root via Junos CLI (super-user class).
                 auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
                 tmp_path = f"/tmp/authorized_keys_{sync_target_user}.tmp"
                 # key_line already contains the full line (type + key + comment); do NOT prepend key_type again
@@ -943,19 +943,24 @@ def install_peer_authorized_keys(devices):
                 # Escape content for printf: replace backslashes first, then newlines
                 escaped_content = auth_keys_content.replace('\\', '\\\\').replace('\n', '\\n')
                 
-                # Write to /tmp then mv atomically into place; chown user-only (no group on Junos)
-                write_cmd = (
-                    f"mkdir -p /var/home/{sync_target_user}/.ssh && "
-                    f"printf '{escaped_content}' > {tmp_path} && "
+                # Step 1 (as macsec_user via request_shell_execute): write content to /tmp
+                # Step 2 (as root via cli -> start shell): mv/chmod/chown — needs root for
+                #   chown to etsi_peer_view and to replace sticky-bit-protected files
+                inner_shell_cmd = (
                     f"mv {tmp_path} {auth_keys_path} && "
                     f"chmod 600 {auth_keys_path} && "
                     f"chown {sync_target_user} {auth_keys_path} && "
                     f"echo OK"
                 )
+                write_cmd = (
+                    f"mkdir -p /var/home/{sync_target_user}/.ssh && "
+                    f"printf '{escaped_content}' > {tmp_path} && "
+                    f"cli -c {junos_cli_quote('start shell command ' + junos_cli_quote(inner_shell_cmd))}"
+                )
                 
-                result = ssh_deploy_cmd(device, write_cmd, timeout=20, include_failed_marker=True)
+                result = ssh_deploy_cmd(device, write_cmd, timeout=30, include_failed_marker=False)
                 
-                if result.returncode != 0 or 'OK' not in result.stdout:
+                if 'OK' not in result.stdout:
                     raise RuntimeError(
                         f"failed to write authorized_keys target={target} path={auth_keys_path}\n"
                         f"stdout={result.stdout}\n"
