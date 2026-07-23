@@ -940,10 +940,24 @@ def handle_create(args):
 
 
 def handle_deploy(args):
+    def print_step_banner(step_id, title, state, purpose=None):
+        line = "=" * 88
+        print(line)
+        print(f"=== DEPLOY STEP {step_id}: {title} [{state}] ===")
+        if purpose:
+            print(f"Purpose: {purpose}")
+        print(line)
+
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
 
     if args.preview or args.dry_run:
+        print_step_banner(
+            "0/6",
+            "PREVIEW OR DRY-RUN",
+            "START",
+            "Render and validate workflow output without modifying devices.",
+        )
         if args.preview:
             print("=== DEPLOY PREVIEW MODE ===")
             print("Rendering generated Junos configuration only.")
@@ -960,16 +974,30 @@ def handle_deploy(args):
             ssh_key=args.ssh_key,
             debug=args.debug,
         )
+        print_step_banner("0/6", "PREVIEW OR DRY-RUN", "END")
         return
 
     if args.script_user_bootstrap_dry_run:
+        print_step_banner(
+            "1/6",
+            "SCRIPT_USER BOOTSTRAP",
+            "DRY-RUN",
+            "Show script-user bootstrap actions without changing devices.",
+        )
         bootstrap_script_users(
             devices=devices,
             repo_root=BASE_DIR,
             dry_run=True,
         )
+        print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
         return
 
+    print_step_banner(
+        "1/6",
+        "SCRIPT_USER BOOTSTRAP",
+        "START",
+        "Ensure script user credentials and SSH runtime prerequisites are ready.",
+    )
     if not args.skip_script_user_bootstrap:
         ok, failed = bootstrap_script_users(
             devices=devices,
@@ -980,9 +1008,25 @@ def handle_deploy(args):
             raise RuntimeError(
                 "SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
             )
+    else:
+        print("[SKIP] script-user bootstrap skipped by CLI option")
+    print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
 
+    print_step_banner(
+        "2/6",
+        "PRE-DEPLOY VALIDATION",
+        "START",
+        "Validate identity, permissions, scripts, and runtime prerequisites.",
+    )
     validate_all_devices(devices, phase="predeploy")
+    print_step_banner("2/6", "PRE-DEPLOY VALIDATION", "END")
 
+    print_step_banner(
+        "3/6",
+        "ARTIFACT COLLECTION",
+        "START",
+        "Collect generated on-box script artifacts for managed QKD devices.",
+    )
     artifacts = {}
     for name, device in devices.items():
         if device.get("managed") is False:
@@ -994,9 +1038,24 @@ def handle_deploy(args):
         if not script_path.exists():
             raise RuntimeError(f"[{name}] Missing runtime onbox artifact: {script_path}. Run create first.")
         artifacts[name] = {"script": script_path}
+    print(f"Artifacts prepared for devices: {len(artifacts)}")
+    print_step_banner("3/6", "ARTIFACT COLLECTION", "END")
 
+    print_step_banner(
+        "4/6",
+        "ONBOX FILE DEPLOY",
+        "START",
+        "Copy and install qkd_onbox.py on target devices (including dual-RE sync).",
+    )
     deploy_onbox(log, devices, artifacts)
+    print_step_banner("4/6", "ONBOX FILE DEPLOY", "END")
 
+    print_step_banner(
+        "5/6",
+        "QKD PROVISIONING",
+        "START",
+        "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
+    )
     run_provisioning(
         log=log,
         dry_run=False,
@@ -1004,8 +1063,16 @@ def handle_deploy(args):
         ssh_key=args.ssh_key,
         debug=args.debug,
     )
+    print_step_banner("5/6", "QKD PROVISIONING", "END")
 
+    print_step_banner(
+        "6/6",
+        "POST-DEPLOY VALIDATION",
+        "START",
+        "Validate final runtime behavior, peer reachability, and state health.",
+    )
     validate_all_devices(devices, phase="postdeploy")
+    print_step_banner("6/6", "POST-DEPLOY VALIDATION", "END")
 
 
 # ---------------------------------------------------------------------------
