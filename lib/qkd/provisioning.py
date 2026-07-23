@@ -713,15 +713,20 @@ def configure_qkd_scripts(dev, name, base, device_dict=None, all_devices_list=No
             print(f"[{name}] WARN failed to apply peer SSH authorized-keys config: {exc}")
 
 
-def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_list, base):
+def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_dict, base):
     """
     Apply peer SSH authorized-keys via Junos configuration (not filesystem manipulation).
     This runs as part of configure_qkd_scripts() so we reuse the already-open NETCONF connection.
+    
+    all_devices_dict: dict of name -> device
     """
     from lib.qkd.identity import collect_script_user_public_keys, qkd_peer_cmd_user
     
     secrets = base.get("secrets", {})
     peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "etsi_peer_view")
+    
+    # Convert devices dict to list for collect_script_user_public_keys
+    all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
     
     try:
         # Collect peer SSH public keys from all devices
@@ -731,7 +736,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         return
     
     # Determine which peer keys this device needs
-    device_names = {d.get("name") or str(i) for i, d in enumerate(all_devices_list)}
+    device_names = set(all_devices_dict.keys())
     source_names = set([device_name])  # Always include self
     
     for link in device_dict.get("links", []) or []:
@@ -789,7 +794,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
 # ----------------------------------------
 
 
-def push_config(device_name, device, commands, base):
+def push_config(device_name, device, commands, base, devices_dict=None):
     secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
     if not isinstance(secrets, dict):
         secrets = {}
@@ -942,7 +947,7 @@ def push_config(device_name, device, commands, base):
                     except Exception:
                         pass
 
-        configure_qkd_scripts(dev, device_name, base, device_dict=device, all_devices_list=devices)
+        configure_qkd_scripts(dev, device_name, base, device_dict=device, all_devices_list=devices_dict)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         max_attempts, base_wait_seconds = lock_retry_parameters()
@@ -1071,5 +1076,5 @@ def run_provisioning(log=None, dry_run=False, preview=False, ssh_key=None, debug
             print(f"[{name}] dry-run -> skipping push")
             continue
 
-        push_config(name, device, commands, base)
+        push_config(name, device, commands, base, devices_dict=devices_to_process)
         print(f"  [{device_idx}/{deployable_count}] ✓ {name} configuration complete")
