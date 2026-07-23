@@ -9,7 +9,7 @@ devices:
     kme_ip: 100.123.252.10
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -62,7 +62,7 @@ devices:
     kme_ip: 100.123.252.11
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -117,7 +117,7 @@ devices:
     kme_ip: 100.123.252.12
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -202,7 +202,7 @@ devices:
     kme_ip: 100.123.252.13
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -287,7 +287,7 @@ devices:
     kme_ip: 100.123.252.14
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -372,7 +372,7 @@ devices:
     kme_ip: 100.123.252.15
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -456,7 +456,7 @@ devices:
     kme_ip: 100.123.252.16
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -524,7 +524,7 @@ devices:
     kme_ip: 100.123.252.17
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -578,7 +578,7 @@ devices:
     kme_ip: 100.123.252.18
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -646,7 +646,7 @@ devices:
     kme_ip: 100.123.252.19
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
@@ -699,7 +699,7 @@ devices:
     kme_ip: 100.123.252.20
     kme_port: 8443
     auth:
-      username: admin
+      username: labuser
       password: juniper1
     script_user: macsec_user
     peer_cmd_user: etsi_peer_view
