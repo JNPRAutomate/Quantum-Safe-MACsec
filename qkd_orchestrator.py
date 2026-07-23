@@ -1056,8 +1056,20 @@ def handle_deploy(args):
             skip_if_no_deploy_password=False,
         )
         if failed:
-            raise RuntimeError(
-                "SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
+            print(
+                "[WARN] SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
+            )
+            print(
+                "[WARN] Excluding failed bootstrap devices from this deploy run."
+            )
+            devices = {name: dev for name, dev in devices.items() if name not in set(failed)}
+            if not devices:
+                raise RuntimeError(
+                    "SCRIPT_USER bootstrap failed for all devices; nothing left to deploy."
+                )
+            print(
+                "[INFO] Remaining deploy targets after bootstrap filtering: %s"
+                % ", ".join(sorted(devices.keys()))
             )
     else:
         print("[SKIP] script-user bootstrap skipped by CLI option")
