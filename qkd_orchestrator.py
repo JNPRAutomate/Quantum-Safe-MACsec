@@ -1246,7 +1246,9 @@ def handle_deploy(args):
 
     # Skip peer SSH key sync when rotation is disabled (keys are static, no sync needed).
     _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
-    _peer_rotation_enabled = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600)) > 0
+    _peer_rotation_secs = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600))
+    _peer_rotation_enabled = _peer_rotation_secs > 0
+    print(f"[DEBUG] peer_cmd_rotation_seconds={_peer_rotation_secs}, enabled={_peer_rotation_enabled}")
 
     # Ensure peer transport keys are synchronized before provisioning. This
     # prevents runtime master->peer bootstrap from depending on a later
