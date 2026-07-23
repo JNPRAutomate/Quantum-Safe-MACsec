@@ -954,6 +954,8 @@ def handle_deploy(args):
 
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
+    initial_targets = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
+    bootstrap_failed = []
     inventory_base = load_inventory_base()
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
     if not isinstance(secrets, dict):
@@ -1056,6 +1058,7 @@ def handle_deploy(args):
             skip_if_no_deploy_password=False,
         )
         if failed:
+            bootstrap_failed = sorted(set(failed))
             print(
                 "[WARN] SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
             )
@@ -1160,6 +1163,16 @@ def handle_deploy(args):
     )
     validate_all_devices(devices, phase="postdeploy")
     print_step_banner("6/6", "POST-DEPLOY VALIDATION", "END")
+
+    deploy_completed = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
+    deploy_skipped = sorted(set(initial_targets) - set(deploy_completed))
+
+    print("=" * 88)
+    print("=== DEPLOY EXECUTION SUMMARY ===")
+    print("bootstrap failed : %s" % (", ".join(bootstrap_failed) if bootstrap_failed else "none"))
+    print("deploy skipped   : %s" % (", ".join(deploy_skipped) if deploy_skipped else "none"))
+    print("deploy completed : %s" % (", ".join(deploy_completed) if deploy_completed else "none"))
+    print("=" * 88)
 
 
 # ---------------------------------------------------------------------------
