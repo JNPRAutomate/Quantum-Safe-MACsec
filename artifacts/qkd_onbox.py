@@ -39,6 +39,8 @@ import os
 import hashlib
 import pwd
 import shlex
+import signal
+import atexit
 
 
 urllib3.disable_warnings()
@@ -212,6 +214,17 @@ CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
 STATE_DIR = str(Path(SSH_KEY).parent.parent / "qkd-state")
 LOG_DIR = f"{STATE_DIR}/logs"
+
+# When script is executed as an SSH action by a non-privileged user (e.g., etsi_peer_view),
+# use /var/tmp for lock files to avoid permission denied on macsec_user's home directory.
+_current_user = pwd.getpwuid(os.getuid()).pw_name
+_use_tmp_locks = _current_user != SCRIPT_USER
+
+if _use_tmp_locks:
+    LOCK_DIR = "/var/tmp"
+else:
+    LOCK_DIR = STATE_DIR
+
 CONFIG_LOG_FILE = str(CONFIG.get("log_file", "")).strip()
 if not CONFIG_LOG_FILE or CONFIG_LOG_FILE.startswith("/var/tmp/"):
     LOG_FILE = f"{LOG_DIR}/qkd_debug.log"
@@ -219,7 +232,38 @@ else:
     LOG_FILE = CONFIG_LOG_FILE
 SSH_ROTATION_LOG_FILE = f"{LOG_DIR}/qkd_ssh_rotation_{DEVICE}.log"
 
+# Track acquired locks for cleanup on exit (crash/signal protection)
+_acquired_action_locks = {}  # {(iface, action): True}
+_acquired_master_lock = False
 
+
+def _cleanup_locks_on_exit():
+    """Ensure all locks are released even on abnormal exit."""
+    global _acquired_action_locks, _acquired_master_lock
+    try:
+        for (iface, action) in list(_acquired_action_locks.keys()):
+            try:
+                release_action_lock(iface, action)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        if _acquired_master_lock:
+            release_lock()
+    except Exception:
+        pass
+
+
+# Register cleanup on normal exit and signals
+atexit.register(_cleanup_locks_on_exit)
+
+def _signal_handler(sig, frame):
+    _cleanup_locks_on_exit()
+    sys.exit(1)
+
+signal.signal(signal.SIGTERM, _signal_handler)
+signal.signal(signal.SIGINT, _signal_handler)
 # ----------------------------
 # LOGGING
 # ----------------------------
@@ -1047,7 +1091,7 @@ def scheduled_key_start_time_with_offset(link, offset_index):
 # ----------------------------
 
 def lock_file():
-    return f"{STATE_DIR}/qkd_onbox_{DEVICE}.lock"
+    return f"{LOCK_DIR}/qkd_onbox_{DEVICE}.lock"
 
 
 def acquire_lock():
@@ -1144,7 +1188,7 @@ def acquire_runtime_config_lock(iface=None, action=None, attempts=12, wait_secon
 
 def action_lock_file(iface, action):
     safe_iface = iface.replace("/", "_")
-    return f"{STATE_DIR}/qkd_onbox_{DEVICE}_{safe_iface}_{action}.lock"
+    return f"{LOCK_DIR}/qkd_onbox_{DEVICE}_{safe_iface}_{action}.lock"
 
 
 def acquire_action_lock(iface, action):
@@ -3408,16 +3452,30 @@ def main():
                 log(f"ACTION LOCK BUSY action={action} iface={iface}", "ERROR", iface, "LOCK")
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
+            # Track lock for cleanup on abnormal exit
+            _acquired_action_locks[(iface, action)] = True
             try:
-                if not acquire_runtime_config_lock(iface, action, attempts=1, wait_seconds=0):
-                    print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
-                    sys.exit(1)
-                try:
+                # Slave-only devices don't need global master lock.
+                # Only try to acquire it if this device has master links.
+                links = managed_links()
+                has_master_links = any(link.get("role") == "master" for link in links)
+                
+                if has_master_links:
+                    # Master or multi-role device: protect with global lock
+                    if not acquire_runtime_config_lock(iface, action, attempts=1, wait_seconds=0):
+                        print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
+                        sys.exit(1)
+                    try:
+                        ok = run_slave_install_key(key_id, iface, generation, start_time)
+                    finally:
+                        release_lock()
+                        _acquired_master_lock = False
+                else:
+                    # Slave-only device: no global lock needed
                     ok = run_slave_install_key(key_id, iface, generation, start_time)
-                finally:
-                    release_lock()
             finally:
                 release_action_lock(iface, action)
+                del _acquired_action_locks[(iface, action)]
             sys.exit(0 if ok else 1)
 
         if action == "status":
@@ -3437,16 +3495,30 @@ def main():
                 log(f"ACTION LOCK BUSY action={action} iface={iface}", "ERROR", iface, "LOCK")
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
+            # Track lock for cleanup on abnormal exit
+            _acquired_action_locks[(iface, action)] = True
             try:
-                if not acquire_runtime_config_lock(iface, action, attempts=1, wait_seconds=0):
-                    print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
-                    sys.exit(1)
-                try:
+                # Slave-only devices don't need global master lock.
+                # Only try to acquire it if this device has master links.
+                links = managed_links()
+                has_master_links = any(link.get("role") == "master" for link in links)
+                
+                if has_master_links:
+                    # Master or multi-role device: protect with global lock
+                    if not acquire_runtime_config_lock(iface, action, attempts=1, wait_seconds=0):
+                        print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
+                        sys.exit(1)
+                    try:
+                        ok = run_slave_install_key_batch(batch_b64, iface)
+                    finally:
+                        release_lock()
+                        _acquired_master_lock = False
+                else:
+                    # Slave-only device: no global lock needed
                     ok = run_slave_install_key_batch(batch_b64, iface)
-                finally:
-                    release_lock()
             finally:
                 release_action_lock(iface, action)
+                del _acquired_action_locks[(iface, action)]
             sys.exit(0 if ok else 1)
 
         if action == "update-peer-authorized-keys":
@@ -3481,11 +3553,15 @@ def main():
         log("MASTER LOCK BUSY -> EXIT", "ERROR", mode="MASTER")
         sys.exit(1)
 
+    # Track lock for cleanup on abnormal exit
+    _acquired_master_lock = True
+
     try:
         run_master()
         sys.exit(0)
     finally:
         release_lock()
+        _acquired_master_lock = False
 
 
 if __name__ == "__main__":
