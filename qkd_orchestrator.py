@@ -1253,10 +1253,7 @@ def handle_deploy(args):
     # postdeploy-only step, and keeps peer SSH working even if a subsequent
     # device hits a provisioning failure.
     # Skip this if we're already deploying to all devices (to avoid redundant sync)
-    if not _peer_rotation_enabled:
-        phase_start(2, "PEER SSH KEY SYNCHRONIZATION", "SKIPPED (peer_cmd_rotation disabled)")
-        phase_end(2, "Phase 2 skipped")
-    elif not args.shipment_preload and len(devices) < len(all_runtime_devices):
+    if not args.shipment_preload and len(devices) < len(all_runtime_devices):
         phase_start(2, "PEER SSH KEY SYNCHRONIZATION", f"(scoped to {len(devices)} devices)")
         install_peer_authorized_keys(peer_sync_scope(devices, all_runtime_devices))
         phase_end(2, "Peer SSH keys synchronized")
@@ -1340,13 +1337,9 @@ def handle_deploy(args):
 
     # Always synchronize peer command authorized keys during deploy so
     # runtime master->peer install-key does not depend on postdeploy validation.
-    if not _peer_rotation_enabled:
-        phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", "SKIPPED (peer_cmd_rotation disabled)")
-        phase_end(5, "Phase 5 skipped")
-    else:
-        phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", f"({len(all_runtime_devices)} total devices)")
-        install_peer_authorized_keys(all_runtime_devices)
-        phase_end(5, "Final peer SSH keys synchronized")
+    phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", f"({len(all_runtime_devices)} total devices)")
+    install_peer_authorized_keys(all_runtime_devices)
+    phase_end(5, "Final peer SSH keys synchronized")
 
     if args.skip_postdeploy_validation:
         phase_start(6, "POSTDEPLOY VALIDATION", "SKIPPED (flag set)")
