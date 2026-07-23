@@ -1574,7 +1574,13 @@ def validate_all_devices_postdeploy(devices):
 
     # Ensure peer command keys are present via Junos login configuration before
     # running matrix SSH authentication checks.
-    install_peer_authorized_keys(devices)
+    # Skip if peer SSH key rotation is disabled (keys are static, no sync needed).
+    _qkd_policy = load_runtime_qkd_policy().get("qkd_policy", {})
+    _peer_rotation_secs = int(_qkd_policy.get("peer_cmd_rotation_seconds", 3600))
+    _peer_rotation_enabled = _peer_rotation_secs > 0
+    
+    if _peer_rotation_enabled:
+        install_peer_authorized_keys(devices)
 
     failed = []
     for index, device in enumerate(devices, start=1):
