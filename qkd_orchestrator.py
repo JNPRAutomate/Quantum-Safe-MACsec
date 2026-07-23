@@ -1335,11 +1335,8 @@ def handle_deploy(args):
     )
     phase_end(4, "QKD configuration applied")
 
-    # Always synchronize peer command authorized keys during deploy so
-    # runtime master->peer install-key does not depend on postdeploy validation.
-    phase_start(5, "FINAL PEER SSH KEY SYNCHRONIZATION", f"({len(all_runtime_devices)} total devices)")
-    install_peer_authorized_keys(all_runtime_devices)
-    phase_end(5, "Final peer SSH keys synchronized")
+    # Peer SSH authorized-keys now configured as part of phase 4 (configure_qkd_scripts)
+    # No separate phase 5 needed
 
     if args.skip_postdeploy_validation:
         phase_start(6, "POSTDEPLOY VALIDATION", "SKIPPED (flag set)")
