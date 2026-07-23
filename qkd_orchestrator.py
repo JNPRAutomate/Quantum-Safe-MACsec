@@ -592,6 +592,21 @@ def deploy_onbox(log, devices, artifacts):
         This MUST run as admin/SCRIPT_USER.
         """
 
+        def copy_to_peer_re(src_path):
+            errors = []
+            for re_name in ("re0", "re1"):
+                cmd = f"file copy {src_path} {re_name}:{src_path}"
+                output = run_cli(dev, cmd, strict=False)
+                low = (output or "").lower()
+                if not any(marker in low for marker in ["permission denied", "put-file failed", "could not send local copy", "error:", "operation-failed", "login incorrect"]):
+                    return
+                errors.append(f"target={re_name} output={output}")
+            raise RuntimeError(
+                f"[{name}] RE peer ONBOX sync failed as {script_user}\n"
+                f"source={src_path}\n"
+                + "\n".join(errors)
+            )
+
         if not is_dual_re(dev):
             log.info(f"[{name}] Single RE detected - skipping RE1 script sync")
             return
@@ -600,35 +615,8 @@ def deploy_onbox(log, devices, artifacts):
             f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {script_user}"
         )
 
-        copy_commands = [
-            f"cli -c 'file copy {remote_op} re1:{remote_op}'",
-            f"cli -c 'file copy {remote_event} re1:{remote_event}'",
-            f"cli -c 'file copy {legacy_op} re1:{legacy_op}'",
-            f"cli -c 'file copy {legacy_event} re1:{legacy_event}'",
-        ]
-
-        for cmd in copy_commands:
-
-            output = run_shell(
-                dev,
-                cmd,
-                strict=False,
-            )
-
-            low = (output or "").lower()
-
-            if (
-                "permission denied" in low
-                or "put-file failed" in low
-                or "could not send local copy" in low
-                or "error:" in low
-                or "operation-failed" in low
-            ):
-                raise RuntimeError(
-                    f"[{name}] RE1 ONBOX sync failed as {script_user}\n"
-                    f"command={cmd}\n"
-                    f"output={output}"
-                )
+        for path in (remote_op, remote_event, legacy_op, legacy_event):
+            copy_to_peer_re(path)
 
         log.info(f"[{name}] RE1 ONBOX sync completed")
 
