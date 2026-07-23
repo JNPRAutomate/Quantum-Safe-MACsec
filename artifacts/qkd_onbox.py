@@ -3352,7 +3352,7 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
-                if not acquire_runtime_config_lock(iface, action):
+                if not acquire_runtime_config_lock(iface, action, attempts=1, wait_seconds=0):
                     print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
                     sys.exit(1)
                 try:
@@ -3381,7 +3381,7 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
-                if not acquire_runtime_config_lock(iface, action):
+                if not acquire_runtime_config_lock(iface, action, attempts=1, wait_seconds=0):
                     print(f"ERROR RUNTIME CONFIG LOCK BUSY action={action} iface={iface}")
                     sys.exit(1)
                 try:
