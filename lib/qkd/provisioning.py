@@ -668,7 +668,7 @@ def render_qkd_script_config(base):
     return peer_ssh_hardening_cfg + "\n" + users_cfg + "\n" + event_cfg + "\n" + op_cfg
 
 
-def configure_qkd_scripts(dev, name, base):
+def configure_qkd_scripts(dev, name, base, device_dict=None, all_devices_list=None):
     script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
@@ -704,6 +704,84 @@ def configure_qkd_scripts(dev, name, base):
             time.sleep(wait_seconds)
 
     print(f"[{name}] QKD scripts event and op configured OK")
+    
+    # Apply peer SSH authorized-keys as second configuration step
+    if device_dict and all_devices_list:
+        try:
+            apply_peer_ssh_authorized_keys_config(dev, name, device_dict, all_devices_list, base)
+        except Exception as exc:
+            print(f"[{name}] WARN failed to apply peer SSH authorized-keys config: {exc}")
+
+
+def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_list, base):
+    """
+    Apply peer SSH authorized-keys via Junos configuration (not filesystem manipulation).
+    This runs as part of configure_qkd_scripts() so we reuse the already-open NETCONF connection.
+    """
+    from lib.qkd.identity import collect_script_user_public_keys, qkd_peer_cmd_user
+    
+    secrets = base.get("secrets", {})
+    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", "etsi_peer_view")
+    
+    try:
+        # Collect peer SSH public keys from all devices
+        pub_keys = collect_script_user_public_keys(all_devices_list)
+    except Exception as exc:
+        print(f"[{device_name}] WARN failed to collect peer SSH keys: {exc}")
+        return
+    
+    # Determine which peer keys this device needs
+    device_names = {d.get("name") or str(i) for i, d in enumerate(all_devices_list)}
+    source_names = set([device_name])  # Always include self
+    
+    for link in device_dict.get("links", []) or []:
+        peer_name = link.get("peer")
+        if peer_name and peer_name in device_names:
+            source_names.add(peer_name)
+    
+    if not source_names or len(source_names) == 1:
+        print(f"[{device_name}] No peer sources for SSH authorized-keys config")
+        return
+    
+    # Build config commands for each peer key
+    config_lines = []
+    for source_name in sorted(source_names):
+        pub_key = pub_keys.get(source_name)
+        if not pub_key:
+            print(f"[{device_name}] WARN missing peer SSH key from {source_name}")
+            continue
+        # pub_key is full line: "ssh-ed25519 AAA... user@host"
+        # Escape quotes for set command
+        escaped_key = pub_key.replace('"', '\\"')
+        config_lines.append(f"set system login user {peer_cmd_user} authorized-keys \"{escaped_key}\"")
+    
+    if not config_lines:
+        print(f"[{device_name}] No valid peer SSH keys to configure")
+        return
+    
+    # Apply via another Config session
+    max_attempts, base_wait_seconds = lock_retry_parameters()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with Config(dev) as cu:
+                for cmd in config_lines:
+                    cu.load(cmd, format="set")
+                if cu.diff():
+                    print(f"[{device_name}] Applying peer SSH authorized-keys config")
+                    commit_safely(dev, cu, device_name, sync=True)
+                    print(f"[{device_name}] Peer SSH authorized-keys configured OK")
+                else:
+                    print(f"[{device_name}] Peer SSH authorized-keys unchanged")
+            break
+        except Exception as exc:
+            if not is_config_db_lock_error(exc) or attempt == max_attempts:
+                raise
+            wait_seconds = base_wait_seconds * attempt
+            print(
+                f"[{device_name}] WARN peer SSH config lock attempt={attempt}/{max_attempts} "
+                f"wait={wait_seconds}s"
+            )
+            time.sleep(wait_seconds)
 
 
 # ----------------------------------------
@@ -864,7 +942,7 @@ def push_config(device_name, device, commands, base):
                     except Exception:
                         pass
 
-        configure_qkd_scripts(dev, device_name, base)
+        configure_qkd_scripts(dev, device_name, base, device_dict=device, all_devices_list=devices)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         max_attempts, base_wait_seconds = lock_retry_parameters()
