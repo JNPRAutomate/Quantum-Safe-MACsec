@@ -443,7 +443,14 @@ def bootstrap_script_user_on_device(
                 pass
 
         if not run_shell_fix(dev, name, script_user):
-            return False
+            print(
+                "[%s] WARN ssh home fix did not complete; continuing because this can be platform-specific on Junos" %
+                name
+            )
+            print(
+                "[%s] hint: predeploy/provisioning will continue with runtime checks and config-based peer SSH auth" %
+                name
+            )
 
         return True
 
