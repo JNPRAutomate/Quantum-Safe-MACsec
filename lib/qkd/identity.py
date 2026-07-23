@@ -844,8 +844,96 @@ def collect_script_user_public_keys(devices):
     return pub_keys
 
 
+def clean_peer_authorized_keys_file(device):
+    """
+    Read authorized_keys file, discard any invalid/malformed lines, rewrite with only valid SSH key lines.
+    This removes garbage from previous failed deployments.
+    
+    Valid SSH key lines must start with: ssh-rsa, ssh-ed25519, ecdsa-sha2-
+    Anything else (comments, malformed lines, etc) is removed.
+    """
+    device = normalize_device(device)
+    name = device_name(device)
+    sync_target_user = qkd_peer_cmd_user()
+    auth_keys_path = f"/var/home/{sync_target_user}/.ssh/authorized_keys"
+    
+    # Read current file (if exists)
+    read_cmd = f"[ -f {auth_keys_path} ] && cat {auth_keys_path} || echo ''"
+    result = ssh_deploy_cmd(device, read_cmd, timeout=20)
+    if result.returncode != 0:
+        return  # File doesn't exist, nothing to clean
+    
+    current_content = result.stdout or ""
+    if not current_content.strip():
+        return  # File is empty
+    
+    # Parse and filter lines — keep only valid SSH key lines
+    current_lines = current_content.splitlines()
+    valid_lines = []
+    invalid_count = 0
+    
+    for line in current_lines:
+        line = line.strip()
+        if not line:
+            continue  # Skip empty lines
+        
+        # Only keep lines that start with valid SSH key type
+        if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
+            # Extra validation: must have at least 2 parts (type + key)
+            parts = line.split()
+            if len(parts) >= 2:
+                valid_lines.append(line)
+                continue
+        
+        # Line is invalid — count and discard
+        invalid_count += 1
+    
+    # If no invalid lines found, nothing to do
+    if invalid_count == 0:
+        return
+    
+    # If all lines were invalid, just delete the file
+    if not valid_lines:
+        rm_cmd = f"cli -c 'start shell command \"rm -f {auth_keys_path} && echo OK\"'"
+        result = ssh_deploy_cmd(device, rm_cmd, timeout=30, include_failed_marker=False)
+        if 'OK' in (result.stdout or ""):
+            print(f"[OK] cleaned authorized_keys on {name}: removed {invalid_count} invalid lines (file deleted)")
+        return
+    
+    # Rewrite file with only valid lines
+    valid_content = '\n'.join(valid_lines) + '\n'
+    escaped_content = valid_content.replace('\\', '\\\\').replace('\n', '\\n').replace("'", "'\\''")
+    
+    tmp_path = f"/tmp/authorized_keys_clean_{sync_target_user}.tmp"
+    inner_shell_cmd = (
+        f"mv {tmp_path} {auth_keys_path} && "
+        f"chmod 600 {auth_keys_path} && "
+        f"echo OK"
+    )
+    write_cmd = (
+        f"mkdir -p /var/home/{sync_target_user}/.ssh && "
+        f"printf '{escaped_content}' > {tmp_path} && "
+        f"cli -c 'start shell command \"{inner_shell_cmd}\"'"
+    )
+    
+    result = ssh_deploy_cmd(device, write_cmd, timeout=30, include_failed_marker=False)
+    if 'OK' in (result.stdout or ""):
+        print(f"[OK] cleaned authorized_keys on {name}: removed {invalid_count} invalid lines, kept {len(valid_lines)} valid")
+    else:
+        print(f"[WARN] failed to clean authorized_keys on {name} (may have stale data)")
+
+
 def install_peer_authorized_keys(devices):
     devices = normalize_devices(devices)
+    
+    # First pass: clean any malformed/stale lines from previous deployments
+    for device in devices:
+        try:
+            clean_peer_authorized_keys_file(device)
+        except Exception as exc:
+            name = device_name(device)
+            print(f"[WARN] failed to clean authorized_keys on {name}: {exc}")
+    
     pub_keys = collect_script_user_public_keys(devices)
     device_names = {device_name(d) for d in devices}
     max_attempts = 5
@@ -940,8 +1028,17 @@ def install_peer_authorized_keys(devices):
                 if auth_keys_content and not auth_keys_content.endswith('\n'):
                     auth_keys_content += '\n'
                 
-                # Escape content for printf: replace backslashes first, then newlines
-                escaped_content = auth_keys_content.replace('\\', '\\\\').replace('\n', '\\n')
+                # Escape content for printf: backslashes, newlines, and single quotes
+                # For use in printf '{content}', we need to escape all three:
+                # - backslash: \ -> \\
+                # - newline: \n (printf interprets)
+                # - quote: ' -> '\'' (close quote, escaped quote, open quote)
+                escaped_content = (
+                    auth_keys_content
+                    .replace('\\', '\\\\')      # backslash
+                    .replace('\n', '\\n')       # newline
+                    .replace("'", "'\\''")      # single quote
+                )
                 
                 # Step 1 (as macsec_user via request_shell_execute): write content to /tmp
                 # Step 2 (as root via cli -> start shell): mv/chmod/chown — needs root for
@@ -1590,6 +1687,14 @@ def validate_all_devices_postdeploy(devices):
     
     if _peer_rotation_enabled:
         install_peer_authorized_keys(devices)
+    else:
+        # Even though we don't sync, clean any stale/malformed lines from previous runs
+        for device in devices:
+            try:
+                clean_peer_authorized_keys_file(device)
+            except Exception as exc:
+                name = device_name(device)
+                print(f"[WARN] failed to clean authorized_keys on {name}: {exc}")
 
     failed = []
     for index, device in enumerate(devices, start=1):
