@@ -593,12 +593,71 @@ def configure_qkd_scripts(dev, name, base):
     print(f"[{name}] QKD scripts event and op configured OK")
 
 
+def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_dict, base):
+    from lib.qkd.identity import collect_script_user_public_keys, qkd_script_user
+
+    secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    peer_cmd_user = secrets.get("script_user") or secrets.get("default_user") or qkd_script_user()
+    all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
+
+    try:
+        pub_keys = collect_script_user_public_keys(all_devices_list)
+    except Exception as exc:
+        print(f"[{device_name}] WARN failed to collect peer SSH keys: {exc}")
+        return
+
+    device_names = set(all_devices_dict.keys())
+    source_names = {device_name}
+
+    for link in device_dict.get("links", []) or []:
+        peer_name = link.get("peer")
+        if peer_name and peer_name in device_names:
+            source_names.add(str(peer_name))
+
+    if not source_names or len(source_names) == 1:
+        print(f"[{device_name}] No peer sources for SSH authorized-keys config")
+        return
+
+    config_lines = []
+    for source_name in sorted(source_names):
+        pub_key = pub_keys.get(source_name)
+        if not pub_key:
+            print(f"[{device_name}] WARN missing peer SSH key from {source_name}")
+            continue
+        parts = pub_key.split(None, 1)
+        if len(parts) != 2:
+            print(f"[{device_name}] WARN malformed peer SSH key from {source_name}: {pub_key}")
+            continue
+        key_type, _key_rest = parts
+        escaped_key = pub_key.replace('"', '\\"')
+        config_lines.append(
+            f"set system login user {peer_cmd_user} authentication {key_type} \"{escaped_key}\""
+        )
+
+    if not config_lines:
+        print(f"[{device_name}] No valid peer SSH keys to configure")
+        return
+
+    with Config(dev) as cu:
+        for cmd in config_lines:
+            cu.load(cmd, format="set")
+        if cu.diff():
+            print(f"[{device_name}] Applying peer SSH authorized-keys config")
+            commit_safely(dev, cu, device_name, sync=True)
+            print(f"[{device_name}] Peer SSH authorized-keys configured OK")
+        else:
+            print(f"[{device_name}] Peer SSH authorized-keys unchanged")
+
+
 # ----------------------------------------
 # PUSH CONFIG
 # ----------------------------------------
 
 
-def push_config(device_name, device, commands, base):
+def push_config(device_name, device, commands, base, devices_dict=None):
     dev = Device(
         host=device["ip"],
         user=device["auth"]["username"],
@@ -616,6 +675,11 @@ def push_config(device_name, device, commands, base):
 
         push_certs(dev, device_name, device)
         configure_qkd_scripts(dev, device_name, base)
+        if devices_dict:
+            try:
+                apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
+            except Exception as exc:
+                print(f"[{device_name}] WARN failed to apply peer SSH authorized-keys config: {exc}")
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         with Config(dev) as cu:
@@ -716,4 +780,4 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
             print(f"[{name}] dry-run -> skipping push")
             continue
 
-        push_config(name, device, commands, base)
+        push_config(name, device, commands, base, devices)
