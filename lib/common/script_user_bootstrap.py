@@ -50,6 +50,7 @@ import os
 import subprocess
 import shlex
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -235,6 +236,35 @@ def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
         raise RuntimeError("Invalid public key generated at %s" % public_key)
 
     return str(private_key), line
+
+
+def mirror_local_script_user_keypair_to_ssh(
+    script_user: str,
+    source_private_key: str,
+) -> str:
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+
+    src_priv = Path(source_private_key)
+    src_pub = Path(source_private_key + ".pub")
+    dst_priv = ssh_dir / ("qkd_%s_id_ed25519" % script_user)
+    dst_pub = ssh_dir / ("qkd_%s_id_ed25519.pub" % script_user)
+
+    shutil.copy2(str(src_priv), str(dst_priv))
+    if src_pub.exists():
+        shutil.copy2(str(src_pub), str(dst_pub))
+
+    try:
+        dst_priv.chmod(0o600)
+    except Exception:
+        pass
+    try:
+        if dst_pub.exists():
+            dst_pub.chmod(0o644)
+    except Exception:
+        pass
+
+    return str(dst_priv)
 
 
 def write_local_ssh_alias_config(
@@ -775,7 +805,11 @@ def bootstrap_script_users(
         local_ssh_config_path = None
     else:
         resolved_script_password = None
-        local_private_key_path, local_public_key_line = ensure_local_script_user_keypair(resolved_script_user)
+        source_private_key_path, local_public_key_line = ensure_local_script_user_keypair(resolved_script_user)
+        local_private_key_path = mirror_local_script_user_keypair_to_ssh(
+            resolved_script_user,
+            source_private_key_path,
+        )
         local_ssh_config_path = None
         if write_local_ssh_config and not dry_run:
             local_ssh_config_path = write_local_ssh_alias_config(
