@@ -371,6 +371,11 @@ def parse_args():
     clean.add_argument("--local-only", action="store_true")
     clean.add_argument("--pki", action="store_true")
     clean.add_argument("--full-macsec", action="store_true")
+    clean.add_argument(
+        "--continue-on-failure",
+        action="store_true",
+        help="Continue local cleanup even if some remote devices fail.",
+    )
 
     validate = subparsers.add_parser(
         "validate",

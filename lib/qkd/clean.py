@@ -518,6 +518,7 @@ def handle_clean(args):
     print(f"local_only = {args.local_only}")
     print(f"pki        = {args.pki}")
     print(f"full_macsec = {args.full_macsec}")
+    print(f"continue_on_failure = {getattr(args, 'continue_on_failure', False)}")
     print("")
 
     devices_file = BASE_DIR / CONFIG["runtime_dir"] / "devices.yaml"
@@ -615,9 +616,17 @@ def handle_clean(args):
             failed.append(name)
 
     if failed:
-        raise RuntimeError(
-            f"Remote clean failed for devices: {', '.join(failed)}. "
-            f"Local runtime was not removed."
+        if not getattr(args, "continue_on_failure", False):
+            raise RuntimeError(
+                f"Remote clean failed for devices: {', '.join(failed)}. "
+                f"Local runtime was not removed."
+            )
+
+        print(
+            "[WARN] Remote clean failed for devices: %s" % ", ".join(failed)
+        )
+        print(
+            "[WARN] Continuing local cleanup because --continue-on-failure is enabled."
         )
 
     clean_runtime()
