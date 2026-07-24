@@ -334,8 +334,17 @@ def write_local_ssh_alias_config(
     inline_lines.append(inline_end)
 
     rebuilt_lines = rebuilt.rstrip("\n").splitlines()
-    rebuilt_lines.extend([""] + inline_lines)
-    main_config.write_text("\n".join(rebuilt_lines) + "\n", encoding="utf-8")
+    # Place managed aliases near the top (right after Include) so they are not
+    # shadowed by earlier generic Host * entries in user SSH config.
+    if rebuilt_lines:
+        first = rebuilt_lines[0]
+        tail = rebuilt_lines[1:]
+        final_lines = [first, ""] + inline_lines
+        if tail:
+            final_lines.extend([""] + tail)
+    else:
+        final_lines = inline_lines
+    main_config.write_text("\n".join(final_lines) + "\n", encoding="utf-8")
     try:
         main_config.chmod(0o600)
     except Exception:
