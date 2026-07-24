@@ -50,6 +50,8 @@ SSH_KEY = CONFIG["ssh_key"]
 LOG_FILE = CONFIG["log_file"]
 LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
 LOG_BACKUP_COUNT = int(CONFIG["log_backup_count"])
+STATE_DIR = CONFIG.get("state_dir", f"/var/home/{SCRIPT_USER}")
+LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
 
 QKD_KEY_SIZE = 256
 
@@ -77,7 +79,12 @@ CERT = f"{SCRIPT_DIR}/certs/{DEVICE}.crt"
 KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
 CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
-STATE_DIR = "/var/tmp"
+def ensure_runtime_dirs():
+    for path in (STATE_DIR, LOG_DIR):
+        try:
+            Path(path).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
 
 # ----------------------------
@@ -85,6 +92,7 @@ STATE_DIR = "/var/tmp"
 # ----------------------------
 
 def rotate_log():
+    ensure_runtime_dirs()
     path = Path(LOG_FILE)
     try:
         if not path.exists():
@@ -154,6 +162,7 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     def write_log_line(log_file):
         try:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
             rotate_one_log(log_file)
             with open(log_file, "a") as f:
                 f.write(line)
@@ -164,7 +173,7 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     if iface:
         safe_iface = iface.replace("/", "_")
-        link_log_file = f"{STATE_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
+        link_log_file = f"{LOG_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
         write_log_line(link_log_file)
 
 
