@@ -588,7 +588,7 @@ def rollback_candidate(dev, name):
 def configure_qkd_scripts(dev, name, base):
     script_name = ONBOX_SCRIPT_NAME
     secrets = base.get("secrets", {})
-    script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
+    script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))

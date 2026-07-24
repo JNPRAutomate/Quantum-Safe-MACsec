@@ -68,7 +68,7 @@ except Exception:  # pragma: no cover
         "runtime_dir": "config/runtime",
     }
     QKD = {
-        "SCRIPT_USER": "admin",
+        "SCRIPT_USER": "etsi_user",
         "DEPLOY_USER": "root",
     }
 
@@ -142,7 +142,7 @@ def get_script_user(inventory_base: Dict[str, Any], override: Optional[str] = No
         os.getenv("QKD_SCRIPT_USER")
         or secrets.get("script_user")
         or QKD.get("SCRIPT_USER")
-        or "admin"
+        or "etsi_user"
     )
 
 
