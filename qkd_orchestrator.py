@@ -784,8 +784,8 @@ def deploy_onbox(
                 log.info(f"[{name}] SCP script to {remote_tmp}")
                 scp.put(str(script), remote_path=remote_tmp)
                 for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
-                    log.info(f"[{name}] SCP sidecar to {remote_sidecar}")
                     scp.put(str(local_sidecar), remote_path=remote_sidecar)
+                    log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
 
             log.info(f"[{name}] Installing onbox script into op/event directories")
             output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
