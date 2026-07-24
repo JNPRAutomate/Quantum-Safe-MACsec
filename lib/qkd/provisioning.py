@@ -720,8 +720,8 @@ def push_config(device_name, device, commands, base, devices_dict=None):
         seed = f"{keychain_name}:bootstrap:secret:{key_index}"
         return hashlib.sha256(seed.encode()).hexdigest()
 
-    def _bootstrap_start_time(key_index):
-        return f"2026-01-01.00:{key_index:02d}"
+    def _bootstrap_start_time():
+        return "2026-01-01.00:01"
 
     def _ensure_keychain_prereqs(cmds):
         refs = []
@@ -744,10 +744,12 @@ def push_config(device_name, device, commands, base, devices_dict=None):
                 f"set security authentication-key-chains key-chain {keychain_name}",
                 f"set security authentication-key-chains key-chain {keychain_name} key 1 key-name {_bootstrap_key_name(keychain_name, 1)}",
                 f"set security authentication-key-chains key-chain {keychain_name} key 1 secret \"{_bootstrap_secret(keychain_name, 1)}\"",
-                f"set security authentication-key-chains key-chain {keychain_name} key 1 start-time {_bootstrap_start_time(1)}",
-                f"set security authentication-key-chains key-chain {keychain_name} key 2 key-name {_bootstrap_key_name(keychain_name, 2)}",
-                f"set security authentication-key-chains key-chain {keychain_name} key 2 secret \"{_bootstrap_secret(keychain_name, 2)}\"",
-                f"set security authentication-key-chains key-chain {keychain_name} key 2 start-time {_bootstrap_start_time(2)}",
+                f"set security authentication-key-chains key-chain {keychain_name} key 1 start-time {_bootstrap_start_time()}",
+                f"delete security authentication-key-chains key-chain {keychain_name} key 0",
+                f"delete security authentication-key-chains key-chain {keychain_name} key 2",
+                f"delete security authentication-key-chains key-chain {keychain_name} key 3",
+                f"delete security authentication-key-chains key-chain {keychain_name} key 4",
+                f"delete security authentication-key-chains key-chain {keychain_name} key 5",
             ]
             for req in required:
                 if req not in existing:

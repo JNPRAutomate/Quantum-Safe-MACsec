@@ -1142,14 +1142,16 @@ def handle_deploy(args):
         "START",
         "Collect generated on-box script artifacts for managed QKD devices.",
     )
-    artifacts = {}
+    # Always refresh runtime on-box artifacts at deploy time so the latest
+    # qkd_onbox.py logic is applied even when create is not re-run.
+    artifacts = build_onbox_artifacts(devices)
     for name, device in devices.items():
         if device.get("managed") is False:
             continue
         mode = device.get("macsec", {}).get("mode", "qkd")
         if mode != "qkd":
             continue
-        script_path = BASE_DIR / CONFIG["runtime_dir"] / name / ONBOX_SCRIPT_NAME
+        script_path = artifacts.get(name, {}).get("script") or (BASE_DIR / CONFIG["runtime_dir"] / name / ONBOX_SCRIPT_NAME)
         if not script_path.exists():
             raise RuntimeError(f"[{name}] Missing runtime onbox artifact: {script_path}. Run create first.")
         artifacts[name] = {"script": script_path}
