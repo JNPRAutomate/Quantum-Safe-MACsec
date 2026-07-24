@@ -354,6 +354,14 @@ def parse_args():
         help="Run SCRIPT_USER bootstrap in dry-run mode, then stop before validation/deploy.",
     )
     deploy.add_argument(
+        "--shipment-preload",
+        action="store_true",
+        help=(
+            "Preload only the minimal on-box runtime files needed by qkd_onbox.py "
+            "(qkd_onbox_config.json and qkd_onbox_inventory.json)."
+        ),
+    )
+    deploy.add_argument(
         "--skip-pre-validation",
         "--skip-predeploy-validation",
         dest="skip_pre_validation",
@@ -468,7 +476,14 @@ def run_scp(log, name, src, dst):
 # Onbox deploy
 # ---------------------------------------------------------------------------
 
-def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None):
+def deploy_onbox(
+    log,
+    devices,
+    artifacts,
+    script_user=None,
+    script_password=None,
+    shipment_preload=False,
+):
     """
     Deploy qkd_onbox.py to Junos devices using SCRIPT_USER/admin as source of truth.
 
@@ -744,6 +759,13 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
             raise FileNotFoundError(f"[{name}] Missing onbox script artifact: {script}")
 
         sidecar_map = artifacts.get(name, {}).get("sidecars", {}) or {}
+        if shipment_preload:
+            required_sidecars = {"qkd_onbox_config.json", "qkd_onbox_inventory.json"}
+            sidecar_map = {
+                sidecar_name: sidecar_path
+                for sidecar_name, sidecar_path in sidecar_map.items()
+                if Path(sidecar_path).name in required_sidecars
+            }
         sidecar_paths = []
         for _, local_sidecar in sorted(sidecar_map.items()):
             local_path = Path(local_sidecar)
@@ -1253,7 +1275,7 @@ def handle_deploy(args):
         script_path = artifacts.get(name, {}).get("script") or (BASE_DIR / CONFIG["runtime_dir"] / name / ONBOX_SCRIPT_NAME)
         if not script_path.exists():
             raise RuntimeError(f"[{name}] Missing runtime onbox artifact: {script_path}. Run create first.")
-        artifacts[name] = {"script": script_path}
+        artifacts.setdefault(name, {})["script"] = script_path
     print(f"Artifacts prepared for devices: {len(artifacts)}")
     print_step_banner("3/6", "ARTIFACT COLLECTION", "END")
 
@@ -1263,7 +1285,14 @@ def handle_deploy(args):
         "START",
         "Copy and install qkd_onbox.py on target devices (including dual-RE sync).",
     )
-    deploy_onbox(log, devices, artifacts, script_user=script_user, script_password=script_password)
+    deploy_onbox(
+        log,
+        devices,
+        artifacts,
+        script_user=script_user,
+        script_password=script_password,
+        shipment_preload=args.shipment_preload,
+    )
     print_step_banner("4/6", "ONBOX FILE DEPLOY", "END")
 
     print_step_banner(

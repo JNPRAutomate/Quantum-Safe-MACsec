@@ -231,54 +231,25 @@ def resolve_pki_runtime():
 
 def build_onbox_config(name, device):
     """
-    Build the CONFIG dictionary embedded into qkd_onbox.py for one device.
+        Build the shared runtime config payload for qkd_onbox.py.
 
-    Link-driven runtime contract:
-      device["links"] is the source of truth.
-
-    Each embedded link includes:
-      - id
-      - role
-      - interface
-      - peer
-      - peer_interface
-      - ca_name
-      - ca_names
-      - keychain_name
-
-    ca_names is intentionally preserved for compatibility with qkd_onbox.py
-    implementations that still iterate over a list of CAs per link.
+        This file is intentionally kept separate from inventory data so operators
+        can inspect or adjust runtime-wide policy and identity values without
+        rewriting the per-device inventory payload.
     """
     if device.get("managed") is False:
         raise ValueError(f"Refusing to build onbox config for unmanaged device {name}")
 
-    # Deploy/runtime source of truth must be the QKD SCRIPT_USER, normally admin.
-    # Do not derive this from labuser/device auth. labuser may not have enough
-    # privileges for dual-RE file synchronization.
-    script_user = device.get("script_user") or QKD["SCRIPT_USER"]
-
     script_dir = QKD["SCRIPT_DIR"]
     ssh_home_base = QKD["SSH_HOME_BASE"]
     ssh_key_name = QKD["SSH_KEY_NAME"]
-    runtime_home = f"{ssh_home_base}/{script_user}"
-    runtime_log_dir = f"{runtime_home}/logs"
 
     pki_runtime = resolve_pki_runtime()
 
     runtime_qkd_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_qkd_policy.get("qkd_policy", {})
 
-    links = normalize_onbox_links(name, device)
-
     config = {
-        # Device identity / debug metadata
-        "device_name": name,
-        "hostname": _device_hostname(name, device),
-
-        "local_sae": _device_sae_id(name, device),
-        "kme_ip": _device_kme_ip(name, device),
-        "kme_port": _device_kme_port(device),
-
         # PKI runtime profile
         "pki_profile": pki_runtime["pki_profile"],
         "ca_cert": pki_runtime["ca_cert"],
@@ -288,19 +259,16 @@ def build_onbox_config(name, device):
         "qkd_policy": qkd_policy,
 
         # Runtime identity
-        "script_user": script_user,
+        "script_user": device.get("script_user") or QKD["SCRIPT_USER"],
         "script_dir": script_dir,
-        "ssh_key": f"{ssh_home_base}/{script_user}/.ssh/{ssh_key_name}",
-        "state_dir": runtime_home,
-        "log_dir": runtime_log_dir,
+        "ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{ssh_key_name}",
+        "state_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}",
+        "log_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs",
 
         # Logging
-        "log_file": f"{runtime_log_dir}/qkd_debug.log",
+        "log_file": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs/qkd_debug.log",
         "log_max_bytes": QKD["LOG_MAX_BYTES"],
         "log_backup_count": QKD["LOG_BACKUP_COUNT"],
-
-        # Link-driven runtime topology for this device
-        "links": links,
     }
 
     # Optional runtime knobs, only embedded if present in QKD/settings.
@@ -318,6 +286,28 @@ def build_onbox_config(name, device):
             config[config_key] = QKD[settings_key]
 
     return config
+
+
+def build_onbox_inventory(name, device):
+    """
+    Build the per-device inventory payload for qkd_onbox.py.
+
+    This holds device-specific values only: identity, transport endpoint and
+    link topology.
+    """
+    if device.get("managed") is False:
+        raise ValueError(f"Refusing to build onbox inventory for unmanaged device {name}")
+
+    links = normalize_onbox_links(name, device)
+
+    return {
+        "device_name": name,
+        "hostname": _device_hostname(name, device),
+        "local_sae": _device_sae_id(name, device),
+        "kme_ip": _device_kme_ip(name, device),
+        "kme_port": _device_kme_port(device),
+        "links": links,
+    }
 
 
 # ----------------------------
@@ -361,6 +351,7 @@ def generate_onbox_sidecars(name, device, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     config = build_onbox_config(name, device)
+    inventory = build_onbox_inventory(name, device)
 
     sidecars = {
         "config": out_dir / "qkd_onbox_config.json",
@@ -372,9 +363,9 @@ def generate_onbox_sidecars(name, device, out_dir):
     }
 
     sidecars["config"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["inventory"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["links"].write_text(json.dumps(config.get("links", []), indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["topology"].write_text(json.dumps({"links": config.get("links", [])}, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["inventory"].write_text(json.dumps(inventory, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["links"].write_text(json.dumps(inventory.get("links", []), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["topology"].write_text(json.dumps({"links": inventory.get("links", [])}, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     sidecars["qkd_policy"].write_text(json.dumps(config.get("qkd_policy", {}), indent=2, sort_keys=False) + "\n", encoding="utf-8")
     sidecars["pki"].write_text(
         json.dumps(
