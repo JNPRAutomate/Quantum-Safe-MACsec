@@ -354,6 +354,29 @@ def clean_device(name, device, full_macsec=False):
 
             return rpc_text(rsp)
 
+        def has_dual_re():
+            out = run_cli_show("show chassis routing-engine")
+            low = (out or "").lower()
+            return (
+                ("re0" in low and "re1" in low)
+                or ("routing engine 0" in low and "routing engine 1" in low)
+                or ("slot 0:" in low and "slot 1:" in low)
+            )
+
+        def clean_peer_re_files(paths):
+            if not has_dual_re():
+                return
+
+            print(f"[{name}] dual-RE detected: best-effort peer RE file cleanup")
+            for re_name in ("re0", "re1"):
+                for path in paths:
+                    run_shell(
+                        f"peer {re_name} delete {path}",
+                        f"cli -c 'file delete {re_name}:{path}'",
+                        strict=False,
+                        show_output=False,
+                    )
+
         ##
         def remote_path_exists(path):
             output = run_shell(
@@ -374,17 +397,55 @@ def clean_device(name, device, full_macsec=False):
         dev.open()
 
         try:
-            run_shell(
-                "config cleanup",
-                config_cleanup_cmd,
-                strict=True,
-            )
+            dual_re = has_dual_re()
+            if dual_re:
+                config_cleanup_sync_cmd = (
+                    f"cli -c 'configure; {config_body}; commit synchronize; exit'"
+                )
+                sync_out = run_shell(
+                    "config cleanup (commit synchronize)",
+                    config_cleanup_sync_cmd,
+                    strict=False,
+                )
+                sync_low = (sync_out or "").lower()
+                if "commit complete" not in sync_low:
+                    print(f"[{name}] WARN commit synchronize cleanup failed, retrying local commit")
+                    run_shell(
+                        "config cleanup (local fallback)",
+                        config_cleanup_cmd,
+                        strict=True,
+                    )
+            else:
+                run_shell(
+                    "config cleanup",
+                    config_cleanup_cmd,
+                    strict=True,
+                )
 
             run_shell(
                 "file/cert/runtime cleanup",
                 file_cleanup_cmd,
                 strict=False,
             )
+
+            peer_cleanup_paths = [
+                f"{event_script_dir}/{script_name}",
+                f"{op_script_dir}/{script_name}",
+                f"{op_script_dir}/qkd_onbox_inventory.json",
+                f"{op_script_dir}/qkd_onbox_config.json",
+                f"/var/tmp/{script_name}",
+                "/var/db/scripts/event/qkd.conf",
+                remote_cert_dir,
+                f"{script_dir}/certs",
+                f"{op_script_dir}/certs",
+                f"{event_script_dir}/certs",
+                script_log_dir,
+                script_home_dir,
+            ]
+            for path in runtime_paths:
+                if path not in peer_cleanup_paths:
+                    peer_cleanup_paths.append(path)
+            clean_peer_re_files(peer_cleanup_paths)
 
             failures = []
 
