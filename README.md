@@ -83,6 +83,10 @@ This section captures the KME interaction concept that underpins key delivery.
 
 The detailed sequence below reflects how the project turns API key retrieval into MACsec state transitions.
 
+For the full runtime model, including the difference between `key_batch_size`, `interval_seconds`, `pending_key_id`, and `next_start_time`, see:
+
+- [docs/qkd/qkd_onbox_runtime_lld.md](docs/qkd/qkd_onbox_runtime_lld.md)
+
 ![QKD-assisted key exchange sequence](docs/images/hld_qkd_key_exchange_sequence.png)
 
 ### 7.1 Expected operational markers
