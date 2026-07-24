@@ -496,7 +496,8 @@ def push_certs(dev, name, device):
             + "\n".join(missing)
         )
 
-    print(f"[{name}] Copying certs profile={profile} sae={sae_id} to {remote_dir}")
+    if DEBUG:
+        print(f"[{name}] Copying certs profile={profile} sae={sae_id} to {remote_dir}")
 
     try:
         dev.rpc.request_shell_execute(
@@ -512,7 +513,8 @@ def push_certs(dev, name, device):
     with SCP(dev, progress=progress) as scp:
         for local_file in (local_cert, local_key, local_ca):
             remote_file = f"{remote_dir}/{local_file.name}"
-            print(f"[{name}] SCP {local_file} -> {remote_file}")
+            if DEBUG:
+                print(f"[{name}] SCP {local_file} -> {remote_file}")
             scp.put(str(local_file), remote_path=remote_file)
 
     verify_cmd = (
@@ -788,9 +790,9 @@ def should_skip_device(name, device):
 # ----------------------------------------
 
 
-def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=False, devices=None):
+def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=False, verbose=0, devices=None):
     global DEBUG
-    DEBUG = debug
+    DEBUG = bool(debug) or int(verbose or 0) > 0
 
     base, runtime_devices, topology = load_inventory()
     if devices is None:

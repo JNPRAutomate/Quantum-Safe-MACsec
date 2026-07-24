@@ -49,7 +49,8 @@ def build_device_config(device_name, device, platform, base, topology):
 
     def bootstrap_key_name(keychain_name, key_index):
         seed = f"{keychain_name}:bootstrap:key-name:{key_index}"
-        return hashlib.sha256(seed.encode()).hexdigest()
+        # Keep CKN bootstrap names compact for broad Junos compatibility.
+        return f"k{key_index}_{hashlib.sha256(seed.encode()).hexdigest()[:24]}"
 
     def bootstrap_secret(keychain_name, key_index):
         seed = f"{keychain_name}:bootstrap:secret:{key_index}"
@@ -147,12 +148,26 @@ def build_device_config(device_name, device, platform, base, topology):
                 
                 keychain_name = keychain_name_for_link(link, ca_name)
 
+                # General reset for deterministic bootstrap across all devices:
+                # remove any pre-existing key-chain shape, then recreate it.
+                add(
+                    f"delete security authentication-key-chains "
+                    f"key-chain {keychain_name}"
+                )
+
                 add(
                     f"set security authentication-key-chains "
                     f"key-chain {keychain_name}"
                 )
 
-                for key_index in range(2):
+                # Remove any stale incomplete bootstrap keys before recreating them.
+                for stale_idx in (0, 1, 2):
+                    add(
+                        f"delete security authentication-key-chains "
+                        f"key-chain {keychain_name} key {stale_idx}"
+                    )
+
+                for key_index in (1, 2):
                     add(
                         f"set security authentication-key-chains "
                         f"key-chain {keychain_name} key {key_index} "
