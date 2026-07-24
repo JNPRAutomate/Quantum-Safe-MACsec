@@ -62,6 +62,14 @@ def qkd_remote_tmp_dir():
     return QKD.get("REMOTE_TMP_DIR", "/var/tmp")
 
 
+def qkd_remote_onbox_config_json():
+    return f"{QKD.get('OP_SCRIPT_DIR', '/var/db/scripts/op')}/qkd_onbox_config.json"
+
+
+def qkd_remote_onbox_inventory_json():
+    return f"{QKD.get('OP_SCRIPT_DIR', '/var/db/scripts/op')}/qkd_onbox_inventory.json"
+
+
 def qkd_runtime_state_dir():
     return qkd_ssh_home()
 
@@ -796,8 +804,14 @@ def check_onbox_embedded_config(device):
     name = device_name(device)
     script_user = qkd_script_user()
     expected_key = qkd_ssh_private_key()
-    path = qkd_remote_op_script()
-    result = ssh_deploy_cmd(device, f"grep -n 'script_user\\|ssh_key' {path}", timeout=30)
+    config_path = qkd_remote_onbox_config_json()
+    inventory_path = qkd_remote_onbox_inventory_json()
+    cmd = (
+        f"test -s {config_path} && test -s {inventory_path}; "
+        f"grep -n 'script_user\\|ssh_key' {config_path}; "
+        f"grep -n 'script_user\\|ssh_key' {inventory_path}"
+    )
+    result = ssh_deploy_cmd(device, cmd, timeout=30)
     if (
         result.returncode != 0
         or "script_user" not in result.stdout
@@ -805,15 +819,26 @@ def check_onbox_embedded_config(device):
         or "ssh_key" not in result.stdout
         or expected_key not in result.stdout
     ):
-        raise RuntimeError(f"embedded qkd_onbox CONFIG mismatch on {name}\nexpected script_user={script_user}\nexpected ssh_key={expected_key}\nstdout={result.stdout}\nstderr={result.stderr}")
-    print(f"[OK] embedded CONFIG identity on {name}: script_user={script_user} ssh_key={expected_key}")
+        raise RuntimeError(
+            f"qkd_onbox runtime JSON identity mismatch on {name}\n"
+            f"expected script_user={script_user}\n"
+            f"expected ssh_key={expected_key}\n"
+            f"config_json={config_path}\n"
+            f"inventory_json={inventory_path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+    print(
+        f"[OK] runtime JSON identity on {name}: script_user={script_user} "
+        f"ssh_key={expected_key}"
+    )
     print_if_verbose(result.stdout)
 
 
 def check_onbox_runtime_policy_config(device):
     device = normalize_device(device)
     name = device_name(device)
-    path = qkd_remote_op_script()
+    path = qkd_remote_onbox_config_json()
     runtime_pki = load_runtime_pki_profile()
     runtime_policy = load_runtime_qkd_policy()
     pki = runtime_pki.get("pki", {})
@@ -835,14 +860,18 @@ def check_onbox_runtime_policy_config(device):
         if result.returncode != 0:
             failed.append((label, marker, result.stdout, result.stderr))
         else:
-            print(f"[OK] embedded runtime marker on {name}: {label}")
+            print(f"[OK] runtime JSON marker on {name}: {label}")
             print_if_verbose(result.stdout)
-    print(f"[OK] embedded runtime CONFIG on {name}: pki_profile={pki_profile} max_installed_keys={max_installed_keys} trust_bundle={'present' if trust_bundle else 'missing'}")
+    print(
+        f"[OK] runtime JSON config on {name}: pki_profile={pki_profile} "
+        f"max_installed_keys={max_installed_keys} "
+        f"trust_bundle={'present' if trust_bundle else 'missing'}"
+    )
     if failed:
         lines = []
         for label, marker, stdout, stderr in failed:
             lines.append(f"- missing marker={label}\n  expected={marker}\n  stdout={stdout}\n  stderr={stderr}")
-        raise RuntimeError(f"deployed qkd_onbox.py runtime CONFIG validation failed on {name}\npath={path}\n" + "\n".join(lines))
+        raise RuntimeError(f"deployed qkd_onbox runtime JSON validation failed on {name}\npath={path}\n" + "\n".join(lines))
 
 
 def expected_max_installed_keys():
