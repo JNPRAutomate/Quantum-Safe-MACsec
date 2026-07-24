@@ -253,13 +253,12 @@ def commit_safely(dev, cu, name, sync=True):
     """
     Commit helper.
 
-    Correct behavior:
-    - Single-RE devices: normal commit only.
-    - Dual-RE devices: commit synchronize.
-    - If a dual-RE commit synchronize fails because backup RE is missing event
-      scripts, sync QKD scripts to peer RE and retry once.
-    - Do not fall back to a normal commit on dual-RE after sync failure, because
-      that hides the actual RE1 problem.
+        Behavior:
+        - Single-RE devices: normal commit only.
+        - Dual-RE devices: commit synchronize.
+        - If dual-RE synchronize fails due script propagation, sync scripts and retry once.
+        - If synchronize still fails due remote RE commit/connectivity issues,
+            fall back to local commit so deploy can progress on active RE.
     """
     dual_re = has_dual_re(dev, name) if sync else False
 
@@ -279,8 +278,22 @@ def commit_safely(dev, cu, name, sync=True):
         ):
             print(f"[{name}] commit synchronize failed; syncing scripts to peer RE and retrying once")
             sync_qkd_scripts_dual_re(dev, name, ONBOX_SCRIPT_NAME)
-            cu.commit(sync=True)
-            return
+            try:
+                cu.commit(sync=True)
+                return
+            except Exception as retry_exc:
+                retry_text = str(retry_exc)
+                retry_low = retry_text.lower()
+                remote_re_sync_failure = (
+                    "remote commit-configuration failed" in retry_low
+                    or "could not connect to re1" in retry_low
+                    or "cannot connect to other re" in retry_low
+                )
+                if remote_re_sync_failure:
+                    print(f"[{name}] WARN commit synchronize still failing on peer RE; falling back to local commit")
+                    cu.commit()
+                    return
+                raise
 
         print(f"[{name}] COMMIT FAILED")
         print(text)
