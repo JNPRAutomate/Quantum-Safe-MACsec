@@ -8,6 +8,8 @@ import subprocess
 import shlex
 import re
 
+ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+
 
 # -------------------------------------------------
 # Basic helpers
@@ -45,14 +47,14 @@ def qkd_authorized_keys():
 def qkd_remote_op_script():
     return QKD.get(
         "REMOTE_OP_SCRIPT_PATH",
-        f"{QKD.get('OP_SCRIPT_DIR', '/var/db/scripts/op')}/{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}",
+        f"{QKD.get('OP_SCRIPT_DIR', '/var/db/scripts/op')}/{ONBOX_SCRIPT_NAME}",
     )
 
 
 def qkd_remote_event_script():
     return (
         f"{QKD.get('EVENT_SCRIPT_DIR', '/var/db/scripts/event')}/"
-        f"{QKD.get('SCRIPT_NAME', 'qkd_onbox.py')}"
+        f"{ONBOX_SCRIPT_NAME}"
     )
 
 
@@ -747,7 +749,7 @@ def check_event_options_script_user(device):
     device = normalize_device(device)
     name = device_name(device)
     script_user = qkd_script_user()
-    script_name = QKD["SCRIPT_NAME"]
+    script_name = ONBOX_SCRIPT_NAME
     cmd = 'cli -c "show configuration event-options event-script | display set"'
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if script_name not in result.stdout or f"python-script-user {script_user}" not in result.stdout:

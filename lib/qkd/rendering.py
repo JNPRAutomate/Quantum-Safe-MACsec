@@ -7,6 +7,7 @@ from lib.common.settings import CONFIG, QKD
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
 TEMPLATE_DIR = BASE_DIR / CONFIG["templates_dir"]
 
@@ -38,7 +39,7 @@ def build_device_config(device_name, device, platform, base, topology):
         "device": device,
         "platform": platform,
         "kme": base.get("kme", {}),
-        "script_name": QKD["SCRIPT_NAME"],
+        "script_name": ONBOX_SCRIPT_NAME,
         "script_user": QKD.get("SCRIPT_USER", "admin"),
         "rotation_interval_seconds": rotation_interval_seconds,
     }

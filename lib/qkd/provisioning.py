@@ -33,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = BASE_DIR / CONFIG["inventory_dir"]
 RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 PLATFORM_DIR = CONFIG_DIR / "platforms"
+ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
 
 def resolve_certs_dir():
@@ -208,27 +209,19 @@ def copy_file_to_other_re(dev, name, src_path, dst_name=None):
 def sync_qkd_scripts_dual_re(dev, name, script_name):
     """
     Ensure qkd_onbox.py exists on both routing engines before commit synchronize.
-
-    Also creates/copies legacy onbox.py as a compatibility shim because stale
-    configurations can still reference /var/db/scripts/event/onbox.py and break
-    commit synchronize before the new candidate is fully checked out.
     """
     op_script_dir = "/var/db/scripts/op"
     event_script_dir = "/var/db/scripts/event"
 
     op_script = f"{op_script_dir}/{script_name}"
     event_script = f"{event_script_dir}/{script_name}"
-    legacy_event_script = f"{event_script_dir}/onbox.py"
-    legacy_op_script = f"{op_script_dir}/onbox.py"
 
-    # Ensure local RE has all compatibility files before trying to copy them.
+    # Ensure local RE has target script files before trying to copy them.
     run_shell(
         dev,
         (
             f"mkdir -p {op_script_dir} {event_script_dir}; "
-            f"test -f {event_script} && cp {event_script} {legacy_event_script} || true; "
-            f"test -f {op_script} && cp {op_script} {legacy_op_script} || true; "
-            f"chmod 755 {event_script} {op_script} {legacy_event_script} {legacy_op_script} 2>/dev/null || true"
+            f"chmod 755 {event_script} {op_script} 2>/dev/null || true"
         ),
         name=name,
         strict=False,
@@ -240,7 +233,7 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
 
     print(f"[{name}] Dual-RE detected - syncing QKD scripts to peer RE")
 
-    for path in (event_script, op_script, legacy_event_script, legacy_op_script):
+    for path in (event_script, op_script):
         copy_file_to_other_re(dev, name, path)
 
     # Ask Junos to push scripts too. Ignore failure here; file copy above is the primary sync.
@@ -285,7 +278,7 @@ def commit_safely(dev, cu, name, sync=True):
             or "remote commit-configuration failed" in low
         ):
             print(f"[{name}] commit synchronize failed; syncing scripts to peer RE and retrying once")
-            sync_qkd_scripts_dual_re(dev, name, QKD.get("SCRIPT_NAME", "qkd_onbox.py"))
+            sync_qkd_scripts_dual_re(dev, name, ONBOX_SCRIPT_NAME)
             cu.commit(sync=True)
             return
 
@@ -576,7 +569,7 @@ def rollback_candidate(dev, name):
 
 
 def configure_qkd_scripts(dev, name, base):
-    script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
+    script_name = ONBOX_SCRIPT_NAME
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "admin"
     runtime_policy = load_runtime_qkd_policy()

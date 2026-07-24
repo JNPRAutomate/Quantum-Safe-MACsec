@@ -15,6 +15,7 @@ from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 # this file is expected under:
 #   <repo>/lib/qkd/<this_file>.py
 BASE_DIR = Path(__file__).resolve().parents[2]
+ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
 # Source onbox template:
 #   artifacts/qkd_onbox.py
@@ -331,8 +332,8 @@ def generate_onbox_script(name, device, out_dir):
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    src = ARTIFACTS_DIR / QKD["SCRIPT_NAME"]
-    dst = out_dir / QKD["SCRIPT_NAME"]
+    src = ARTIFACTS_DIR / ONBOX_SCRIPT_NAME
+    dst = out_dir / ONBOX_SCRIPT_NAME
 
     if not src.exists():
         raise FileNotFoundError(f"Missing source onbox template: {src}")
