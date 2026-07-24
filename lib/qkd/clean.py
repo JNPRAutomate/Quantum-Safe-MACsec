@@ -368,14 +368,33 @@ def clean_device(name, device, full_macsec=False):
                 return
 
             print(f"[{name}] dual-RE detected: best-effort peer RE file cleanup")
+            unique_paths = []
+            for path in paths:
+                if path and path not in unique_paths:
+                    unique_paths.append(path)
+
             for re_name in ("re0", "re1"):
-                for path in paths:
-                    run_shell(
+                print(f"[{name}] peer {re_name} cleanup ({len(unique_paths)} paths)")
+                real_errors = 0
+                for path in unique_paths:
+                    out = run_shell(
                         f"peer {re_name} delete {path}",
                         f"cli -c 'file delete {re_name}:{path}'",
                         strict=False,
                         show_output=False,
+                        show_label=False,
                     )
+                    low = (out or "").lower()
+                    if (
+                        "error" in low
+                        and "no such file" not in low
+                        and "cannot stat" not in low
+                        and "not found" not in low
+                    ):
+                        real_errors += 1
+
+                if real_errors:
+                    print(f"[{name}] WARN peer {re_name} cleanup had {real_errors} non-benign errors")
 
         ##
         def remote_path_exists(path):
