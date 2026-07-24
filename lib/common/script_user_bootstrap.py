@@ -49,6 +49,7 @@ import getpass
 import os
 import subprocess
 import shlex
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -265,7 +266,8 @@ def write_local_ssh_alias_config(
     # Keep Include at the top-level to avoid it being swallowed by a trailing
     # Match block in ~/.ssh/config on some OpenSSH configurations.
     existing_lines = content.splitlines()
-    cleaned_lines = [ln for ln in existing_lines if ln.strip() != include_line]
+    include_re = re.compile(r"^\s*Include\s+.*\.ssh/config\.d/\*\.conf\s*$")
+    cleaned_lines = [ln for ln in existing_lines if not include_re.match(ln)]
     rebuilt = include_line
     if cleaned_lines:
         rebuilt += "\n" + "\n".join(cleaned_lines)
