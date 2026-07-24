@@ -662,6 +662,11 @@ def deploy_onbox(
             f"ls -l {remote_op}; "
             f"ls -l {remote_event}; "
             f"{sidecar_cleanup}"
+            f"rm -f {op_script_dir}/qkd_onbox.links.json "
+            f"{op_script_dir}/qkd_onbox.topology.json "
+            f"{op_script_dir}/qkd_onbox.qkd_policy.json "
+            f"{op_script_dir}/qkd_onbox.pki.json "
+            f"{op_script_dir}/qkd_onbox.config.json "
             f"rm -f {remote_tmp_script}"
         )
 

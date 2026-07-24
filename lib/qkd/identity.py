@@ -3,10 +3,12 @@
 from lib.common.settings import QKD, PKI
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import subprocess
 import shlex
 import re
+import time
 
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
@@ -311,6 +313,13 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
         timeout=timeout,
         include_failed_marker=include_failed_marker,
     )
+
+
+def postdeploy_worker_limit(task_count):
+    configured = int(QKD.get("POSTDEPLOY_CONCURRENCY", 8))
+    if configured < 1:
+        configured = 1
+    return max(1, min(task_count, configured))
 
 
 # -------------------------------------------------
@@ -647,14 +656,21 @@ def check_peer_ssh_from_device(device):
     connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 5))
     alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 5))
     alive_max = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX", 2))
-    timeout_count = 0
-
+    links = []
     for link in device.get("links", []):
         peer_ip = link.get("peer_ip")
         if not peer_ip:
             print(f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip")
             continue
 
+        links.append((link, peer_ip))
+
+    if not links:
+        return
+
+    started = time.perf_counter()
+
+    def probe_peer_ssh(peer_link, peer_ip):
         marker = f"QKD_PEER_SSH_OK_{name}_{str(peer_ip).replace('.', '_')}"
         if platform_is_legacy_qfx(device):
             peer_payload = f"echo {marker}"
@@ -681,8 +697,7 @@ def check_peer_ssh_from_device(device):
         combined_low = combined.lower()
 
         if marker in combined:
-            print(f"[OK] peer SSH {name} -> {peer_ip} as {script_user}")
-            continue
+            return {"peer_ip": peer_ip, "ok": True}
 
         hard_fail_markers = [
             "permission denied",
@@ -700,19 +715,12 @@ def check_peer_ssh_from_device(device):
             )
 
         if "rpctimeouterror" in combined_low or "timeout" in combined_low:
-            timeout_count += 1
-            print(
-                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {script_user}; "
-                "manual SSH may still be valid"
-            )
-            print_if_verbose(stdout)
-            print_if_verbose(stderr)
-            if max_timeouts > 0 and timeout_count >= max_timeouts:
-                print(
-                    f"[WARN] peer reachability checks on {name}: timeout threshold reached "
-                    f"({timeout_count}/{max_timeouts}); continuing with remaining peers"
-                )
-            continue
+            return {
+                "peer_ip": peer_ip,
+                "timeout": True,
+                "stdout": stdout,
+                "stderr": stderr,
+            }
 
         raise RuntimeError(
             f"peer SSH marker not observed from {name} to {peer_ip} as {script_user}\n"
@@ -720,6 +728,50 @@ def check_peer_ssh_from_device(device):
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )
+
+    peer_results = []
+    failures = []
+    with ThreadPoolExecutor(max_workers=postdeploy_worker_limit(len(links))) as executor:
+        futures = {
+            executor.submit(probe_peer_ssh, link, peer_ip): peer_ip
+            for link, peer_ip in links
+        }
+        for future in as_completed(futures):
+            peer_ip = futures[future]
+            try:
+                peer_results.append(future.result())
+            except Exception as exc:
+                failures.append((peer_ip, exc))
+
+    if failures:
+        peer_ip, exc = failures[0]
+        raise RuntimeError(f"peer SSH validation failed on {name} peer={peer_ip}\n{exc}")
+
+    timeout_count = 0
+    for result in peer_results:
+        peer_ip = result["peer_ip"]
+        if result.get("ok"):
+            print(f"[OK] peer SSH {name} -> {peer_ip} as {script_user}")
+            continue
+        if result.get("timeout"):
+            timeout_count += 1
+            print(
+                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {script_user}; "
+                "manual SSH may still be valid"
+            )
+            print_if_verbose(result.get("stdout", ""))
+            print_if_verbose(result.get("stderr", ""))
+            if max_timeouts > 0 and timeout_count >= max_timeouts:
+                print(
+                    f"[WARN] peer reachability checks on {name}: timeout threshold reached "
+                    f"({timeout_count}/{max_timeouts}); continuing with remaining peers"
+                )
+            continue
+
+        raise RuntimeError(f"unexpected peer SSH result state on {name} peer={peer_ip}: {result}")
+
+        elapsed = time.perf_counter() - started
+        print(f"[TIMER] peer SSH checks on {name}: {elapsed:.2f}s for {len(links)} peers")
 
 
 # -------------------------------------------------
@@ -941,67 +993,94 @@ def check_qkd_status_as_script_user(device):
     status_timeout = int(QKD.get("POSTDEPLOY_QKD_STATUS_TIMEOUT", 20))
     max_attempts = int(QKD.get("POSTDEPLOY_QKD_STATUS_MAX_ATTEMPTS", 1))
     strict_status = bool(QKD.get("POSTDEPLOY_QKD_STATUS_STRICT", False))
-    for link in device.get("links", []):
-        iface = link.get("interface")
-        if not iface:
+    started = time.perf_counter()
+    cmd = "op qkd_onbox.py action status"
+    result = None
+    for attempt in range(1, max_attempts + 1):
+        result = ssh_script_user_onbox_cmd(
+            device,
+            cmd,
+            timeout=status_timeout,
+            include_failed_marker=False,
+        )
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        combined = f"{stdout}\n{stderr}".lower()
+        is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
+        if result.returncode == 0:
+            break
+        if is_timeout and attempt < max_attempts:
+            print(f"[WARN] qkd status timeout on {name} batch attempt={attempt}/{max_attempts}; retrying")
             continue
-        cmd = f"op qkd_onbox.py action status iface {iface}"
-        result = None
-        for attempt in range(1, max_attempts + 1):
-            result = ssh_script_user_onbox_cmd(
-                device,
-                cmd,
-                timeout=status_timeout,
-                include_failed_marker=False,
+        if is_timeout and not strict_status:
+            print(
+                f"[WARN] qkd status timeout on {name} batch; "
+                "continuing because POSTDEPLOY_QKD_STATUS_STRICT is disabled"
             )
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            combined = f"{stdout}\n{stderr}".lower()
-            is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
-            if result.returncode == 0:
-                break
-            if is_timeout and attempt < max_attempts:
-                print(f"[WARN] qkd status timeout on {name} iface={iface} attempt={attempt}/{max_attempts}; retrying")
-                continue
-            if is_timeout and not strict_status:
-                print(
-                    f"[WARN] qkd status timeout on {name} iface={iface}; "
-                    "continuing because POSTDEPLOY_QKD_STATUS_STRICT is disabled"
-                )
-                result = None
-                break
-            raise RuntimeError(
-                f"QKD status failed on {name} iface={iface} as {script_user}\n"
-                f"stdout={stdout}\n"
-                f"stderr={stderr}"
+            result = None
+            break
+        raise RuntimeError(
+            f"QKD status failed on {name} as {script_user}\n"
+            f"stdout={stdout}\n"
+            f"stderr={stderr}"
+        )
+
+    if result is None:
+        return
+
+    raw = ((result.stdout if result else "") or "").strip()
+    try:
+        status = json.loads(raw)
+    except Exception as exc:
+        raise RuntimeError(f"QKD status JSON parse failed on {name} as {script_user}\nstdout={raw}\nerror={exc}")
+
+    if isinstance(status, dict):
+        status_items = [status]
+    elif isinstance(status, list):
+        status_items = status
+    else:
+        raise RuntimeError(f"QKD status payload has unexpected type on {name}: {type(status)}")
+
+    if not status_items:
+        print(f"[WARN] qkd status returned no items on {name}")
+        return
+
+    for item in status_items:
+        if not isinstance(item, dict):
+            raise RuntimeError(f"QKD status item has unexpected type on {name}: {type(item)}")
+        iface = item.get("iface") or item.get("interface") or item.get("link", {}).get("interface")
+        ca_name = item.get("ca_name")
+        keychain_name = item.get("keychain_name")
+        generation = item.get("generation")
+        installed_keys = item.get("installed_keys", []) or []
+        health = item.get("health", {}) or {}
+        degraded = bool(health.get("degraded"))
+        declared_down = bool(health.get("declared_down"))
+        kme_fail_count = health.get("kme_fail_count", 0)
+        last_kme_error = health.get("last_kme_error")
+        health_state = "DEGRADED" if degraded or declared_down or last_kme_error else "OK"
+        if iface:
+            print(
+                f"[OK] qkd status {name} iface={iface}: ca={ca_name} keychain={keychain_name} "
+                f"generation={generation} installed_keys={len(installed_keys)} "
+                f"kme_fail_count={kme_fail_count} health={health_state}"
             )
+        else:
+            print(
+                f"[OK] qkd status {name}: ca={ca_name} keychain={keychain_name} "
+                f"generation={generation} installed_keys={len(installed_keys)} "
+                f"kme_fail_count={kme_fail_count} health={health_state}"
+            )
+        print_if_verbose(raw)
 
-        if result is None:
-            continue
-
-        raw = ((result.stdout if result else "") or "").strip()
-        try:
-            status = json.loads(raw)
-            ca_name = status.get("ca_name")
-            keychain_name = status.get("keychain_name")
-            generation = status.get("generation")
-            installed_keys = status.get("installed_keys", []) or []
-            health = status.get("health", {}) or {}
-            degraded = bool(health.get("degraded"))
-            declared_down = bool(health.get("declared_down"))
-            kme_fail_count = health.get("kme_fail_count", 0)
-            last_kme_error = health.get("last_kme_error")
-            health_state = "DEGRADED" if degraded or declared_down or last_kme_error else "OK"
-            print(f"[OK] qkd status {name} iface={iface}: ca={ca_name} keychain={keychain_name} generation={generation} installed_keys={len(installed_keys)} kme_fail_count={kme_fail_count} health={health_state}")
-            print_if_verbose(raw)
-        except Exception:
-            print(f"[OK] qkd status {name} iface={iface}")
-            print_if_verbose(raw)
+    elapsed = time.perf_counter() - started
+    print(f"[TIMER] qkd status on {name}: {elapsed:.2f}s for {len(status_items)} interfaces")
 
 
 def check_no_state_save_errors(device):
     device = normalize_device(device)
     name = device_name(device)
+    started = time.perf_counter()
     runtime_log_dir = qkd_runtime_log_dir()
     cmd = (
         "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' "
@@ -1018,6 +1097,8 @@ def check_no_state_save_errors(device):
     if matched_lines:
         raise RuntimeError(f"STATE SAVE ERROR detected on {name}\nstdout={chr(10).join(matched_lines)}\nstderr={result.stderr}")
     print(f"[OK] no state save errors on {name}")
+    elapsed = time.perf_counter() - started
+    print(f"[TIMER] state save scan on {name}: {elapsed:.2f}s")
 
 
 # -------------------------------------------------
@@ -1053,26 +1134,36 @@ def validate_device_identity_postdeploy(device):
     device = normalize_device(device)
     name = device_name(device)
     validate_device_record(device)
+    started = time.perf_counter()
 
-    if platform_is_legacy_qfx(device):
-        print(f"=== QKD legacy QFX post-deploy validation: {name} ===")
-        print(f"[OK] QKD legacy QFX post-deploy validation passed: {name}")
-        return
+    try:
+        if platform_is_legacy_qfx(device):
+            print(f"=== QKD legacy QFX post-deploy validation: {name} ===")
+            print(f"[OK] QKD legacy QFX post-deploy validation passed: {name}")
+            return
 
-    print(f"=== QKD post-deploy validation: {name} ===")
-    check_op_script_path(device)
-    check_op_script_permissions(device)
-    check_event_script_path(device)
-    check_event_script_permissions(device)
-    check_system_scripts_python3(device)
-    check_event_options_script_user(device)
-    check_onbox_embedded_config(device)
-    check_onbox_runtime_policy_config(device)
-    check_keychain_slot_limit(device)
-    check_peer_ssh_from_device(device)
-    check_qkd_status_as_script_user(device)
-    check_no_state_save_errors(device)
-    print(f"[OK] QKD post-deploy validation passed: {name}")
+        print(f"=== QKD post-deploy validation: {name} ===")
+        setup_started = time.perf_counter()
+        check_op_script_path(device)
+        check_op_script_permissions(device)
+        check_event_script_path(device)
+        check_event_script_permissions(device)
+        check_system_scripts_python3(device)
+        check_event_options_script_user(device)
+        check_onbox_embedded_config(device)
+        check_onbox_runtime_policy_config(device)
+        print(f"[TIMER] setup checks on {name}: {time.perf_counter() - setup_started:.2f}s")
+
+        runtime_started = time.perf_counter()
+        check_keychain_slot_limit(device)
+        check_peer_ssh_from_device(device)
+        check_qkd_status_as_script_user(device)
+        check_no_state_save_errors(device)
+        print(f"[TIMER] runtime checks on {name}: {time.perf_counter() - runtime_started:.2f}s")
+
+        print(f"[OK] QKD post-deploy validation passed: {name}")
+    finally:
+        print(f"[TIMER] QKD post-deploy validation total on {name}: {time.perf_counter() - started:.2f}s")
 
 
 def validate_all_devices_predeploy(devices):
@@ -1119,6 +1210,7 @@ def validate_all_devices_predeploy(devices):
 def validate_all_devices_postdeploy(devices):
     devices = normalize_devices(devices)
     check_validation_plan()
+    started = time.perf_counter()
     print("")
     print("=== QKD post-deploy validation ===")
     print(f"Devices: {len(devices)}")
@@ -1150,6 +1242,7 @@ def validate_all_devices_postdeploy(devices):
         raise RuntimeError("QKD post-deploy validation failed for: " + ", ".join(name for name, _ in failed))
     print("=== QKD post-deploy validation complete ===")
     print("Result: OK")
+    print(f"[TIMER] all-device post-deploy validation total: {time.perf_counter() - started:.2f}s")
 
 
 def validate_all_devices(devices, phase="predeploy"):

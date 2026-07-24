@@ -175,65 +175,6 @@ def ensure_runtime_dirs():
             pass
 
 
-def ensure_compat_runtime_sidecars():
-    """
-    Keep compatibility JSON files available under /var/db/scripts/op so
-    operators can inspect runtime parameters used by qkd_onbox.
-    """
-    shared_config = {
-        "pki_profile": CONFIG.get("pki_profile"),
-        "ca_cert": CONFIG.get("ca_cert"),
-        "trust_bundle": CONFIG.get("trust_bundle"),
-        "script_user": CONFIG.get("script_user"),
-        "script_dir": CONFIG.get("script_dir"),
-        "ssh_key": CONFIG.get("ssh_key"),
-        "state_dir": CONFIG.get("state_dir"),
-        "log_dir": CONFIG.get("log_dir"),
-        "log_file": CONFIG.get("log_file"),
-        "log_max_bytes": CONFIG.get("log_max_bytes"),
-        "log_backup_count": CONFIG.get("log_backup_count"),
-        "qkd_policy": CONFIG.get("qkd_policy"),
-    }
-    inventory_payload = {
-        "device_name": CONFIG.get("device_name"),
-        "hostname": CONFIG.get("hostname"),
-        "local_sae": CONFIG.get("local_sae"),
-        "kme_ip": CONFIG.get("kme_ip"),
-        "kme_port": CONFIG.get("kme_port"),
-        "links": CONFIG.get("links", []),
-    }
-    sidecars = {
-        "qkd_onbox_config.json": shared_config,
-        "qkd_onbox_inventory.json": inventory_payload,
-        "qkd_onbox.config.json": shared_config,
-        "qkd_onbox.links.json": LINKS,
-        "qkd_onbox.qkd_policy.json": qkd_policy(),
-        "qkd_onbox.pki.json": {
-            "pki_profile": CONFIG.get("pki_profile"),
-            "ca_cert": CONFIG.get("ca_cert"),
-            "trust_bundle": CONFIG.get("trust_bundle"),
-        },
-    }
-
-    try:
-        Path(OP_RUNTIME_DIR).mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return
-
-    for file_name, payload in sidecars.items():
-        target = Path(OP_RUNTIME_DIR) / file_name
-        tmp = Path(f"{target}.{os.getpid()}.tmp")
-        try:
-            tmp.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
-            tmp.replace(target)
-        except Exception:
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception:
-                pass
-
-
 # ----------------------------
 # LOGGING
 # ----------------------------
@@ -2070,19 +2011,40 @@ def run_slave_install_key_batch(batch_b64, iface):
     return True
 
 
-def run_slave_status(iface):
-    link = link_by_interface(iface)
-    if not link:
-        return False
+def _status_payload_for_link(link):
+    iface = link.get("interface")
+    if not iface:
+        return None
+
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if promoted:
         save_db_state(peer, iface, state)
+    state["iface"] = iface
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
     state["effective_batch_size"] = effective_batch
+    return state
+
+
+def run_slave_status(iface):
+    if not iface:
+        payload = []
+        for link in managed_links():
+            state = _status_payload_for_link(link)
+            if state is not None:
+                payload.append(state)
+        print(json.dumps(payload))
+        return True
+
+    link = link_by_interface(iface)
+    if not link:
+        return False
+    state = _status_payload_for_link(link)
+    if state is None:
+        return False
     print(json.dumps(state))
     return True
 
@@ -2449,7 +2411,6 @@ def run_master():
 
 def main():
     log("SCRIPT START", "INFO")
-    ensure_compat_runtime_sidecars()
 
     if MACSEC_MODEL != "keychain":
         log(f"UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain", "ERROR")
@@ -2475,10 +2436,6 @@ def main():
             sys.exit(0 if ok else 1)
 
         if action == "status":
-            if not iface:
-                log("INVALID STATUS ARGUMENTS", "ERROR", iface, "SLAVE")
-                print("ERROR INVALID STATUS ARGUMENTS")
-                sys.exit(1)
             ok = run_slave_status(iface)
             sys.exit(0 if ok else 1)
 

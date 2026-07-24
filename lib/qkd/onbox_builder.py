@@ -356,30 +356,10 @@ def generate_onbox_sidecars(name, device, out_dir):
     sidecars = {
         "config": out_dir / "qkd_onbox_config.json",
         "inventory": out_dir / "qkd_onbox_inventory.json",
-        "links": out_dir / "qkd_onbox.links.json",
-        "topology": out_dir / "qkd_onbox.topology.json",
-        "qkd_policy": out_dir / "qkd_onbox.qkd_policy.json",
-        "pki": out_dir / "qkd_onbox.pki.json",
     }
 
     sidecars["config"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     sidecars["inventory"].write_text(json.dumps(inventory, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["links"].write_text(json.dumps(inventory.get("links", []), indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["topology"].write_text(json.dumps({"links": inventory.get("links", [])}, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["qkd_policy"].write_text(json.dumps(config.get("qkd_policy", {}), indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    sidecars["pki"].write_text(
-        json.dumps(
-            {
-                "pki_profile": config.get("pki_profile"),
-                "ca_cert": config.get("ca_cert"),
-                "trust_bundle": config.get("trust_bundle"),
-            },
-            indent=2,
-            sort_keys=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
 
     return sidecars
 
