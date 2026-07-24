@@ -256,7 +256,7 @@ def write_local_ssh_alias_config(
     ssh_dir.mkdir(parents=True, exist_ok=True)
     config_d.mkdir(parents=True, exist_ok=True)
 
-    include_line = "Include ~/.ssh/config.d/*.conf"
+    include_line = "Include %s/.ssh/config.d/*.conf" % str(Path.home())
     if main_config.exists():
         content = main_config.read_text(encoding="utf-8")
         if include_line not in content:
