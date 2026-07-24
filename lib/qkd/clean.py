@@ -490,6 +490,27 @@ def clean_device(name, device, full_macsec=False):
                 pass
 
     except Exception as e:
+        fallback_auth = device.get("_fallback_auth") if isinstance(device, dict) else None
+        if (
+            not device.get("_clean_retried")
+            and isinstance(fallback_auth, dict)
+            and fallback_auth.get("username")
+            and fallback_auth.get("password")
+        ):
+            current_auth = device.get("auth") if isinstance(device, dict) else {}
+            current_user = (current_auth or {}).get("username")
+            fallback_user = fallback_auth.get("username")
+            if fallback_user != current_user:
+                print(
+                    f"[WARN] Device clean auth failed on {name} as {current_user}; retrying with fallback user {fallback_user}"
+                )
+                device["_clean_retried"] = True
+                device["auth"] = {
+                    "username": fallback_auth.get("username"),
+                    "password": fallback_auth.get("password"),
+                }
+                return clean_device(name, device, full_macsec=full_macsec)
+
         print(f"[FAIL] Device clean failed: {name}: {e}")
         return False        
 
@@ -595,6 +616,11 @@ def handle_clean(args):
         if not isinstance(device, dict):
             continue
         auth = device.get("auth")
+        if isinstance(auth, dict):
+            device["_fallback_auth"] = {
+                "username": auth.get("username"),
+                "password": auth.get("password"),
+            }
         if not isinstance(auth, dict):
             auth = {}
             device["auth"] = auth
