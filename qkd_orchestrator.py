@@ -354,7 +354,16 @@ def parse_args():
         help="Run SCRIPT_USER bootstrap in dry-run mode, then stop before validation/deploy.",
     )
     deploy.add_argument(
+        "--skip-pre-validation",
+        "--skip-predeploy-validation",
+        dest="skip_pre_validation",
+        action="store_true",
+        help="Skip step 2 pre-deploy validation to speed up iterative deploy runs.",
+    )
+    deploy.add_argument(
+        "--skip-post-validation",
         "--skip-postdeploy-validation",
+        dest="skip_post_validation",
         action="store_true",
         help="Skip step 6 post-deploy validation to speed up iterative deploy runs.",
     )
@@ -1110,14 +1119,22 @@ def handle_deploy(args):
         device["script_user"] = script_user
     print(f"Deploy auth source: inventory_base script_user={script_user}")
 
-    print_step_banner(
-        "2/6",
-        "PRE-DEPLOY VALIDATION",
-        "START",
-        "Validate identity, permissions, scripts, and runtime prerequisites.",
-    )
-    validate_all_devices(devices, phase="predeploy")
-    print_step_banner("2/6", "PRE-DEPLOY VALIDATION", "END")
+    if args.skip_pre_validation:
+        print_step_banner(
+            "2/6",
+            "PRE-DEPLOY VALIDATION",
+            "SKIP",
+            "Skipped by CLI option --skip-pre-validation.",
+        )
+    else:
+        print_step_banner(
+            "2/6",
+            "PRE-DEPLOY VALIDATION",
+            "START",
+            "Validate identity, permissions, scripts, and runtime prerequisites.",
+        )
+        validate_all_devices(devices, phase="predeploy")
+        print_step_banner("2/6", "PRE-DEPLOY VALIDATION", "END")
 
     print_step_banner(
         "3/6",
@@ -1165,12 +1182,12 @@ def handle_deploy(args):
     )
     print_step_banner("5/6", "QKD PROVISIONING", "END")
 
-    if args.skip_postdeploy_validation:
+    if args.skip_post_validation:
         print_step_banner(
             "6/6",
             "POST-DEPLOY VALIDATION",
             "SKIP",
-            "Skipped by CLI option --skip-postdeploy-validation.",
+            "Skipped by CLI option --skip-post-validation.",
         )
     else:
         print_step_banner(
