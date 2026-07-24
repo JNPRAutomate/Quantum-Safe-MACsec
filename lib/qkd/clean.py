@@ -217,9 +217,7 @@ def clean_device(name, device, full_macsec=False):
             "delete event-options policy QKD",
             "delete event-options policy QKD_POLICY",
             f"delete event-options event-script file {script_name}",
-            "delete event-options event-script file onbox.py",
             f"delete system scripts op file {script_name}",
-            "delete system scripts op file onbox.py",
             f"delete system login user {script_user}",
         ]
 
@@ -255,9 +253,7 @@ def clean_device(name, device, full_macsec=False):
 
         file_cleanup_parts = [
             f"rm -f {event_script_dir}/{script_name}",
-            f"rm -f {event_script_dir}/onbox.py",
             f"rm -f {op_script_dir}/{script_name}",
-            f"rm -f {op_script_dir}/onbox.py",
             f"rm -f {op_script_dir}/qkd_onbox_inventory.json",
             f"rm -f {op_script_dir}/qkd_onbox_config.json",
             f"rm -f /var/tmp/{script_name}",
@@ -401,9 +397,7 @@ def clean_device(name, device, full_macsec=False):
                 "set event-options policy QKD",
                 "set event-options policy QKD_POLICY",
                 f"set event-options event-script file {script_name}",
-                "set event-options event-script file onbox.py",
                 f"set system scripts op file {script_name}",
-                "set system scripts op file onbox.py",
             ]
 
             if full_macsec:
@@ -453,8 +447,6 @@ def clean_device(name, device, full_macsec=False):
             paths_should_be_absent = [
                 f"{op_script_dir}/{script_name}",
                 f"{event_script_dir}/{script_name}",
-                f"{op_script_dir}/onbox.py",
-                f"{event_script_dir}/onbox.py",
                 f"{op_script_dir}/qkd_onbox_inventory.json",
                 f"{op_script_dir}/qkd_onbox_config.json",
                 f"/var/tmp/{script_name}",
