@@ -451,6 +451,7 @@ def build_set_commands(
     user_exists: bool,
     auth_mode: str = "password",
     public_key_line: Optional[str] = None,
+    remove_encrypted_password: bool = False,
 ) -> List[str]:
     commands = [
         "set system login user %s class super-user" % script_user,
@@ -474,9 +475,10 @@ def build_set_commands(
             raise ValueError("Invalid public_key_line for key-only auth mode")
         key_type = parts[0]
         key_payload = public_key_line.replace('"', '\\"')
-        commands.append(
-            "delete system login user %s authentication encrypted-password" % script_user
-        )
+        if remove_encrypted_password:
+            commands.append(
+                "delete system login user %s authentication encrypted-password" % script_user
+            )
         commands.append(
             "set system login user %s authentication %s \"%s\""
             % (script_user, key_type, key_payload)
@@ -616,8 +618,21 @@ def bootstrap_script_user_on_device(
             if not script_password:
                 raise ValueError("SCRIPT_USER password is required for password auth mode")
             encrypted_password = None if exists else encrypted_junos_password(script_password)
+            remove_encrypted_password = False
         else:
             encrypted_password = None
+            remove_encrypted_password = False
+            if exists:
+                try:
+                    existing_cfg = _rpc_text(
+                        dev.rpc.cli(
+                            "show configuration system login user %s | display set" % script_user,
+                            format="text",
+                        )
+                    )
+                    remove_encrypted_password = "encrypted-password" in existing_cfg
+                except Exception:
+                    remove_encrypted_password = False
 
         commands = build_set_commands(
             script_user,
@@ -625,6 +640,7 @@ def bootstrap_script_user_on_device(
             exists,
             auth_mode=script_auth_mode,
             public_key_line=public_key_line,
+            remove_encrypted_password=remove_encrypted_password,
         )
 
         cu = Config(dev)
