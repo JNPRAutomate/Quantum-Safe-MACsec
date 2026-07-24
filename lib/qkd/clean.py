@@ -12,6 +12,7 @@ from lib.common.settings import CONFIG, PKI, QKD
 from lib.common.config import load_inventory_base
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
 
 # ----------------------------------------
@@ -142,11 +143,13 @@ def clean_device(name, device, full_macsec=False):
         user = device["auth"]["username"]
         passwd = device["auth"]["password"]
 
-        script_name = QKD["SCRIPT_NAME"]
+        script_name = ONBOX_SCRIPT_NAME
+        script_user = str(device.get("script_user") or QKD.get("SCRIPT_USER") or "admin")
         script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
         remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
+        script_home_dir = f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{script_user}"
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -211,7 +214,10 @@ def clean_device(name, device, full_macsec=False):
             "delete event-options policy QKD",
             "delete event-options policy QKD_POLICY",
             f"delete event-options event-script file {script_name}",
+            "delete event-options event-script file onbox.py",
             f"delete system scripts op file {script_name}",
+            "delete system scripts op file onbox.py",
+            f"delete system login user {script_user}",
         ]
 
         if full_macsec:
@@ -246,13 +252,18 @@ def clean_device(name, device, full_macsec=False):
 
         file_cleanup_parts = [
             f"rm -f {event_script_dir}/{script_name}",
+            f"rm -f {event_script_dir}/onbox.py",
             f"rm -f {op_script_dir}/{script_name}",
+            f"rm -f {op_script_dir}/onbox.py",
+            f"rm -f {op_script_dir}/qkd_onbox_inventory.json",
+            f"rm -f {op_script_dir}/qkd_onbox_config.json",
             f"rm -f /var/tmp/{script_name}",
             "rm -f /var/db/scripts/event/qkd.conf",
             f"rm -rf {remote_cert_dir}",
             f"rm -rf {script_dir}/certs",
             f"rm -rf {op_script_dir}/certs",
             f"rm -rf {event_script_dir}/certs",
+            f"rm -rf {script_home_dir}",
         ]
 
         for path in runtime_paths:
@@ -387,7 +398,9 @@ def clean_device(name, device, full_macsec=False):
                 "set event-options policy QKD",
                 "set event-options policy QKD_POLICY",
                 f"set event-options event-script file {script_name}",
+                "set event-options event-script file onbox.py",
                 f"set system scripts op file {script_name}",
+                "set system scripts op file onbox.py",
             ]
 
             if full_macsec:
@@ -437,12 +450,17 @@ def clean_device(name, device, full_macsec=False):
             paths_should_be_absent = [
                 f"{op_script_dir}/{script_name}",
                 f"{event_script_dir}/{script_name}",
+                f"{op_script_dir}/onbox.py",
+                f"{event_script_dir}/onbox.py",
+                f"{op_script_dir}/qkd_onbox_inventory.json",
+                f"{op_script_dir}/qkd_onbox_config.json",
                 f"/var/tmp/{script_name}",
                 "/var/db/scripts/event/qkd.conf",
                 remote_cert_dir,
                 f"{script_dir}/certs",
                 f"{op_script_dir}/certs",
                 f"{event_script_dir}/certs",
+                script_home_dir,
             ]
 
             for path in runtime_paths:

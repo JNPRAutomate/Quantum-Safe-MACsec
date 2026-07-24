@@ -51,7 +51,8 @@ from lib.qkd.clean import handle_clean
 from lib.kme.instructions import print_manual_kme_copy_instructions
 
 
-script_name = QKD["SCRIPT_NAME"]
+ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -425,7 +426,7 @@ def print_identity_plan():
     print("=== QKD identity plan ===")
     print(f"deploy_user       = {QKD['DEPLOY_USER']}")
     print(f"script_user       = {QKD['SCRIPT_USER']}")
-    print(f"script_name       = {QKD['SCRIPT_NAME']}")
+    print(f"script_name       = {ONBOX_SCRIPT_NAME}")
     print(f"remote_op_script  = {QKD['REMOTE_OP_SCRIPT_PATH']}")
     print(f"ssh_home          = {QKD['SSH_HOME_BASE']}/{QKD['SCRIPT_USER']}")
     print(f"ssh_key           = {QKD['SSH_HOME_BASE']}/{QKD['SCRIPT_USER']}/.ssh/{QKD['SSH_KEY_NAME']}")
@@ -462,7 +463,7 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "admin")
-    script_name = QKD.get("SCRIPT_NAME", "qkd_onbox.py")
+    script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
@@ -471,10 +472,6 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
     remote_tmp = f"{tmp_dir}/{script_name}"
     remote_op = f"{op_script_dir}/{script_name}"
     remote_event = f"{event_script_dir}/{script_name}"
-
-    # Legacy shim kept intentionally: old configs/groups may still reference onbox.py.
-    legacy_op = f"{op_script_dir}/onbox.py"
-    legacy_event = f"{event_script_dir}/onbox.py"
 
     inventory_base = load_inventory_base()
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
@@ -584,9 +581,7 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"cp {remote_tmp} {remote_op}; "
             f"cp {remote_tmp} {remote_event}; "
-            f"cp {remote_tmp} {legacy_op}; "
-            f"cp {remote_tmp} {legacy_event}; "
-            f"chmod 755 {remote_op} {remote_event} {legacy_op} {legacy_event}; "
+            f"chmod 755 {remote_op} {remote_event}; "
             f"ls -l {remote_op}; "
             f"ls -l {remote_event}; "
             f"rm -f {remote_tmp}"
@@ -659,7 +654,7 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
             f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {resolved_script_user}"
         )
 
-        for path in (remote_op, remote_event, legacy_op, legacy_event):
+        for path in (remote_op, remote_event):
             copy_to_peer_re(path)
 
         log.info(f"[{name}] RE1 ONBOX sync completed")
@@ -1128,7 +1123,7 @@ def handle_deploy(args):
         mode = device.get("macsec", {}).get("mode", "qkd")
         if mode != "qkd":
             continue
-        script_path = BASE_DIR / CONFIG["runtime_dir"] / name / QKD["SCRIPT_NAME"]
+        script_path = BASE_DIR / CONFIG["runtime_dir"] / name / ONBOX_SCRIPT_NAME
         if not script_path.exists():
             raise RuntimeError(f"[{name}] Missing runtime onbox artifact: {script_path}. Run create first.")
         artifacts[name] = {"script": script_path}
