@@ -1140,6 +1140,14 @@ def handle_deploy(args):
     if bootstrap_user:
         QKD["DEPLOY_USER"] = bootstrap_user
 
+    # Pre-deploy checks should use bootstrap/deploy transport credentials when
+    # available. SCRIPT_USER credentials are validated by the checks themselves.
+    predeploy_auth_user = script_user
+    predeploy_auth_password = script_password
+    if bootstrap_user and bootstrap_password:
+        predeploy_auth_user = bootstrap_user
+        predeploy_auth_password = bootstrap_password
+
     for name, device in devices.items():
         if not isinstance(device, dict):
             continue
@@ -1147,10 +1155,10 @@ def handle_deploy(args):
         if not isinstance(auth, dict):
             auth = {}
             device["auth"] = auth
-        auth["username"] = script_user
-        auth["password"] = script_password
+        auth["username"] = predeploy_auth_user
+        auth["password"] = predeploy_auth_password
         device["script_user"] = script_user
-    print(f"Deploy auth source: inventory_base script_user={script_user}")
+    print(f"Pre-deploy auth source: user={predeploy_auth_user}")
 
     if args.skip_pre_validation:
         print_step_banner(
@@ -1168,6 +1176,20 @@ def handle_deploy(args):
         )
         validate_all_devices(devices, phase="predeploy")
         print_step_banner("2/6", "PRE-DEPLOY VALIDATION", "END")
+
+        # After pre-deploy validation, switch transport auth to SCRIPT_USER for
+        # runtime deployment/provisioning flow.
+        for name, device in devices.items():
+            if not isinstance(device, dict):
+                continue
+            auth = device.get("auth")
+            if not isinstance(auth, dict):
+                auth = {}
+                device["auth"] = auth
+            auth["username"] = script_user
+            auth["password"] = script_password
+            device["script_user"] = script_user
+        print(f"Deploy auth source: inventory_base script_user={script_user}")
 
     print_step_banner(
         "3/6",
