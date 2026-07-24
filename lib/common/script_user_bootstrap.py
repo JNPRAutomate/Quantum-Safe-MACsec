@@ -279,13 +279,23 @@ def write_local_ssh_alias_config(
 
         alias = str(name).strip().lower()
         canonical = str(name).strip()
-        lines.append("")
-        lines.append(f"Host {alias} {canonical}")
-        lines.append(f"    HostName {host_ip}")
-        lines.append(f"    User {script_user}")
-        lines.append(f"    IdentityFile {identity_file}")
-        lines.append("    IdentitiesOnly yes")
-        lines.append("    Port 22")
+
+        def _append_host_block(host_value: str) -> None:
+            lines.append("")
+            lines.append(f"Host {host_value}")
+            lines.append(f"    HostName {host_ip}")
+            lines.append(f"    User {script_user}")
+            lines.append(f"    IdentityFile {identity_file}")
+            lines.append("    IdentitiesOnly yes")
+            lines.append("    StrictHostKeyChecking no")
+            lines.append("    UserKnownHostsFile /dev/null")
+            lines.append("    Port 22")
+
+        # Write dedicated blocks for lowercase and canonical names to avoid
+        # OpenSSH host-pattern ambiguity across versions.
+        _append_host_block(alias)
+        if canonical and canonical != alias:
+            _append_host_block(canonical)
 
     include_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
