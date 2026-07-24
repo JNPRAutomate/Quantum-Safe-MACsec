@@ -524,7 +524,6 @@ def check_script_user_authorized_keys(device):
     ssh_dir = qkd_ssh_dir()
     pub_path = qkd_ssh_public_key()
     auth_path = qkd_authorized_keys()
-    tmp_path = f"{auth_path}.tmp"
     owner_result = ssh_deploy_cmd(device, f"ls -l {auth_path}", timeout=20, include_failed_marker=False)
     owner_line = (owner_result.stdout or "").strip()
     if owner_result.returncode == 0 and owner_line:
@@ -543,14 +542,16 @@ def check_script_user_authorized_keys(device):
                     f"hint=optional repair with deploy/root credentials via lib/common/script_user_bootstrap.py --ask-deploy-password"
                 )
                 return
+    # Never overwrite authorized_keys here: provisioning sync later installs
+    # peer keys; this check only guarantees local key presence.
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -s {pub_path}; "
-        f"cp {pub_path} {tmp_path}; "
-        f"chmod 600 {tmp_path}; "
-        f"test ! -e {auth_path} || rm -f {auth_path}; "
-        f"mv -f {tmp_path} {auth_path}; "
-        f"ls -l {auth_path}"
+        f"touch {auth_path}; "
+        f"grep -q -F -x -f {pub_path} {auth_path} || cat {pub_path} >> {auth_path}; "
+        f"chmod 600 {auth_path}; "
+        f"ls -l {auth_path}; "
+        f"wc -l {auth_path}"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if result.returncode != 0:

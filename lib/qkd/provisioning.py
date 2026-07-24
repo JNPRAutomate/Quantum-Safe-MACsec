@@ -643,21 +643,17 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         print(f"[{device_name}] WARN failed to collect peer SSH keys: {exc}")
         return
 
-    device_names = set(all_devices_dict.keys())
-    source_names = {device_name}
+    # Keep all runtime peers mutually trusted even if inventory links omit
+    # explicit peer names (some topologies provide only peer_ip).
+    source_names = sorted(pub_keys.keys())
 
-    for link in device_dict.get("links", []) or []:
-        peer_name = link.get("peer")
-        if peer_name and peer_name in device_names:
-            source_names.add(str(peer_name))
-
-    if not source_names or len(source_names) == 1:
-        print(f"[{device_name}] No peer sources for SSH authorized-keys config")
+    if not source_names:
+        print(f"[{device_name}] No peer sources for SSH authorized-keys sync")
         return
 
     key_lines = []
 
-    for source_name in sorted(source_names):
+    for source_name in source_names:
         pub_key = pub_keys.get(source_name)
         if not pub_key:
             print(f"[{device_name}] WARN missing peer SSH key from {source_name}")
