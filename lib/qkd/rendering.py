@@ -41,7 +41,7 @@ def build_device_config(device_name, device, platform, base, topology):
         "platform": platform,
         "kme": base.get("kme", {}),
         "script_name": ONBOX_SCRIPT_NAME,
-        "script_user": QKD.get("SCRIPT_USER", "admin"),
+        "script_user": QKD.get("SCRIPT_USER", "etsi_user"),
         "rotation_interval_seconds": rotation_interval_seconds,
     }
 

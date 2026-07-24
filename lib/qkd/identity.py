@@ -17,7 +17,7 @@ ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
 
 def qkd_script_user():
-    return QKD.get("SCRIPT_USER", "admin")
+    return QKD.get("SCRIPT_USER", "etsi_user")
 
 
 def qkd_deploy_user():

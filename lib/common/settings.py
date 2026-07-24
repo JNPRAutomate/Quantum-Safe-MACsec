@@ -67,7 +67,7 @@ QKD = {
     #   - runtime state/log/lock ownership under /var/home/{SCRIPT_USER}
     #
     # Root must only be used by the orchestrator for deploy/clean/setup.
-    "SCRIPT_USER": "admin",
+    "SCRIPT_USER": "etsi_user",
 
     # Privileged deploy/cleanup user.
     #
@@ -88,9 +88,9 @@ QKD = {
 
     # Runtime files on Junos
     "REMOTE_TMP_DIR": "/var/tmp",
-    "LOG_FILE": "/var/home/admin/logs/qkd_debug.log",
-    "STATE_FILE_PREFIX": "/var/home/admin/qkd_db",
-    "LOCK_FILE_PREFIX": "/var/home/admin/qkd_onbox",
+    "LOG_FILE": "/var/home/etsi_user/logs/qkd_debug.log",
+    "STATE_FILE_PREFIX": "/var/home/etsi_user/qkd_db",
+    "LOCK_FILE_PREFIX": "/var/home/etsi_user/qkd_onbox",
 
     # Log rotation inside qkd_onbox.py
     "LOG_MAX_BYTES": 10485760,

@@ -438,7 +438,7 @@ def run_ssh_cmd(log, name, ip, user, cmds):
 
 def print_identity_plan():
     print("=== QKD identity plan ===")
-    script_user = QKD.get("SCRIPT_USER", "admin")
+    script_user = QKD.get("SCRIPT_USER", "etsi_user")
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
     runtime_home = f"{ssh_home_base}/{script_user}"
     print(f"deploy_user       = {QKD['DEPLOY_USER']}")
@@ -479,7 +479,7 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
       - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
     """
 
-    resolved_script_user = script_user or QKD.get("SCRIPT_USER", "admin")
+    resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -1033,7 +1033,7 @@ def handle_deploy(args):
         or secrets.get("script_user")
         or secrets.get("default_user")
         or QKD.get("SCRIPT_USER")
-        or "admin"
+        or "etsi_user"
     )
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
@@ -1284,7 +1284,7 @@ def handle_validate(args):
         or secrets.get("script_user")
         or secrets.get("default_user")
         or QKD.get("SCRIPT_USER")
-        or "admin"
+        or "etsi_user"
     )
 
     resolved_script_password = (

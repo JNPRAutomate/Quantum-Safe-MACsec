@@ -144,7 +144,7 @@ def clean_device(name, device, full_macsec=False):
         passwd = device["auth"]["password"]
 
         script_name = ONBOX_SCRIPT_NAME
-        script_user = str(device.get("script_user") or QKD.get("SCRIPT_USER") or "admin")
+        script_user = str(device.get("script_user") or QKD.get("SCRIPT_USER") or "etsi_user")
         script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
