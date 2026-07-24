@@ -589,7 +589,18 @@ def configure_qkd_scripts(dev, name, base):
 
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    full_cfg = event_cfg + "\n" + op_cfg
+    legacy_cleanup_cfg = "\n".join(
+        [
+            "delete event-options event-script file offbox.py",
+            "delete system scripts op file offbox.py",
+            "delete event-options generate-event OFFBOX_TIMER",
+            "delete event-options policy OFFBOX",
+            "delete event-options policy OFFBOX_POLICY",
+            "delete event-options policy QKD then event-script offbox.py",
+            "delete event-options policy QKD then event-script onbox.py",
+        ]
+    )
+    full_cfg = legacy_cleanup_cfg + "\n" + event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
 
@@ -644,7 +655,14 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
             continue
         key_type = parts[0]
         key_blob = parts[1]
-        escaped_key = key_blob.replace('"', '\\"')
+        key_comment = " ".join(parts[2:]).strip() if len(parts) > 2 else ""
+        if not key_comment:
+            key_comment = f"{peer_cmd_user}@{source_name}"
+
+        # Junos expects the SSH public key in full format inside the key payload:
+        #   <key-type> <base64> <comment>
+        key_payload = f"{key_type} {key_blob} {key_comment}"
+        escaped_key = key_payload.replace('"', '\\"')
         config_lines.append(
             f"set system login user {peer_cmd_user} authentication {key_type} \"{escaped_key}\""
         )

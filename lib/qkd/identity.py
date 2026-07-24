@@ -485,12 +485,13 @@ def check_remote_certs(device):
 def check_script_user_ssh_identity(device):
     device = normalize_device(device)
     name = device_name(device)
+    script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
     pub_path = qkd_ssh_public_key()
     key_type = str(QKD.get("SSH_KEY_TYPE", "ed25519")).strip().lower()
     key_bits = int(QKD.get("SSH_KEY_BITS", 4096))
-    key_comment = QKD.get("SSH_KEY_COMMENT", "qkd-orchestrator")
+    key_comment = f"{script_user}@{name}".replace('"', "")
 
     if key_type == "rsa":
         keygen_cmd = f"ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}"
