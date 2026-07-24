@@ -7,6 +7,7 @@ import yaml
 import time
 import subprocess
 import hashlib
+import shlex
 from pathlib import Path
 
 import logging
@@ -621,7 +622,13 @@ def configure_qkd_scripts(dev, name, base):
 
 
 def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_dict, base):
-    from lib.qkd.identity import collect_script_user_public_keys, qkd_script_user
+    from lib.qkd.identity import (
+        collect_script_user_public_keys,
+        qkd_script_user,
+        qkd_authorized_keys,
+        qkd_ssh_dir,
+        ssh_deploy_cmd,
+    )
 
     secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
     if not isinstance(secrets, dict):
@@ -648,18 +655,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         print(f"[{device_name}] No peer sources for SSH authorized-keys config")
         return
 
-    config_lines = []
-    # Keep password auth intact; reset only public-key auth algorithms so peer
-    # key auth is rebuilt deterministically every deploy.
-    config_lines.extend(
-        [
-            f"delete system login user {peer_cmd_user} authentication ssh-ed25519",
-            f"delete system login user {peer_cmd_user} authentication ssh-rsa",
-            f"delete system login user {peer_cmd_user} authentication ecdsa-sha2-nistp256",
-            f"delete system login user {peer_cmd_user} authentication ecdsa-sha2-nistp384",
-            f"delete system login user {peer_cmd_user} authentication ecdsa-sha2-nistp521",
-        ]
-    )
+    key_lines = []
 
     for source_name in sorted(source_names):
         pub_key = pub_keys.get(source_name)
@@ -679,24 +675,39 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         # Junos expects the SSH public key in full format inside the key payload:
         #   <key-type> <base64> <comment>
         key_payload = f"{key_type} {key_blob} {key_comment}"
-        escaped_key = key_payload.replace('"', '\\"')
-        config_lines.append(
-            f"set system login user {peer_cmd_user} authentication {key_type} \"{escaped_key}\""
-        )
+        # Keep only a canonical SSH public key line for file-based synchronization.
+        key_lines.append(key_payload)
 
-    if not config_lines:
+    if not key_lines:
         print(f"[{device_name}] No valid peer SSH keys to configure")
         return
 
-    with Config(dev) as cu:
-        for cmd in config_lines:
-            cu.load(cmd, format="set")
-        if cu.diff():
-            print(f"[{device_name}] Applying peer SSH authorized-keys config")
-            commit_safely(dev, cu, device_name, sync=True)
-            print(f"[{device_name}] Peer SSH authorized-keys configured OK")
-        else:
-            print(f"[{device_name}] Peer SSH authorized-keys unchanged")
+    auth_path = qkd_authorized_keys()
+    ssh_dir = qkd_ssh_dir()
+    cmd_parts = [
+        f"mkdir -p {ssh_dir}",
+        f"touch {auth_path}",
+    ]
+    for key_line in key_lines:
+        quoted_key = shlex.quote(key_line)
+        cmd_parts.append(f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}")
+    cmd_parts.extend(
+        [
+            f"chmod 600 {auth_path}",
+            f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}",
+        ]
+    )
+    sync_cmd = "; ".join(cmd_parts)
+
+    print(f"[{device_name}] Applying peer SSH authorized_keys sync")
+    result = ssh_deploy_cmd(device_dict, sync_cmd, timeout=60, include_failed_marker=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"peer SSH authorized_keys sync failed on {device_name}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+    print(f"[{device_name}] Peer SSH authorized_keys synchronized OK")
 
 
 # ----------------------------------------
