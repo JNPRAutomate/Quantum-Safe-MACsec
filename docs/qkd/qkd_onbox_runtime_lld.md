@@ -104,7 +104,6 @@ The script supports:
 4. otherwise runs master flow with global lock.
 
 ---
-
 ## 5. Function-level reference
 
 ## 5.1 Logging and observability
@@ -237,6 +236,110 @@ For each master link in `run_master()`:
 
 ---
 
+## 6.1 Batch timing semantics and pending-state model
+
+This is the part that is easiest to misunderstand, so it is documented explicitly.
+
+### What a batch means
+
+When `qkd_onbox.py` runs in batch mode, the master does **not** ask the KME for one key and then let the key-chain rotate by itself.
+
+Instead, the master:
+
+1. requests one ENC key per batch slot,
+2. installs all returned keys into the Junos authentication key-chain,
+3. assigns a scheduled `start-time` to each key,
+4. persists the head of that queue as the current `pending_key_id`.
+
+The key-chain stores the keys, but it does not decide when to fetch more keys from the KME. That is still the job of `qkd_onbox.py`.
+
+### Important distinction: batch size vs. interval
+
+These two values are related, but they are not the same thing:
+
+- `key_batch_size` = how many future keys are fetched and preloaded in one batch
+- `interval_seconds` = the spacing between successive keys inside that batch
+
+So if you configure:
+
+- `key_batch_size = 5`
+- `interval_seconds = 60`
+
+then the runtime does **not** mean “five keys every 12 seconds”.
+
+It means:
+
+- one batch contains 5 future keys,
+- key 0 starts at the base scheduled time,
+- key 1 starts 60 seconds later,
+- key 2 starts 120 seconds later,
+- key 3 starts 180 seconds later,
+- key 4 starts 240 seconds later.
+
+In other words, the total preloaded horizon of the batch is approximately:
+
+$$
+(key\_batch\_size - 1) \times interval\_seconds
+$$
+
+If you want a new key to become eligible every 30 seconds, set `interval_seconds = 30`.
+Do **not** divide 60 by the batch size unless you explicitly want a shorter spacing.
+
+### What `pending_key_id` and `next_start_time` are for
+
+The runtime keeps explicit pending state because Junos key-chain storage alone is not enough to coordinate safe rotation.
+
+`pending_key_id` and `next_start_time` exist so `qkd_onbox.py` can answer two separate questions:
+
+1. Is there already a future key queued for this link?
+2. Is that key due yet, or should the master skip fetching another batch?
+
+This prevents the master from requesting new ENC keys too early and keeps the active/pending timeline stable across both routers.
+
+### What actually promotes a key
+
+Promotion is not done by the key-chain by itself.
+
+The runtime promotes a pending key only when both of these are true:
+
+1. the scheduled `start-time` has arrived,
+2. MKA confirms that the key is the one currently in use.
+
+When that happens, `promote_pending_key_if_mka_confirmed()` moves the head of the pending queue into `active_key_id`.
+
+### Why the key-chain does not “do everything”
+
+JunOS key-chain configuration is only the local container for staged keys.
+It can store future entries and activate them at their programmed `start-time`, but it does not:
+
+- request new keys from the KME,
+- decide when a batch should be replenished,
+- persist peer/master synchronization state,
+- validate MKA confirmation against the runtime policy,
+- or coordinate the next ENC cycle.
+
+That orchestration remains in `qkd_onbox.py`.
+
+### Practical example
+
+If the runtime is configured with:
+
+- `batch_enabled = true`
+- `key_batch_size = 5`
+- `interval_seconds = 60`
+
+then a master cycle can fetch 5 keys in one pass and schedule them as a 5-minute future window.
+
+That means:
+
+- the first key is scheduled at the base start time,
+- the second key is scheduled one minute later,
+- and so on until the fifth key.
+
+When the queued keys are consumed and the head of the queue is confirmed/promoted, the next master cycle can fetch another batch.
+
+---
+
 ## 7. How device YAML content reaches each on-box script
 
 ## 7.1 Data path
@@ -249,8 +352,14 @@ For each master link in `run_master()`:
 
 ## 7.2 Result
 
-Each router gets its own `qkd_onbox.py` containing a fully embedded `CONFIG` dictionary for that device only.  
-At runtime, `qkd_onbox.py` reads from this embedded dictionary (not from remote YAML files).
+Each router gets its own `qkd_onbox.py` containing a merged runtime `CONFIG` loaded from two separate on-device JSON files:
+
+- `qkd_onbox_config.json`: shared runtime configuration, policy, identity, and paths
+- `qkd_onbox_inventory.json`: per-device inventory and topology data
+
+At runtime, `qkd_onbox.py` loads both files, merges them in memory, and then uses the merged `CONFIG` object for execution.
+
+This is intentional: the files stay physically separate so operators can inspect and manage them independently, even though the runtime script consumes them together.
 
 ---
 
