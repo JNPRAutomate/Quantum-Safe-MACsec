@@ -665,7 +665,17 @@ def run_script_user_key_fix(
         )
         return True
 
+    key_comment = f"{script_user}@qkd-bootstrap"
     command = (
+        f"mkdir -p {ssh_home_base}/{script_user}/.ssh; "
+        f"if [ ! -s {key_path} ] && [ ! -s {pub_path} ]; then "
+        f"ssh-keygen -t ed25519 -N '' -C {shlex.quote(key_comment)} -f {key_path}; "
+        f"elif [ -s {key_path} ] && [ ! -s {pub_path} ]; then "
+        f"ssh-keygen -y -f {key_path} > {pub_path}; "
+        f"elif [ ! -s {key_path} ] && [ -s {pub_path} ]; then "
+        f"rm -f {pub_path}; "
+        f"ssh-keygen -t ed25519 -N '' -C {shlex.quote(key_comment)} -f {key_path}; "
+        f"fi; "
         f"chown {script_user} {key_path} {pub_path}; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
@@ -684,11 +694,11 @@ def run_script_user_key_fix(
             "permission denied",
             "operation not permitted",
             "invalid user",
-            "no such file or directory",
             "cannot access",
             "cannot create directory",
             "cannot touch",
             "chown:",
+            "ssh-keygen:",
         ]
         if any(marker in low for marker in error_markers):
             print(
