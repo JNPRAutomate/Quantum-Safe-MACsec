@@ -651,11 +651,12 @@ def check_peer_ssh_from_device(device):
     name = device_name(device)
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
-    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 10))
+    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 4))
     max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 0))
-    connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 5))
-    alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 5))
-    alive_max = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX", 2))
+    connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 2))
+    alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 2))
+    alive_max = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX", 1))
+    max_peers = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_PEERS", 1))
     links = []
     for link in device.get("links", []):
         peer_ip = link.get("peer_ip")
@@ -667,6 +668,13 @@ def check_peer_ssh_from_device(device):
 
     if not links:
         return
+
+    if max_peers > 0 and len(links) > max_peers:
+        print(
+            f"[INFO] peer SSH check on {name}: sampling {max_peers}/{len(links)} peers "
+            "(set POSTDEPLOY_PEER_SSH_MAX_PEERS=0 for full scan)"
+        )
+        links = links[:max_peers]
 
     started = time.perf_counter()
 
@@ -770,8 +778,8 @@ def check_peer_ssh_from_device(device):
 
         raise RuntimeError(f"unexpected peer SSH result state on {name} peer={peer_ip}: {result}")
 
-        elapsed = time.perf_counter() - started
-        print(f"[TIMER] peer SSH checks on {name}: {elapsed:.2f}s for {len(links)} peers")
+    elapsed = time.perf_counter() - started
+    print(f"[TIMER] peer SSH checks on {name}: {elapsed:.2f}s for {len(links)} peers")
 
 
 # -------------------------------------------------
@@ -990,9 +998,13 @@ def check_qkd_status_as_script_user(device):
     device = normalize_device(device)
     name = device_name(device)
     script_user = qkd_script_user()
-    status_timeout = int(QKD.get("POSTDEPLOY_QKD_STATUS_TIMEOUT", 20))
+    status_timeout = int(QKD.get("POSTDEPLOY_QKD_STATUS_TIMEOUT", 8))
     max_attempts = int(QKD.get("POSTDEPLOY_QKD_STATUS_MAX_ATTEMPTS", 1))
     strict_status = bool(QKD.get("POSTDEPLOY_QKD_STATUS_STRICT", False))
+    status_enabled = bool(QKD.get("POSTDEPLOY_QKD_STATUS_ENABLED", True))
+    if not status_enabled:
+        print(f"[INFO] qkd status check skipped on {name} (POSTDEPLOY_QKD_STATUS_ENABLED=false)")
+        return
     started = time.perf_counter()
     cmd = "op qkd_onbox.py action status"
     result = None
