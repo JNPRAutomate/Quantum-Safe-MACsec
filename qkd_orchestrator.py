@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -358,7 +359,7 @@ def parse_args():
         action="store_true",
         help=(
             "Preload only the minimal on-box runtime files needed by qkd_onbox.py "
-            "(qkd_onbox_config.json and qkd_onbox_inventory.json)."
+            "as empty JSON placeholders (qkd_onbox_config.json and qkd_onbox_inventory.json)."
         ),
     )
     deploy.add_argument(
@@ -764,14 +765,52 @@ def deploy_onbox(
             raise FileNotFoundError(f"[{name}] Missing onbox script artifact: {script}")
 
         sidecar_map = artifacts.get(name, {}).get("sidecars", {}) or {}
-        if shipment_preload:
-            required_sidecars = {"qkd_onbox_config.json", "qkd_onbox_inventory.json"}
-            sidecar_map = {
-                sidecar_name: sidecar_path
-                for sidecar_name, sidecar_path in sidecar_map.items()
-                if Path(sidecar_path).name in required_sidecars
-            }
+
         sidecar_paths = []
+        if shipment_preload:
+            with tempfile.TemporaryDirectory(prefix=f"{name}-shipment-preload-") as preload_dir:
+                preload_path = Path(preload_dir)
+                for file_name in ("qkd_onbox_config.json", "qkd_onbox_inventory.json"):
+                    placeholder_path = preload_path / file_name
+                    placeholder_path.write_text("{}\n", encoding="utf-8")
+                    sidecar_paths.append(placeholder_path)
+
+                remote_sidecar_tmps = [f"{tmp_dir}/{p.name}" for p in sidecar_paths]
+                remote_sidecar_ops = [f"{op_script_dir}/{p.name}" for p in sidecar_paths]
+
+                log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
+
+                dev = open_device_as_script_user(ip)
+
+                try:
+                    with SCP(dev) as scp:
+                        log.info(f"[{name}] SCP script to {remote_tmp}")
+                        scp.put(str(script), remote_path=remote_tmp)
+                        for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
+                            scp.put(str(local_sidecar), remote_path=remote_sidecar)
+                            log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
+
+                    log.info(f"[{name}] Installing onbox script into op/event directories")
+                    output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
+
+                    if output:
+                        log.debug(f"[{name}] ONBOX install output:\n{output}")
+
+                    sync_to_re1_if_needed(dev, name, extra_paths=remote_sidecar_ops)
+
+                    log.info(f"[{name}] ONBOX deploy OK")
+
+                except Exception as exc:
+                    log.error(f"[{name}] DEPLOY FAILED -> {exc}")
+                    raise
+
+                finally:
+                    try:
+                        dev.close()
+                    except Exception:
+                        pass
+            continue
+
         for _, local_sidecar in sorted(sidecar_map.items()):
             local_path = Path(local_sidecar)
             if local_path.exists():
