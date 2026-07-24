@@ -645,12 +645,13 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         if not pub_key:
             print(f"[{device_name}] WARN missing peer SSH key from {source_name}")
             continue
-        parts = pub_key.split(None, 1)
-        if len(parts) != 2:
+        parts = pub_key.strip().split()
+        if len(parts) < 2:
             print(f"[{device_name}] WARN malformed peer SSH key from {source_name}: {pub_key}")
             continue
-        key_type, _key_rest = parts
-        escaped_key = pub_key.replace('"', '\\"')
+        key_type = parts[0]
+        key_blob = parts[1]
+        escaped_key = key_blob.replace('"', '\\"')
         config_lines.append(
             f"set system login user {peer_cmd_user} authentication {key_type} \"{escaped_key}\""
         )

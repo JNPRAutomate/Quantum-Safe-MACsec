@@ -31,7 +31,7 @@ def qkd_ssh_dir():
 
 
 def qkd_ssh_private_key():
-    return f"{qkd_ssh_dir()}/{QKD.get('SSH_KEY_NAME', 'qkd_id_rsa')}"
+    return f"{qkd_ssh_dir()}/{QKD.get('SSH_KEY_NAME', 'qkd_id_ed25519')}"
 
 
 def qkd_ssh_public_key():
@@ -466,11 +466,20 @@ def check_script_user_ssh_identity(device):
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
     pub_path = qkd_ssh_public_key()
-    key_bits = QKD.get("SSH_KEY_BITS", 4096)
+    key_type = str(QKD.get("SSH_KEY_TYPE", "ed25519")).strip().lower()
+    key_bits = int(QKD.get("SSH_KEY_BITS", 4096))
     key_comment = QKD.get("SSH_KEY_COMMENT", "qkd-orchestrator")
+
+    if key_type == "rsa":
+        keygen_cmd = f"ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}"
+    elif key_type == "ed25519":
+        keygen_cmd = f"ssh-keygen -t ed25519 -N \"\" -C \"{key_comment}\" -f {key_path}"
+    else:
+        raise ValueError(f"Unsupported SSH_KEY_TYPE={key_type}. Expected 'ed25519' or 'rsa'.")
+
     cmd = (
         f"mkdir -p {ssh_dir}; "
-        f"test -f {key_path} || ssh-keygen -t rsa -b {key_bits} -N \"\" -C \"{key_comment}\" -f {key_path}; "
+        f"test -f {key_path} || {keygen_cmd}; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
         f"ls -l {key_path}; "
