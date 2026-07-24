@@ -649,6 +649,18 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         return
 
     config_lines = []
+    # Keep password auth intact; reset only public-key auth algorithms so peer
+    # key auth is rebuilt deterministically every deploy.
+    config_lines.extend(
+        [
+            f"delete system login user {peer_cmd_user} authentication ssh-ed25519",
+            f"delete system login user {peer_cmd_user} authentication ssh-rsa",
+            f"delete system login user {peer_cmd_user} authentication ecdsa-sha2-nistp256",
+            f"delete system login user {peer_cmd_user} authentication ecdsa-sha2-nistp384",
+            f"delete system login user {peer_cmd_user} authentication ecdsa-sha2-nistp521",
+        ]
+    )
+
     for source_name in sorted(source_names):
         pub_key = pub_keys.get(source_name)
         if not pub_key:
