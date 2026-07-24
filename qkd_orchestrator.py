@@ -1019,6 +1019,7 @@ def handle_deploy(args):
             preview=args.preview,
             ssh_key=args.ssh_key,
             debug=args.debug,
+            verbose=args.verbose,
         )
         print_step_banner("0/6", "PREVIEW OR DRY-RUN", "END")
         return
@@ -1154,6 +1155,7 @@ def handle_deploy(args):
         preview=False,
         ssh_key=args.ssh_key,
         debug=args.debug,
+        verbose=args.verbose,
         devices=devices,
     )
     print_step_banner("5/6", "QKD PROVISIONING", "END")
