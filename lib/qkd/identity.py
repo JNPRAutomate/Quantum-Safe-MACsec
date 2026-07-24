@@ -500,9 +500,12 @@ def check_script_user_ssh_identity(device):
     else:
         raise ValueError(f"Unsupported SSH_KEY_TYPE={key_type}. Expected 'ed25519' or 'rsa'.")
 
+    pub_tmp = f"{pub_path}.tmp"
     cmd = (
         f"mkdir -p {ssh_dir}; "
         f"test -f {key_path} || {keygen_cmd}; "
+        f"ssh-keygen -y -f {key_path} > {pub_tmp}; "
+        f"mv -f {pub_tmp} {pub_path}; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
         f"ls -l {key_path}; "
