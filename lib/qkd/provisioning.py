@@ -554,6 +554,20 @@ def push_certs(dev, name, device):
     if output:
         dbg_block(f"{name} REMOTE CERTS", output)
 
+    low = (output or "").lower()
+    error_markers = [
+        "permission denied",
+        "operation not permitted",
+        "chown:",
+        "chmod:",
+        "no such file or directory",
+    ]
+    if any(marker in low for marker in error_markers):
+        raise RuntimeError(
+            f"[{name}] Remote cert ownership/permission enforcement failed for script_user={script_user}\n"
+            f"output={output}"
+        )
+
     required_markers = [
         f"OK:{remote_dir}/{local_cert.name}",
         f"OK:{remote_dir}/{local_key.name}",
@@ -565,6 +579,35 @@ def push_certs(dev, name, device):
             f"[{name}] Remote cert verification failed\n"
             f"expected markers={missing_remote}\n"
             f"output={output}"
+        )
+
+    # Ensure the runtime key/cert/CA files are actually owned by script_user,
+    # otherwise qkd_onbox running as script_user can fail with PermissionError.
+    expected_files = [local_cert.name, local_key.name, local_ca.name]
+    owner_violations = []
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for file_name in expected_files:
+            suffix = f"/{file_name}"
+            if not stripped.endswith(suffix):
+                continue
+            parts = stripped.split()
+            if len(parts) < 9:
+                owner_violations.append((file_name, "<unparsed>", stripped))
+                continue
+            owner = parts[2]
+            if owner != script_user:
+                owner_violations.append((file_name, owner, stripped))
+
+    if owner_violations:
+        details = "\n".join(
+            f"- file={file_name} owner={owner} line={line}"
+            for file_name, owner, line in owner_violations
+        )
+        raise RuntimeError(
+            f"[{name}] Remote cert owner mismatch. Expected owner={script_user}\n{details}"
         )
 
     sync_certs_dual_re(dev, name, remote_dir, [local_cert.name, local_key.name, local_ca.name])
