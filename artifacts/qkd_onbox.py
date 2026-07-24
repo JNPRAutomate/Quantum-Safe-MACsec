@@ -46,6 +46,7 @@ LINKS = CONFIG.get("links", [])
 SCRIPT_USER = CONFIG["script_user"]
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
+OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
 
 LOG_FILE = CONFIG["log_file"]
 LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
@@ -85,6 +86,41 @@ def ensure_runtime_dirs():
             Path(path).mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
+
+
+def ensure_compat_runtime_sidecars():
+    """
+    Keep compatibility JSON files available under /var/db/scripts/op so
+    operators can inspect runtime parameters used by qkd_onbox.
+    """
+    sidecars = {
+        "qkd_onbox.config.json": CONFIG,
+        "qkd_onbox.links.json": LINKS,
+        "qkd_onbox.qkd_policy.json": qkd_policy(),
+        "qkd_onbox.pki.json": {
+            "pki_profile": CONFIG.get("pki_profile"),
+            "ca_cert": CONFIG.get("ca_cert"),
+            "trust_bundle": CONFIG.get("trust_bundle"),
+        },
+    }
+
+    try:
+        Path(OP_RUNTIME_DIR).mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    for file_name, payload in sidecars.items():
+        target = Path(OP_RUNTIME_DIR) / file_name
+        tmp = Path(f"{target}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
+            tmp.replace(target)
+        except Exception:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
 
 
 # ----------------------------
@@ -2302,6 +2338,7 @@ def run_master():
 
 def main():
     log("SCRIPT START", "INFO")
+    ensure_compat_runtime_sidecars()
 
     if MACSEC_MODEL != "keychain":
         log(f"UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain", "ERROR")

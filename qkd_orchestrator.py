@@ -590,23 +590,38 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
             f"Unable to open device {host} as {resolved_script_user}: {last_error}"
         )
 
-    def install_on_active_re(dev):
+    def install_on_active_re(dev, remote_tmp_script, sidecar_remote_tmps, sidecar_remote_ops):
         """
         Install script on the active/master RE.
         """
+        sidecar_copy_cmds = []
+        sidecar_cleanup_cmds = []
+        for src, dst in zip(sidecar_remote_tmps, sidecar_remote_ops):
+            sidecar_copy_cmds.append(f"cp {src} {dst}")
+            sidecar_cleanup_cmds.append(f"rm -f {src}")
+
+        sidecar_copy = "; ".join(sidecar_copy_cmds)
+        sidecar_cleanup = "; ".join(sidecar_cleanup_cmds)
+        if sidecar_copy:
+            sidecar_copy = sidecar_copy + "; "
+        if sidecar_cleanup:
+            sidecar_cleanup = sidecar_cleanup + "; "
+
         install_cmd = (
             f"mkdir -p {op_script_dir} {event_script_dir}; "
-            f"cp {remote_tmp} {remote_op}; "
-            f"cp {remote_tmp} {remote_event}; "
+            f"cp {remote_tmp_script} {remote_op}; "
+            f"cp {remote_tmp_script} {remote_event}; "
+            f"{sidecar_copy}"
             f"chmod 755 {remote_op} {remote_event}; "
             f"ls -l {remote_op}; "
             f"ls -l {remote_event}; "
-            f"rm -f {remote_tmp}"
+            f"{sidecar_cleanup}"
+            f"rm -f {remote_tmp_script}"
         )
 
         return run_shell(dev, install_cmd, strict=True)
 
-    def sync_to_re1_if_needed(dev, name):
+    def sync_to_re1_if_needed(dev, name, extra_paths=None):
         """
         Copy op/event scripts to RE1 on dual-RE systems.
 
@@ -671,7 +686,12 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
             f"[{name}] Dual-RE detected - syncing ONBOX scripts to RE1 as {resolved_script_user}"
         )
 
-        for path in (remote_op, remote_event):
+        sync_paths = [remote_op, remote_event]
+        for p in (extra_paths or []):
+            if p not in sync_paths:
+                sync_paths.append(p)
+
+        for path in sync_paths:
             copy_to_peer_re(path)
 
         log.info(f"[{name}] RE1 ONBOX sync completed")
@@ -692,6 +712,16 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
         if not script.exists():
             raise FileNotFoundError(f"[{name}] Missing onbox script artifact: {script}")
 
+        sidecar_map = artifacts.get(name, {}).get("sidecars", {}) or {}
+        sidecar_paths = []
+        for _, local_sidecar in sorted(sidecar_map.items()):
+            local_path = Path(local_sidecar)
+            if local_path.exists():
+                sidecar_paths.append(local_path)
+
+        remote_sidecar_tmps = [f"{tmp_dir}/{p.name}" for p in sidecar_paths]
+        remote_sidecar_ops = [f"{op_script_dir}/{p.name}" for p in sidecar_paths]
+
         log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
 
         dev = open_device_as_script_user(ip)
@@ -700,14 +730,17 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
             with SCP(dev) as scp:
                 log.info(f"[{name}] SCP script to {remote_tmp}")
                 scp.put(str(script), remote_path=remote_tmp)
+                for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
+                    log.info(f"[{name}] SCP sidecar to {remote_sidecar}")
+                    scp.put(str(local_sidecar), remote_path=remote_sidecar)
 
             log.info(f"[{name}] Installing onbox script into op/event directories")
-            output = install_on_active_re(dev)
+            output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
 
             if output:
                 log.debug(f"[{name}] ONBOX install output:\n{output}")
 
-            sync_to_re1_if_needed(dev, name)
+            sync_to_re1_if_needed(dev, name, extra_paths=remote_sidecar_ops)
 
             log.info(f"[{name}] ONBOX deploy OK")
 
