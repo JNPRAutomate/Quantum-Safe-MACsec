@@ -1,6 +1,8 @@
 qkd_policy:
   rekey_enabled: true
   batch_enabled: true
+  bootstrap_with_fallback_key: true
+  bootstrap_fallback_keys: 1
   interval_seconds: 60
 
   key_batch_size: 5
