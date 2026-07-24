@@ -1,6 +1,7 @@
 from pathlib import Path
 from pprint import pformat
 import copy
+import json
 
 from lib.common.settings import CONFIG, QKD
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
@@ -372,6 +373,45 @@ def generate_onbox_script(name, device, out_dir):
     return dst
 
 
+def generate_onbox_sidecars(name, device, out_dir):
+    """
+    Generate JSON sidecar files for operational compatibility/debugging.
+
+    These files are copied under /var/db/scripts/op during deploy and mirror
+    the runtime parameters embedded into qkd_onbox.py.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    config = build_onbox_config(name, device)
+
+    sidecars = {
+        "config": out_dir / "qkd_onbox.config.json",
+        "links": out_dir / "qkd_onbox.links.json",
+        "qkd_policy": out_dir / "qkd_onbox.qkd_policy.json",
+        "pki": out_dir / "qkd_onbox.pki.json",
+    }
+
+    sidecars["config"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["links"].write_text(json.dumps(config.get("links", []), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["qkd_policy"].write_text(json.dumps(config.get("qkd_policy", {}), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["pki"].write_text(
+        json.dumps(
+            {
+                "pki_profile": config.get("pki_profile"),
+                "ca_cert": config.get("ca_cert"),
+                "trust_bundle": config.get("trust_bundle"),
+            },
+            indent=2,
+            sort_keys=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    return sidecars
+
+
 # ----------------------------
 # BUILD ONBOX ARTIFACTS
 # ----------------------------
@@ -416,8 +456,14 @@ def build_onbox_artifacts(devices):
                 device,
                 out_dir=device_runtime_dir,
             )
+            sidecars = generate_onbox_sidecars(
+                name,
+                device,
+                out_dir=device_runtime_dir,
+            )
 
             outputs[name]["script"] = script
+            outputs[name]["sidecars"] = sidecars
 
         elif mode == "static":
             # Static mode does not need qkd_onbox.py.
