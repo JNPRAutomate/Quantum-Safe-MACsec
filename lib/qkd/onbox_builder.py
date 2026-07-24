@@ -1,5 +1,4 @@
 from pathlib import Path
-from pprint import pformat
 import copy
 import json
 
@@ -343,27 +342,8 @@ def generate_onbox_script(name, device, out_dir):
     if not src.exists():
         raise FileNotFoundError(f"Missing source onbox template: {src}")
 
-    config = build_onbox_config(name, device)
-
     with open(src, "r", encoding="utf-8") as handle:
         content = handle.read()
-
-    config_literal = pformat(
-        config,
-        indent=4,
-        width=120,
-        sort_dicts=False,
-    )
-
-    if "__CONFIG_PLACEHOLDER__" not in content:
-        raise RuntimeError(
-            f"Missing __CONFIG_PLACEHOLDER__ in source template: {src}"
-        )
-
-    content = content.replace(
-        "__CONFIG_PLACEHOLDER__",
-        f"CONFIG = {config_literal}",
-    )
 
     with open(dst, "w", encoding="utf-8") as handle:
         handle.write(content)
@@ -375,10 +355,7 @@ def generate_onbox_script(name, device, out_dir):
 
 def generate_onbox_sidecars(name, device, out_dir):
     """
-    Generate JSON sidecar files for operational compatibility/debugging.
-
-    These files are copied under /var/db/scripts/op during deploy and mirror
-    the runtime parameters embedded into qkd_onbox.py.
+    Generate runtime JSON files consumed by qkd_onbox.py on device.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -386,14 +363,18 @@ def generate_onbox_sidecars(name, device, out_dir):
     config = build_onbox_config(name, device)
 
     sidecars = {
-        "config": out_dir / "qkd_onbox.config.json",
+        "config": out_dir / "qkd_onbox_config.json",
+        "inventory": out_dir / "qkd_onbox_inventory.json",
         "links": out_dir / "qkd_onbox.links.json",
+        "topology": out_dir / "qkd_onbox.topology.json",
         "qkd_policy": out_dir / "qkd_onbox.qkd_policy.json",
         "pki": out_dir / "qkd_onbox.pki.json",
     }
 
     sidecars["config"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["inventory"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     sidecars["links"].write_text(json.dumps(config.get("links", []), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    sidecars["topology"].write_text(json.dumps({"links": config.get("links", [])}, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     sidecars["qkd_policy"].write_text(json.dumps(config.get("qkd_policy", {}), indent=2, sort_keys=False) + "\n", encoding="utf-8")
     sidecars["pki"].write_text(
         json.dumps(
