@@ -509,6 +509,46 @@ def append_pending_key(state, generation, key_id, start_time):
     return normalize_pending_keys(state)
 
 
+def prune_stale_pending_keys(state, iface=None):
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if not pending:
+        return state
+
+    try:
+        active_generation = int(state.get("generation") or 0)
+    except Exception:
+        active_generation = 0
+
+    kept = []
+    dropped = []
+    for item in pending:
+        generation = item.get("generation")
+        try:
+            generation = int(generation) if generation is not None else None
+        except Exception:
+            generation = None
+
+        # Any pending key at or behind active generation is stale and blocks
+        # promotion because pending queue is generation-sorted.
+        if generation is not None and generation <= active_generation:
+            dropped.append(item)
+            continue
+        kept.append(item)
+
+    if dropped:
+        state["pending_keys"] = kept
+        state = sync_pending_legacy_fields(state)
+        log(
+            f"STALE PENDING KEYS PURGED dropped={len(dropped)} active_generation={active_generation} "
+            f"dropped_generations={[item.get('generation') for item in dropped]}",
+            "WARN",
+            iface,
+            "STATE",
+        )
+    return state
+
+
 def ensure_health_state(state):
     if "health" not in state:
         state["health"] = {}
@@ -542,6 +582,7 @@ def load_link_state(peer, iface, link):
         state["keychain_name"] = stable_keychain_name(link)
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
+    state = prune_stale_pending_keys(state, iface=iface)
     return state
 
 
@@ -1191,6 +1232,7 @@ def mka_confirms_key(iface, key_id, generation=None):
 def promote_pending_key_if_mka_confirmed(peer, iface, state):
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
+    state = prune_stale_pending_keys(state, iface=iface)
     pending_keys = state.get("pending_keys", [])
     if not pending_keys:
         return state, False

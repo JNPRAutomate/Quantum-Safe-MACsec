@@ -57,8 +57,8 @@ def build_device_config(device_name, device, platform, base, topology):
         seed = f"{keychain_name}:bootstrap:secret:{key_index}"
         return hashlib.sha256(seed.encode()).hexdigest()
 
-    def bootstrap_start_time(key_index):
-        return f"2026-01-01.00:{key_index:02d}"
+    def bootstrap_start_time():
+        return "2026-01-01.00:01"
     
     def add(cmd):
         if not cmd:
@@ -161,31 +161,32 @@ def build_device_config(device_name, device, platform, base, topology):
                     f"key-chain {keychain_name}"
                 )
 
-                # Remove any stale incomplete bootstrap keys before recreating them.
-                for stale_idx in (0, 1, 2):
+                # Keep a single deterministic bootstrap key in config.
+                # Runtime qkd_onbox.py manages rotating operational keys.
+                for stale_idx in (0, 2, 3, 4, 5):
                     add(
                         f"delete security authentication-key-chains "
                         f"key-chain {keychain_name} key {stale_idx}"
                     )
 
-                for key_index in (1, 2):
-                    add(
-                        f"set security authentication-key-chains "
-                        f"key-chain {keychain_name} key {key_index} "
-                        f"key-name {bootstrap_key_name(keychain_name, key_index)}"
-                    )
+                key_index = 1
+                add(
+                    f"set security authentication-key-chains "
+                    f"key-chain {keychain_name} key {key_index} "
+                    f"key-name {bootstrap_key_name(keychain_name, key_index)}"
+                )
 
-                    add(
-                        f"set security authentication-key-chains "
-                        f"key-chain {keychain_name} key {key_index} "
-                        f"secret \"{bootstrap_secret(keychain_name, key_index)}\""
-                    )
+                add(
+                    f"set security authentication-key-chains "
+                    f"key-chain {keychain_name} key {key_index} "
+                    f"secret \"{bootstrap_secret(keychain_name, key_index)}\""
+                )
 
-                    add(
-                        f"set security authentication-key-chains "
-                        f"key-chain {keychain_name} key {key_index} "
-                        f"start-time {bootstrap_start_time(key_index)}"
-                    )
+                add(
+                    f"set security authentication-key-chains "
+                    f"key-chain {keychain_name} key {key_index} "
+                    f"start-time {bootstrap_start_time()}"
+                )
                 
                 
                 add(
