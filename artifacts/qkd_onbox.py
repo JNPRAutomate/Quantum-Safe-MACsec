@@ -2,8 +2,15 @@
 """
 QKD on-box MACsec keychain/MKA controller.
 
-This template is embedded by lib/qkd/onbox_builder.py by replacing
-__CONFIG_PLACEHOLDER__ with a per-device CONFIG dictionary.
+Runtime configuration is loaded from external JSON files preloaded on the router.
+
+Default file locations:
+    - /var/db/scripts/op/qkd_onbox_config.json
+    - /var/db/scripts/op/qkd_onbox_inventory.json
+
+These can be overridden with environment variables:
+    - QKD_ONBOX_CONFIG_PATH
+    - QKD_ONBOX_INVENTORY_PATH
 
 Link-driven runtime contract
 ----------------------------
@@ -34,8 +41,88 @@ import pwd
 
 
 urllib3.disable_warnings()
+DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
+DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
 
-__CONFIG_PLACEHOLDER__
+
+def _load_json_or_die(path, label):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        print(f"ERROR MISSING {label} file: {path}")
+        sys.exit(1)
+    except Exception as exc:
+        print(
+            f"ERROR INVALID {label} JSON file: {path} "
+            f"error_type={type(exc).__name__} error={str(exc)}"
+        )
+        sys.exit(1)
+
+    if not isinstance(data, dict):
+        print(f"ERROR INVALID {label} JSON file: {path} root must be object")
+        sys.exit(1)
+
+    return data
+
+
+def _validate_runtime_contract_or_die(config):
+    required_keys = [
+        "local_sae",
+        "kme_ip",
+        "ca_cert",
+        "script_user",
+        "script_dir",
+        "ssh_key",
+        "log_file",
+        "log_max_bytes",
+        "log_backup_count",
+        "qkd_policy",
+    ]
+    missing = [key for key in required_keys if key not in config]
+    local_sae = config.get("local_sae", "<missing>")
+
+    def _contract_error(message):
+        print(
+            "ERROR INVALID runtime JSON contract: "
+            f"{message} local_sae={local_sae} "
+            f"config_path={CONFIG_PATH} inventory_path={INVENTORY_PATH}"
+        )
+        sys.exit(1)
+
+    if missing:
+        _contract_error(f"missing keys={missing}")
+
+    if not isinstance(config.get("qkd_policy"), dict):
+        _contract_error("qkd_policy must be an object")
+
+    if not isinstance(config.get("links"), list):
+        _contract_error("links must be an array")
+
+    try:
+        int(config.get("kme_port", 443))
+        int(config.get("log_max_bytes"))
+        int(config.get("log_backup_count"))
+    except Exception as exc:
+        _contract_error(
+            f"numeric field parse failed error_type={type(exc).__name__} error={str(exc)}"
+        )
+
+
+CONFIG_PATH = os.environ.get("QKD_ONBOX_CONFIG_PATH", DEFAULT_CONFIG_PATH)
+INVENTORY_PATH = os.environ.get("QKD_ONBOX_INVENTORY_PATH", DEFAULT_INVENTORY_PATH)
+
+STATIC_CONFIG = _load_json_or_die(CONFIG_PATH, "config")
+INVENTORY_CONFIG = _load_json_or_die(INVENTORY_PATH, "inventory")
+
+CONFIG = {}
+CONFIG.update(STATIC_CONFIG)
+CONFIG.update(INVENTORY_CONFIG)
+
+_validate_runtime_contract_or_die(CONFIG)
+
+if not isinstance(CONFIG.get("links"), list):
+    CONFIG["links"] = []
 
 DEVICE = CONFIG["local_sae"]
 KME_IP = CONFIG["kme_ip"]
@@ -94,6 +181,8 @@ def ensure_compat_runtime_sidecars():
     operators can inspect runtime parameters used by qkd_onbox.
     """
     sidecars = {
+        "qkd_onbox_config.json": CONFIG,
+        "qkd_onbox_inventory.json": CONFIG,
         "qkd_onbox.config.json": CONFIG,
         "qkd_onbox.links.json": LINKS,
         "qkd_onbox.qkd_policy.json": qkd_policy(),

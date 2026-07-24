@@ -34,6 +34,7 @@ def build_device_config(device_name, device, platform, base, topology):
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
+    fallback_bootstrap = bool(qkd_policy.get("bootstrap_with_fallback_key", False))
 
     context = {
         "device": device,
@@ -56,6 +57,14 @@ def build_device_config(device_name, device, platform, base, topology):
     def bootstrap_secret(keychain_name, key_index):
         seed = f"{keychain_name}:bootstrap:secret:{key_index}"
         return hashlib.sha256(seed.encode()).hexdigest()
+
+    def fallback_ckn_hex(ca_name):
+        seed = f"{ca_name}:fallback:ckn"
+        return hashlib.sha256(seed.encode()).hexdigest()[:32]
+
+    def fallback_cak_hex(ca_name):
+        seed = f"{ca_name}:fallback:cak"
+        return hashlib.sha256(seed.encode()).hexdigest() + hashlib.sha256((seed + ":2").encode()).hexdigest()
 
     def bootstrap_start_time():
         return "2026-01-01.00:01"
@@ -161,32 +170,42 @@ def build_device_config(device_name, device, platform, base, topology):
                     f"key-chain {keychain_name}"
                 )
 
-                # Keep a single deterministic bootstrap key in config.
-                # Runtime qkd_onbox.py manages rotating operational keys.
-                for stale_idx in (0, 2, 3, 4, 5):
+                if fallback_bootstrap:
                     add(
-                        f"delete security authentication-key-chains "
-                        f"key-chain {keychain_name} key {stale_idx}"
+                        f"set security macsec connectivity-association {ca_name} "
+                        f"fallback-key ckn {fallback_ckn_hex(ca_name)}"
+                    )
+                    add(
+                        f"set security macsec connectivity-association {ca_name} "
+                        f"fallback-key cak {fallback_cak_hex(ca_name)}"
+                    )
+                else:
+                    # Keep a single deterministic bootstrap key in config.
+                    # Runtime qkd_onbox.py manages rotating operational keys.
+                    for stale_idx in (0, 2, 3, 4, 5):
+                        add(
+                            f"delete security authentication-key-chains "
+                            f"key-chain {keychain_name} key {stale_idx}"
+                        )
+
+                    key_index = 1
+                    add(
+                        f"set security authentication-key-chains "
+                        f"key-chain {keychain_name} key {key_index} "
+                        f"key-name {bootstrap_key_name(keychain_name, key_index)}"
                     )
 
-                key_index = 1
-                add(
-                    f"set security authentication-key-chains "
-                    f"key-chain {keychain_name} key {key_index} "
-                    f"key-name {bootstrap_key_name(keychain_name, key_index)}"
-                )
+                    add(
+                        f"set security authentication-key-chains "
+                        f"key-chain {keychain_name} key {key_index} "
+                        f"secret \"{bootstrap_secret(keychain_name, key_index)}\""
+                    )
 
-                add(
-                    f"set security authentication-key-chains "
-                    f"key-chain {keychain_name} key {key_index} "
-                    f"secret \"{bootstrap_secret(keychain_name, key_index)}\""
-                )
-
-                add(
-                    f"set security authentication-key-chains "
-                    f"key-chain {keychain_name} key {key_index} "
-                    f"start-time {bootstrap_start_time()}"
-                )
+                    add(
+                        f"set security authentication-key-chains "
+                        f"key-chain {keychain_name} key {key_index} "
+                        f"start-time {bootstrap_start_time()}"
+                    )
                 
                 
                 add(
