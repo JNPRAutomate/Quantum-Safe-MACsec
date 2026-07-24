@@ -666,26 +666,46 @@ def run_script_user_key_fix(
         return True
 
     key_comment = f"{script_user}@qkd-bootstrap"
-    command = (
-        f"mkdir -p {shlex.quote(f'{ssh_home_base}/{script_user}/.ssh')}; "
-        f"test -s {shlex.quote(key_path)} || rm -f {shlex.quote(key_path)} {shlex.quote(pub_path)}; "
-        f"test -s {shlex.quote(key_path)} || ssh-keygen -q -t ed25519 -N '' -C {shlex.quote(key_comment)} -f {shlex.quote(key_path)}; "
-        f"test -s {shlex.quote(pub_path)} || ssh-keygen -y -f {shlex.quote(key_path)} > {shlex.quote(pub_path)}; "
-        f"chown {shlex.quote(script_user)} {shlex.quote(key_path)} {shlex.quote(pub_path)}; "
-        f"chmod 600 {shlex.quote(key_path)}; "
-        f"chmod 644 {shlex.quote(pub_path)}; "
-        f"test -s {shlex.quote(key_path)} && test -s {shlex.quote(pub_path)} && echo QKD_KEY_FIX_OK || echo QKD_KEY_FIX_FAIL; "
-        f"ls -l {shlex.quote(key_path)}; "
-        f"ls -l {shlex.quote(pub_path)}"
-    )
 
-    try:
+    def _run(command: str) -> str:
         result = dev.rpc.request_shell_execute(command=command)
         text = _rpc_text(result).strip()
         if text:
             print("[%s] ssh key fix output:\n%s" % (name, text))
+        return text
 
-        low = text.lower()
+    try:
+        ssh_dir = f"{ssh_home_base}/{script_user}/.ssh"
+
+        _run(
+            f"mkdir -p {shlex.quote(ssh_dir)}; "
+            f"chown {shlex.quote(script_user)} {shlex.quote(ssh_dir)}; "
+            f"chmod 700 {shlex.quote(ssh_dir)}"
+        )
+
+        key_probe = _run(f"ls -l {shlex.quote(key_path)}")
+        if "no such file or directory" in key_probe.lower() or not key_probe:
+            _run(
+                f"rm -f {shlex.quote(key_path)} {shlex.quote(pub_path)}; "
+                f"ssh-keygen -q -t ed25519 -N '' -C {shlex.quote(key_comment)} -f {shlex.quote(key_path)}"
+            )
+
+        _run(
+            f"rm -f {shlex.quote(pub_path)}; "
+            f"ssh-keygen -y -f {shlex.quote(key_path)} > {shlex.quote(pub_path)}"
+        )
+
+        verify = _run(
+            f"chown {shlex.quote(script_user)} {shlex.quote(key_path)} {shlex.quote(pub_path)}; "
+            f"chmod 600 {shlex.quote(key_path)}; "
+            f"chmod 644 {shlex.quote(pub_path)}; "
+            f"ls -l {shlex.quote(key_path)}; "
+            f"ls -l {shlex.quote(pub_path)}; "
+            f"wc -c {shlex.quote(key_path)}; "
+            f"wc -c {shlex.quote(pub_path)}"
+        )
+
+        low = verify.lower()
         error_markers = [
             "permission denied",
             "operation not permitted",
@@ -696,7 +716,7 @@ def run_script_user_key_fix(
             "chown:",
             "ssh-keygen:",
             "overwrite (y/n)?",
-            "qkd_key_fix_fail",
+            "no such file or directory",
         ]
         if any(marker in low for marker in error_markers):
             print(
@@ -707,6 +727,11 @@ def run_script_user_key_fix(
                 "[%s] hint: bootstrap user must be able to repair %s key ownership and permissions" %
                 (name, script_user)
             )
+            return False
+
+        wc_sizes = [int(m.group(1)) for m in re.finditer(r"(?m)^\s*(\d+)\s+", verify)]
+        if len(wc_sizes) >= 2 and (wc_sizes[-2] <= 0 or wc_sizes[-1] <= 0):
+            print("[%s] FAIL ssh key fix: key files are empty after repair" % name)
             return False
 
         return True
