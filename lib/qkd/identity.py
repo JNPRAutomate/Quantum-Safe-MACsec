@@ -634,8 +634,11 @@ def check_peer_ssh_from_device(device):
     name = device_name(device)
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
-    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 3))
-    max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 1))
+    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 10))
+    max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 0))
+    connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 5))
+    alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 5))
+    alive_max = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX", 2))
     timeout_count = 0
 
     for link in device.get("links", []):
@@ -656,9 +659,9 @@ def check_peer_ssh_from_device(device):
             f"-o StrictHostKeyChecking=no "
             f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
             f"-o BatchMode=yes "
-            f"-o ConnectTimeout=2 "
-            f"-o ServerAliveInterval=2 "
-            f"-o ServerAliveCountMax=1 "
+            f"-o ConnectTimeout={connect_timeout} "
+            f"-o ServerAliveInterval={alive_interval} "
+            f"-o ServerAliveCountMax={alive_max} "
             f"-o LogLevel=ERROR "
             f"{script_user}@{peer_ip} "
             f"{shlex.quote(peer_payload)}"
@@ -696,12 +699,11 @@ def check_peer_ssh_from_device(device):
             )
             print_if_verbose(stdout)
             print_if_verbose(stderr)
-            if timeout_count >= max_timeouts:
+            if max_timeouts > 0 and timeout_count >= max_timeouts:
                 print(
                     f"[WARN] peer reachability checks on {name}: timeout threshold reached "
-                    f"({timeout_count}/{max_timeouts}); skipping remaining peers"
+                    f"({timeout_count}/{max_timeouts}); continuing with remaining peers"
                 )
-                break
             continue
 
         raise RuntimeError(
