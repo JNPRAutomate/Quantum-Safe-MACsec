@@ -49,8 +49,9 @@ def build_device_config(device_name, device, platform, base, topology):
 
     def bootstrap_key_name(keychain_name, key_index):
         seed = f"{keychain_name}:bootstrap:key-name:{key_index}"
-        # Keep CKN bootstrap names compact for broad Junos compatibility.
-        return f"k{key_index}_{hashlib.sha256(seed.encode()).hexdigest()[:24]}"
+        # Junos requires key-name(CKN) to be a pure hexadecimal string.
+        # Use a stable SHA-256 hex digest so it is always valid and deterministic.
+        return hashlib.sha256(seed.encode()).hexdigest()
 
     def bootstrap_secret(keychain_name, key_index):
         seed = f"{keychain_name}:bootstrap:secret:{key_index}"
