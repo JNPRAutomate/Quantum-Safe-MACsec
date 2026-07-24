@@ -64,7 +64,7 @@ QKD = {
     #   - Junos event-options python-script-user
     #   - qkd_onbox.py runtime execution
     #   - peer SSH-exec from one router to another
-    #   - runtime state/log/lock ownership under /var/tmp
+    #   - runtime state/log/lock ownership under /var/home/{SCRIPT_USER}
     #
     # Root must only be used by the orchestrator for deploy/clean/setup.
     "SCRIPT_USER": "admin",
@@ -88,9 +88,9 @@ QKD = {
 
     # Runtime files on Junos
     "REMOTE_TMP_DIR": "/var/tmp",
-    "LOG_FILE": "/var/tmp/qkd_debug.log",
-    "STATE_FILE_PREFIX": "/var/tmp/qkd_db",
-    "LOCK_FILE_PREFIX": "/var/tmp/qkd_onbox",
+    "LOG_FILE": "/var/home/admin/logs/qkd_debug.log",
+    "STATE_FILE_PREFIX": "/var/home/admin/qkd_db",
+    "LOCK_FILE_PREFIX": "/var/home/admin/qkd_onbox",
 
     # Log rotation inside qkd_onbox.py
     "LOG_MAX_BYTES": 10485760,

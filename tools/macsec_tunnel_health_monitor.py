@@ -612,7 +612,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
     """Get MACsec tunnel health from a device."""
     device_name, device_ip, ring_ip = DEVICES[sae_id]
     key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
-    log_file = f"/var/home/macsec_user/qkd-state/logs/qkd_debug.log"
+    log_file = "/var/home/admin/logs/qkd_debug.log"
     
     health_data = {
         'macsec_status': {},
@@ -699,8 +699,9 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             time.sleep(0.1)
         
         # Get key status from JSON state files.
-        # Current qkd_onbox runtime stores state in /var/tmp (legacy fallback kept).
-        qkd_state_dirs = ["/var/tmp", "/var/home/macsec_user/qkd-state"]
+        # Current qkd_onbox runtime stores state in /var/home/<script_user>.
+        # Keep legacy fallback directories for older deployments.
+        qkd_state_dirs = ["/var/home/admin", "/var/home/macsec_user/qkd-state", "/var/tmp"]
 
         json_files = []
         for qkd_state_dir in qkd_state_dirs:

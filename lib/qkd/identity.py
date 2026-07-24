@@ -62,6 +62,14 @@ def qkd_remote_tmp_dir():
     return QKD.get("REMOTE_TMP_DIR", "/var/tmp")
 
 
+def qkd_runtime_state_dir():
+    return qkd_ssh_home()
+
+
+def qkd_runtime_log_dir():
+    return f"{qkd_ssh_home()}/logs"
+
+
 def qkd_remote_cert_dir():
     return PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
 
@@ -313,7 +321,8 @@ def check_validation_plan():
     print(f"authorized_keys      = {qkd_authorized_keys()}")
     print(f"op_script_path       = {qkd_remote_op_script()}")
     print(f"cert_dir             = {qkd_remote_cert_dir()}")
-    print(f"log_file             = {QKD.get('LOG_FILE', '/var/tmp/qkd_debug.log')}")
+    print(f"log_file             = {qkd_runtime_log_dir()}/qkd_debug.log")
+    print(f"runtime_state_dir    = {qkd_runtime_state_dir()}")
     print(f"runtime_tmp_dir      = {qkd_remote_tmp_dir()}")
 
 
@@ -423,8 +432,19 @@ def check_script_dirs_simple(device):
 def check_runtime_cleanup_simple(device):
     device = normalize_device(device)
     name = device_name(device)
+    runtime_state_dir = qkd_runtime_state_dir()
+    runtime_log_dir = qkd_runtime_log_dir()
     cmd = (
         "echo ### qkd-runtime-cleanup; "
+        f"mkdir -p {runtime_log_dir}; "
+        f"chflags nouchg,noschg {runtime_state_dir}/qkd_db_*.json; "
+        f"chflags nouchg,noschg {runtime_state_dir}/qkd_db_*.json.*.tmp; "
+        f"chflags nouchg,noschg {runtime_log_dir}/qkd_debug*.log; "
+        f"chflags nouchg,noschg {runtime_state_dir}/qkd_onbox_*; "
+        f"rm -f {runtime_state_dir}/qkd_db_*.json; "
+        f"rm -f {runtime_state_dir}/qkd_db_*.json.*.tmp; "
+        f"rm -f {runtime_log_dir}/qkd_debug*.log; "
+        f"rm -rf {runtime_state_dir}/qkd_onbox_*; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json.*.tmp; "
         "chflags nouchg,noschg /var/tmp/qkd_debug*.log; "
@@ -549,8 +569,9 @@ def check_script_user_can_read_private_key(device):
 def check_script_user_atomic_write(device):
     device = normalize_device(device)
     name = device_name(device)
-    test_path = "/var/tmp/qkd_identity_write_test.json"
-    tmp_path = "/var/tmp/qkd_identity_write_test.json.tmp"
+    runtime_state_dir = qkd_runtime_state_dir()
+    test_path = f"{runtime_state_dir}/qkd_identity_write_test.json"
+    tmp_path = f"{runtime_state_dir}/qkd_identity_write_test.json.tmp"
     cmd = f"echo old > {test_path}; echo new > {tmp_path}; mv {tmp_path} {test_path}; cat {test_path}; ls -l {test_path}; rm -f {test_path}"
     result = ssh_script_user_onbox_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
@@ -945,7 +966,11 @@ def check_qkd_status_as_script_user(device):
 def check_no_state_save_errors(device):
     device = normalize_device(device)
     name = device_name(device)
-    cmd = "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' /var/tmp/qkd_debug*.log 2>/dev/null || true"
+    runtime_log_dir = qkd_runtime_log_dir()
+    cmd = (
+        "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' "
+        f"{runtime_log_dir}/qkd_debug*.log /var/tmp/qkd_debug*.log 2>/dev/null || true"
+    )
     result = ssh_deploy_cmd(device, cmd, timeout=20)
     output = (result.stdout or "").strip()
     real_error_markers = ["STATE SAVE ERROR", "KEYCHAIN BOOTSTRAP STATE SAVE FAIL", "Operation not permitted"]

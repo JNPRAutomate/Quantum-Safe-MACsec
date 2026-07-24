@@ -424,16 +424,19 @@ def run_ssh_cmd(log, name, ip, user, cmds):
 
 def print_identity_plan():
     print("=== QKD identity plan ===")
+    script_user = QKD.get("SCRIPT_USER", "admin")
+    ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
+    runtime_home = f"{ssh_home_base}/{script_user}"
     print(f"deploy_user       = {QKD['DEPLOY_USER']}")
-    print(f"script_user       = {QKD['SCRIPT_USER']}")
+    print(f"script_user       = {script_user}")
     print(f"script_name       = {ONBOX_SCRIPT_NAME}")
     print(f"remote_op_script  = {QKD['REMOTE_OP_SCRIPT_PATH']}")
-    print(f"ssh_home          = {QKD['SSH_HOME_BASE']}/{QKD['SCRIPT_USER']}")
-    print(f"ssh_key           = {QKD['SSH_HOME_BASE']}/{QKD['SCRIPT_USER']}/.ssh/{QKD['SSH_KEY_NAME']}")
+    print(f"ssh_home          = {runtime_home}")
+    print(f"ssh_key           = {runtime_home}/.ssh/{QKD['SSH_KEY_NAME']}")
     print(f"runtime_tmp_dir   = {QKD['REMOTE_TMP_DIR']}")
-    print(f"log_file          = {QKD['LOG_FILE']}")
-    print(f"state_prefix      = {QKD['STATE_FILE_PREFIX']}")
-    print(f"lock_prefix       = {QKD['LOCK_FILE_PREFIX']}")
+    print(f"log_file          = {runtime_home}/logs/qkd_debug.log")
+    print(f"state_prefix      = {runtime_home}/qkd_db")
+    print(f"lock_prefix       = {runtime_home}/qkd_onbox")
 
 
 def run_scp(log, name, src, dst):

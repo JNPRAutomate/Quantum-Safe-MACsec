@@ -150,6 +150,7 @@ def clean_device(name, device, full_macsec=False):
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
         remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
         script_home_dir = f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{script_user}"
+        script_log_dir = f"{script_home_dir}/logs"
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -171,12 +172,11 @@ def clean_device(name, device, full_macsec=False):
                 or name
             )
 
-        def runtime_tmp_paths():
+        def runtime_state_paths():
             sae = device_sae_id()
 
             paths = [
-                f"/var/tmp/{script_name}",
-                f"/var/tmp/qkd_onbox_{sae}.lock",
+                f"{script_home_dir}/qkd_onbox_{sae}.lock",
             ]
 
             for link in device.get("links", []):
@@ -190,9 +190,9 @@ def clean_device(name, device, full_macsec=False):
 
                 paths.extend(
                     [
-                        f"/var/tmp/qkd_db_{peer}_{safe_iface}.json",
-                        f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_install-key.lock",
-                        f"/var/tmp/qkd_onbox_{sae}_{safe_iface}_status.lock",
+                        f"{script_home_dir}/qkd_db_{peer}_{safe_iface}.json",
+                        f"{script_home_dir}/qkd_onbox_{sae}_{safe_iface}_install-key.lock",
+                        f"{script_home_dir}/qkd_onbox_{sae}_{safe_iface}_status.lock",
                     ]
                 )
 
@@ -204,8 +204,11 @@ def clean_device(name, device, full_macsec=False):
 
             return deduped
 
-        runtime_paths = runtime_tmp_paths()
+        runtime_paths = runtime_state_paths()
         soft_runtime_paths = [
+            f"{script_log_dir}/qkd_debug.log",
+            f"{script_log_dir}/qkd_debug_*.log",
+            # Legacy cleanup for older deployments that wrote under /var/tmp.
             "/var/tmp/qkd_debug.log",
             "/var/tmp/qkd_debug_*.log",
         ]
@@ -460,6 +463,7 @@ def clean_device(name, device, full_macsec=False):
                 f"{script_dir}/certs",
                 f"{op_script_dir}/certs",
                 f"{event_script_dir}/certs",
+                script_log_dir,
                 script_home_dir,
             ]
 

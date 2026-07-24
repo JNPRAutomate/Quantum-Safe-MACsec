@@ -260,6 +260,8 @@ def build_onbox_config(name, device):
     script_dir = QKD["SCRIPT_DIR"]
     ssh_home_base = QKD["SSH_HOME_BASE"]
     ssh_key_name = QKD["SSH_KEY_NAME"]
+    runtime_home = f"{ssh_home_base}/{script_user}"
+    runtime_log_dir = f"{runtime_home}/logs"
 
     pki_runtime = resolve_pki_runtime()
 
@@ -289,9 +291,11 @@ def build_onbox_config(name, device):
         "script_user": script_user,
         "script_dir": script_dir,
         "ssh_key": f"{ssh_home_base}/{script_user}/.ssh/{ssh_key_name}",
+        "state_dir": runtime_home,
+        "log_dir": runtime_log_dir,
 
         # Logging
-        "log_file": QKD["LOG_FILE"],
+        "log_file": f"{runtime_log_dir}/qkd_debug.log",
         "log_max_bytes": QKD["LOG_MAX_BYTES"],
         "log_backup_count": QKD["LOG_BACKUP_COUNT"],
 
