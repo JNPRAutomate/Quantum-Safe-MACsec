@@ -520,11 +520,10 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
         or secrets.get("default_password")
     )
 
-    if not resolved_script_password:
+    if not resolved_script_password and not (resolved_bootstrap_user and resolved_bootstrap_password):
         raise RuntimeError(
-            "Cannot deploy ONBOX as SCRIPT_USER/admin because no password was found. "
-            "Expected one of secrets.script_password, secrets.admin_password, "
-            "or secrets.default_password in inventory_base.yaml."
+            "Cannot deploy ONBOX: missing both SCRIPT_USER password and bootstrap credentials. "
+            "Provide SCRIPT_USER password or bootstrap credentials in inventory/env."
         )
 
     def rpc_text(rsp):
@@ -581,14 +580,12 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
         """
         last_error = None
 
-        credential_candidates = [(resolved_script_user, resolved_script_password)]
+        credential_candidates = []
+        if resolved_script_user and resolved_script_password:
+            credential_candidates.append((resolved_script_user, resolved_script_password))
         if (
             resolved_bootstrap_user
             and resolved_bootstrap_password
-            and (
-                str(resolved_bootstrap_user) != str(resolved_script_user)
-                or str(resolved_bootstrap_password) != str(resolved_script_password)
-            )
         ):
             credential_candidates.append((resolved_bootstrap_user, resolved_bootstrap_password))
 
@@ -1077,6 +1074,11 @@ def handle_deploy(args):
         or secrets.get("default_password")
         or None
     )
+    script_auth_mode = (
+        os.getenv("QKD_SCRIPT_USER_AUTH_MODE")
+        or secrets.get("script_user_auth_mode")
+        or "password"
+    ).strip().lower()
 
     if args.preview or args.dry_run:
         print_step_banner(
@@ -1138,6 +1140,7 @@ def handle_deploy(args):
             repo_root=BASE_DIR,
             deploy_user=bootstrap_user,
             deploy_password=bootstrap_password,
+            script_auth_mode=script_auth_mode,
             dry_run=False,
             # Deploy must fail fast if privileged bootstrap credentials are missing.
             skip_if_no_deploy_password=False,
@@ -1163,7 +1166,7 @@ def handle_deploy(args):
         print("[SKIP] script-user bootstrap skipped by CLI option")
     print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
 
-    if not script_password:
+    if script_auth_mode == "password" and not script_password:
         raise RuntimeError(
             "Missing script-user credentials for deploy. Set one of "
             "QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
@@ -1211,19 +1214,26 @@ def handle_deploy(args):
         validate_all_devices(devices, phase="predeploy")
         print_step_banner("2/6", "PRE-DEPLOY VALIDATION", "END")
 
-        # After pre-deploy validation, switch transport auth to SCRIPT_USER for
-        # runtime deployment/provisioning flow.
-        for name, device in devices.items():
-            if not isinstance(device, dict):
-                continue
-            auth = device.get("auth")
-            if not isinstance(auth, dict):
-                auth = {}
-                device["auth"] = auth
-            auth["username"] = script_user
-            auth["password"] = script_password
-            device["script_user"] = script_user
-        print(f"Deploy auth source: inventory_base script_user={script_user}")
+        # After pre-deploy validation, switch transport auth to SCRIPT_USER only
+        # when password-based auth is enabled. In key-only mode, keep bootstrap
+        # transport credentials for NETCONF/SCP while runtime executes as SCRIPT_USER.
+        if script_auth_mode == "password":
+            for name, device in devices.items():
+                if not isinstance(device, dict):
+                    continue
+                auth = device.get("auth")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    device["auth"] = auth
+                auth["username"] = script_user
+                auth["password"] = script_password
+                device["script_user"] = script_user
+            print(f"Deploy auth source: inventory_base script_user={script_user}")
+        else:
+            print(
+                f"Deploy auth source: bootstrap transport user={predeploy_auth_user} "
+                f"(script_user={script_user}, auth_mode={script_auth_mode})"
+            )
 
     print_step_banner(
         "3/6",
