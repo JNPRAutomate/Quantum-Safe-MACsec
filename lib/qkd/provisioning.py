@@ -589,18 +589,7 @@ def configure_qkd_scripts(dev, name, base):
 
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    legacy_cleanup_cfg = "\n".join(
-        [
-            "delete event-options event-script file offbox.py",
-            "delete system scripts op file offbox.py",
-            "delete event-options generate-event OFFBOX_TIMER",
-            "delete event-options policy OFFBOX",
-            "delete event-options policy OFFBOX_POLICY",
-            "delete event-options policy QKD then event-script offbox.py",
-            "delete event-options policy QKD then event-script onbox.py",
-        ]
-    )
-    full_cfg = legacy_cleanup_cfg + "\n" + event_cfg + "\n" + op_cfg
+    full_cfg = event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
 
