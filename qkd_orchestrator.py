@@ -353,6 +353,11 @@ def parse_args():
         action="store_true",
         help="Run SCRIPT_USER bootstrap in dry-run mode, then stop before validation/deploy.",
     )
+    deploy.add_argument(
+        "--skip-postdeploy-validation",
+        action="store_true",
+        help="Skip step 6 post-deploy validation to speed up iterative deploy runs.",
+    )
 
     clean = subparsers.add_parser(
         "clean",
@@ -1160,14 +1165,22 @@ def handle_deploy(args):
     )
     print_step_banner("5/6", "QKD PROVISIONING", "END")
 
-    print_step_banner(
-        "6/6",
-        "POST-DEPLOY VALIDATION",
-        "START",
-        "Validate final runtime behavior, peer reachability, and state health.",
-    )
-    validate_all_devices(devices, phase="postdeploy")
-    print_step_banner("6/6", "POST-DEPLOY VALIDATION", "END")
+    if args.skip_postdeploy_validation:
+        print_step_banner(
+            "6/6",
+            "POST-DEPLOY VALIDATION",
+            "SKIP",
+            "Skipped by CLI option --skip-postdeploy-validation.",
+        )
+    else:
+        print_step_banner(
+            "6/6",
+            "POST-DEPLOY VALIDATION",
+            "START",
+            "Validate final runtime behavior, peer reachability, and state health.",
+        )
+        validate_all_devices(devices, phase="postdeploy")
+        print_step_banner("6/6", "POST-DEPLOY VALIDATION", "END")
 
     deploy_completed = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
     deploy_skipped = sorted(set(initial_targets) - set(deploy_completed))
