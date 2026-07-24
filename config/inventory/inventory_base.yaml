@@ -4,6 +4,6 @@ system:
 secrets:
   default_user: labuser
   bootstrap_user: labuser
-  script_user: admin
+  script_user: etsi_user
 kme:
   port: 8443

@@ -505,6 +505,21 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
         or secrets.get("default_password")
     )
 
+    resolved_bootstrap_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or secrets.get("default_user")
+    )
+    resolved_bootstrap_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+    )
+
     if not resolved_script_password:
         raise RuntimeError(
             "Cannot deploy ONBOX as SCRIPT_USER/admin because no password was found. "
@@ -566,25 +581,44 @@ def deploy_onbox(log, devices, artifacts, script_user=None, script_password=None
         """
         last_error = None
 
-        for port in (830, 22):
-            dev = Device(
-                host=host,
-                user=resolved_script_user,
-                passwd=str(resolved_script_password),
-                port=port,
-                gather_facts=False,
+        credential_candidates = [(resolved_script_user, resolved_script_password)]
+        if (
+            resolved_bootstrap_user
+            and resolved_bootstrap_password
+            and (
+                str(resolved_bootstrap_user) != str(resolved_script_user)
+                or str(resolved_bootstrap_password) != str(resolved_script_password)
             )
+        ):
+            credential_candidates.append((resolved_bootstrap_user, resolved_bootstrap_password))
 
-            try:
-                dev.open()
-                return dev
-            except Exception as exc:
-                last_error = exc
+        for candidate_user, candidate_password in credential_candidates:
+            if not candidate_user or not candidate_password:
+                continue
+
+            for port in (830, 22):
+                dev = Device(
+                    host=host,
+                    user=candidate_user,
+                    passwd=str(candidate_password),
+                    port=port,
+                    gather_facts=False,
+                )
 
                 try:
-                    dev.close()
-                except Exception:
-                    pass
+                    dev.open()
+                    if str(candidate_user) != str(resolved_script_user):
+                        log.warning(
+                            f"[{host}] script_user auth failed; ONBOX deploy fallback to bootstrap user {candidate_user}"
+                        )
+                    return dev
+                except Exception as exc:
+                    last_error = exc
+
+                    try:
+                        dev.close()
+                    except Exception:
+                        pass
 
         raise RuntimeError(
             f"Unable to open device {host} as {resolved_script_user}: {last_error}"
