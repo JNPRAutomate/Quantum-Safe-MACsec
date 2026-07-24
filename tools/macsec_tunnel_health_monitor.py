@@ -38,25 +38,72 @@ def get_device_interfaces_from_qkd_inventory(shell):
     """
     try:
         inv_path = "/var/db/scripts/op/qkd_onbox_inventory.json"
-        inv_output = send_shell_command(shell, f"cat {inv_path}", verbose=False)
-        
-        # Extract JSON from shell output
-        inv_output = inv_output.strip()
-        start_idx = inv_output.find('{')
-        end_idx = inv_output.rfind('}')
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            json_str = inv_output[start_idx:end_idx+1]
-            inv_data = json.loads(json_str)
-            
-            # Extract interfaces from inventory structure
-            if 'interfaces' in inv_data:
-                return set(inv_data['interfaces'])
-            elif 'macsec_interfaces' in inv_data:
-                return set(inv_data['macsec_interfaces'])
+        inv_data = load_remote_qkd_json(shell, inv_path)
+        if not inv_data:
+            return set()
+
+        # Current runtime structure uses links[].interface.
+        interfaces = set()
+        links = inv_data.get('links', [])
+        if isinstance(links, list):
+            for link in links:
+                if isinstance(link, dict):
+                    iface = link.get('interface')
+                    if iface:
+                        interfaces.add(str(iface))
+
+        # Legacy fallback fields.
+        if not interfaces:
+            if 'interfaces' in inv_data and isinstance(inv_data['interfaces'], list):
+                interfaces.update(str(i) for i in inv_data['interfaces'] if i)
+            elif 'macsec_interfaces' in inv_data and isinstance(inv_data['macsec_interfaces'], list):
+                interfaces.update(str(i) for i in inv_data['macsec_interfaces'] if i)
+
+        return interfaces
     except Exception:
         pass
     
     return set()
+
+
+def load_remote_qkd_json(shell, path):
+    """Load a JSON file from remote shell output safely."""
+    output = send_shell_command(shell, f"cat {path}", verbose=False)
+    if not output:
+        return None
+    output = output.strip()
+    start_idx = output.find('{')
+    end_idx = output.rfind('}')
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return None
+    try:
+        return json.loads(output[start_idx:end_idx + 1])
+    except Exception:
+        return None
+
+
+def get_qkd_state_dirs_from_config(shell):
+    """Resolve runtime state directories from qkd_onbox_config.json.
+
+    Primary source of truth is /var/home/{script_user}, where qkd_onbox stores
+    qkd_db_*.json in current deployments.
+    """
+    config_path = "/var/db/scripts/op/qkd_onbox_config.json"
+    cfg = load_remote_qkd_json(shell, config_path) or {}
+
+    dirs = []
+    script_user = cfg.get("script_user") or "etsi_user"
+    home_dir = f"/var/home/{script_user}"
+    dirs.append(home_dir)
+
+    state_dir = cfg.get("state_dir")
+    if state_dir and str(state_dir) not in dirs:
+        dirs.append(str(state_dir))
+
+    if "/var/tmp" not in dirs:
+        dirs.append("/var/tmp")
+
+    return dirs
 
 # Device mapping: sae_id -> (device_name, device_ip, ring_ip)
 DEVICES = {
@@ -698,10 +745,8 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 break
             time.sleep(0.1)
         
-        # Get key status from JSON state files.
-        # Current qkd_onbox runtime stores state in /var/home/<script_user>.
-        # Keep legacy fallback directories for older deployments.
-        qkd_state_dirs = ["/var/home/admin", "/var/home/macsec_user/qkd-state", "/var/tmp"]
+        # Get key status from JSON state files in configured runtime state_dir.
+        qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
 
         json_files = []
         for qkd_state_dir in qkd_state_dirs:
