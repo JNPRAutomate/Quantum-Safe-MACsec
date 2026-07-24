@@ -496,6 +496,7 @@ def resolve_cert_paths_for_device(name, device):
 def push_certs(dev, name, device):
     remote_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
     files = resolve_cert_paths_for_device(name, device)
+    script_user = str(device.get("script_user") or QKD.get("SCRIPT_USER", "etsi_user"))
 
     profile = files["profile"]
     sae_id = files["sae_id"]
@@ -533,12 +534,17 @@ def push_certs(dev, name, device):
             scp.put(str(local_file), remote_path=remote_file)
 
     verify_cmd = (
+        f"chown {script_user} {remote_dir}; "
+        f"chown {script_user} {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
         f"chmod 644 {remote_dir}/{local_cert.name}; "
         f"chmod 600 {remote_dir}/{local_key.name}; "
         f"chmod 644 {remote_dir}/{local_ca.name}; "
         f"test -s {remote_dir}/{local_cert.name} && echo OK:{remote_dir}/{local_cert.name}; "
         f"test -s {remote_dir}/{local_key.name} && echo OK:{remote_dir}/{local_key.name}; "
         f"test -s {remote_dir}/{local_ca.name} && echo OK:{remote_dir}/{local_ca.name}; "
+        f"ls -l {remote_dir}/{local_cert.name}; "
+        f"ls -l {remote_dir}/{local_key.name}; "
+        f"ls -l {remote_dir}/{local_ca.name}; "
         f"ls -l {remote_dir}"
     )
 
