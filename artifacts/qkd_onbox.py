@@ -1672,7 +1672,37 @@ def validate_ssh_runtime_for_master():
         )
         print(f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}")
         return False
+
+    runtime_files = [
+        ("cert", CERT),
+        ("key", KEY),
+        ("ca", CA),
+    ]
+    for label, path in runtime_files:
+        if not path:
+            log(
+                f"TLS RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} file_type={label} reason=PATH_EMPTY",
+                "ERROR",
+                mode="MASTER",
+            )
+            return False
+        if not Path(path).exists():
+            log(
+                f"TLS RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} file_type={label} path={path} reason=NOT_FOUND",
+                "ERROR",
+                mode="MASTER",
+            )
+            return False
+        if not os.access(path, os.R_OK):
+            log(
+                f"TLS RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} file_type={label} path={path} reason=NOT_READABLE_BY_RUNTIME_USER",
+                "ERROR",
+                mode="MASTER",
+            )
+            return False
+
     log(f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}", "INFO", mode="MASTER")
+    log(f"TLS RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} cert={CERT} key={KEY} ca={CA}", "INFO", mode="MASTER")
     return True
 
 
