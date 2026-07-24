@@ -643,23 +643,30 @@ def deploy_onbox(
         """
         sidecar_copy_cmds = []
         sidecar_cleanup_cmds = []
+        sidecar_harden_cmds = []
         for src, dst in zip(sidecar_remote_tmps, sidecar_remote_ops):
             sidecar_copy_cmds.append(f"cp {src} {dst}")
             sidecar_cleanup_cmds.append(f"rm -f {src}")
+            sidecar_harden_cmds.append(f"chown {resolved_script_user} {dst}; chmod 600 {dst}")
 
         sidecar_copy = "; ".join(sidecar_copy_cmds)
         sidecar_cleanup = "; ".join(sidecar_cleanup_cmds)
+        sidecar_harden = "; ".join(sidecar_harden_cmds)
         if sidecar_copy:
             sidecar_copy = sidecar_copy + "; "
         if sidecar_cleanup:
             sidecar_cleanup = sidecar_cleanup + "; "
+        if sidecar_harden:
+            sidecar_harden = sidecar_harden + "; "
 
         install_cmd = (
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"cp {remote_tmp_script} {remote_op}; "
             f"cp {remote_tmp_script} {remote_event}; "
             f"{sidecar_copy}"
-            f"chmod 755 {remote_op} {remote_event}; "
+            f"chown {resolved_script_user} {remote_op} {remote_event}; "
+            f"chmod 700 {remote_op} {remote_event}; "
+            f"{sidecar_harden}"
             f"ls -l {remote_op}; "
             f"ls -l {remote_event}; "
             f"{sidecar_cleanup}"
