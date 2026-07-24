@@ -368,9 +368,10 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     """Parse QKD key status using Python's json.loads() - SIMPLE & RELIABLE.
     
     Reads actual JSON files and extracts:
-    - active_key_id
-    - pending_key_id  
-    - pending_stale_count (number of items in pending_keys array)
+    - active_key_id (from active_key_id field, with installed_keys fallback)
+    - pending_key_id
+    - pending_count
+    - pending_stale_count (explicit stale indicator only; not equal to pending_count)
     """
     key_status = {
         'active_key_id': None,
@@ -436,9 +437,35 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
         # Count pending_keys array
         if 'pending_keys' in data and isinstance(data['pending_keys'], list):
             key_status['pending_count'] = len(data['pending_keys'])
-            key_status['pending_stale_count'] = len(data['pending_keys'])
             if verbose and data['pending_keys']:
                 print(f"[DEBUG] Pending keys: {data['pending_keys']}")
+
+        # Fallback for active key: derive from installed_keys if explicit
+        # active_key_id is missing/None in some state transitions.
+        if not key_status['active_key_id'] and isinstance(data.get('installed_keys'), list):
+            active_entries = [
+                item for item in data['installed_keys']
+                if isinstance(item, dict) and item.get('status') == 'active' and item.get('key_id')
+            ]
+            if active_entries:
+                # Prefer highest generation active key.
+                active_entries.sort(key=lambda x: int(x.get('generation', 0)))
+                key_status['active_key_id'] = active_entries[-1].get('key_id')
+                key_status['active_count'] = 1
+
+        # Pending key fallback from queue head if pending_key_id field is absent.
+        if not key_status['pending_key_id'] and isinstance(data.get('pending_keys'), list) and data['pending_keys']:
+            head = data['pending_keys'][0]
+            if isinstance(head, dict) and head.get('key_id'):
+                key_status['pending_key_id'] = head.get('key_id')
+
+        # Stale must be explicit. Do not mark every pending key as stale.
+        if isinstance(data.get('pending_stale_count'), int):
+            key_status['pending_stale_count'] = int(data.get('pending_stale_count') or 0)
+        elif isinstance(data.get('pending_stale_keys'), list):
+            key_status['pending_stale_count'] = len(data.get('pending_stale_keys') or [])
+        else:
+            key_status['pending_stale_count'] = 0
             
     except json.JSONDecodeError as e:
         if verbose:
