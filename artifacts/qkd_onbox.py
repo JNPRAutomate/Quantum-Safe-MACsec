@@ -180,10 +180,32 @@ def ensure_compat_runtime_sidecars():
     Keep compatibility JSON files available under /var/db/scripts/op so
     operators can inspect runtime parameters used by qkd_onbox.
     """
+    shared_config = {
+        "pki_profile": CONFIG.get("pki_profile"),
+        "ca_cert": CONFIG.get("ca_cert"),
+        "trust_bundle": CONFIG.get("trust_bundle"),
+        "script_user": CONFIG.get("script_user"),
+        "script_dir": CONFIG.get("script_dir"),
+        "ssh_key": CONFIG.get("ssh_key"),
+        "state_dir": CONFIG.get("state_dir"),
+        "log_dir": CONFIG.get("log_dir"),
+        "log_file": CONFIG.get("log_file"),
+        "log_max_bytes": CONFIG.get("log_max_bytes"),
+        "log_backup_count": CONFIG.get("log_backup_count"),
+        "qkd_policy": CONFIG.get("qkd_policy"),
+    }
+    inventory_payload = {
+        "device_name": CONFIG.get("device_name"),
+        "hostname": CONFIG.get("hostname"),
+        "local_sae": CONFIG.get("local_sae"),
+        "kme_ip": CONFIG.get("kme_ip"),
+        "kme_port": CONFIG.get("kme_port"),
+        "links": CONFIG.get("links", []),
+    }
     sidecars = {
-        "qkd_onbox_config.json": CONFIG,
-        "qkd_onbox_inventory.json": CONFIG,
-        "qkd_onbox.config.json": CONFIG,
+        "qkd_onbox_config.json": shared_config,
+        "qkd_onbox_inventory.json": inventory_payload,
+        "qkd_onbox.config.json": shared_config,
         "qkd_onbox.links.json": LINKS,
         "qkd_onbox.qkd_policy.json": qkd_policy(),
         "qkd_onbox.pki.json": {
