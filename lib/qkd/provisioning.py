@@ -712,7 +712,11 @@ def push_config(device_name, device, commands, base, devices_dict=None):
                         cmd = cmd.strip()
                         if not cmd or cmd.startswith("#"):
                             continue
-                        cu.load(cmd, format="set")
+                        cu.load(
+                            cmd,
+                            format="set",
+                            ignore_warning=["statement not found"],
+                        )
 
                     if cu.diff():
                         print(f"[{device_name}] Applying config")
