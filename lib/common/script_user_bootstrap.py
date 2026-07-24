@@ -647,6 +647,66 @@ def run_shell_fix(
         return False
 
 
+def run_script_user_key_fix(
+    dev: Device,
+    name: str,
+    script_user: str,
+    deploy_user: str,
+) -> bool:
+    ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
+    key_name = QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")
+    key_path = f"{ssh_home_base}/{script_user}/.ssh/{key_name}"
+    pub_path = f"{key_path}.pub"
+
+    if deploy_user not in ("root", script_user):
+        print(
+            "[%s] INFO ssh key fix skipped: deploy user %s is not privileged for %s ownership repair" %
+            (name, deploy_user, script_user)
+        )
+        return True
+
+    command = (
+        f"chown {script_user} {key_path} {pub_path}; "
+        f"chmod 600 {key_path}; "
+        f"chmod 644 {pub_path}; "
+        f"ls -l {key_path}; "
+        f"ls -l {pub_path}"
+    )
+
+    try:
+        result = dev.rpc.request_shell_execute(command=command)
+        text = _rpc_text(result).strip()
+        if text:
+            print("[%s] ssh key fix output:\n%s" % (name, text))
+
+        low = text.lower()
+        error_markers = [
+            "permission denied",
+            "operation not permitted",
+            "invalid user",
+            "no such file or directory",
+            "cannot access",
+            "cannot create directory",
+            "cannot touch",
+            "chown:",
+        ]
+        if any(marker in low for marker in error_markers):
+            print(
+                "[%s] FAIL ssh key fix: insufficient privileges or invalid runtime user state for %s" %
+                (name, script_user)
+            )
+            print(
+                "[%s] hint: bootstrap user must be able to repair %s key ownership and permissions" %
+                (name, script_user)
+            )
+            return False
+
+        return True
+    except Exception as exc:
+        print("[%s] FAIL ssh key fix: %s" % (name, exc))
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Junos bootstrap
 # ---------------------------------------------------------------------------
@@ -749,6 +809,16 @@ def bootstrap_script_user_on_device(
             print(
                 "[%s] hint: predeploy/provisioning will continue with runtime checks and config-based peer SSH auth" %
                 name
+            )
+
+        if not run_script_user_key_fix(dev, name, script_user, deploy_user):
+            print(
+                "[%s] WARN ssh key fix did not complete; continuing because this can be platform-specific on Junos" %
+                name
+            )
+            print(
+                "[%s] hint: the script user private key must remain owned by %s for runtime SSH checks" %
+                (name, script_user)
             )
 
         return True
