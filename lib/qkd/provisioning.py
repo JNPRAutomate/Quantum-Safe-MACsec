@@ -6,6 +6,7 @@ from jnpr.junos.exception import ConfigLoadError
 import yaml
 import time
 import subprocess
+import hashlib
 from pathlib import Path
 
 import logging
@@ -692,6 +693,52 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
 
 
 def push_config(device_name, device, commands, base, devices_dict=None):
+    def _bootstrap_key_name(keychain_name, key_index):
+        seed = f"{keychain_name}:bootstrap:key-name:{key_index}"
+        return hashlib.sha256(seed.encode()).hexdigest()
+
+    def _bootstrap_secret(keychain_name, key_index):
+        seed = f"{keychain_name}:bootstrap:secret:{key_index}"
+        return hashlib.sha256(seed.encode()).hexdigest()
+
+    def _bootstrap_start_time(key_index):
+        return f"2026-01-01.00:{key_index:02d}"
+
+    def _ensure_keychain_prereqs(cmds):
+        refs = []
+        existing = set()
+
+        for line in cmds:
+            s = (line or "").strip()
+            if not s or s.startswith("#"):
+                continue
+            existing.add(s)
+            marker = " pre-shared-key-chain "
+            if s.startswith("set security macsec connectivity-association ") and marker in s:
+                kc = s.split(marker, 1)[1].strip()
+                if kc and kc not in refs:
+                    refs.append(kc)
+
+        extras = []
+        for keychain_name in refs:
+            required = [
+                f"set security authentication-key-chains key-chain {keychain_name}",
+                f"set security authentication-key-chains key-chain {keychain_name} key 1 key-name {_bootstrap_key_name(keychain_name, 1)}",
+                f"set security authentication-key-chains key-chain {keychain_name} key 1 secret \"{_bootstrap_secret(keychain_name, 1)}\"",
+                f"set security authentication-key-chains key-chain {keychain_name} key 1 start-time {_bootstrap_start_time(1)}",
+                f"set security authentication-key-chains key-chain {keychain_name} key 2 key-name {_bootstrap_key_name(keychain_name, 2)}",
+                f"set security authentication-key-chains key-chain {keychain_name} key 2 secret \"{_bootstrap_secret(keychain_name, 2)}\"",
+                f"set security authentication-key-chains key-chain {keychain_name} key 2 start-time {_bootstrap_start_time(2)}",
+            ]
+            for req in required:
+                if req not in existing:
+                    extras.append(req)
+                    existing.add(req)
+
+        return cmds + extras
+
+    commands = _ensure_keychain_prereqs(commands)
+
     dev = Device(
         host=device["ip"],
         user=device["auth"]["username"],
