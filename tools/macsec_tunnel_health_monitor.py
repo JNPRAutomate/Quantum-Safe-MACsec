@@ -1101,7 +1101,13 @@ def format_tunnel_status(health_data):
             a_short = a[:8] if a else 'None'
             p_short = p[:8] if p else 'None'
             pair_chunks.append(f"{local_device}-{peer}@{iface}:{a_short}/{p_short}")
-        status += f" | Pairs: {'; '.join(pair_chunks)}"
+
+        if len(pair_chunks) == 1:
+            status += f" | Pairs: {pair_chunks[0]}"
+        else:
+            status += " | Pairs:"
+            for pair in pair_chunks:
+                status += f"\n    - {pair}"
     else:
         # When active key is not yet promoted but pending exists, show explicit
         # bootstrap/pending state instead of misleading "None(0)".
@@ -1147,6 +1153,18 @@ def format_tunnel_status(health_data):
         status += f" | 🔴 LACP_DOWN: {lacp_down}"
     
     return status
+
+
+def print_device_status_line(sae_id, device_name, status_str):
+    """Print one device status, supporting multiline status output."""
+    prefix = f"sae-{sae_id}  {device_name:<15} │ "
+    lines = (status_str or "").splitlines() or [""]
+
+    print(f"{prefix}{lines[0]}")
+    if len(lines) > 1:
+        continuation_prefix = " " * len(prefix)
+        for line in lines[1:]:
+            print(f"{continuation_prefix}{line}")
 
 
 def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=False):
@@ -1229,7 +1247,7 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 
                 # Print device status
                 status_str = format_tunnel_status(health)
-                print(f"sae-{sae_id}  {device_name:<15} │ {status_str}")
+                print_device_status_line(sae_id, device_name, status_str)
                 
                 # Update summary
                 summary['total_devices'] += 1
