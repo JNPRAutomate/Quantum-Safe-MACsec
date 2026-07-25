@@ -3021,7 +3021,7 @@ def run_master():
                 state, evicted = evict_pending_head_for_recovery(
                     state,
                     iface,
-                    reason=f"PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE overdue_seconds={pending_stuck_overdue_seconds}",
+                    reason="PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE",
                     peer_state=None,
                     overdue_seconds=pending_stuck_overdue_seconds,
                 )
@@ -3041,7 +3041,7 @@ def run_master():
                 state, evicted = evict_pending_head_for_recovery(
                     state,
                     iface,
-                    reason=f"PENDING_STUCK_AND_PEER_STATE_INVALID overdue_seconds={pending_stuck_overdue_seconds}",
+                    reason="PENDING_STUCK_AND_PEER_STATE_INVALID",
                     peer_state=peer_state,
                     overdue_seconds=pending_stuck_overdue_seconds,
                 )
@@ -3080,7 +3080,7 @@ def run_master():
                 state, evicted = evict_pending_head_for_recovery(
                     state,
                     iface,
-                    reason=f"PENDING_STUCK_AND_PEER_MISMATCH overdue_seconds={pending_stuck_overdue_seconds}",
+                    reason="PENDING_STUCK_AND_PEER_MISMATCH",
                     peer_state=peer_state,
                     overdue_seconds=pending_stuck_overdue_seconds,
                 )
@@ -3093,7 +3093,7 @@ def run_master():
                 state, evicted = evict_pending_head_for_recovery(
                     state,
                     iface,
-                    reason=f"PENDING_STUCK_CONFIRMED_BY_PEER_STATUS overdue_seconds={pending_stuck_overdue_seconds}",
+                    reason="PENDING_STUCK_CONFIRMED_BY_PEER_STATUS",
                     peer_state=peer_state,
                     overdue_seconds=pending_stuck_overdue_seconds,
                 )
