@@ -603,6 +603,11 @@ def prune_stale_pending_keys(state, iface=None):
     if not pending:
         return state
 
+    # If there is no active key yet, pending entries are bootstrap candidates,
+    # not stale keys. Dropping them causes endless bootstrap loops.
+    if not state.get("active_key_id"):
+        return state
+
     try:
         active_generation = int(state.get("generation") or 0)
     except Exception:
@@ -617,8 +622,8 @@ def prune_stale_pending_keys(state, iface=None):
         except Exception:
             generation = None
 
-        # Any pending key at or behind active generation is stale and blocks
-        # promotion because pending queue is generation-sorted.
+        # Any pending key behind the confirmed active generation is stale and
+        # blocks promotion because pending queue is generation-sorted.
         if generation is not None and generation <= active_generation:
             dropped.append(item)
             continue
