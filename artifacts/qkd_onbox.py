@@ -1287,6 +1287,21 @@ def junos_start_time_from_epoch(epoch_seconds):
     return time.strftime("%Y-%m-%d.%H:%M", time.localtime(int(epoch_seconds)))
 
 
+def format_start_time_cli(start_time):
+    """Convert internal start_time format (YYYY-MM-DD.HH:MM) to Junos CLI format.
+
+    Junos CLI expects: YYYY-MM-DD.HH:MM:SS
+    Example: "2026-07-25.14:13" -> "2026-07-25.14:13:00"
+    """
+    if not start_time:
+        return None
+    # Already has seconds
+    if start_time.count(":") == 2:
+        return start_time
+    # Add :00 seconds
+    return f"{start_time}:00"
+
+
 def start_time_is_future(start_time, grace_seconds=0):
     epoch = epoch_from_junos_start_time(start_time)
     if epoch is None:
@@ -2095,7 +2110,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         if generation is None:
             key_index = qkd_key_index_from_time()
         else:
-            key_index = qkd_key_index_from_generation(generation)
+            key_index = int(generation) % max_installed_keys()
 
         # VALIDATION: Check key_index
         if not isinstance(key_index, int) or key_index < 0 or key_index > 65535:
@@ -2110,7 +2125,8 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             log(f"START_TIME FORMAT INVALID idx={idx} start_time={start_time}", "ERROR", iface, "MACSEC")
             return False
 
-        cli_start_time = format_start_time_cli(start_time)
+        # Convert YYYY-MM-DD.HH:MM to YYYY-MM-DD.HH:MM:SS for Junos CLI
+        cli_start_time = start_time if start_time.count(":") == 2 else f"{start_time}:00"
         if not isinstance(cli_start_time, str) or len(cli_start_time) < 10:
             log(f"START_TIME CLI FORMAT INVALID idx={idx} cli_start_time={cli_start_time}", "ERROR", iface, "MACSEC")
             return False
