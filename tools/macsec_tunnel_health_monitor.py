@@ -265,6 +265,17 @@ def send_shell_command(shell, command, timeout=5.0, verbose=False):
     return output
 
 
+def send_cli_command(client, command, timeout=8):
+    """Run a single Junos CLI command via exec_command and return combined output."""
+    try:
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        out = stdout.read().decode(errors='ignore')
+        err = stderr.read().decode(errors='ignore')
+        return (out or "") + (err or "")
+    except Exception:
+        return ""
+
+
 def reset_mka_statistics(password=None, verbose=False):
     """Reset MKA statistics counters on all devices for clean baseline."""
     print("[*] Resetting MKA statistics on all devices...")
@@ -877,8 +888,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
         
         # Get key status from JSON state files in configured runtime state_dir.
-        # Primary method: explicit shell commands that read files under
-        # /var/home/<script_user> exactly as runtime writes them.
+        # Use exec_command for deterministic, non-interactive output.
         qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
 
         json_files = []
@@ -900,14 +910,13 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
         # Fallback source: directory listing in case inventory is incomplete.
         for qkd_state_dir in qkd_state_dirs:
-            ls_output = send_shell_command(
-                shell,
+            ls_output = send_cli_command(
+                client,
                 f"start shell command \"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null\"",
-                verbose=False,
             )
             # Fallback: Junos CLI listing.
             if 'qkd_db_' not in (ls_output or ''):
-                ls_output = send_shell_command(shell, f"file list {qkd_state_dir} | no-more", verbose=False)
+                ls_output = send_cli_command(client, f"file list {qkd_state_dir} | no-more")
 
             for raw_line in (ls_output or "").split('\n'):
                 line = raw_line.strip()
@@ -946,25 +955,23 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         }
 
         for jfile in json_files:
-            file_content = send_shell_command(
-                shell,
-                f"start shell command \"cat {jfile}\"",
-                verbose=False,
+            file_content = send_cli_command(
+                client,
+                f"start shell command \"cat {jfile} 2>/dev/null\"",
             )
             if '{' not in (file_content or ''):
                 base_name = os.path.basename(jfile)
                 for qkd_state_dir in qkd_state_dirs:
-                    rel_try = send_shell_command(
-                        shell,
+                    rel_try = send_cli_command(
+                        client,
                         f"start shell command \"cd {qkd_state_dir} && cat {base_name} 2>/dev/null\"",
-                        verbose=False,
                     )
                     if '{' in (rel_try or ''):
                         file_content = rel_try
                         break
             # Fallback: Junos CLI file show.
             if '{' not in (file_content or ''):
-                file_content = send_shell_command(shell, f"file show {jfile} | no-more", verbose=False)
+                file_content = send_cli_command(client, f"file show {jfile} | no-more")
             parsed = parse_key_status_via_python_json(
                 json_data_str=file_content,
                 all_json_str=file_content,
@@ -1014,8 +1021,6 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
         health_data['key_status'] = aggregated_key_status
 
-        
-        shell.close()
         
         shell.close()
         client.close()
