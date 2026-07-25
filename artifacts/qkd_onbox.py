@@ -2142,6 +2142,11 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {cli_start_time}")
 
+    # PHASE 3: Remove bootstrap key (key 1 with start-time 2026-1-1) after first rotation batch
+    if len(entries) > 0:
+        log(f"KEYCHAIN BOOTSTRAP CLEANUP ca={ca_name} keychain={keychain_name} batch_entries={len(entries)} action=remove_bootstrap_key", "DEBUG", iface, "MACSEC")
+        cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key 1")
+
     if commit:
         cli_cmds.append("commit")
     cli_cmds.append("exit")
