@@ -3169,6 +3169,7 @@ def run_master():
                     )
                     if evicted:
                         save_db_state(peer, iface, state)
+                        continue  # Skip to next cycle with cleared pending, allow batch install
 
         if not compare_peer_keychain_state(state, peer_state):
             local_active = state.get("active_key_id")
