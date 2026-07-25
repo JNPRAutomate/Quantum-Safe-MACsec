@@ -876,6 +876,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             'confirmed_count': 0,
             'promoted_count': 0,
             'error_count': 0,
+            'per_link': [],
         }
 
         for jfile in json_files:
@@ -896,6 +897,29 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             aggregated_key_status['pending_count'] += int(parsed.get('pending_count', 0) or 0)
 
             aggregated_key_status['pending_stale_count'] += int(parsed.get('pending_stale_count', 0) or 0)
+
+            # Keep per-link view (peer + interface) so multi-link devices like MX1
+            # show one key state per pair (e.g. MX1-MX2 and MX1-MX6).
+            base = os.path.basename(jfile)
+            match = re.match(r"qkd_db_([^_]+)_(.+)\.json$", base)
+            peer_name = None
+            iface_name = None
+            if match:
+                peer_name = match.group(1)
+                iface_name = match.group(2).replace("_", "/")
+
+            aggregated_key_status['per_link'].append(
+                {
+                    'peer': peer_name or 'UNKNOWN',
+                    'iface': iface_name or 'UNKNOWN',
+                    'active_key_id': parsed.get('active_key_id'),
+                    'pending_key_id': parsed.get('pending_key_id'),
+                    'active_count': int(parsed.get('active_count', 0) or 0),
+                    'pending_count': int(parsed.get('pending_count', 0) or 0),
+                }
+            )
+
+        aggregated_key_status['per_link'].sort(key=lambda x: (x.get('peer') or '', x.get('iface') or ''))
 
         health_data['key_status'] = aggregated_key_status
 
@@ -942,6 +966,7 @@ def format_tunnel_status(health_data):
     pending_count = keys.get('pending_count', 0)
     active_key = keys.get('active_key_id')
     pending_key = keys.get('pending_key_id')
+    per_link = keys.get('per_link') or []
     
     # Safely slice keys - handle None and short UUIDs
     if active_key and len(active_key) > 0:
@@ -968,12 +993,25 @@ def format_tunnel_status(health_data):
     
     status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | {lacp_part}"
     
-    # When active key is not yet promoted but pending exists, show explicit
-    # bootstrap/pending state instead of misleading "None(0)".
-    if (not active_key) and pending_key:
-        status += f" | Active: bootstrap/pending | Pending: {pending_key_short}({pending_count})"
+    # For devices with multiple QKD links, show per-pair key state.
+    if len(per_link) > 1:
+        pair_chunks = []
+        for item in per_link:
+            peer = item.get('peer') or 'UNK'
+            iface = item.get('iface') or 'unk'
+            a = item.get('active_key_id')
+            p = item.get('pending_key_id')
+            a_short = a[:8] if a else 'None'
+            p_short = p[:8] if p else 'None'
+            pair_chunks.append(f"{peer}@{iface}:{a_short}/{p_short}")
+        status += f" | Pairs: {'; '.join(pair_chunks)}"
     else:
-        status += f" | Active: {active_key_short}({active_count}) | Pending: {pending_key_short}({pending_count})"
+        # When active key is not yet promoted but pending exists, show explicit
+        # bootstrap/pending state instead of misleading "None(0)".
+        if (not active_key) and pending_key:
+            status += f" | Active: bootstrap/pending | Pending: {pending_key_short}({pending_count})"
+        else:
+            status += f" | Active: {active_key_short}({active_count}) | Pending: {pending_key_short}({pending_count})"
     
     if pending_stale > 0:
         status += f" | ⚠️  STALE: {pending_stale}"
