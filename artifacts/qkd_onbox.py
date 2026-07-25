@@ -484,10 +484,12 @@ def max_installed_keys():
 
 
 def key_batch_size():
-    value = int(qkd_policy().get("key_batch_size", max_installed_keys()))
-    if value < 1:
-        return 1
-    return min(value, max_installed_keys())
+    # FORCE single-key for stability testing
+    return 1
+    # value = int(qkd_policy().get("key_batch_size", max_installed_keys()))
+    # if value < 1:
+    #     return 1
+    # return min(value, max_installed_keys())
 
 
 def rotation_interval_seconds():
