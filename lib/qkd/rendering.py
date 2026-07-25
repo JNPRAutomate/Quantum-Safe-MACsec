@@ -171,6 +171,13 @@ def build_device_config(device_name, device, platform, base, topology):
                     f"key-chain {keychain_name}"
                 )
 
+                # Always reset fallback-key so bootstrap is deterministic and
+                # never reuses stale fallback material from previous deploys.
+                add(
+                    f"delete security macsec connectivity-association {ca_name} "
+                    f"fallback-key"
+                )
+
                 if fallback_bootstrap:
                     add(
                         f"set security macsec connectivity-association {ca_name} "

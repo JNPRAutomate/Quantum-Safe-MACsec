@@ -775,6 +775,14 @@ def push_config(device_name, device, commands, base, devices_dict=None):
     def _bootstrap_start_time():
         return "2026-01-01.00:01"
 
+    def _fallback_ckn_hex(ca_name):
+        seed = f"{ca_name}:fallback:ckn"
+        return hashlib.sha256(seed.encode()).hexdigest()[:32]
+
+    def _fallback_cak_hex(ca_name):
+        seed = f"{ca_name}:fallback:cak"
+        return hashlib.sha256(seed.encode()).hexdigest()
+
     def _ensure_keychain_prereqs(cmds):
         refs = []
         existing = set()
@@ -810,7 +818,51 @@ def push_config(device_name, device, commands, base, devices_dict=None):
 
         return cmds + extras
 
+    def _ensure_fallback_key_prereqs(cmds):
+        prefix = "set security macsec connectivity-association "
+        ckn_marker = " fallback-key ckn "
+        cak_marker = " fallback-key cak "
+
+        ckn_by_ca = {}
+        cak_by_ca = {}
+        existing = set()
+
+        for line in cmds:
+            s = (line or "").strip()
+            if not s or s.startswith("#"):
+                continue
+            existing.add(s)
+
+            if not s.startswith(prefix):
+                continue
+
+            if ckn_marker in s:
+                head, val = s.split(ckn_marker, 1)
+                ca_name = head[len(prefix):].strip()
+                ckn_by_ca[ca_name] = val.strip()
+            elif cak_marker in s:
+                head, val = s.split(cak_marker, 1)
+                ca_name = head[len(prefix):].strip()
+                cak_by_ca[ca_name] = val.strip()
+
+        extras = []
+        all_ca = set(ckn_by_ca.keys()) | set(cak_by_ca.keys())
+        for ca_name in sorted(all_ca):
+            if ca_name not in ckn_by_ca:
+                cmd = f"{prefix}{ca_name} fallback-key ckn {_fallback_ckn_hex(ca_name)}"
+                if cmd not in existing:
+                    extras.append(cmd)
+                    existing.add(cmd)
+            if ca_name not in cak_by_ca:
+                cmd = f"{prefix}{ca_name} fallback-key cak {_fallback_cak_hex(ca_name)}"
+                if cmd not in existing:
+                    extras.append(cmd)
+                    existing.add(cmd)
+
+        return cmds + extras
+
     commands = _ensure_keychain_prereqs(commands)
+    commands = _ensure_fallback_key_prereqs(commands)
 
     dev = Device(
         host=device["ip"],
