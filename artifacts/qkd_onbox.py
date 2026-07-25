@@ -3110,11 +3110,11 @@ def run_master():
                 "MASTER",
             )
             
-            # RECOVERY: If failure is recent (<5min), allow ONE recovery attempt
+            # RECOVERY: If failure is recent (<15min), allow ONE recovery attempt
             now = int(time.time())
             unavailable_since = int(state['health'].get('kme_unavailable_since', 0))
             hold_age_seconds = now - unavailable_since
-            if hold_age_seconds < 300:  # 5 minutes
+            if hold_age_seconds < 900:  # 15 minutes (matches KME_HOLD_DOWN_SECONDS)
                 log(f"KME RECOVERY: Hold is recent ({hold_age_seconds}s) - skip hold and try install", "INFO", iface, "MASTER")
                 # Fall through to rotation logic instead of continue
             else:
