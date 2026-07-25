@@ -68,7 +68,9 @@ def get_device_interfaces_from_qkd_inventory(shell):
 
 def load_remote_qkd_json(shell, path):
     """Load a JSON file from remote shell output safely."""
-    output = send_shell_command(shell, f"cat {path}", verbose=False)
+    output = send_shell_command(shell, f"file show {path} | no-more", verbose=False)
+    if not output or '{' not in output:
+        output = send_shell_command(shell, f"cat {path}", verbose=False)
     if not output:
         return None
     output = output.strip()
@@ -844,84 +846,32 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
         health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
         
-        # Get key status from JSON state files.
-        # Try to enter Unix shell first, but keep a CLI fallback for devices
-        # where `start shell` is restricted or prompt detection is inconsistent.
-        in_unix_shell = False
-        try:
-            shell.send("start shell\n")
-            time.sleep(0.4)
-            probe = ""
-            for _ in range(30):
-                try:
-                    if hasattr(shell, "recv_ready") and not shell.recv_ready():
-                        time.sleep(0.1)
-                        continue
-                    chunk = shell.recv(1024).decode(errors="ignore")
-                    if chunk:
-                        probe += chunk
-                        stripped = probe.rstrip()
-                        if stripped.endswith("%") or stripped.endswith("$") or stripped.endswith("#"):
-                            in_unix_shell = True
-                            break
-                except socket.timeout:
-                    break
-                except Exception:
-                    break
-            if not in_unix_shell:
-                pwd_out = send_shell_command(shell, "pwd", verbose=False)
-                if "/var/home" in (pwd_out or "") or "/root" in (pwd_out or ""):
-                    in_unix_shell = True
-        except Exception:
-            in_unix_shell = False
-        
         # Get key status from JSON state files in configured runtime state_dir.
         qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
 
         json_files = []
         for qkd_state_dir in qkd_state_dirs:
-            list_outputs = []
+            ls_output = send_shell_command(shell, f"file list {qkd_state_dir} | no-more", verbose=False)
+            for raw_line in (ls_output or "").split('\n'):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith('%') or line.startswith('error:'):
+                    continue
 
-            # Try Unix-shell style listing.
-            list_outputs.append(
-                send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
-            )
-
-            # Try Junos CLI style listing.
-            list_outputs.append(
-                send_shell_command(shell, f"file list {qkd_state_dir} | match qkd_db_", verbose=False)
-            )
-
-            for ls_output in list_outputs:
-                for raw_line in (ls_output or "").split('\n'):
-                    line = raw_line.strip()
-                    if not line:
+                # file list output can contain either absolute paths or bare names.
+                candidates = re.findall(r'(?:/\S*qkd_db_\S*\.json|qkd_db_\S*\.json)', line)
+                for candidate in candidates:
+                    if '*' in candidate:
                         continue
-                    if line.startswith('%') or line.startswith('ls:'):
+                    json_pos = candidate.find('.json')
+                    if json_pos == -1:
                         continue
+                    candidate = candidate[:json_pos + 5]
 
-                    # Robust token extraction from noisy shell output (echoed command,
-                    # prompt fragments, or accidental multi-token lines).
-                    candidates = re.findall(r'(?:/\S*qkd_db_\S*\.json|qkd_db_\S*\.json)', line)
-                    if not candidates:
-                        candidates = [line]
-
-                    for candidate in candidates:
-                        if '*' in candidate:
-                            continue
-                        if 'qkd_db_' not in candidate or '.json' not in candidate:
-                            continue
-
-                        # Trim possible trailing punctuation/noise after .json
-                        json_pos = candidate.find('.json')
-                        candidate = candidate[:json_pos + 5]
-
-                        full_path = candidate
-                        if not full_path.startswith('/'):
-                            full_path = f"{qkd_state_dir}/{full_path}"
-
-                        if full_path not in json_files:
-                            json_files.append(full_path)
+                    full_path = candidate if candidate.startswith('/') else f"{qkd_state_dir}/{candidate}"
+                    if full_path not in json_files:
+                        json_files.append(full_path)
 
         if verbose:
             print(f"[DEBUG] qkd_db files discovered: {json_files}")
@@ -939,10 +889,9 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         }
 
         for jfile in json_files:
-            # Try both read methods because shell mode can drift between CLI and Unix shell.
-            file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
+            file_content = send_shell_command(shell, f"file show {jfile} | no-more", verbose=False)
             if '{' not in (file_content or ''):
-                file_content = send_shell_command(shell, f"file show {jfile}", verbose=False)
+                file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
             parsed = parse_key_status_via_python_json(
                 json_data_str=file_content,
                 all_json_str=file_content,
