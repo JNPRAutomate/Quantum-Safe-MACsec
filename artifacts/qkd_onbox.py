@@ -2493,6 +2493,33 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         cmd += f" batch-b64 {batch_b64}"
 
     start_time_human = format_next_start_time_with_millis(start_time) if start_time else "None"
+    if (not start_time) and batch_b64:
+        try:
+            decoded = base64.urlsafe_b64decode(batch_b64.encode()).decode()
+            batch = json.loads(decoded)
+            if isinstance(batch, list) and batch:
+                starts = []
+                for item in batch:
+                    if not isinstance(item, dict):
+                        continue
+                    value = item.get("start_time")
+                    if value:
+                        starts.append(str(value))
+                if starts:
+                    starts.sort(key=lambda s: epoch_from_junos_start_time(s) or (2**31))
+                    first_start = starts[0]
+                    if len(starts) == 1:
+                        start_time_human = format_next_start_time_with_millis(first_start)
+                    else:
+                        last_start = starts[-1]
+                        start_time_human = (
+                            f"{format_next_start_time_with_millis(first_start)}"
+                            f"..{format_next_start_time_with_millis(last_start)}"
+                            f" count={len(starts)}"
+                        )
+        except Exception:
+            pass
+
     log(
         f"SSH EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
         f"scheduled_start_time={start_time_human} cmd=\"{cmd}\"",
