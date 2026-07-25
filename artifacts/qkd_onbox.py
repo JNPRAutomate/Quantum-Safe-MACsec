@@ -2154,7 +2154,9 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {cli_start_time}")
 
     if commit:
-        cli_cmds.append("commit")
+        # Extract generation list from entries for commit comment
+        gen_list = ",".join(str(e.get("generation", "?")) for e in entries if e.get("generation") is not None)
+        cli_cmds.append(f"commit comment \"QKD: KEY ROTATION generations=[{gen_list}] ca={ca_name} keychain={keychain_name} iface={iface}\"")
     cli_cmds.append("exit")
     cmd = "; ".join(cli_cmds)
 
@@ -2238,7 +2240,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
         cli_cmds.append(f"delete security macsec interfaces {iface} connectivity-association")
 
     cli_cmds.append(f"set security macsec interfaces {iface} connectivity-association {ca_name}")
-    cli_cmds.append("commit")
+    cli_cmds.append(f"commit comment \"QKD: INTERFACE BIND iface={iface} ca={ca_name}\"")
     cli_cmds.append("exit")
     cmd = "; ".join(cli_cmds)
 
@@ -2888,7 +2890,7 @@ def bootstrap_keychain_link(link, force=False):
     cli_cmds = ["configure"]
     for k in range(max_installed_keys()):
         cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain} key {k}")
-    cli_cmds.append("commit")
+    cli_cmds.append(f"commit comment \"QKD: BOOTSTRAP CLEANUP ca={ca_name} keychain={keychain} iface={iface}\"")
     cli_cmds.append("exit")
     cleanup_cmd = "; ".join(cli_cmds)
     try:
