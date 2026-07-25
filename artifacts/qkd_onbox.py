@@ -2873,6 +2873,23 @@ def bootstrap_keychain_link(link, force=False):
             }
         )
 
+    # BOOTSTRAP PHASE 1: Clear any existing keys from keychain (start fresh)
+    log(f"KEYCHAIN BOOTSTRAP CLEANUP PHASE ca={ca_name} keychain={keychain} action=delete_all_existing_keys", "DEBUG", iface, "BOOTSTRAP")
+    cli_cmds = ["configure"]
+    for k in range(max_installed_keys()):
+        cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain} key {k}")
+    cli_cmds.append("commit")
+    cli_cmds.append("exit")
+    cleanup_cmd = "; ".join(cli_cmds)
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cleanup_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="ignore").strip()
+            log(f"KEYCHAIN BOOTSTRAP CLEANUP WARNING returncode={result.returncode} stderr_preview={stderr[:100]}", "WARNING", iface, "BOOTSTRAP")
+    except Exception as e:
+        log(f"KEYCHAIN BOOTSTRAP CLEANUP ERROR ca={ca_name} keychain={keychain} error={str(e)}", "ERROR", iface, "BOOTSTRAP")
+
+    # BOOTSTRAP PHASE 2: Install fresh bootstrap keys
     if len(bootstrap_records) > 1:
         if not install_keychain_batch(iface, bootstrap_records, ca_name, keychain, state=state, commit=True):
             log("KEYCHAIN BOOTSTRAP FAILED local install-key-batch", "ERROR", iface, "BOOTSTRAP")
