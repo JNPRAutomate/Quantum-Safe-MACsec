@@ -2001,14 +2001,14 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         log("KEYCHAIN INSTALL BATCH EMPTY", "ERROR", iface, "MACSEC")
         return False
 
-    if state is None:
-        state = {}
-
-    entries = assign_slots_for_entries(state, entries)
-
     cli_cmds = ["configure"]
-    # Step 1: Remove CA's reference to keychain (blocks MKA from using it during key swap)
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key")
     cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}")
 
     for entry in entries:
         key_id = entry.get("key_id")
@@ -2033,16 +2033,16 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cak = k[:32].hex()
         ckn = ckn_from_key_id(key_id)
 
-        try:
-            key_index = int(entry.get("slot"))
-        except Exception:
+        if generation is None:
             key_index = qkd_key_index_from_time()
+        else:
+            key_index = qkd_key_index_from_generation(generation)
 
         if not start_time:
             start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
 
         log(
-            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={start_time} key_id={key_id}",
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={format_start_time_display(start_time)} key_id={key_id}",
             "INFO",
             iface,
             "MACSEC",
@@ -2051,10 +2051,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
-        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {start_time}")
-
-    # Step 2: After all new keys are loaded, restore CA's reference to keychain
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {format_start_time_cli(start_time)}")
 
     if commit:
         cli_cmds.append("commit")
