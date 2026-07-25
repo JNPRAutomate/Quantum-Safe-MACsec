@@ -644,6 +644,64 @@ def purge_pending_older_than_generation(state, incoming_generation, iface=None, 
     return state
 
 
+def trim_installed_keys_preserve_active(state):
+    """Trim installed_keys while keeping active key metadata available.
+
+    We must retain the active-key entry so stale-pending logic can derive the
+    true active generation. Blind tail slicing can drop active entries when a
+    new batch is appended.
+    """
+    installed = state.get("installed_keys", [])
+    if not isinstance(installed, list):
+        state["installed_keys"] = []
+        return state
+
+    keep = KEYCHAIN_KEEP_LAST
+    if keep < 1:
+        keep = 1
+
+    active_key_id = state.get("active_key_id")
+    tail = installed[-keep:]
+    if not active_key_id:
+        state["installed_keys"] = tail
+        return state
+
+    has_active_in_tail = any(
+        isinstance(item, dict) and item.get("key_id") == active_key_id
+        for item in tail
+    )
+    if has_active_in_tail:
+        state["installed_keys"] = tail
+        return state
+
+    active_item = None
+    for item in reversed(installed):
+        if isinstance(item, dict) and item.get("key_id") == active_key_id:
+            active_item = dict(item)
+            break
+
+    if active_item is None:
+        state["installed_keys"] = tail
+        return state
+
+    if keep == 1:
+        state["installed_keys"] = [active_item]
+        return state
+
+    merged = [active_item]
+    for item in tail:
+        if not isinstance(item, dict):
+            continue
+        if item.get("key_id") == active_key_id:
+            continue
+        merged.append(item)
+        if len(merged) >= keep:
+            break
+
+    state["installed_keys"] = merged
+    return state
+
+
 def prune_stale_pending_keys(state, iface=None):
     state = normalize_pending_keys(state)
     pending = state.get("pending_keys", [])
@@ -688,10 +746,31 @@ def prune_stale_pending_keys(state, iface=None):
             )
         return state
 
-    try:
-        active_generation = int(state.get("generation") or 0)
-    except Exception:
-        active_generation = 0
+    # Use the generation of the actually active key, not the latest scheduled
+    # batch generation. Otherwise freshly queued pending keys can be purged
+    # immediately after batch install.
+    active_generation = None
+    active_key_id = state.get("active_key_id")
+    installed = state.get("installed_keys", [])
+    if active_key_id and isinstance(installed, list):
+        for item in installed:
+            if not isinstance(item, dict):
+                continue
+            if item.get("key_id") != active_key_id:
+                continue
+            generation = item.get("generation")
+            try:
+                if generation is not None:
+                    active_generation = int(generation)
+                    break
+            except Exception:
+                pass
+
+    if active_generation is None:
+        try:
+            active_generation = int(state.get("generation") or 0)
+        except Exception:
+            active_generation = 0
 
     kept = []
     dropped = []
@@ -1448,7 +1527,8 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         if item.get("key_id") == pending_key_id:
             item["status"] = "active"
             item["promoted_at"] = promotion_time
-    state["installed_keys"] = installed[-KEYCHAIN_KEEP_LAST:]
+    state["installed_keys"] = installed
+    state = trim_installed_keys_preserve_active(state)
 
     log(
         f"PENDING KEY PROMOTED active_key_id={state.get('active_key_id')} generation={state.get('generation')} "
@@ -1981,7 +2061,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     state["last_rotation"] = int(time.time())
     state.setdefault("installed_keys", [])
     state["installed_keys"].append({"generation": state.get("generation"), "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
-    state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
+    state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
@@ -2107,7 +2187,7 @@ def run_slave_install_key_batch(batch_b64, iface):
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
     state["last_rotation"] = int(time.time())
-    state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
+    state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
@@ -2295,7 +2375,7 @@ def bootstrap_keychain_link(link, force=False):
                 "status": "pending",
             }
         )
-    state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
+    state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
 
     if start_time_is_future(start_time):
