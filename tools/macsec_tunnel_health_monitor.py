@@ -394,23 +394,47 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
     if not json_data_str:
         return key_status
     
-    # Extract ONLY the JSON part from shell output
-    # Shell output may contain command echo, prompt, etc.
-    # Find the first { and last } to extract pure JSON
+    # Extract ONLY the first complete JSON object from shell output.
+    # Shell output may contain command echo, prompt, or even concatenated
+    # objects if an upstream command is malformed.
     json_data_str = json_data_str.strip()
-    
-    # Find start of JSON (first '{')
+
+    # Find start of JSON (first '{').
     start_idx = json_data_str.find('{')
     if start_idx == -1:
         return key_status
-    
-    # Find end of JSON (last '}')
-    end_idx = json_data_str.rfind('}')
+
+    # Brace-balanced scan to find the end of the first JSON object.
+    depth = 0
+    end_idx = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(json_data_str[start_idx:], start=start_idx):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end_idx = i
+                break
+
     if end_idx == -1 or end_idx < start_idx:
         return key_status
-    
-    # Extract pure JSON
-    json_data_str = json_data_str[start_idx:end_idx+1]
+
+    json_data_str = json_data_str[start_idx:end_idx + 1]
     
     try:
         data = json.loads(json_data_str)
