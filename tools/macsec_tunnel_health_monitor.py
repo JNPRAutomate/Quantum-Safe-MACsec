@@ -848,12 +848,15 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 if line.startswith('%') or line.startswith('ls:'):
                     continue
 
-                # Handle both one-path-per-line and unexpected multi-token lines.
-                candidates = [line]
-                if ' ' in line:
-                    candidates = [tok.strip() for tok in line.split() if tok.strip()]
+                # Robust token extraction from noisy shell output (echoed command,
+                # prompt fragments, or accidental multi-token lines).
+                candidates = re.findall(r'(?:/\S*qkd_db_\S*\.json|qkd_db_\S*\.json)', line)
+                if not candidates:
+                    candidates = [line]
 
                 for candidate in candidates:
+                    if '*' in candidate:
+                        continue
                     if 'qkd_db_' not in candidate or not candidate.endswith('.json'):
                         continue
 
@@ -900,13 +903,20 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
             # Keep per-link view (peer + interface) so multi-link devices like MX1
             # show one key state per pair (e.g. MX1-MX2 and MX1-MX6).
-            base = os.path.basename(jfile)
-            match = re.match(r"qkd_db_([^_]+)_(.+)\.json$", base)
+            base = os.path.basename(str(jfile).strip())
             peer_name = None
             iface_name = None
-            if match:
-                peer_name = match.group(1)
-                iface_name = match.group(2).replace("_", "/")
+
+            # Parse qkd_db_<PEER>_<IFACE>.json using explicit prefix/suffix.
+            if base.startswith("qkd_db_") and base.endswith(".json"):
+                core = base[len("qkd_db_"):-len(".json")]
+                if "_" in core:
+                    peer_name, iface_compact = core.split("_", 1)
+                    iface_name = iface_compact.replace("_", "/")
+
+            # Skip anonymous rows with no parsed key data to avoid UNKNOWN@UNKNOWN noise.
+            if not peer_name and not parsed.get('active_key_id') and not parsed.get('pending_key_id'):
+                continue
 
             aggregated_key_status['per_link'].append(
                 {
