@@ -167,6 +167,16 @@ Notes:
 - Bootstrap remains policy-driven and last-resort.
 - Defer behavior is now bounded: after prolonged stuck mismatch, runtime force-advances pending window.
 
+### Stall Type H: Local cache empty after forced advance, but peer mismatch still blocks rotation
+Description:
+- After forced pending advance, local runtime cache can become empty (`active_key_id=None`, `pending_key_id=None`).
+- If peer still reports active/pending state, the mismatch branch can keep skipping forever unless local-empty state is treated as recoverable.
+
+Mitigation implemented:
+- Added explicit branch: `PEER STATE MISMATCH BUT LOCAL CACHE EMPTY -> ALLOW ROTATION ...`
+- When local cache is empty and link is operational, runtime is allowed to proceed with a fresh rotation cycle instead of remaining trapped in mismatch skip.
+- This prevents the post-recovery deadlock where forced advance clears local pending state but peer still reports residual state.
+
 ## Compatibility Notes
 - Existing fields (`generation`, `pending_key_id`, `next_start_time`) are preserved for backward compatibility and observability.
 - Runtime decisions are no longer centered on those legacy fields.

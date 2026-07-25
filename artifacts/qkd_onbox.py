@@ -3054,39 +3054,63 @@ def run_master():
             peer_active = peer_state.get("active_key_id")
             local_pending = state.get("pending_key_id")
             peer_pending = peer_state.get("pending_key_id")
+            local_cache_empty = False
 
-            # Non-destructive default: mismatches are expected during async
-            # promotion windows. Keep link stable and let normal cycles heal.
-            log(
-                f"PEER STATE MISMATCH -> SKIP BOOTSTRAP local_active_key={local_active} peer_active_key={peer_active} "
-                f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
-                f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_state.get('next_start_time')}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-
-            force_on_mismatch = bool(qkd_policy().get("force_bootstrap_on_peer_mismatch", False))
-            if force_on_mismatch and not local_pending and not peer_pending and local_active and peer_active and local_active != peer_active:
+            # If local cache has already been drained by stuck recovery and the
+            # link is still operational, do not let peer mismatch block a fresh
+            # rotation cycle forever. Treat local state as empty cache and move
+            # forward with a new batch.
+            if not local_active and not local_pending:
+                local_cache_empty = True
                 log(
-                    "PEER STATE HARD MISMATCH -> CONTROLLED BOOTSTRAP (policy override)",
-                    "ERROR",
+                    f"PEER STATE MISMATCH BUT LOCAL CACHE EMPTY -> ALLOW ROTATION peer_active_key={peer_active} "
+                    f"peer_pending_key={peer_pending} peer_next_start_time={peer_state.get('next_start_time')}",
+                    "WARN",
                     iface,
                     "MASTER",
                 )
-                bootstrap_keychain_link(link, force=True)
-
-            if pending_stuck_exceeded:
-                state, evicted = evict_pending_head_for_recovery(
-                    state,
+                if peer_active and not state.get("last_seen_key_id"):
+                    state["last_seen_key_id"] = peer_active
+                if not save_db_state(peer, iface, state):
+                    log("STATE SAVE FAIL AFTER LOCAL CACHE EMPTY MISMATCH", "ERROR", iface, "MASTER")
+            else:
+                # Non-destructive default: mismatches are expected during async
+                # promotion windows. Keep link stable and let normal cycles heal.
+                log(
+                    f"PEER STATE MISMATCH -> SKIP BOOTSTRAP local_active_key={local_active} peer_active_key={peer_active} "
+                    f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
+                    f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_state.get('next_start_time')}",
+                    "WARN",
                     iface,
-                    reason="PENDING_STUCK_AND_PEER_MISMATCH",
-                    peer_state=peer_state,
-                    overdue_seconds=pending_stuck_overdue_seconds,
+                    "MASTER",
                 )
-                if evicted:
-                    save_db_state(peer, iface, state)
-            continue
+
+                force_on_mismatch = bool(qkd_policy().get("force_bootstrap_on_peer_mismatch", False))
+                if force_on_mismatch and not local_pending and not peer_pending and local_active and peer_active and local_active != peer_active:
+                    log(
+                        "PEER STATE HARD MISMATCH -> CONTROLLED BOOTSTRAP (policy override)",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    bootstrap_keychain_link(link, force=True)
+
+                if pending_stuck_exceeded:
+                    state, evicted = evict_pending_head_for_recovery(
+                        state,
+                        iface,
+                        reason="PENDING_STUCK_AND_PEER_MISMATCH",
+                        peer_state=peer_state,
+                        overdue_seconds=pending_stuck_overdue_seconds,
+                    )
+                    if evicted:
+                        save_db_state(peer, iface, state)
+                continue
+
+            if local_cache_empty:
+                # Local cache drained by recovery: continue into the normal
+                # rotation decision path below instead of short-circuiting.
+                pass
 
         if state.get("pending_key_id"):
             if pending_stuck_exceeded:
