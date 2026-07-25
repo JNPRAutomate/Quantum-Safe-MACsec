@@ -767,10 +767,16 @@ def prune_stale_pending_keys(state, iface=None):
                 pass
 
     if active_generation is None:
-        try:
-            active_generation = int(state.get("generation") or 0)
-        except Exception:
-            active_generation = 0
+        # Do not fall back to state['generation'] here: during batch install it
+        # can represent the newest scheduled generation, not the confirmed
+        # active one, and that would purge all fresh pending keys.
+        log(
+            "STALE PURGE SKIPPED unable_to_resolve_active_generation",
+            "WARN",
+            iface,
+            "STATE",
+        )
+        return state
 
     kept = []
     dropped = []
@@ -2736,7 +2742,7 @@ def run_master():
                     "installed_at": int(time.time()),
                 }
             )
-        state["installed_keys"] = state["installed_keys"][-KEYCHAIN_KEEP_LAST:]
+        state = trim_installed_keys_preserve_active(state)
         state = clear_kme_failure(peer, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
