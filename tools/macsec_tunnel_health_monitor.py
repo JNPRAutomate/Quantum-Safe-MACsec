@@ -66,6 +66,35 @@ def get_device_interfaces_from_qkd_inventory(shell):
     return set()
 
 
+def get_device_links_from_qkd_inventory(shell):
+    """Read peer/interface link tuples from device qkd_onbox_inventory.json.
+
+    Returns list of dicts: [{"peer": "MX2", "interface": "et-0/0/0"}, ...]
+    """
+    try:
+        inv_path = "/var/db/scripts/op/qkd_onbox_inventory.json"
+        inv_data = load_remote_qkd_json(shell, inv_path)
+        if not inv_data:
+            return []
+
+        links = []
+        raw_links = inv_data.get('links', [])
+        if isinstance(raw_links, list):
+            for item in raw_links:
+                if not isinstance(item, dict):
+                    continue
+                peer = item.get('peer') or item.get('peer_name')
+                iface = item.get('interface') or item.get('iface')
+                if peer and iface:
+                    links.append({
+                        'peer': str(peer),
+                        'interface': str(iface),
+                    })
+        return links
+    except Exception:
+        return []
+
+
 def load_remote_qkd_json(shell, path):
     """Load a JSON file from remote shell output safely."""
     output = send_shell_command(shell, f"file show {path} | no-more", verbose=False)
@@ -841,17 +870,45 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         
         # Get expected interfaces from device's qkd_onbox_inventory.json
         device_ifaces = get_device_interfaces_from_qkd_inventory(shell)
+        device_links = get_device_links_from_qkd_inventory(shell)
         
         # Get interface admin status (to detect admin-down vs operational-down)
         ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
         health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
         
         # Get key status from JSON state files in configured runtime state_dir.
+        # Primary method: explicit shell commands that read files under
+        # /var/home/<script_user> exactly as runtime writes them.
         qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
 
         json_files = []
+
+        # Primary deterministic source: build DB filenames from inventory links.
+        # qkd_onbox persists files as qkd_db_<PEER>_<IFACE_WITH_UNDERSCORES>.json
+        # under /var/home/<script_user> (or configured state_dir).
+        for link in device_links:
+            peer = (link.get('peer') or '').strip()
+            iface = (link.get('interface') or '').strip()
+            if not peer or not iface:
+                continue
+            compact_iface = iface.replace('/', '_')
+            base_name = f"qkd_db_{peer}_{compact_iface}.json"
+            for qkd_state_dir in qkd_state_dirs:
+                full_path = f"{qkd_state_dir}/{base_name}"
+                if full_path not in json_files:
+                    json_files.append(full_path)
+
+        # Fallback source: directory listing in case inventory is incomplete.
         for qkd_state_dir in qkd_state_dirs:
-            ls_output = send_shell_command(shell, f"file list {qkd_state_dir} | no-more", verbose=False)
+            ls_output = send_shell_command(
+                shell,
+                f"start shell command \"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null\"",
+                verbose=False,
+            )
+            # Fallback: Junos CLI listing.
+            if 'qkd_db_' not in (ls_output or ''):
+                ls_output = send_shell_command(shell, f"file list {qkd_state_dir} | no-more", verbose=False)
+
             for raw_line in (ls_output or "").split('\n'):
                 line = raw_line.strip()
                 if not line:
@@ -889,9 +946,25 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         }
 
         for jfile in json_files:
-            file_content = send_shell_command(shell, f"file show {jfile} | no-more", verbose=False)
+            file_content = send_shell_command(
+                shell,
+                f"start shell command \"cat {jfile}\"",
+                verbose=False,
+            )
             if '{' not in (file_content or ''):
-                file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
+                base_name = os.path.basename(jfile)
+                for qkd_state_dir in qkd_state_dirs:
+                    rel_try = send_shell_command(
+                        shell,
+                        f"start shell command \"cd {qkd_state_dir} && cat {base_name} 2>/dev/null\"",
+                        verbose=False,
+                    )
+                    if '{' in (rel_try or ''):
+                        file_content = rel_try
+                        break
+            # Fallback: Junos CLI file show.
+            if '{' not in (file_content or ''):
+                file_content = send_shell_command(shell, f"file show {jfile} | no-more", verbose=False)
             parsed = parse_key_status_via_python_json(
                 json_data_str=file_content,
                 all_json_str=file_content,
