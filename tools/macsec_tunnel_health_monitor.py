@@ -750,6 +750,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
     log_file = "/var/home/admin/logs/qkd_debug.log"
     
     health_data = {
+        'device_name': device_name,
         'macsec_status': {},
         'mka_status': {},
         'lacp_status': {},
@@ -954,6 +955,7 @@ def format_tunnel_status(health_data):
     macsec = health_data.get('macsec_status', {})
     mka = health_data.get('mka_status', {})
     keys = health_data.get('key_status', {})
+    local_device = health_data.get('device_name', 'LOCAL')
     lacp = health_data.get('lacp_status', {})
     mka_stats = health_data.get('mka_stats', {}).get('interfaces', {})
     
@@ -1003,8 +1005,8 @@ def format_tunnel_status(health_data):
     
     status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | {lacp_part}"
     
-    # For devices with multiple QKD links, show per-pair key state.
-    if len(per_link) > 1:
+    # Show per-pair key state when per-link files are available.
+    if per_link:
         pair_chunks = []
         for item in per_link:
             peer = item.get('peer') or 'UNK'
@@ -1013,7 +1015,7 @@ def format_tunnel_status(health_data):
             p = item.get('pending_key_id')
             a_short = a[:8] if a else 'None'
             p_short = p[:8] if p else 'None'
-            pair_chunks.append(f"{peer}@{iface}:{a_short}/{p_short}")
+            pair_chunks.append(f"{local_device}-{peer}@{iface}:{a_short}/{p_short}")
         status += f" | Pairs: {'; '.join(pair_chunks)}"
     else:
         # When active key is not yet promoted but pending exists, show explicit
