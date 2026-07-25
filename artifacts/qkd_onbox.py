@@ -2340,18 +2340,42 @@ def run_master():
             local_pending = state.get("pending_key_id")
 
             if local_active and not local_pending and (not peer_active) and peer_pending:
+                # Allow peer to lag transiently, but do not skip forever.
+                # After a grace window, fall back to controlled bootstrap.
                 lag_due = True
+                lag_overdue_seconds = None
                 if peer_next_start:
                     lag_due = start_time_is_due(peer_next_start)
-                if lag_due:
+                    peer_epoch = epoch_from_junos_start_time(peer_next_start)
+                    if peer_epoch is not None:
+                        lag_overdue_seconds = int(time.time()) - int(peer_epoch)
+
+                peer_lag_recovery_seconds = int(
+                    qkd_policy().get("peer_lag_recovery_seconds", max(180, rotation_interval_seconds() * 3))
+                )
+
+                if lag_due and (
+                    lag_overdue_seconds is None or lag_overdue_seconds <= peer_lag_recovery_seconds
+                ):
                     log(
                         f"PEER STATE MISMATCH BUT LOCAL HEALTHY -> SKIP BOOTSTRAP local_active_key={local_active} "
-                        f"peer_pending_key={peer_pending} peer_next_start_time={peer_next_start}",
-                        "ERROR",
+                        f"peer_pending_key={peer_pending} peer_next_start_time={peer_next_start} "
+                        f"lag_overdue_seconds={lag_overdue_seconds} peer_lag_recovery_seconds={peer_lag_recovery_seconds}",
+                        "WARN",
                         iface,
                         "MASTER",
                     )
                     continue
+
+                if lag_due:
+                    log(
+                        f"PEER STATE LAG EXCEEDED -> ALLOW CONTROLLED BOOTSTRAP local_active_key={local_active} "
+                        f"peer_pending_key={peer_pending} peer_next_start_time={peer_next_start} "
+                        f"lag_overdue_seconds={lag_overdue_seconds} peer_lag_recovery_seconds={peer_lag_recovery_seconds}",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
 
             log(
                 f"PEER STATE MISMATCH -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
