@@ -3318,66 +3318,80 @@ def run_master():
 
         batch_records = []
         enc_batch_start_ms = now_ms()
-        for offset in range(batch_size):
-            generation = first_generation + offset
-            start_time = scheduled_key_start_time_with_offset(link, offset)
-            customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
-            key_id, key = do_enc(link["peer_sae"])
-            if not key_id:
-                record_kme_failure(peer, iface, state, "ENC_FAILED")
-                log("ENC FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                batch_records = []
-                break
-            customer_event("ENC_KEY_OK", iface=iface, mode="MASTER", rotation=rotation_id_for(iface, generation, key_id), generation=generation, key_id=key_id)
-            batch_records.append(
-                {
-                    "generation": generation,
-                    "start_time": start_time,
-                    "key_id": key_id,
-                    "key": key,
-                }
-            )
+        try:
+            for offset in range(batch_size):
+                generation = first_generation + offset
+                start_time = scheduled_key_start_time_with_offset(link, offset)
+                customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
+                key_id, key = do_enc(link["peer_sae"])
+                if not key_id:
+                    record_kme_failure(peer, iface, state, "ENC_FAILED")
+                    log("ENC FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                    batch_records = []
+                    break
+                customer_event("ENC_KEY_OK", iface=iface, mode="MASTER", rotation=rotation_id_for(iface, generation, key_id), generation=generation, key_id=key_id)
+                batch_records.append(
+                    {
+                        "generation": generation,
+                        "start_time": start_time,
+                        "key_id": key_id,
+                        "key": key,
+                    }
+                )
+        except Exception as e:
+            log(f"BATCH ENC EXCEPTION {type(e).__name__}: {str(e)}", "ERROR", iface, "MASTER")
+            import traceback
+            log(f"TRACEBACK: {traceback.format_exc()}", "ERROR", iface, "MASTER")
+            batch_records = []
 
         if not batch_records:
-            log(f"BATCH RECORDS EMPTY -> SKIP INSTALL", "ERROR", iface, "MASTER")
+            log(f"BATCH RECORDS EMPTY -> SKIP INSTALL batch_records={batch_records}", "ERROR", iface, "MASTER")
             continue
 
         log(f"BATCH RECORDS READY count={len(batch_records)} batch_size={batch_size}", "INFO", iface, "MASTER")
 
-        peer_payload = []
-        for item in batch_records:
-            peer_payload.append(
-                {
-                    "generation": item["generation"],
-                    "start_time": item["start_time"],
-                    "key_id": item["key_id"],
-                }
-            )
+        try:
+            peer_payload = []
+            for item in batch_records:
+                peer_payload.append(
+                    {
+                        "generation": item["generation"],
+                        "start_time": item["start_time"],
+                        "key_id": item["key_id"],
+                    }
+                )
 
-        local_install_start_ms = now_ms()
-        log(f"PRE_INSTALL_CHECK batch_size={batch_size} ca={ca_name} keychain={keychain}", "DEBUG", iface, "MASTER")
-        
-        if batch_size > 1:
-            log(f"BATCH INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
-            install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, state=state, commit=True)
-            fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
-            fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
-        else:
-            log(f"SINGLE INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
-            item = batch_records[0]
-            install_ok = install_keychain_key(
-                iface,
-                item["key_id"],
-                item["key"],
-                ca_name,
-                keychain,
-                state=state,
-                generation=item["generation"],
-                start_time=item["start_time"],
-                commit=True,
-            )
-            fail_reason = "LOCAL_INSTALL_KEY_FAILED"
-            fail_log = "LOCAL INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY"
+            local_install_start_ms = now_ms()
+            log(f"PRE_INSTALL_CHECK batch_size={batch_size} ca={ca_name} keychain={keychain}", "DEBUG", iface, "MASTER")
+            
+            if batch_size > 1:
+                log(f"BATCH INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
+                install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, state=state, commit=True)
+                fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
+                fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
+            else:
+                log(f"SINGLE INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
+                item = batch_records[0]
+                install_ok = install_keychain_key(
+                    iface,
+                    item["key_id"],
+                    item["key"],
+                    ca_name,
+                    keychain,
+                    state=state,
+                    generation=item["generation"],
+                    start_time=item["start_time"],
+                    commit=True,
+                )
+                fail_reason = "LOCAL_INSTALL_KEY_FAILED"
+                fail_log = "LOCAL INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY"
+
+        except Exception as e:
+            log(f"BATCH INSTALL EXCEPTION {type(e).__name__}: {str(e)}", "ERROR", iface, "MASTER")
+            import traceback
+            log(f"TRACEBACK: {traceback.format_exc()}", "ERROR", iface, "MASTER")
+            record_kme_failure(peer, iface, state, "LOCAL_INSTALL_EXCEPTION")
+            continue
 
         if not install_ok:
             record_kme_failure(peer, iface, state, fail_reason)
