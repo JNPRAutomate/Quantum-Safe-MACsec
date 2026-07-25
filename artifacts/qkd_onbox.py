@@ -2329,6 +2329,30 @@ def run_master():
             continue
 
         if not compare_peer_keychain_state(state, peer_state):
+            # Guard-rail: avoid destructive local re-bootstrap when local state
+            # is already healthy and peer is merely lagging in promotion.
+            # In this case, keep local active key stable and let peer catch up
+            # through subsequent status/promotion cycles.
+            peer_active = peer_state.get("active_key_id")
+            peer_pending = peer_state.get("pending_key_id")
+            peer_next_start = peer_state.get("next_start_time")
+            local_active = state.get("active_key_id")
+            local_pending = state.get("pending_key_id")
+
+            if local_active and not local_pending and (not peer_active) and peer_pending:
+                lag_due = True
+                if peer_next_start:
+                    lag_due = start_time_is_due(peer_next_start)
+                if lag_due:
+                    log(
+                        f"PEER STATE MISMATCH BUT LOCAL HEALTHY -> SKIP BOOTSTRAP local_active_key={local_active} "
+                        f"peer_pending_key={peer_pending} peer_next_start_time={peer_next_start}",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
+
             log(
                 f"PEER STATE MISMATCH -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} "
