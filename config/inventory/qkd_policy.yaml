@@ -3,10 +3,14 @@ qkd_policy:
   batch_enabled: true
   bootstrap_with_fallback_key: true
   bootstrap_fallback_keys: 1
-  interval_seconds: 60
+  interval_seconds: 200
 
-  key_batch_size: 5
+  key_batch_size: 3
   max_installed_keys: 5
+  pending_confirm_grace_seconds: 60
+  pending_stuck_recovery_seconds: 600
+  pending_recovery_window_seconds: 600
+  pending_stuck_aggressive_evict_seconds: 300
 
   key_ttl_seconds: 0
 
