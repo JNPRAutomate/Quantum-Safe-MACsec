@@ -1238,7 +1238,7 @@ def save_db_state(peer, iface, state):
         log(
             f"STATE SAVED file={path} generation={state.get('generation')} ca={state.get('ca_name')} "
             f"keychain={state.get('keychain_name')} active_key_id={state.get('active_key_id')} "
-            f"pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')}",
+            f"pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
             "INFO",
             iface,
             "STATE"
@@ -1300,6 +1300,16 @@ def format_start_time_cli(start_time):
         return start_time
     # Add :00 seconds
     return f"{start_time}:00"
+
+
+def format_next_start_time_with_millis(start_time_str):
+    """Format next_start_time as YYYY-MM-DD HH:MM:SS with current seconds."""
+    if not start_time_str:
+        return "None"
+    current_seconds = int(time.time()) % 60
+    # start_time_str format: "2026-07-25.14:53" → "2026-07-25 14:53:SS"
+    formatted = start_time_str.replace(".", " ")
+    return f"{formatted}:{current_seconds:02d}"
 
 
 def start_time_is_future(start_time, grace_seconds=0):
@@ -3047,7 +3057,7 @@ def run_master():
             continue
 
         if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
-            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
+            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
             continue
 
         pending_stuck_exceeded = False
@@ -3060,7 +3070,7 @@ def run_master():
             confirm_grace_seconds = pending_confirm_grace_seconds()
             if pending_epoch is not None and int(time.time()) < (int(pending_epoch) + confirm_grace_seconds):
                 log(
-                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
+                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
                     f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={confirm_grace_seconds}",
                     "INFO",
                     iface,
@@ -3091,7 +3101,7 @@ def run_master():
                     continue
 
                 log(
-                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
+                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
                     f"reason=PENDING_AWAITING_MKA_CONFIRMATION",
                     "WARN",
                     iface,
@@ -3103,7 +3113,7 @@ def run_master():
             overdue_seconds = now_epoch - confirm_deadline
             if overdue_seconds <= stuck_recovery_seconds:
                 log(
-                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
+                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
                     f"reason=PENDING_AWAITING_MKA_CONFIRMATION overdue_seconds={max(0, overdue_seconds)} "
                     f"pending_stuck_recovery_seconds={stuck_recovery_seconds}",
                     "WARN",
@@ -3364,7 +3374,7 @@ def run_master():
 
         log(f"ROTATION CHECK check3_passed=True (rekey enabled)", "DEBUG", iface, "MASTER")
 
-        log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')}", "INFO", iface, "MASTER")
+        log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
 
         batch_size = effective_batch
         first_generation = next_generation(state)
