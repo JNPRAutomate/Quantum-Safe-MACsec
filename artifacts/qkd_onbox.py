@@ -2007,12 +2007,9 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
     entries = assign_slots_for_entries(state, entries)
 
     cli_cmds = ["configure"]
-    # Keep CA wiring stable; update keychain entries without rebuilding CA each cycle.
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}")
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}")
+    # Only modify keychain entries, NOT the CA or interface config
+    # CA config must be pre-established by bootstrap_keychain_link or initial setup
+    cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name}")
 
     for entry in entries:
         key_id = entry.get("key_id")
