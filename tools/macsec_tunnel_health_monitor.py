@@ -443,14 +443,44 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
         # Fallback for active key: derive from installed_keys if explicit
         # active_key_id is missing/None in some state transitions.
         if not key_status['active_key_id'] and isinstance(data.get('installed_keys'), list):
-            active_entries = [
+            installed_entries = [
                 item for item in data['installed_keys']
-                if isinstance(item, dict) and item.get('status') == 'active' and item.get('key_id')
+                if isinstance(item, dict) and item.get('key_id')
             ]
+
+            def _safe_generation(entry):
+                try:
+                    return int(entry.get('generation', 0) or 0)
+                except Exception:
+                    return 0
+
+            # Preferred: explicit active/current/inuse status.
+            active_entries = [
+                item for item in installed_entries
+                if str(item.get('status', '')).lower() in ('active', 'current', 'inuse')
+            ]
+
+            selected = None
             if active_entries:
-                # Prefer highest generation active key.
-                active_entries.sort(key=lambda x: int(x.get('generation', 0)))
-                key_status['active_key_id'] = active_entries[-1].get('key_id')
+                active_entries.sort(key=_safe_generation)
+                selected = active_entries[-1]
+            else:
+                # Legacy fallback: state generation points to current active key.
+                try:
+                    current_gen = int(data.get('generation', 0) or 0)
+                except Exception:
+                    current_gen = 0
+                gen_matches = [item for item in installed_entries if _safe_generation(item) == current_gen]
+                if gen_matches:
+                    gen_matches.sort(key=_safe_generation)
+                    selected = gen_matches[-1]
+                elif installed_entries:
+                    # Last-resort fallback for legacy states with no status fields.
+                    installed_entries.sort(key=_safe_generation)
+                    selected = installed_entries[-1]
+
+            if selected and selected.get('key_id'):
+                key_status['active_key_id'] = selected.get('key_id')
                 key_status['active_count'] = 1
 
         # Pending key fallback from queue head if pending_key_id field is absent.
@@ -458,6 +488,8 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
             head = data['pending_keys'][0]
             if isinstance(head, dict) and head.get('key_id'):
                 key_status['pending_key_id'] = head.get('key_id')
+            elif isinstance(head, str) and head:
+                key_status['pending_key_id'] = head
 
         # Stale must be explicit. Do not mark every pending key as stale.
         if isinstance(data.get('pending_stale_count'), int):
@@ -777,15 +809,26 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
         json_files = []
         for qkd_state_dir in qkd_state_dirs:
-            ls_output = send_shell_command(shell, f"ls -la {qkd_state_dir}/", verbose=False)
-            for line in ls_output.split('\n'):
-                if '.json' in line and 'qkd_db_' in line:
-                    parts = line.split()
-                    if len(parts) >= 9:
-                        filename = parts[-1]
-                        full_path = f"{qkd_state_dir}/{filename}"
-                        if full_path not in json_files:
-                            json_files.append(full_path)
+            # Use shell glob output directly: more robust than parsing "ls -la" columns.
+            ls_output = send_shell_command(shell, f"ls {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
+            for raw_line in ls_output.split('\n'):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith('%') or line.startswith('ls:'):
+                    continue
+                if 'qkd_db_' not in line or not line.endswith('.json'):
+                    continue
+
+                full_path = line
+                if not full_path.startswith('/'):
+                    full_path = f"{qkd_state_dir}/{full_path}"
+
+                if full_path not in json_files:
+                    json_files.append(full_path)
+
+        if verbose:
+            print(f"[DEBUG] qkd_db files discovered: {json_files}")
 
         aggregated_key_status = {
             'active_key_id': None,
@@ -888,7 +931,12 @@ def format_tunnel_status(health_data):
     
     status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | {lacp_part}"
     
-    status += f" | Active: {active_key_short}({active_count}) | Pending: {pending_key_short}({pending_count})"
+    # When active key is not yet promoted but pending exists, show explicit
+    # bootstrap/pending state instead of misleading "None(0)".
+    if (not active_key) and pending_key:
+        status += f" | Active: bootstrap/pending | Pending: {pending_key_short}({pending_count})"
+    else:
+        status += f" | Active: {active_key_short}({active_count}) | Pending: {pending_key_short}({pending_count})"
     
     if pending_stale > 0:
         status += f" | ⚠️  STALE: {pending_stale}"
