@@ -1508,13 +1508,14 @@ def record_kme_failure(peer, iface, state, reason):
 def clear_kme_failure(peer, iface, state):
     state = ensure_health_state(state)
     was_degraded = state["health"].get("degraded", False)
+    was_declared_down = state["health"].get("declared_down", False)
     state["health"]["kme_fail_count"] = 0
     state["health"]["kme_unavailable_since"] = 0
     state["health"]["last_kme_error"] = None
     state["health"]["degraded"] = False
     state["health"]["declared_down"] = False
-    if was_degraded:
-        log("KME HEALTH RESTORED", "INFO", iface, "HEALTH")
+    if was_degraded or was_declared_down:
+        log("KME HEALTH RESTORED declared_down reset", "INFO", iface, "HEALTH")
     return state
 
 
@@ -3102,21 +3103,21 @@ def run_master():
             continue
 
         if link_in_kme_hold(state, KME_FAIL_THRESHOLD, KME_HOLD_DOWN_SECONDS):
+            fail_count = int(state['health'].get('kme_fail_count', 0))
             log(
                 f"KME HOLD ACTIVE - keep current MACsec ca={ca_name} active_key_id={state.get('active_key_id')} "
-                f"fail_count={state['health'].get('kme_fail_count')} unavailable_since={state['health'].get('kme_unavailable_since')}",
+                f"fail_count={fail_count} unavailable_since={state['health'].get('kme_unavailable_since')}",
                 "ERROR",
                 iface,
                 "MASTER",
             )
-            
-            # RECOVERY: If failure is recent (<15min), allow ONE recovery attempt
-            now = int(time.time())
-            unavailable_since = int(state['health'].get('kme_unavailable_since', 0))
-            hold_age_seconds = now - unavailable_since
-            if hold_age_seconds < 900:  # 15 minutes (matches KME_HOLD_DOWN_SECONDS)
-                log(f"KME RECOVERY: Hold is recent ({hold_age_seconds}s) - skip hold and try install", "INFO", iface, "MASTER")
-                # Fall through to rotation logic instead of continue
+            # Only hard-block if fail_count has reached the threshold.
+            # Low fail_count (e.g. 1) means a transient error - clear and proceed.
+            if fail_count < KME_FAIL_THRESHOLD:
+                log(f"KME HOLD fail_count={fail_count} below threshold={KME_FAIL_THRESHOLD} -> clear and proceed", "INFO", iface, "MASTER")
+                state = clear_kme_failure(peer, iface, state)
+                save_db_state(peer, iface, state)
+                # Fall through to rotation logic
             else:
                 if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
                     log("KME HOLD ACTIVE BUT MACSEC NOT INUSE -> KEEP HOLD", "ERROR", iface, "MASTER")
