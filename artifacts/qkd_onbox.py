@@ -911,7 +911,100 @@ def ensure_health_state(state):
     health.setdefault("last_kme_error", None)
     health.setdefault("degraded", False)
     health.setdefault("declared_down", False)
+    health.setdefault("last_pending_stuck_key_id", None)
+    health.setdefault("last_pending_stuck_evict_at", 0)
+    health.setdefault("pending_stuck_evict_count", 0)
     return state
+
+
+def evict_pending_head_for_recovery(state, iface, reason, peer_state=None):
+    """Drop the pending head when it is provably stuck and unblock rotation.
+
+    This is intentionally non-destructive: CA/keychain stay untouched; we only
+    clear stale scheduling head from local runtime cache.
+    """
+    state = ensure_health_state(state)
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if not pending:
+        return state, False
+
+    head = pending[0]
+    pending_key_id = head.get("key_id")
+    pending_start_time = head.get("start_time")
+
+    if not pending_key_id:
+        return state, False
+
+    now_epoch = int(time.time())
+    health = state.get("health", {})
+    last_key = health.get("last_pending_stuck_key_id")
+    try:
+        last_evict_at = int(health.get("last_pending_stuck_evict_at", 0))
+    except Exception:
+        last_evict_at = 0
+
+    cooldown_seconds = int(
+        qkd_policy().get(
+            "pending_stuck_evict_cooldown_seconds",
+            max(120, rotation_interval_seconds() * 2),
+        )
+    )
+
+    if pending_key_id == last_key and (now_epoch - last_evict_at) < cooldown_seconds:
+        log(
+            f"PENDING STUCK RECOVERY COOLDOWN -> KEEP HEAD pending_key_id={pending_key_id} "
+            f"cooldown_seconds={cooldown_seconds} elapsed_seconds={now_epoch - last_evict_at}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        return state, False
+
+    # Only evict automatically when peer is either aligned on the same stuck
+    # head or unavailable as a cache authority for pending convergence.
+    peer_pending = None
+    if isinstance(peer_state, dict):
+        peer_pending = peer_state.get("pending_key_id")
+
+    if peer_state is not None and peer_pending and peer_pending != pending_key_id:
+        log(
+            f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
+            f"reason={reason}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        return state, False
+
+    dropped = pending.pop(0)
+    state["pending_keys"] = pending
+    state = sync_pending_legacy_fields(state)
+
+    for item in state.get("installed_keys", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("key_id") == pending_key_id and item.get("status") == "pending":
+            item["status"] = "stale-pending-evicted"
+
+    health["last_pending_stuck_key_id"] = pending_key_id
+    health["last_pending_stuck_evict_at"] = now_epoch
+    try:
+        health["pending_stuck_evict_count"] = int(health.get("pending_stuck_evict_count", 0)) + 1
+    except Exception:
+        health["pending_stuck_evict_count"] = 1
+    health["last_kme_error"] = f"PENDING_STUCK_EVICTED:{pending_key_id}"
+    state["health"] = health
+    state = normalize_slot_ring(state)
+
+    log(
+        f"PENDING STUCK RECOVERED -> EVICT HEAD pending_key_id={pending_key_id} start_time={pending_start_time} "
+        f"reason={reason} dropped_generation={dropped.get('generation')}",
+        "ERROR",
+        iface,
+        "MASTER",
+    )
+    return state, True
 
 
 def load_link_state(peer, iface, link):
@@ -2803,6 +2896,9 @@ def run_master():
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
             continue
 
+        pending_stuck_exceeded = False
+        pending_stuck_overdue_seconds = None
+
         # When pending key start-time is due, allow a short grace window for
         # MKA confirmation to avoid premature peer-mismatch bootstrap loops.
         if state.get("pending_key_id") and state.get("next_start_time"):
@@ -2829,6 +2925,16 @@ def run_master():
 
             now_epoch = int(time.time())
             if pending_epoch is None:
+                state, evicted = evict_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason="INVALID_PENDING_START_TIME",
+                    peer_state=None,
+                )
+                if evicted:
+                    save_db_state(peer, iface, state)
+                    continue
+
                 log(
                     f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
                     f"reason=PENDING_AWAITING_MKA_CONFIRMATION",
@@ -2859,6 +2965,8 @@ def run_master():
                 iface,
                 "MASTER",
             )
+            pending_stuck_exceeded = True
+            pending_stuck_overdue_seconds = overdue_seconds
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
@@ -2890,6 +2998,15 @@ def run_master():
         peer_state = get_peer_status(link, iface)
         if peer_state is None:
             log("PEER STATUS unavailable -> SKIP ROTATION", "ERROR", iface, "MASTER")
+            if pending_stuck_exceeded:
+                state, evicted = evict_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason=f"PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE overdue_seconds={pending_stuck_overdue_seconds}",
+                    peer_state=None,
+                )
+                if evicted:
+                    save_db_state(peer, iface, state)
             continue
 
         if not keychain_state_valid(peer_state):
@@ -2900,6 +3017,15 @@ def run_master():
                 iface,
                 "MASTER",
             )
+            if pending_stuck_exceeded:
+                state, evicted = evict_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason=f"PENDING_STUCK_AND_PEER_STATE_INVALID overdue_seconds={pending_stuck_overdue_seconds}",
+                    peer_state=peer_state,
+                )
+                if evicted:
+                    save_db_state(peer, iface, state)
             continue
 
         if not compare_peer_keychain_state(state, peer_state):
@@ -2928,9 +3054,30 @@ def run_master():
                     "MASTER",
                 )
                 bootstrap_keychain_link(link, force=True)
+
+            if pending_stuck_exceeded:
+                state, evicted = evict_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason=f"PENDING_STUCK_AND_PEER_MISMATCH overdue_seconds={pending_stuck_overdue_seconds}",
+                    peer_state=peer_state,
+                )
+                if evicted:
+                    save_db_state(peer, iface, state)
             continue
 
         if state.get("pending_key_id"):
+            if pending_stuck_exceeded:
+                state, evicted = evict_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason=f"PENDING_STUCK_CONFIRMED_BY_PEER_STATUS overdue_seconds={pending_stuck_overdue_seconds}",
+                    peer_state=peer_state,
+                )
+                if evicted:
+                    save_db_state(peer, iface, state)
+                    continue
+
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
             continue
 

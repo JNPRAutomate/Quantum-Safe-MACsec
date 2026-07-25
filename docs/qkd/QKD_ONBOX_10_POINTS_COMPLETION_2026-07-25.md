@@ -87,6 +87,82 @@ New/updated log patterns:
 - `PEER STATE INVALID -> SKIP ROTATION ...`
 - `LOCAL CONFIG INVALID -> SKIP BOOTSTRAP (policy default)`
 
+## Stall Types Detected in Runtime and Their Handling
+
+### Stall Type A: Symmetric pending-head deadlock (both peers stuck on same pending key)
+Description:
+- Both nodes keep reporting `PENDING KEY NOT YET CONFIRMED` for the same pending key.
+- MKA stays secured/inuse but `ckn_match=False` for that pending key.
+- Runtime repeatedly logs `PENDING STUCK EXCEEDED -> ALLOW RECOVERY` and then falls back to skip.
+
+Mitigation implemented:
+- Added active non-destructive recovery: pending-head eviction after threshold.
+- Helper: `evict_pending_head_for_recovery(...)`.
+- Safety: cooldown and peer-aware checks to avoid oscillation.
+
+Key log markers:
+- `PENDING STUCK RECOVERED -> EVICT HEAD ...`
+- `PENDING STUCK RECOVERY COOLDOWN -> KEEP HEAD ...`
+
+### Stall Type B: Invalid/unparseable pending start-time wedge
+Description:
+- Pending exists but `next_start_time` cannot be parsed.
+- Normal overdue progression cannot be computed; queue can stall indefinitely.
+
+Mitigation implemented:
+- Recovery path now tries controlled pending-head eviction for invalid start-time.
+- Reason tag: `INVALID_PENDING_START_TIME`.
+
+### Stall Type C: Pending stuck + peer status unavailable
+Description:
+- Pending exceeds stuck threshold while peer status cannot be fetched.
+- Previous behavior could loop without making forward progress.
+
+Mitigation implemented:
+- If stuck threshold is exceeded and peer status is unavailable, runtime can evict pending head locally (non-destructive) and proceed.
+- Reason tag: `PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE`.
+
+### Stall Type D: Pending stuck + peer state invalid
+Description:
+- Pending exceeds stuck threshold while peer status is reachable but not valid.
+- Runtime may remain in skip loops with no convergence.
+
+Mitigation implemented:
+- Added stuck recovery action with peer-invalid context.
+- Reason tag: `PENDING_STUCK_AND_PEER_STATE_INVALID`.
+
+### Stall Type E: Pending stuck + peer mismatch drift
+Description:
+- Peer status is valid but pending/active state mismatch persists.
+- Non-destructive mismatch policy avoids bootstrap, but can still stall if no active recovery is performed.
+
+Mitigation implemented:
+- Added stuck recovery action even inside mismatch branch.
+- Reason tag: `PENDING_STUCK_AND_PEER_MISMATCH`.
+
+### Stall Type F: Pending stuck with peer-confirmed same head but no MKA confirm
+Description:
+- Both peers agree on pending head, but MKA never confirms activation.
+- System can loop forever in `PENDING_KEY_NOT_CONFIRMED` without intervention.
+
+Mitigation implemented:
+- Added explicit stuck recovery action before final skip in confirmed-peer-status branch.
+- Reason tag: `PENDING_STUCK_CONFIRMED_BY_PEER_STATUS`.
+
+### Stall Type G: Recovery thrash risk after eviction
+Description:
+- Repeated immediate evictions of the same key can create oscillation.
+
+Mitigation implemented:
+- Added eviction cooldown with health tracking fields:
+	- `last_pending_stuck_key_id`
+	- `last_pending_stuck_evict_at`
+	- `pending_stuck_evict_count`
+
+Notes:
+- Recovery is non-destructive by design (no CA teardown).
+- Bootstrap remains policy-driven and last-resort.
+
 ## Compatibility Notes
 - Existing fields (`generation`, `pending_key_id`, `next_start_time`) are preserved for backward compatibility and observability.
 - Runtime decisions are no longer centered on those legacy fields.
