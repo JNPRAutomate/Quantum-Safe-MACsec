@@ -820,28 +820,50 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
         health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
         
-        # Get key status from JSON state files (FIXED: was reading log artifacts)
-        shell.send("start shell\n")
-        time.sleep(0.3)
-        output = ""
-        while "%" not in output:
-            try:
-                chunk = shell.recv(1024).decode()
-                output += chunk
-            except socket.timeout:
-                break
-            except Exception:
-                break
-            time.sleep(0.1)
+        # Get key status from JSON state files.
+        # Try to enter Unix shell first, but keep a CLI fallback for devices
+        # where `start shell` is restricted or prompt detection is inconsistent.
+        in_unix_shell = False
+        try:
+            shell.send("start shell\n")
+            time.sleep(0.4)
+            probe = ""
+            for _ in range(30):
+                try:
+                    if hasattr(shell, "recv_ready") and not shell.recv_ready():
+                        time.sleep(0.1)
+                        continue
+                    chunk = shell.recv(1024).decode(errors="ignore")
+                    if chunk:
+                        probe += chunk
+                        stripped = probe.rstrip()
+                        if stripped.endswith("%") or stripped.endswith("$") or stripped.endswith("#"):
+                            in_unix_shell = True
+                            break
+                except socket.timeout:
+                    break
+                except Exception:
+                    break
+            if not in_unix_shell:
+                pwd_out = send_shell_command(shell, "pwd", verbose=False)
+                if "/var/home" in (pwd_out or "") or "/root" in (pwd_out or ""):
+                    in_unix_shell = True
+        except Exception:
+            in_unix_shell = False
         
         # Get key status from JSON state files in configured runtime state_dir.
         qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
 
         json_files = []
         for qkd_state_dir in qkd_state_dirs:
-            # Force one-file-per-line output. Plain `ls` may print columns,
-            # which can concatenate multiple paths on one line and break JSON parsing.
-            ls_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
+            if in_unix_shell:
+                # Force one-file-per-line output. Plain `ls` may print columns,
+                # which can concatenate multiple paths on one line and break JSON parsing.
+                ls_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
+            else:
+                # CLI fallback (works when start shell is not entered):
+                # list files under directory and keep only qkd_db_*.json rows.
+                ls_output = send_shell_command(shell, f"file list {qkd_state_dir} | match qkd_db_", verbose=False)
             for raw_line in ls_output.split('\n'):
                 line = raw_line.strip()
                 if not line:
@@ -858,8 +880,12 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                 for candidate in candidates:
                     if '*' in candidate:
                         continue
-                    if 'qkd_db_' not in candidate or not candidate.endswith('.json'):
+                    if 'qkd_db_' not in candidate or '.json' not in candidate:
                         continue
+
+                    # Trim possible trailing punctuation/noise after .json
+                    json_pos = candidate.find('.json')
+                    candidate = candidate[:json_pos + 5]
 
                     full_path = candidate
                     if not full_path.startswith('/'):
@@ -884,7 +910,10 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         }
 
         for jfile in json_files:
-            file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
+            if in_unix_shell:
+                file_content = send_shell_command(shell, f"cat {jfile}", verbose=False)
+            else:
+                file_content = send_shell_command(shell, f"file show {jfile}", verbose=False)
             parsed = parse_key_status_via_python_json(
                 json_data_str=file_content,
                 all_json_str=file_content,
