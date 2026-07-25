@@ -1001,6 +1001,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
 
     dropped = pending.pop(0)
     state["pending_keys"] = pending
+    state["pending_stuck_at"] = None  # Clear stuck timer when evicted
     state = sync_pending_legacy_fields(state)
 
     for item in state.get("installed_keys", []):
@@ -1859,6 +1860,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         state["active_generation"] = int(pending_generation)
     state["active_confirmed_at"] = promotion_time
     state["pending_keys"] = pending_keys[1:]
+    state["pending_stuck_at"] = None  # Clear stuck timer when promoted
     state = sync_pending_legacy_fields(state)
 
     installed = state.get("installed_keys", [])
@@ -3005,6 +3007,9 @@ def run_master():
             )
             pending_stuck_exceeded = True
             pending_stuck_overdue_seconds = overdue_seconds
+            # Track when pending first became stuck for aggressive evict threshold
+            if not state.get("pending_stuck_at"):
+                state["pending_stuck_at"] = int(time.time())
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
@@ -3067,6 +3072,30 @@ def run_master():
                 if evicted:
                     save_db_state(peer, iface, state)
             continue
+
+        # AGGRESSIVE EVICT: If pending is stuck for >3min, evict immediately to unblock rotation
+        if state.get("pending_key_id") and pending_stuck_exceeded:
+            pending_stuck_start = state.get("pending_stuck_at")
+            if pending_stuck_start:
+                stuck_duration_seconds = int(time.time()) - pending_stuck_start
+                aggressive_evict_threshold = int(qkd_policy().get("pending_stuck_aggressive_evict_seconds", 180))
+                if stuck_duration_seconds > aggressive_evict_threshold:
+                    log(
+                        f"AGGRESSIVE EVICT PENDING -> UNBLOCK ROTATION pending_key_id={state.get('pending_key_id')} "
+                        f"stuck_duration={stuck_duration_seconds}s threshold={aggressive_evict_threshold}s",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    state, evicted = evict_pending_head_for_recovery(
+                        state,
+                        iface,
+                        reason="PENDING_STUCK_AGGRESSIVE_EVICT",
+                        peer_state=peer_state,
+                        overdue_seconds=stuck_duration_seconds,
+                    )
+                    if evicted:
+                        save_db_state(peer, iface, state)
 
         if not compare_peer_keychain_state(state, peer_state):
             local_active = state.get("active_key_id")
