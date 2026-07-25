@@ -64,7 +64,8 @@ def build_device_config(device_name, device, platform, base, topology):
 
     def fallback_cak_hex(ca_name):
         seed = f"{ca_name}:fallback:cak"
-        return hashlib.sha256(seed.encode()).hexdigest() + hashlib.sha256((seed + ":2").encode()).hexdigest()
+        # Junos enforces max length 64 for this field.
+        return hashlib.sha256(seed.encode()).hexdigest()
 
     def bootstrap_start_time():
         return "2026-01-01.00:01"
