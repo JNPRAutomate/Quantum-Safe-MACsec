@@ -3556,8 +3556,24 @@ def run_master():
             log(f"POST-ROTATION PEER STATE INVALID local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}", "ERROR", iface, "MASTER")
             continue
         if not compare_peer_keychain_state(state, peer_state):
-            log(f"POST-ROTATION PEER STATE MISMATCH local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} peer_keychain={peer_state.get('keychain_name')} local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}", "ERROR", iface, "MASTER")
-            continue
+            # Check if this is a transient mismatch: same pending key with future start-time
+            local_pending_key = state.get("pending_key_id")
+            peer_pending_key = peer_state.get("pending_key_id")
+            local_pending_start = state.get("next_start_time")
+            peer_pending_start = peer_state.get("next_start_time")
+            is_transient_mismatch = (
+                local_pending_key 
+                and peer_pending_key 
+                and local_pending_key == peer_pending_key
+                and local_pending_start == peer_pending_start
+                and start_time_is_future(local_pending_start)
+            )
+            
+            if is_transient_mismatch:
+                log(f"POST-ROTATION PEER STATE TRANSIENT MISMATCH (pending key aligned, tolerating) local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} pending_key={local_pending_key} pending_start={local_pending_start}", "INFO", iface, "MASTER")
+            else:
+                log(f"POST-ROTATION PEER STATE MISMATCH local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} peer_keychain={peer_state.get('keychain_name')} local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}", "ERROR", iface, "MASTER")
+                continue
 
         log(
             f"KEYCHAIN ROTATION BATCH DONE rotation={rotation} ca={ca_name} keychain={keychain} generation={state.get('generation')} pending_key_id={state.get('pending_key_id')} "
