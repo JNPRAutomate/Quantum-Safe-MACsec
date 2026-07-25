@@ -809,23 +809,31 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
         json_files = []
         for qkd_state_dir in qkd_state_dirs:
-            # Use shell glob output directly: more robust than parsing "ls -la" columns.
-            ls_output = send_shell_command(shell, f"ls {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
+            # Force one-file-per-line output. Plain `ls` may print columns,
+            # which can concatenate multiple paths on one line and break JSON parsing.
+            ls_output = send_shell_command(shell, f"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null", verbose=False)
             for raw_line in ls_output.split('\n'):
                 line = raw_line.strip()
                 if not line:
                     continue
                 if line.startswith('%') or line.startswith('ls:'):
                     continue
-                if 'qkd_db_' not in line or not line.endswith('.json'):
-                    continue
 
-                full_path = line
-                if not full_path.startswith('/'):
-                    full_path = f"{qkd_state_dir}/{full_path}"
+                # Handle both one-path-per-line and unexpected multi-token lines.
+                candidates = [line]
+                if ' ' in line:
+                    candidates = [tok.strip() for tok in line.split() if tok.strip()]
 
-                if full_path not in json_files:
-                    json_files.append(full_path)
+                for candidate in candidates:
+                    if 'qkd_db_' not in candidate or not candidate.endswith('.json'):
+                        continue
+
+                    full_path = candidate
+                    if not full_path.startswith('/'):
+                        full_path = f"{qkd_state_dir}/{full_path}"
+
+                    if full_path not in json_files:
+                        json_files.append(full_path)
 
         if verbose:
             print(f"[DEBUG] qkd_db files discovered: {json_files}")
