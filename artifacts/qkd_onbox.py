@@ -3286,13 +3286,20 @@ def run_master():
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
             continue
 
+        # DEBUG: Log what's blocking rotation
+        log(f"ROTATION CHECK pending_key_id=NONE check1_passed=True", "DEBUG", iface, "MASTER")
+
         if rotation_too_soon(state, MIN_ROTATION_INTERVAL):
-            log(f"ROTATION SKIP last_rotation={state.get('last_rotation')} generation={state.get('generation')}", "INFO", iface, "MASTER")
+            log(f"ROTATION SKIP last_rotation={state.get('last_rotation')} generation={state.get('generation')} reason=ROTATION_TOO_SOON min_interval={MIN_ROTATION_INTERVAL}", "INFO", iface, "MASTER")
             continue
+
+        log(f"ROTATION CHECK check2_passed=True (not too soon)", "DEBUG", iface, "MASTER")
 
         if not rekey_enabled():
             log("ROTATION SKIP reason=REKEY_DISABLED", "INFO", iface, "MASTER")
             continue
+
+        log(f"ROTATION CHECK check3_passed=True (rekey enabled)", "DEBUG", iface, "MASTER")
 
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')}", "INFO", iface, "MASTER")
 
