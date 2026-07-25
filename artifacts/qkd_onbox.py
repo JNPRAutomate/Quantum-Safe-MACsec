@@ -2007,10 +2007,10 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
     entries = assign_slots_for_entries(state, entries)
 
     cli_cmds = ["configure"]
-    # Delete entire keychain to clear all old keys, then recreate empty
-    # (CA references keychain by name, so deletion and recreation keeps CA valid)
-    cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name}")
-    cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name}")
+    # Refresh CA keychain binding (removes old reference, re-adds it)
+    # This ensures stale keys don't get used
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
 
     for entry in entries:
         key_id = entry.get("key_id")
