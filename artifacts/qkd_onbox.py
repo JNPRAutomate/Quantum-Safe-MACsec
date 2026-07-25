@@ -3120,6 +3120,27 @@ def run_master():
                     )
                     bootstrap_keychain_link(link, force=True)
 
+                # NEW: Force bootstrap if peer has stale pending but local doesn't
+                if not local_pending and peer_pending and local_active == peer_active:
+                    peer_next_start = peer_state.get("next_start_time")
+                    if peer_next_start:
+                        try:
+                            peer_start_ts = datetime.datetime.strptime(peer_next_start, "%Y-%m-%d.%H:%M").timestamp()
+                            now_ts = time.time()
+                            peer_age_seconds = now_ts - peer_start_ts
+                            recovery_window = int(qkd_policy().get("pending_recovery_window_seconds", 360))
+                            if peer_age_seconds > recovery_window:
+                                log(
+                                    f"PEER PENDING STALE -> FORCE BOOTSTRAP peer_pending_age={peer_age_seconds}s "
+                                    f"recovery_window={recovery_window}s peer_pending_key={peer_pending}",
+                                    "WARN",
+                                    iface,
+                                    "MASTER",
+                                )
+                                bootstrap_keychain_link(link, force=True)
+                        except Exception as e:
+                            log(f"PEER STALE PENDING CHECK FAIL: {e}", "WARN", iface, "MASTER")
+
                 if pending_stuck_exceeded:
                     state, evicted = evict_pending_head_for_recovery(
                         state,
