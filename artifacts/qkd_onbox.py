@@ -2836,13 +2836,6 @@ def bootstrap_keychain_link(link, force=False):
 
     log(f"KEYCHAIN BOOTSTRAP START force={force} ca={ca_name} keychain={keychain} generation={generation} start_time={start_time}", "INFO", iface, "BOOTSTRAP")
 
-    bootstrap_fallback_keys = int(qkd_policy().get("bootstrap_fallback_keys", 1))
-    if bootstrap_fallback_keys < 0:
-        bootstrap_fallback_keys = 0
-    max_fallback = max(0, max_installed_keys() - 1)
-    if bootstrap_fallback_keys > max_fallback:
-        bootstrap_fallback_keys = max_fallback
-
     bootstrap_records = []
 
     key_id, key = do_enc(link["peer_sae"])
@@ -2857,33 +2850,6 @@ def bootstrap_keychain_link(link, force=False):
             "key": key,
         }
     )
-
-    start_epoch = epoch_from_junos_start_time(start_time)
-    for offset in range(1, bootstrap_fallback_keys + 1):
-        fallback_generation = generation + offset
-        if start_epoch is not None:
-            fallback_start_time = junos_start_time_from_epoch(start_epoch + offset * rotation_interval_seconds())
-        else:
-            fallback_start_time = scheduled_key_start_time_with_offset(link, offset)
-
-        fb_key_id, fb_key = do_enc(link["peer_sae"])
-        if not fb_key_id:
-            log(
-                f"KEYCHAIN BOOTSTRAP FALLBACK ENC FAILED offset={offset} generation={fallback_generation} -> continue with available keys",
-                "ERROR",
-                iface,
-                "BOOTSTRAP",
-            )
-            break
-
-        bootstrap_records.append(
-            {
-                "generation": fallback_generation,
-                "start_time": fallback_start_time,
-                "key_id": fb_key_id,
-                "key": fb_key,
-            }
-        )
 
     # BOOTSTRAP PHASE 1: Clear any existing keys from keychain (start fresh)
     log(f"KEYCHAIN BOOTSTRAP CLEANUP PHASE ca={ca_name} keychain={keychain} action=delete_all_existing_keys", "DEBUG", iface, "BOOTSTRAP")
@@ -2901,56 +2867,35 @@ def bootstrap_keychain_link(link, force=False):
     except Exception as e:
         log(f"KEYCHAIN BOOTSTRAP CLEANUP ERROR ca={ca_name} keychain={keychain} error={str(e)}", "ERROR", iface, "BOOTSTRAP")
 
-    # BOOTSTRAP PHASE 2: Install fresh bootstrap keys
-    if len(bootstrap_records) > 1:
-        if not install_keychain_batch(iface, bootstrap_records, ca_name, keychain, state=state, commit=True):
-            log("KEYCHAIN BOOTSTRAP FAILED local install-key-batch", "ERROR", iface, "BOOTSTRAP")
-            return False
-    else:
-        item = bootstrap_records[0]
-        if not install_keychain_key(
-            iface,
-            item["key_id"],
-            item["key"],
-            ca_name,
-            keychain,
-            state=state,
-            generation=item["generation"],
-            start_time=item["start_time"],
-        ):
-            log("KEYCHAIN BOOTSTRAP FAILED local install-key", "ERROR", iface, "BOOTSTRAP")
-            return False
+    # BOOTSTRAP PHASE 2: Install bootstrap key (generation 0 -> key 0)
+    item = bootstrap_records[0]
+    if not install_keychain_key(
+        iface,
+        item["key_id"],
+        item["key"],
+        ca_name,
+        keychain,
+        state=state,
+        generation=item["generation"],
+        start_time=item["start_time"],
+    ):
+        log("KEYCHAIN BOOTSTRAP FAILED local install-key", "ERROR", iface, "BOOTSTRAP")
+        return False
 
     if not bind_interface_to_stable_ca(iface, ca_name, keychain):
         log("KEYCHAIN BOOTSTRAP FAILED local bind", "ERROR", iface, "BOOTSTRAP")
         return False
 
-    if len(bootstrap_records) > 1:
-        peer_payload = [
-            {
-                "generation": item["generation"],
-                "start_time": item["start_time"],
-                "key_id": item["key_id"],
-            }
-            for item in bootstrap_records
-        ]
-        payload_json = json.dumps(peer_payload, separators=(",", ":"))
-        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
-        if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
-            log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
-            return False
-    else:
-        item = bootstrap_records[0]
-        if not send_command(
-            link,
-            "install-key",
-            iface,
-            key_id=item["key_id"],
-            generation=item["generation"],
-            start_time=item["start_time"],
-        ):
-            log("KEYCHAIN BOOTSTRAP FAILED peer install-key AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
-            return False
+    if not send_command(
+        link,
+        "install-key",
+        iface,
+        key_id=item["key_id"],
+        generation=item["generation"],
+        start_time=item["start_time"],
+    ):
+        log("KEYCHAIN BOOTSTRAP FAILED peer install-key AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
+        return False
 
     time.sleep(0.5)
 
