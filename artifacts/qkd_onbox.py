@@ -2988,7 +2988,7 @@ def run_master():
 
         if not verify_local_config_state(link, state):
             force_local_config_bootstrap = bool(
-                qkd_policy().get("force_bootstrap_on_local_config_invalid", False)
+                qkd_policy().get("force_bootstrap_on_local_config_invalid", True)
             )
             if not force_local_config_bootstrap:
                 log(
