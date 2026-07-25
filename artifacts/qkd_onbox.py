@@ -162,6 +162,7 @@ ROTATION_STAGGER_MINUTES = int(CONFIG.get("rotation_stagger_minutes", 1))
 ROTATION_STAGGER_BUCKETS = int(CONFIG.get("rotation_stagger_buckets", 5))
 
 LOG_LEVEL = CONFIG.get("log_level", "INFO")
+CLI_PATH = CONFIG.get("cli_path", "/usr/sbin/cli")
 
 CERT = f"{SCRIPT_DIR}/certs/{DEVICE}.crt"
 KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
@@ -209,8 +210,10 @@ def rotate_log():
 
 
 def log(msg, level="INFO", iface=None, mode=None):
-    levels = {"DEBUG": 10, "INFO": 20, "ERROR": 30}
-    if levels.get(level, 20) < levels.get(LOG_LEVEL, 20):
+    levels = {"DEBUG": 10, "INFO": 20, "WARN": 25, "WARNING": 25, "ERROR": 30}
+    level = str(level or "INFO").upper()
+    log_level = str(LOG_LEVEL or "INFO").upper()
+    if levels.get(level, 20) < levels.get(log_level, 20):
         return
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1121,6 +1124,17 @@ def reconcile_state_with_router(link, iface, state):
     router_ckn = fields.get("cak_name")
     router_key_id = find_key_id_for_ckn(state, router_ckn)
     if not router_key_id:
+        last_seen_key_id = state.get("last_seen_key_id")
+        if last_seen_key_id:
+            if state.get("active_key_id") != last_seen_key_id:
+                log(
+                    f"STATE RECONCILED FROM LAST_SEEN old_active_key_id={state.get('active_key_id')} new_active_key_id={last_seen_key_id}",
+                    "INFO",
+                    iface,
+                    "STATE",
+                )
+            state["active_key_id"] = last_seen_key_id
+            state["active_confirmed_at"] = int(time.time())
         return state
 
     if state.get("active_key_id") != router_key_id:
@@ -1532,7 +1546,7 @@ def rotation_too_soon(state, min_interval=50):
 def get_configured_active_ca(iface):
     cmd = f"show configuration security macsec interfaces {iface} | display set"
     try:
-        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
         log("CONFIG CHECK TIMEOUT", "ERROR", iface, "CONFIG")
         return None
@@ -1567,7 +1581,7 @@ def get_configured_active_ca(iface):
 def macsec_has_inuse_sa(iface, expected_ca=None):
     cmd = "show security macsec connections"
     try:
-        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except subprocess.TimeoutExpired:
         log("MACSEC CONNECTION CHECK TIMEOUT", "ERROR", iface, "MACSEC")
         return False
@@ -1630,7 +1644,7 @@ def normalize_hex_string(value):
 def get_mka_session_block_for_iface(iface):
     cmd = "show security mka sessions"
     try:
-        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     except subprocess.TimeoutExpired:
         log("MKA SESSION CHECK TIMEOUT", "ERROR", iface, "MKA")
         return None
@@ -2038,7 +2052,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
     cmd = "; ".join(cli_cmds)
 
     try:
-        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     except subprocess.TimeoutExpired:
         log(f"KEYCHAIN INSTALL TIMEOUT ca={ca_name} keychain={keychain_name} entries={len(entries)}", "ERROR", iface, "MACSEC")
         return False
@@ -2057,7 +2071,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             "MACSEC",
         )
         try:
-            rb = subprocess.run(["/usr/sbin/cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            rb = subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             rb_stdout = rb.stdout.decode(errors="ignore").strip()
             rb_stderr = rb.stderr.decode(errors="ignore").strip()
             log(f"KEYCHAIN INSTALL ROLLBACK DONE ca={ca_name} keychain={keychain_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
@@ -2113,7 +2127,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     cmd = "; ".join(cli_cmds)
 
     try:
-        result = subprocess.run(["/usr/sbin/cli", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
     except subprocess.TimeoutExpired:
         log(f"INTERFACE BIND TIMEOUT ca={ca_name}", "ERROR", iface, "MACSEC")
         return False
@@ -2126,7 +2140,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(f"INTERFACE BIND FAIL ca={ca_name} keychain={keychain_name} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, "MACSEC")
         try:
-            rb = subprocess.run(["/usr/sbin/cli", "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            rb = subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             rb_stdout = rb.stdout.decode(errors="ignore").strip()
             rb_stderr = rb.stderr.decode(errors="ignore").strip()
             log(f"INTERFACE BIND ROLLBACK DONE ca={ca_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
@@ -2146,7 +2160,7 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
 def macsec_down(iface):
     log("MACSEC DOWN", "ERROR", iface, "FAILSAFE")
     try:
-        subprocess.run(["/usr/sbin/cli", "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        subprocess.run([CLI_PATH, "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except Exception as e:
         log(f"MACSEC DOWN ERROR error={str(e)}", "ERROR", iface, "FAILSAFE")
 
@@ -2658,13 +2672,9 @@ def _status_payload_for_link(link):
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
     state = reconcile_state_with_router(link, iface, state)
-    before_state_fingerprint = json.dumps(state, sort_keys=True)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-    after_state_fingerprint = json.dumps(state, sort_keys=True)
-    # Persist any state normalization/promotion performed during status so
-    # stale queue cleanup is not lost between cycles.
-    if promoted or before_state_fingerprint != after_state_fingerprint:
-        save_db_state(peer, iface, state)
+    # Status is intentionally read-only: it may normalize the in-memory
+    # payload for reporting, but it must not persist side effects.
     state["iface"] = iface
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
@@ -2871,11 +2881,13 @@ def run_master():
 
         state = load_link_state(peer, iface, link)
         state = ensure_health_state(state)
+        before_reconcile_fingerprint = json.dumps(state, sort_keys=True)
         state = reconcile_state_with_router(link, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-        if promoted:
+        after_reconcile_fingerprint = json.dumps(state, sort_keys=True)
+        if promoted or before_reconcile_fingerprint != after_reconcile_fingerprint:
             if not save_db_state(peer, iface, state):
-                log("STATE SAVE FAIL AFTER MKA PROMOTION", "ERROR", iface, "MASTER")
+                log("STATE SAVE FAIL AFTER RECONCILIATION", "ERROR", iface, "MASTER")
                 continue
 
         if not keychain_state_valid(state):
@@ -3071,8 +3083,11 @@ def run_master():
                 )
                 if peer_active and not state.get("last_seen_key_id"):
                     state["last_seen_key_id"] = peer_active
+                state["active_key_id"] = state.get("last_seen_key_id") or peer_active or state.get("active_key_id")
+                state["active_confirmed_at"] = int(time.time())
                 if not save_db_state(peer, iface, state):
                     log("STATE SAVE FAIL AFTER LOCAL CACHE EMPTY MISMATCH", "ERROR", iface, "MASTER")
+                    continue
             else:
                 # Non-destructive default: mismatches are expected during async
                 # promotion windows. Keep link stable and let normal cycles heal.
