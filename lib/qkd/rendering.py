@@ -190,13 +190,13 @@ def build_device_config(device_name, device, platform, base, topology):
                 else:
                     # Keep a single deterministic bootstrap key in config.
                     # Runtime qkd_onbox.py manages rotating operational keys.
-                    for stale_idx in (0, 2, 3, 4, 5):
+                    for stale_idx in (1, 2, 3, 4, 5):
                         add(
                             f"delete security authentication-key-chains "
                             f"key-chain {keychain_name} key {stale_idx}"
                         )
 
-                    key_index = 1
+                    key_index = 0
                     add(
                         f"set security authentication-key-chains "
                         f"key-chain {keychain_name} key {key_index} "

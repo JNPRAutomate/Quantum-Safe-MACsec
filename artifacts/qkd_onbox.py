@@ -2089,6 +2089,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         key_id = entry.get("key_id")
         key_b64 = entry.get("key")
         generation = entry.get("generation")
+        slot = entry.get("slot")
         start_time = entry.get("start_time")
 
         if not key_id or not key_b64:
@@ -2116,7 +2117,9 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             log(f"CKN FORMAT INVALID idx={idx} ckn_len={len(ckn)} ckn={ckn[:20]}...", "ERROR", iface, "MACSEC")
             return False
 
-        if generation is None:
+        if slot is not None:
+            key_index = int(slot) % max_installed_keys()
+        elif generation is None:
             key_index = qkd_key_index_from_time()
         else:
             # Cycle through all key slots: gen 0→key 0, gen 1→key 1, etc.
@@ -2671,6 +2674,7 @@ def run_slave_install_key_batch(batch_b64, iface):
             continue
         key_id = item.get("key_id")
         generation = item.get("generation")
+        slot = item.get("slot")
         start_time = item.get("start_time")
 
         if not key_id:
@@ -2696,6 +2700,7 @@ def run_slave_install_key_batch(batch_b64, iface):
                 "key_id": key_id,
                 "key": key,
                 "generation": generation,
+                "slot": slot,
                 "start_time": start_time,
             }
         )
@@ -2845,6 +2850,7 @@ def bootstrap_keychain_link(link, force=False):
     bootstrap_records.append(
         {
             "generation": generation,
+            "slot": 0,
             "start_time": start_time,
             "key_id": key_id,
             "key": key,
@@ -2869,15 +2875,13 @@ def bootstrap_keychain_link(link, force=False):
 
     # BOOTSTRAP PHASE 2: Install bootstrap key (generation 0 -> key 0)
     item = bootstrap_records[0]
-    if not install_keychain_key(
+    if not install_keychain_batch(
         iface,
-        item["key_id"],
-        item["key"],
+        [item],
         ca_name,
         keychain,
         state=state,
-        generation=item["generation"],
-        start_time=item["start_time"],
+        commit=True,
     ):
         log("KEYCHAIN BOOTSTRAP FAILED local install-key", "ERROR", iface, "BOOTSTRAP")
         return False
@@ -2886,15 +2890,18 @@ def bootstrap_keychain_link(link, force=False):
         log("KEYCHAIN BOOTSTRAP FAILED local bind", "ERROR", iface, "BOOTSTRAP")
         return False
 
-    if not send_command(
-        link,
-        "install-key",
-        iface,
-        key_id=item["key_id"],
-        generation=item["generation"],
-        start_time=item["start_time"],
-    ):
-        log("KEYCHAIN BOOTSTRAP FAILED peer install-key AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
+    peer_payload = [
+        {
+            "generation": item["generation"],
+            "slot": item.get("slot"),
+            "start_time": item["start_time"],
+            "key_id": item["key_id"],
+        }
+    ]
+    payload_json = json.dumps(peer_payload, separators=(",", ":"))
+    payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
+    if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
+        log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
         return False
 
     time.sleep(0.5)
