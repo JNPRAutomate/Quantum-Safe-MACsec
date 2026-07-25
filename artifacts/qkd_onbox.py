@@ -1700,7 +1700,8 @@ def parse_mka_session_fields(mka_block):
             fields["interface_state"] = line.split("Interface State:", 1)[1].strip()
             continue
         if line.startswith("CAK name:"):
-            fields["cak_name"] = line.split("CAK name:", 1)[1].strip()
+            raw_cak = line.split("CAK name:", 1)[1].strip()
+            fields["cak_name"] = normalize_hex_string(raw_cak)
             continue
         if line.startswith("CAK type:"):
             fields["cak_type"] = line.split("CAK type:", 1)[1].strip()
@@ -1760,7 +1761,7 @@ def mka_confirms_key(iface, key_id, generation=None):
 
     fields = parse_mka_session_fields(mka_block)
     cak_name = fields.get("cak_name")
-    cak_name_norm = normalize_hex_string(cak_name)
+    cak_name_norm = cak_name if cak_name else ""
     secured = mka_session_secured(fields)
     ckn_match = expected_ckn_norm == cak_name_norm
     key_number = fields.get("key_number")
