@@ -520,10 +520,6 @@ def pending_stuck_recovery_seconds():
     return value
 
 
-def qkd_key_index_from_generation(generation):
-    return int(generation) % max_installed_keys()
-
-
 def qkd_key_index_from_time():
     return int(time.time()) % max_installed_keys()
 
@@ -540,8 +536,10 @@ def default_keychain_state(link):
         "pending_keys": [],
         "pending_key_id": None,
         "next_start_time": None,
+        "last_seen_key_id": None,
         "last_rotation": 0,
         "installed_keys": [],
+        "slots": [],
         "health": {
             "kme_fail_count": 0,
             "kme_unavailable_since": 0,
@@ -628,6 +626,59 @@ def normalize_pending_keys(state):
 
     state["pending_keys"] = normalized
     return sync_pending_legacy_fields(state)
+
+
+def normalize_slot_ring(state):
+    ring_size = max_installed_keys()
+    if ring_size < 1:
+        ring_size = 1
+
+    installed = state.get("installed_keys", [])
+    if not isinstance(installed, list):
+        installed = []
+
+    latest_by_slot = {}
+    for item in installed:
+        if not isinstance(item, dict):
+            continue
+        slot = item.get("slot")
+        try:
+            slot = int(slot)
+        except Exception:
+            continue
+        if slot < 0 or slot >= ring_size:
+            continue
+        latest_by_slot[slot] = {
+            "slot": slot,
+            "key_id": item.get("key_id"),
+            "start_time": item.get("start_time"),
+            "status": item.get("status"),
+            "installed_at": item.get("installed_at"),
+            "generation": item.get("generation"),
+        }
+
+    ring = []
+    for slot in range(ring_size):
+        ring.append(latest_by_slot.get(slot))
+    state["slots"] = ring
+    return state
+
+
+def record_installed_key(state, generation, key_id, start_time, slot, status):
+    state.setdefault("installed_keys", [])
+    state["installed_keys"].append(
+        {
+            "generation": generation,
+            "key_id": key_id,
+            "slot": slot,
+            "installed_at": int(time.time()),
+            "start_time": start_time,
+            "status": status,
+        }
+    )
+    state = trim_installed_keys_preserve_active(state)
+    state = normalize_slot_ring(state)
+    return state
 
 
 def append_pending_key(state, generation, key_id, start_time):
@@ -804,89 +855,36 @@ def prune_stale_pending_keys(state, iface=None):
     if not pending:
         return state
 
-    # If there is no active key yet, pending entries are bootstrap candidates.
-    # However, very old pending heads can wedge the queue forever and block
-    # promotion of newly installed keys. Purge only overdue entries.
+    # Router/MKA is authoritative for activation. Without an active key,
+    # keep pending queue intact and avoid self-inflicted bootstrap loops.
     if not state.get("active_key_id"):
-        stale_after_seconds = int(
-            qkd_policy().get("pending_no_active_recovery_seconds", max(180, rotation_interval_seconds() * 3))
-        )
-        now_epoch = int(time.time())
-        kept = []
-        dropped = []
-
-        for item in pending:
-            start_time = item.get("start_time")
-            start_epoch = epoch_from_junos_start_time(start_time)
-            if start_epoch is None:
-                kept.append(item)
-                continue
-
-            overdue_seconds = now_epoch - int(start_epoch)
-            if overdue_seconds > stale_after_seconds:
-                dropped.append((item, overdue_seconds))
-                continue
-            kept.append(item)
-
-        if dropped:
-            state["pending_keys"] = kept
-            state = sync_pending_legacy_fields(state)
-            log(
-                f"STALE PENDING KEYS PURGED(no_active) dropped={len(dropped)} "
-                f"stale_after_seconds={stale_after_seconds} "
-                f"dropped_generations={[d[0].get('generation') for d in dropped]} "
-                f"dropped_overdue_seconds={[d[1] for d in dropped]}",
-                "WARN",
-                iface,
-                "STATE",
-            )
         return state
 
-    # Use an explicit active_generation first; it tracks the generation that
-    # has been confirmed/promoted by MKA and is robust against batch scheduling.
-    active_generation = None
-    stored_active_generation = state.get("active_generation")
-    try:
-        if stored_active_generation is not None:
-            active_generation = int(stored_active_generation)
-    except Exception:
-        active_generation = None
-
-    # Fallback for legacy states: derive from installed_keys active entry.
     active_key_id = state.get("active_key_id")
     installed = state.get("installed_keys", [])
-    if active_generation is None and active_key_id and isinstance(installed, list):
-        for item in installed:
+    active_start_epoch = None
+    if active_key_id and isinstance(installed, list):
+        for item in reversed(installed):
             if not isinstance(item, dict):
                 continue
             if item.get("key_id") != active_key_id:
                 continue
-            generation = item.get("generation")
-            try:
-                if generation is not None:
-                    active_generation = int(generation)
-                    break
-            except Exception:
-                pass
+            active_start_epoch = epoch_from_junos_start_time(item.get("start_time"))
+            break
 
-    if active_generation is None:
-        # Do not fall back to state['generation'] here: during batch install it
-        # can represent the newest scheduled generation, not the confirmed
-        # active one, and that would purge all fresh pending keys.
+    if active_start_epoch is None:
         return state
 
     kept = []
     dropped = []
     for item in pending:
-        generation = item.get("generation")
-        try:
-            generation = int(generation) if generation is not None else None
-        except Exception:
-            generation = None
+        item_key_id = item.get("key_id")
+        item_epoch = epoch_from_junos_start_time(item.get("start_time"))
 
-        # Any pending key behind the confirmed active generation is stale and
-        # blocks promotion because pending queue is generation-sorted.
-        if generation is not None and generation <= active_generation:
+        if item_key_id == active_key_id:
+            dropped.append(item)
+            continue
+        if item_epoch is not None and int(item_epoch) <= int(active_start_epoch):
             dropped.append(item)
             continue
         kept.append(item)
@@ -895,7 +893,7 @@ def prune_stale_pending_keys(state, iface=None):
         state["pending_keys"] = kept
         state = sync_pending_legacy_fields(state)
         log(
-            f"STALE PENDING KEYS PURGED dropped={len(dropped)} active_generation={active_generation} "
+            f"STALE PENDING KEYS PURGED dropped={len(dropped)} active_key_id={active_key_id} "
             f"dropped_generations={[item.get('generation') for item in dropped]}",
             "WARN",
             iface,
@@ -935,9 +933,14 @@ def load_link_state(peer, iface, link):
         state["ca_name"] = stable_ca_name(link)
     if "keychain_name" not in state:
         state["keychain_name"] = stable_keychain_name(link)
+    if "slots" not in state:
+        state["slots"] = []
+    if "last_seen_key_id" not in state:
+        state["last_seen_key_id"] = None
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
     state = prune_stale_pending_keys(state, iface=iface)
+    state = normalize_slot_ring(state)
     return state
 
 
@@ -951,9 +954,103 @@ def keychain_state_valid(state):
     if not isinstance(state.get("installed_keys"), list):
         return False
     state = normalize_pending_keys(state)
-    if not state.get("active_key_id") and not state.get("pending_keys"):
+    if not state.get("active_key_id") and not state.get("pending_keys") and not state.get("installed_keys"):
         return False
     return True
+
+
+def find_key_id_for_ckn(state, ckn_value):
+    if not ckn_value:
+        return None
+
+    expected = normalize_hex_string(str(ckn_value))
+
+    installed = state.get("installed_keys", [])
+    if not isinstance(installed, list):
+        installed = []
+
+    for item in reversed(installed):
+        if not isinstance(item, dict):
+            continue
+        key_id = item.get("key_id")
+        if not key_id:
+            continue
+        if normalize_hex_string(ckn_from_key_id(str(key_id))) == expected:
+            return str(key_id)
+
+    pending = state.get("pending_keys", [])
+    if not isinstance(pending, list):
+        pending = []
+
+    for item in pending:
+        if not isinstance(item, dict):
+            continue
+        key_id = item.get("key_id")
+        if not key_id:
+            continue
+        if normalize_hex_string(ckn_from_key_id(str(key_id))) == expected:
+            return str(key_id)
+
+    return None
+
+
+def reconcile_state_with_router(link, iface, state):
+    state = ensure_health_state(state)
+    state = normalize_pending_keys(state)
+    state = normalize_slot_ring(state)
+
+    mka_block = get_mka_session_block_for_iface(iface)
+    if not mka_block:
+        return state
+
+    fields = parse_mka_session_fields(mka_block)
+    if not mka_session_secured(fields):
+        return state
+
+    router_ckn = fields.get("cak_name")
+    router_key_id = find_key_id_for_ckn(state, router_ckn)
+    if not router_key_id:
+        return state
+
+    if state.get("active_key_id") != router_key_id:
+        log(
+            f"STATE RECONCILED FROM ROUTER old_active_key_id={state.get('active_key_id')} new_active_key_id={router_key_id}",
+            "INFO",
+            iface,
+            "STATE",
+        )
+
+    state["active_key_id"] = router_key_id
+    state["last_seen_key_id"] = router_key_id
+    state["active_confirmed_at"] = int(time.time())
+
+    pending = state.get("pending_keys", [])
+    if isinstance(pending, list) and pending:
+        trimmed = []
+        drop_until_seen = True
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            key_id = item.get("key_id")
+            if drop_until_seen and key_id == router_key_id:
+                drop_until_seen = False
+                continue
+            if drop_until_seen:
+                continue
+            trimmed.append(item)
+        if not drop_until_seen:
+            state["pending_keys"] = trimmed
+            state = sync_pending_legacy_fields(state)
+
+    for item in state.get("installed_keys", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("key_id") == router_key_id:
+            item["status"] = "active"
+
+    state = prune_stale_pending_keys(state, iface=iface)
+    state = normalize_slot_ring(state)
+    return state
 
 
 def compare_peer_keychain_state(local_state, peer_state):
@@ -965,7 +1062,9 @@ def compare_peer_keychain_state(local_state, peer_state):
         return False
     if local_state.get("keychain_name") != peer_state.get("keychain_name"):
         return False
-    if local_state.get("active_key_id") != peer_state.get("active_key_id"):
+    local_active = local_state.get("active_key_id")
+    peer_active = peer_state.get("active_key_id")
+    if local_active and peer_active and local_active != peer_active:
         return False
     local_state = normalize_pending_keys(local_state)
     peer_state = normalize_pending_keys(peer_state)
@@ -991,6 +1090,7 @@ def compare_peer_keychain_state(local_state, peer_state):
 
 def save_db_state(peer, iface, state):
     state = normalize_pending_keys(state)
+    state = normalize_slot_ring(state)
     path = Path(db_state_file(peer, iface))
     tmp = Path(f"{path}.{os.getpid()}.tmp")
     try:
@@ -1632,6 +1732,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             item["promoted_at"] = promotion_time
     state["installed_keys"] = installed
     state = trim_installed_keys_preserve_active(state)
+    state = normalize_slot_ring(state)
 
     log(
         f"PENDING KEY PROMOTED active_key_id={state.get('active_key_id')} generation={state.get('generation')} "
@@ -1676,6 +1777,14 @@ def verify_local_config_state(link, state):
     if configured_ca != expected_ca:
         log(f"LOCAL CONFIG STATE MISMATCH expected_ca={expected_ca} configured_ca={configured_ca}", "ERROR", iface, "CONFIG")
         return False
+    expected_keychain = state.get("keychain_name") or stable_keychain_name(link)
+    if expected_keychain and not macsec_has_inuse_sa(iface, expected_ca=expected_ca):
+        log(
+            f"LOCAL CONFIG STATE WARN ca={configured_ca} expected_keychain={expected_keychain} status=NOT_INUSE",
+            "WARN",
+            iface,
+            "CONFIG",
+        )
     log(f"LOCAL CONFIG STATE OK ca={configured_ca}", "INFO", iface, "CONFIG")
     return True
 
@@ -1880,7 +1989,6 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
 
     if keychain_name:
-        cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key")
         cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
         cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}")
         cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}")
@@ -2195,8 +2303,12 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     state = load_link_state(peer, iface, link)
     state = purge_pending_older_than_start_time(state, start_time, iface=iface, mode_ctx="SLAVE")
     if epoch_from_junos_start_time(start_time) is None:
-        # Legacy fallback if incoming start-time is missing/invalid.
-        state = purge_pending_older_than_generation(state, generation, iface=iface, mode_ctx="SLAVE")
+        log(
+            "INSTALL-KEY INVALID START-TIME -> SKIP STALE PURGE",
+            "WARN",
+            iface,
+            "SLAVE",
+        )
 
     dec_start_ms = now_ms()
     customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
@@ -2242,19 +2354,16 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     state["keychain_name"] = keychain
     state = append_pending_key(state, state.get("generation"), key_id, start_time)
     state["last_rotation"] = int(time.time())
-    state.setdefault("installed_keys", [])
-    state["installed_keys"].append(
-        {
-            "generation": state.get("generation"),
-            "key_id": key_id,
-            "slot": (int(state.get("slot_cursor", 0)) - 1) % max_installed_keys(),
-            "installed_at": int(time.time()),
-            "start_time": start_time,
-            "status": "pending",
-        }
+    state = record_installed_key(
+        state,
+        state.get("generation"),
+        key_id,
+        start_time,
+        (int(state.get("slot_cursor", 0)) - 1) % max_installed_keys(),
+        "pending",
     )
-    state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
+    state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
@@ -2382,12 +2491,11 @@ def run_slave_install_key_batch(batch_b64, iface):
             mode_ctx="SLAVE",
         )
     elif batch_generations:
-        # Legacy fallback if no valid start-time is present in the batch.
-        state = purge_pending_older_than_generation(
-            state,
-            min(batch_generations),
-            iface=iface,
-            mode_ctx="SLAVE",
+        log(
+            "SKIP LEGACY GENERATION PURGE no_valid_start_time_in_batch=1",
+            "WARN",
+            iface,
+            "SLAVE",
         )
 
     for entry in install_entries:
@@ -2397,23 +2505,20 @@ def run_slave_install_key_batch(batch_b64, iface):
         if generation is not None:
             state["generation"] = int(generation)
         state = append_pending_key(state, generation, key_id, start_time)
-        state.setdefault("installed_keys", [])
-        state["installed_keys"].append(
-            {
-                "generation": generation,
-                "key_id": key_id,
-                "slot": entry.get("slot"),
-                "installed_at": int(time.time()),
-                "start_time": start_time,
-                "status": "pending",
-            }
+        state = record_installed_key(
+            state,
+            generation,
+            key_id,
+            start_time,
+            entry.get("slot"),
+            "pending",
         )
 
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
     state["last_rotation"] = int(time.time())
-    state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
+    state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
@@ -2441,6 +2546,7 @@ def _status_payload_for_link(link):
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
+    state = reconcile_state_with_router(link, iface, state)
     before_state_fingerprint = json.dumps(state, sort_keys=True)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
     after_state_fingerprint = json.dumps(state, sort_keys=True)
@@ -2540,35 +2646,6 @@ def bootstrap_keychain_link(link, force=False):
         )
 
     if len(bootstrap_records) > 1:
-        peer_payload = [
-            {
-                "generation": item["generation"],
-                "start_time": item["start_time"],
-                "key_id": item["key_id"],
-            }
-            for item in bootstrap_records
-        ]
-        payload_json = json.dumps(peer_payload, separators=(",", ":"))
-        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
-        if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
-            log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch", "ERROR", iface, "BOOTSTRAP")
-            return False
-    else:
-        item = bootstrap_records[0]
-        if not send_command(
-            link,
-            "install-key",
-            iface,
-            key_id=item["key_id"],
-            generation=item["generation"],
-            start_time=item["start_time"],
-        ):
-            log("KEYCHAIN BOOTSTRAP FAILED peer install-key", "ERROR", iface, "BOOTSTRAP")
-            return False
-
-    time.sleep(0.5)
-
-    if len(bootstrap_records) > 1:
         if not install_keychain_batch(iface, bootstrap_records, ca_name, keychain, state=state, commit=True):
             log("KEYCHAIN BOOTSTRAP FAILED local install-key-batch", "ERROR", iface, "BOOTSTRAP")
             return False
@@ -2591,22 +2668,49 @@ def bootstrap_keychain_link(link, force=False):
         log("KEYCHAIN BOOTSTRAP FAILED local bind", "ERROR", iface, "BOOTSTRAP")
         return False
 
+    if len(bootstrap_records) > 1:
+        peer_payload = [
+            {
+                "generation": item["generation"],
+                "start_time": item["start_time"],
+                "key_id": item["key_id"],
+            }
+            for item in bootstrap_records
+        ]
+        payload_json = json.dumps(peer_payload, separators=(",", ":"))
+        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
+        if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
+            log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
+            return False
+    else:
+        item = bootstrap_records[0]
+        if not send_command(
+            link,
+            "install-key",
+            iface,
+            key_id=item["key_id"],
+            generation=item["generation"],
+            start_time=item["start_time"],
+        ):
+            log("KEYCHAIN BOOTSTRAP FAILED peer install-key AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
+            return False
+
+    time.sleep(0.5)
+
     for item in bootstrap_records:
         state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"])
     state["last_rotation"] = int(time.time())
     for item in bootstrap_records:
-        state["installed_keys"].append(
-            {
-                "generation": item["generation"],
-                "key_id": item["key_id"],
-                "slot": item.get("slot"),
-                "installed_at": int(time.time()),
-                "start_time": item["start_time"],
-                "status": "pending",
-            }
+        state = record_installed_key(
+            state,
+            item["generation"],
+            item["key_id"],
+            item["start_time"],
+            item.get("slot"),
+            "pending",
         )
-    state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
+    state = reconcile_state_with_router(link, iface, state)
 
     if start_time_is_future(start_time):
         if not save_db_state(peer, iface, state):
@@ -2656,6 +2760,7 @@ def run_master():
 
         state = load_link_state(peer, iface, link)
         state = ensure_health_state(state)
+        state = reconcile_state_with_router(link, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
         if promoted:
             if not save_db_state(peer, iface, state):
@@ -2670,7 +2775,24 @@ def run_master():
             continue
 
         if not verify_local_config_state(link, state):
-            log("LOCAL CONFIG INVALID -> CONTROLLED BOOTSTRAP", "ERROR", iface, "MASTER")
+            force_local_config_bootstrap = bool(
+                qkd_policy().get("force_bootstrap_on_local_config_invalid", False)
+            )
+            if not force_local_config_bootstrap:
+                log(
+                    "LOCAL CONFIG INVALID -> SKIP BOOTSTRAP (policy default)",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
+                continue
+
+            log(
+                "LOCAL CONFIG INVALID -> CONTROLLED BOOTSTRAP (policy override)",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
             if not bootstrap_keychain_link(link, force=True):
                 log("CONTROLLED BOOTSTRAP FAILED AFTER LOCAL CONFIG INVALID", "ERROR", iface, "MASTER")
                 continue
@@ -2772,173 +2894,40 @@ def run_master():
 
         if not keychain_state_valid(peer_state):
             log(
-                f"PEER STATE INVALID -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                f"PEER STATE INVALID -> SKIP ROTATION local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}",
-                "ERROR",
+                "WARN",
                 iface,
                 "MASTER",
             )
-            bootstrap_keychain_link(link, force=True)
             continue
 
         if not compare_peer_keychain_state(state, peer_state):
-            # Guard-rail: avoid destructive local re-bootstrap when local state
-            # is already healthy and peer is merely lagging in promotion.
-            # In this case, keep local active key stable and let peer catch up
-            # through subsequent status/promotion cycles.
-            peer_active = peer_state.get("active_key_id")
-            peer_pending = peer_state.get("pending_key_id")
-            peer_next_start = peer_state.get("next_start_time")
             local_active = state.get("active_key_id")
+            peer_active = peer_state.get("active_key_id")
             local_pending = state.get("pending_key_id")
+            peer_pending = peer_state.get("pending_key_id")
 
-            # If local side has already promoted and peer is still on the
-            # previous active key while holding a pending key, treat it as
-            # transient promotion lag and wait within a bounded window.
-            if (
-                local_active
-                and not local_pending
-                and peer_pending
-                and peer_active != local_active
-            ):
-                lag_overdue_seconds = None
-                peer_epoch = epoch_from_junos_start_time(peer_next_start)
-                if peer_epoch is not None:
-                    lag_overdue_seconds = int(time.time()) - int(peer_epoch)
+            # Non-destructive default: mismatches are expected during async
+            # promotion windows. Keep link stable and let normal cycles heal.
+            log(
+                f"PEER STATE MISMATCH -> SKIP BOOTSTRAP local_active_key={local_active} peer_active_key={peer_active} "
+                f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
+                f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_state.get('next_start_time')}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
 
-                peer_promotion_recovery_seconds = int(
-                    qkd_policy().get(
-                        "peer_promotion_recovery_seconds",
-                        pending_stuck_recovery_seconds(),
-                    )
-                )
-
-                if (
-                    lag_overdue_seconds is None
-                    or lag_overdue_seconds <= peer_promotion_recovery_seconds
-                ):
-                    log(
-                        f"PEER STATE MISMATCH (PROMOTION LAG) -> SKIP BOOTSTRAP local_active_key={local_active} "
-                        f"peer_active_key={peer_active} peer_pending_key={peer_pending} "
-                        f"peer_next_start_time={peer_next_start} lag_overdue_seconds={lag_overdue_seconds} "
-                        f"peer_promotion_recovery_seconds={peer_promotion_recovery_seconds}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
+            force_on_mismatch = bool(qkd_policy().get("force_bootstrap_on_peer_mismatch", False))
+            if force_on_mismatch and not local_pending and not peer_pending and local_active and peer_active and local_active != peer_active:
                 log(
-                    f"PEER PROMOTION LAG EXCEEDED -> ALLOW CONTROLLED BOOTSTRAP local_active_key={local_active} "
-                    f"peer_active_key={peer_active} peer_pending_key={peer_pending} "
-                    f"peer_next_start_time={peer_next_start} lag_overdue_seconds={lag_overdue_seconds} "
-                    f"peer_promotion_recovery_seconds={peer_promotion_recovery_seconds}",
+                    "PEER STATE HARD MISMATCH -> CONTROLLED BOOTSTRAP (policy override)",
                     "ERROR",
                     iface,
                     "MASTER",
                 )
-
-            # If both sides already agree on the active key and only pending
-            # heads differ, prefer bounded reconciliation over immediate
-            # bootstrap. This avoids resetting healthy links on transient
-            # scheduling drift.
-            if (
-                local_active
-                and peer_active
-                and local_active == peer_active
-                and local_pending
-                and peer_pending
-                and local_pending != peer_pending
-            ):
-                now_epoch = int(time.time())
-                local_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
-                peer_epoch = epoch_from_junos_start_time(peer_next_start)
-
-                local_overdue_seconds = None
-                peer_overdue_seconds = None
-                if local_epoch is not None:
-                    local_overdue_seconds = now_epoch - int(local_epoch)
-                if peer_epoch is not None:
-                    peer_overdue_seconds = now_epoch - int(peer_epoch)
-
-                pending_mismatch_recovery_seconds = int(
-                    qkd_policy().get(
-                        "pending_mismatch_recovery_seconds",
-                        max(180, rotation_interval_seconds() * 3),
-                    )
-                )
-
-                local_within_recovery = (
-                    local_overdue_seconds is None
-                    or local_overdue_seconds <= pending_mismatch_recovery_seconds
-                )
-                peer_within_recovery = (
-                    peer_overdue_seconds is None
-                    or peer_overdue_seconds <= pending_mismatch_recovery_seconds
-                )
-
-                if local_within_recovery and peer_within_recovery:
-                    log(
-                        f"PEER STATE MISMATCH (PENDING DRIFT) -> SKIP BOOTSTRAP local_active_key={local_active} "
-                        f"peer_active_key={peer_active} local_pending_key={local_pending} peer_pending_key={peer_pending} "
-                        f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_next_start} "
-                        f"local_overdue_seconds={local_overdue_seconds} peer_overdue_seconds={peer_overdue_seconds} "
-                        f"pending_mismatch_recovery_seconds={pending_mismatch_recovery_seconds}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
-            if local_active and not local_pending and (not peer_active) and peer_pending:
-                # Allow peer to lag transiently, but do not skip forever.
-                # After a grace window, fall back to controlled bootstrap.
-                lag_due = True
-                lag_overdue_seconds = None
-                if peer_next_start:
-                    lag_due = start_time_is_due(peer_next_start)
-                    peer_epoch = epoch_from_junos_start_time(peer_next_start)
-                    if peer_epoch is not None:
-                        lag_overdue_seconds = int(time.time()) - int(peer_epoch)
-
-                peer_lag_recovery_seconds = int(
-                    qkd_policy().get("peer_lag_recovery_seconds", max(180, rotation_interval_seconds() * 3))
-                )
-
-                if lag_due and (
-                    lag_overdue_seconds is None or lag_overdue_seconds <= peer_lag_recovery_seconds
-                ):
-                    log(
-                        f"PEER STATE MISMATCH BUT LOCAL HEALTHY -> SKIP BOOTSTRAP local_active_key={local_active} "
-                        f"peer_pending_key={peer_pending} peer_next_start_time={peer_next_start} "
-                        f"lag_overdue_seconds={lag_overdue_seconds} peer_lag_recovery_seconds={peer_lag_recovery_seconds}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
-                if lag_due:
-                    log(
-                        f"PEER STATE LAG EXCEEDED -> ALLOW CONTROLLED BOOTSTRAP local_active_key={local_active} "
-                        f"peer_pending_key={peer_pending} peer_next_start_time={peer_next_start} "
-                        f"lag_overdue_seconds={lag_overdue_seconds} peer_lag_recovery_seconds={peer_lag_recovery_seconds}",
-                        "ERROR",
-                        iface,
-                        "MASTER",
-                    )
-
-            log(
-                f"PEER STATE MISMATCH -> CONTROLLED BOOTSTRAP local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
-                f"local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} "
-                f"peer_keychain={peer_state.get('keychain_name')} local_active_key={state.get('active_key_id')} peer_active_key={peer_state.get('active_key_id')} "
-                f"local_pending_key={state.get('pending_key_id')} peer_pending_key={peer_state.get('pending_key_id')} "
-                f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_state.get('next_start_time')}",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            bootstrap_keychain_link(link, force=True)
+                bootstrap_keychain_link(link, force=True)
             continue
 
         if state.get("pending_key_id"):
@@ -3093,21 +3082,18 @@ def run_master():
         state["ca_name"] = ca_name
         state["keychain_name"] = keychain
         state["last_rotation"] = int(time.time())
-        state.setdefault("installed_keys", [])
         for item in batch_records:
             state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"])
-            state["installed_keys"].append(
-                {
-                    "generation": item["generation"],
-                    "key_id": item["key_id"],
-                    "slot": item.get("slot"),
-                    "start_time": item["start_time"],
-                    "status": "pending",
-                    "installed_at": int(time.time()),
-                }
+            state = record_installed_key(
+                state,
+                item["generation"],
+                item["key_id"],
+                item["start_time"],
+                item.get("slot"),
+                "pending",
             )
-        state = trim_installed_keys_preserve_active(state)
         state = clear_kme_failure(peer, iface, state)
+        state = reconcile_state_with_router(link, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
         if not save_db_state(peer, iface, state):
