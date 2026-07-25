@@ -1696,15 +1696,20 @@ def parse_mka_session_fields(mka_block):
     }
     if not mka_block:
         return fields
+    
+    parse_log_lines = []
+    
     for raw_line in mka_block.splitlines():
         line = raw_line.strip()
         if line.startswith("Interface State:"):
             fields["interface_state"] = line.split("Interface State:", 1)[1].strip()
+            parse_log_lines.append(f"interface_state={fields['interface_state']}")
             continue
         if line.startswith("CAK name:"):
             raw_cak = line.split("CAK name:", 1)[1].strip()
             fields["cak_name"] = normalize_hex_string(raw_cak)
-            log(f"MKA_PARSE CAK raw={raw_cak} normalized={fields['cak_name']}", "DEBUG", None, "MKA")
+            parse_log_lines.append(f"cak_raw={raw_cak}")
+            log(f"MKA_PARSE CAK raw={raw_cak} normalized={fields['cak_name']} len_raw={len(raw_cak)} len_norm={len(fields['cak_name'])}", "DEBUG", None, "MKA")
             continue
         if line.startswith("CAK type:"):
             fields["cak_type"] = line.split("CAK type:", 1)[1].strip()
@@ -1716,6 +1721,7 @@ def parse_mka_session_fields(mka_block):
             try:
                 value = line.split("Key number:", 1)[1].strip().split()[0]
                 fields["key_number"] = int(value)
+                parse_log_lines.append(f"key_number={fields['key_number']}")
             except Exception:
                 fields["key_number"] = None
             continue
@@ -1740,6 +1746,18 @@ def parse_mka_session_fields(mka_block):
             except Exception:
                 pass
             continue
+    
+    if parse_log_lines:
+        log(f"MKA_PARSE_SUMMARY {' '.join(parse_log_lines)}", "DEBUG", None, "MKA")
+    
+    # Validation: Check CAK format
+    cak_name = fields.get("cak_name")
+    if cak_name:
+        if len(cak_name) != 64:
+            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)} cak={cak_name[:20]}...", "ERROR", None, "MKA")
+        if not all(c in '0123456789abcdef' for c in cak_name.lower()):
+            log(f"MKA_PARSE CAK NOT HEX cak={cak_name[:20]}...", "ERROR", None, "MKA")
+    
     return fields
 
 
@@ -1760,6 +1778,7 @@ def mka_confirms_key(iface, key_id, generation=None):
     expected_ckn_norm = normalize_hex_string(expected_ckn)
     mka_block = get_mka_session_block_for_iface(iface)
     if not mka_block:
+        log(f"MKA BLOCK NOT FOUND iface={iface}", "DEBUG", iface, "MKA")
         return False
 
     fields = parse_mka_session_fields(mka_block)
@@ -1811,8 +1830,11 @@ def mka_confirms_key(iface, key_id, generation=None):
     )
     # Debug: show CKN mismatch details
     log(
-        f"MKA CKN_DEBUG expected_ckn_norm={expected_ckn_norm} "
-        f"cak_name_raw={cak_name} cak_name_norm={cak_name_norm}",
+        f"MKA CKN_DEBUG expected_ckn={expected_ckn[:16]}... expected_norm={expected_ckn_norm[:16]}... "
+        f"cak_name_raw={cak_name[:16] if cak_name else 'NONE'}... "
+        f"cak_name_norm={cak_name_norm[:16]}... "
+        f"exp_len={len(expected_ckn_norm)} cak_len={len(cak_name_norm)} "
+        f"match={ckn_match}",
         "DEBUG",
         iface,
         "MKA",
@@ -2003,48 +2025,90 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         log("KEYCHAIN INSTALL BATCH EMPTY", "ERROR", iface, "MACSEC")
         return False
 
+    # VALIDATION: Check critical parameters
+    if not ca_name or not isinstance(ca_name, str):
+        log(f"KEYCHAIN INSTALL CA_NAME INVALID ca_name={ca_name}", "ERROR", iface, "MACSEC")
+        return False
+    if not keychain_name or not isinstance(keychain_name, str):
+        log(f"KEYCHAIN INSTALL KEYCHAIN_NAME INVALID keychain_name={keychain_name}", "ERROR", iface, "MACSEC")
+        return False
+    if not CLI_PATH or not os.path.exists(CLI_PATH):
+        log(f"KEYCHAIN INSTALL CLI_PATH INVALID cli_path={CLI_PATH}", "ERROR", iface, "MACSEC")
+        return False
+
     cli_cmds = ["configure"]
+    
+    # PHASE 1: Disconnect keychain from CA
+    log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=delete_pre_shared_key", "DEBUG", iface, "MACSEC")
     cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key")
     cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
+    
+    # PHASE 2: Reconfigure CA
+    log(f"KEYCHAIN INSTALL PHASE2 ca={ca_name} action=reconfigure_ca security_mode=static-cak cipher=gcm-aes-xpn-256", "DEBUG", iface, "MACSEC")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}")
 
-    for entry in entries:
+    # PHASE 3: Install keys
+    log(f"KEYCHAIN INSTALL PHASE3 keychain={keychain_name} num_entries={len(entries)}", "DEBUG", iface, "MACSEC")
+    for idx, entry in enumerate(entries):
         key_id = entry.get("key_id")
         key_b64 = entry.get("key")
         generation = entry.get("generation")
         start_time = entry.get("start_time")
 
         if not key_id or not key_b64:
-            log(f"KEYCHAIN INSTALL ENTRY INVALID entry={entry}", "ERROR", iface, "MACSEC")
+            log(f"KEYCHAIN INSTALL ENTRY INVALID idx={idx} entry={entry}", "ERROR", iface, "MACSEC")
             return False
 
         try:
             k = base64.b64decode(key_b64)
         except Exception as e:
-            log(f"KEY DECODE FAIL key_id={key_id} error={str(e)}", "ERROR", iface, "MACSEC")
+            log(f"KEY DECODE FAIL idx={idx} key_id={key_id} error={str(e)}", "ERROR", iface, "MACSEC")
             return False
 
         if len(k) < 32:
-            log(f"KEY TOO SHORT len={len(k)} key_id={key_id}", "ERROR", iface, "MACSEC")
+            log(f"KEY TOO SHORT idx={idx} len={len(k)} key_id={key_id}", "ERROR", iface, "MACSEC")
             return False
 
         cak = k[:32].hex()
         ckn = ckn_from_key_id(key_id)
+
+        # VALIDATION: Check CAK and CKN format
+        if not isinstance(cak, str) or len(cak) != 64 or not all(c in '0123456789abcdef' for c in cak.lower()):
+            log(f"CAK FORMAT INVALID idx={idx} cak_len={len(cak)} cak={cak[:20]}...", "ERROR", iface, "MACSEC")
+            return False
+        if not isinstance(ckn, str) or len(ckn) != 64 or not all(c in '0123456789abcdef' for c in ckn.lower()):
+            log(f"CKN FORMAT INVALID idx={idx} ckn_len={len(ckn)} ckn={ckn[:20]}...", "ERROR", iface, "MACSEC")
+            return False
 
         if generation is None:
             key_index = qkd_key_index_from_time()
         else:
             key_index = qkd_key_index_from_generation(generation)
 
+        # VALIDATION: Check key_index
+        if not isinstance(key_index, int) or key_index < 0 or key_index > 65535:
+            log(f"KEY_INDEX INVALID idx={idx} key_index={key_index} type={type(key_index)}", "ERROR", iface, "MACSEC")
+            return False
+
         if not start_time:
             start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
 
+        # VALIDATION: Check start_time format
+        if not isinstance(start_time, str) or '.' not in start_time:
+            log(f"START_TIME FORMAT INVALID idx={idx} start_time={start_time}", "ERROR", iface, "MACSEC")
+            return False
+
+        cli_start_time = format_start_time_cli(start_time)
+        if not isinstance(cli_start_time, str) or len(cli_start_time) < 10:
+            log(f"START_TIME CLI FORMAT INVALID idx={idx} cli_start_time={cli_start_time}", "ERROR", iface, "MACSEC")
+            return False
+
         log(
-            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} key_index={key_index} start_time={format_start_time_display(start_time)} key_id={key_id}",
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} idx={idx} key_index={key_index} start_time={start_time} key_id={key_id} cak={cak[:16]}... ckn={ckn[:16]}...",
             "INFO",
             iface,
             "MACSEC",
@@ -2053,12 +2117,14 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
-        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {format_start_time_cli(start_time)}")
+        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {cli_start_time}")
 
     if commit:
         cli_cmds.append("commit")
     cli_cmds.append("exit")
     cmd = "; ".join(cli_cmds)
+
+    log(f"KEYCHAIN INSTALL CLI_CMD_COUNT total_cmds={len(cli_cmds)} commit={commit}", "DEBUG", iface, "MACSEC")
 
     try:
         result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
@@ -2071,6 +2137,13 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
     stdout = result.stdout.decode(errors="ignore").strip()
     stderr = result.stderr.decode(errors="ignore").strip()
+    
+    # Log CLI output for debugging
+    if stdout:
+        log(f"KEYCHAIN INSTALL STDOUT len={len(stdout)} first_200={stdout[:200]}", "DEBUG", iface, "MACSEC")
+    if stderr:
+        log(f"KEYCHAIN INSTALL STDERR len={len(stderr)} first_200={stderr[:200]}", "DEBUG", iface, "MACSEC")
+    
     if result.returncode != 0 or junos_output_has_error(stdout, stderr):
         log(
             f"KEYCHAIN INSTALL FAIL ca={ca_name} keychain={keychain_name} entries={len(entries)} "
