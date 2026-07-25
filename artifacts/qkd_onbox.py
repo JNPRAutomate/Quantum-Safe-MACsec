@@ -2061,12 +2061,11 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
     cli_cmds = ["configure"]
     
-    # PHASE 1: Disconnect keychain from CA
-    log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=delete_pre_shared_key", "DEBUG", iface, "MACSEC")
-    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key")
+    # PHASE 1: Disconnect old keychain from CA (keep fallback-key)
+    log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=delete_pre_shared_key_chain", "DEBUG", iface, "MACSEC")
     cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
     
-    # PHASE 2: Reconfigure CA
+    # PHASE 2: Reconfigure CA with new keychain
     log(f"KEYCHAIN INSTALL PHASE2 ca={ca_name} action=reconfigure_ca security_mode=static-cak cipher=gcm-aes-xpn-256", "DEBUG", iface, "MACSEC")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
