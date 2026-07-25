@@ -251,7 +251,7 @@ def sync_certs_dual_re(dev, name, remote_dir, filenames):
         copy_file_to_other_re(dev, name, f"{remote_dir}/{filename}")
 
 
-def commit_safely(dev, cu, name, sync=True):
+def commit_safely(dev, cu, name, sync=True, phase="CONFIG_APPLY", detail=None):
     """
     Commit helper.
 
@@ -263,12 +263,19 @@ def commit_safely(dev, cu, name, sync=True):
             fall back to local commit so deploy can progress on active RE.
     """
     dual_re = has_dual_re(dev, name) if sync else False
+    commit_mode = "synchronize" if (sync and dual_re) else "local"
+    detail_txt = str(detail or "").strip()
+    commit_comment = f"QKD DEPLOY phase={phase} device={name} mode={commit_mode}"
+    if detail_txt:
+        commit_comment += f" detail={detail_txt}"
+
+    print(f"[{name}] Commit phase={phase} mode={commit_mode}")
 
     try:
         if sync and dual_re:
-            cu.commit(sync=True)
+            cu.commit(sync=True, comment=commit_comment)
         else:
-            cu.commit()
+            cu.commit(comment=commit_comment)
         return
     except Exception as exc:
         text = str(exc)
@@ -281,7 +288,8 @@ def commit_safely(dev, cu, name, sync=True):
             print(f"[{name}] commit synchronize failed; syncing scripts to peer RE and retrying once")
             sync_qkd_scripts_dual_re(dev, name, ONBOX_SCRIPT_NAME)
             try:
-                cu.commit(sync=True)
+                retry_comment = f"{commit_comment} retry=1 reason=peer_re_sync"
+                cu.commit(sync=True, comment=retry_comment)
                 return
             except Exception as retry_exc:
                 retry_text = str(retry_exc)
@@ -293,7 +301,8 @@ def commit_safely(dev, cu, name, sync=True):
                 )
                 if remote_re_sync_failure:
                     print(f"[{name}] WARN commit synchronize still failing on peer RE; falling back to local commit")
-                    cu.commit()
+                    fallback_comment = f"{commit_comment} fallback=local"
+                    cu.commit(comment=fallback_comment)
                     return
                 raise
 
@@ -668,7 +677,14 @@ def configure_qkd_scripts(dev, name, base):
 
     with Config(dev) as cu:
         cu.load(full_cfg, format="set", merge=False)
-        commit_safely(dev, cu, name, sync=True)
+        commit_safely(
+            dev,
+            cu,
+            name,
+            sync=True,
+            phase="QKD_SCRIPT_CONFIG",
+            detail=f"script={script_name}",
+        )
 
     print(f"[{name}] QKD scripts event and op configured OK")
 
@@ -905,7 +921,14 @@ def push_config(device_name, device, commands, base, devices_dict=None):
 
                     if cu.diff():
                         print(f"[{device_name}] Applying config")
-                        commit_safely(dev, cu, device_name, sync=True)
+                        commit_safely(
+                            dev,
+                            cu,
+                            device_name,
+                            sync=True,
+                            phase="MACSEC_QKD_CONFIG",
+                            detail=f"commands={len(commands)}",
+                        )
                         print(f"[{device_name}] Commit OK")
                     else:
                         print(f"[{device_name}] No changes")
