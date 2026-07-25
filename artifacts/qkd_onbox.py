@@ -1702,6 +1702,7 @@ def parse_mka_session_fields(mka_block):
         if line.startswith("CAK name:"):
             raw_cak = line.split("CAK name:", 1)[1].strip()
             fields["cak_name"] = normalize_hex_string(raw_cak)
+            log(f"MKA_PARSE CAK raw={raw_cak} normalized={fields['cak_name']}", "DEBUG", None, "MKA")
             continue
         if line.startswith("CAK type:"):
             fields["cak_type"] = line.split("CAK type:", 1)[1].strip()
@@ -1803,6 +1804,14 @@ def mka_confirms_key(iface, key_id, generation=None):
         f"key_number={key_number} interface_state={fields.get('interface_state')} "
         f"mka_suspended={fields.get('mka_suspended')}",
         "INFO",
+        iface,
+        "MKA",
+    )
+    # Debug: show CKN mismatch details
+    log(
+        f"MKA CKN_DEBUG expected_ckn_norm={expected_ckn_norm} "
+        f"cak_name_raw={cak_name} cak_name_norm={cak_name_norm}",
+        "DEBUG",
         iface,
         "MKA",
     )
