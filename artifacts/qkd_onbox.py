@@ -917,7 +917,7 @@ def ensure_health_state(state):
     return state
 
 
-def evict_pending_head_for_recovery(state, iface, reason, peer_state=None):
+def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overdue_seconds=None):
     """Drop the pending head when it is provably stuck and unblock rotation.
 
     This is intentionally non-destructive: CA/keychain stay untouched; we only
@@ -953,7 +953,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None):
 
     if pending_key_id == last_key and (now_epoch - last_evict_at) < cooldown_seconds:
         log(
-            f"PENDING STUCK RECOVERY COOLDOWN -> KEEP HEAD pending_key_id={pending_key_id} "
+            f"PENDING STUCK RECOVERY COOLDOWN -> HOLD CURRENT PENDING pending_key_id={pending_key_id} "
             f"cooldown_seconds={cooldown_seconds} elapsed_seconds={now_epoch - last_evict_at}",
             "WARN",
             iface,
@@ -968,14 +968,32 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None):
         peer_pending = peer_state.get("pending_key_id")
 
     if peer_state is not None and peer_pending and peer_pending != pending_key_id:
-        log(
-            f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
-            f"reason={reason}",
-            "WARN",
-            iface,
-            "MASTER",
+        force_evict_seconds = int(
+            qkd_policy().get(
+                "pending_stuck_force_evict_seconds",
+                max(900, pending_stuck_recovery_seconds() * 3),
+            )
         )
-        return state, False
+
+        if overdue_seconds is not None and int(overdue_seconds) > force_evict_seconds:
+            log(
+                f"PENDING STUCK RECOVERY OVERRIDE -> FORCE ADVANCE pending_key_id={pending_key_id} "
+                f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
+                f"pending_stuck_force_evict_seconds={force_evict_seconds} reason={reason}",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+        else:
+            log(
+                f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
+                f"reason={reason} overdue_seconds={overdue_seconds} pending_stuck_force_evict_seconds={force_evict_seconds}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
+            return state, False
+
 
     dropped = pending.pop(0)
     state["pending_keys"] = pending
@@ -998,7 +1016,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None):
     state = normalize_slot_ring(state)
 
     log(
-        f"PENDING STUCK RECOVERED -> EVICT HEAD pending_key_id={pending_key_id} start_time={pending_start_time} "
+        f"PENDING STUCK RECOVERY APPLIED -> ADVANCE PENDING WINDOW pending_key_id={pending_key_id} start_time={pending_start_time} "
         f"reason={reason} dropped_generation={dropped.get('generation')}",
         "ERROR",
         iface,
@@ -2930,6 +2948,7 @@ def run_master():
                     iface,
                     reason="INVALID_PENDING_START_TIME",
                     peer_state=None,
+                    overdue_seconds=None,
                 )
                 if evicted:
                     save_db_state(peer, iface, state)
@@ -3004,6 +3023,7 @@ def run_master():
                     iface,
                     reason=f"PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE overdue_seconds={pending_stuck_overdue_seconds}",
                     peer_state=None,
+                    overdue_seconds=pending_stuck_overdue_seconds,
                 )
                 if evicted:
                     save_db_state(peer, iface, state)
@@ -3023,6 +3043,7 @@ def run_master():
                     iface,
                     reason=f"PENDING_STUCK_AND_PEER_STATE_INVALID overdue_seconds={pending_stuck_overdue_seconds}",
                     peer_state=peer_state,
+                    overdue_seconds=pending_stuck_overdue_seconds,
                 )
                 if evicted:
                     save_db_state(peer, iface, state)
@@ -3061,6 +3082,7 @@ def run_master():
                     iface,
                     reason=f"PENDING_STUCK_AND_PEER_MISMATCH overdue_seconds={pending_stuck_overdue_seconds}",
                     peer_state=peer_state,
+                    overdue_seconds=pending_stuck_overdue_seconds,
                 )
                 if evicted:
                     save_db_state(peer, iface, state)
@@ -3073,6 +3095,7 @@ def run_master():
                     iface,
                     reason=f"PENDING_STUCK_CONFIRMED_BY_PEER_STATUS overdue_seconds={pending_stuck_overdue_seconds}",
                     peer_state=peer_state,
+                    overdue_seconds=pending_stuck_overdue_seconds,
                 )
                 if evicted:
                     save_db_state(peer, iface, state)

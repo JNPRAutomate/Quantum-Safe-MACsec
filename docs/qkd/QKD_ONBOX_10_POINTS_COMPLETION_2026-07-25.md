@@ -101,8 +101,8 @@ Mitigation implemented:
 - Safety: cooldown and peer-aware checks to avoid oscillation.
 
 Key log markers:
-- `PENDING STUCK RECOVERED -> EVICT HEAD ...`
-- `PENDING STUCK RECOVERY COOLDOWN -> KEEP HEAD ...`
+- `PENDING STUCK RECOVERY APPLIED -> ADVANCE PENDING WINDOW ...`
+- `PENDING STUCK RECOVERY COOLDOWN -> HOLD CURRENT PENDING ...`
 
 ### Stall Type B: Invalid/unparseable pending start-time wedge
 Description:
