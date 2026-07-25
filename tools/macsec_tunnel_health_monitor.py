@@ -203,8 +203,15 @@ def send_shell_command(shell, command, timeout=5.0, verbose=False):
             chunk = shell.recv(1024).decode()
             if chunk:
                 output += chunk
-                if ">" in chunk or "%" in chunk:
-                    break
+                stripped = output.rstrip()
+                # Stop only when prompt appears at the end, not merely anywhere
+                # in the chunk (hostnames and echoed commands include '>').
+                if stripped.endswith(">") or stripped.endswith("%"):
+                    # If more bytes are immediately ready, keep draining first.
+                    if hasattr(shell, "recv_ready") and shell.recv_ready():
+                        pass
+                    else:
+                        break
         except socket.timeout:
             break
         except Exception:
@@ -500,6 +507,28 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
             key_status['pending_stale_count'] = 0
             
     except json.JSONDecodeError as e:
+        raw = all_json_str or json_data_str or ""
+        # Fallback parser: tolerate shell noise/prompts around JSON.
+        try:
+            active_match = re.search(r'"active_key_id"\s*:\s*"([a-f0-9\-]+)"', raw)
+            pending_match = re.search(r'"pending_key_id"\s*:\s*"([a-f0-9\-]+)"', raw)
+
+            if active_match:
+                key_status['active_key_id'] = active_match.group(1)
+                key_status['active_count'] = 1
+
+            if pending_match:
+                key_status['pending_key_id'] = pending_match.group(1)
+
+            pending_block = re.search(r'"pending_keys"\s*:\s*\[(.*?)\]', raw, flags=re.S)
+            if pending_block:
+                key_status['pending_count'] = len(re.findall(r'"key_id"\s*:', pending_block.group(1)))
+
+            if not key_status['pending_count'] and key_status['pending_key_id']:
+                key_status['pending_count'] = 1
+        except Exception:
+            pass
+
         if verbose:
             print(f"[DEBUG] JSON parse error: {str(e)[:100]}")
     except Exception as e:
