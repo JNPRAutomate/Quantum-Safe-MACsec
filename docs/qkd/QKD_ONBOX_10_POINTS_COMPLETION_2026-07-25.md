@@ -139,6 +139,9 @@ Description:
 Mitigation implemented:
 - Added stuck recovery action even inside mismatch branch.
 - Reason tag: `PENDING_STUCK_AND_PEER_MISMATCH`.
+- Added hard-time override to prevent indefinite defer loops when mismatch persists too long.
+- New policy: `pending_stuck_force_evict_seconds`.
+- New log marker: `PENDING STUCK RECOVERY OVERRIDE -> FORCE ADVANCE ...`.
 
 ### Stall Type F: Pending stuck with peer-confirmed same head but no MKA confirm
 Description:
@@ -162,6 +165,7 @@ Mitigation implemented:
 Notes:
 - Recovery is non-destructive by design (no CA teardown).
 - Bootstrap remains policy-driven and last-resort.
+- Defer behavior is now bounded: after prolonged stuck mismatch, runtime force-advances pending window.
 
 ## Compatibility Notes
 - Existing fields (`generation`, `pending_key_id`, `next_start_time`) are preserved for backward compatibility and observability.
