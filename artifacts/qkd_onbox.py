@@ -3279,16 +3279,18 @@ def run_master():
                     if evicted:
                         save_db_state(peer, iface, state)
                 
-                # Allow batch rotation to proceed if: no local pending, have active key, and batch mode
-                if not local_pending and local_active and runtime_mode == "batch":
+                # Allow rotation to proceed if local has no pending key and has an active key.
+                # This covers both single and batch mode: if local state is clean (no pending),
+                # installing a new key and sending it to peer will resync both sides.
+                if not local_pending and local_active:
                     log(
-                        f"PEER STATE MISMATCH BUT NO LOCAL PENDING -> ALLOW BATCH ROTATION "
-                        f"local_active={local_active} batch_mode=True peer_mismatch_allowed=true",
+                        f"PEER STATE MISMATCH BUT NO LOCAL PENDING -> ALLOW ROTATION "
+                        f"local_active={local_active} runtime_mode={runtime_mode} peer_mismatch_allowed=true",
                         "INFO",
                         iface,
                         "MASTER",
                     )
-                    pass  # Continue to batch install logic below
+                    pass  # Continue to install logic below
                 else:
                     continue
 
