@@ -3339,7 +3339,10 @@ def run_master():
             )
 
         if not batch_records:
+            log(f"BATCH RECORDS EMPTY -> SKIP INSTALL", "ERROR", iface, "MASTER")
             continue
+
+        log(f"BATCH RECORDS READY count={len(batch_records)} batch_size={batch_size}", "INFO", iface, "MASTER")
 
         peer_payload = []
         for item in batch_records:
@@ -3352,11 +3355,15 @@ def run_master():
             )
 
         local_install_start_ms = now_ms()
+        log(f"PRE_INSTALL_CHECK batch_size={batch_size} ca={ca_name} keychain={keychain}", "DEBUG", iface, "MASTER")
+        
         if batch_size > 1:
+            log(f"BATCH INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
             install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, state=state, commit=True)
             fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
             fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
         else:
+            log(f"SINGLE INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
             item = batch_records[0]
             install_ok = install_keychain_key(
                 iface,
