@@ -2247,11 +2247,11 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
 
 
 def macsec_down(iface):
-    log("MACSEC DOWN", "ERROR", iface, "FAILSAFE")
-    try:
-        subprocess.run([CLI_PATH, "-c", f"configure; delete security macsec interfaces {iface}; commit; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    except Exception as e:
-        log(f"MACSEC DOWN ERROR error={str(e)}", "ERROR", iface, "FAILSAFE")
+    log("MACSEC DOWN - holding current config, NOT removing interface binding", "ERROR", iface, "FAILSAFE")
+    # IMPORTANT: Do NOT delete the macsec interface binding.
+    # Removing the interface binding breaks MACsec permanently until manual re-bootstrap.
+    # The fallback-key keeps the link operative at reduced security.
+    # Let the bootstrap logic restore the keychain on next cycle.
 
 
 # ----------------------------
