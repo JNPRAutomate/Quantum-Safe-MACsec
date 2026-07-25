@@ -3403,6 +3403,11 @@ def run_master():
             log(fail_log, "ERROR", iface, "MASTER")
             continue
 
+        # Installation succeeded - clear KME failure counter
+        if state.get("health", {}).get("kme_fail_count", 0) > 0:
+            state = clear_kme_failure(peer, iface, state)
+            log(f"KME FAILURE CLEARED after successful install", "INFO", iface, "MASTER")
+
         customer_event(
             "LOCAL_KEYCHAIN_INSTALL_OK",
             iface=iface,
