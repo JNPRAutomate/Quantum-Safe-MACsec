@@ -2007,10 +2007,8 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
     entries = assign_slots_for_entries(state, entries)
 
     cli_cmds = ["configure"]
-    # Refresh CA keychain binding (removes old reference, re-adds it)
-    # This ensures stale keys don't get used
+    # Step 1: Remove CA's reference to keychain (blocks MKA from using it during key swap)
     cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
-    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
 
     for entry in entries:
         key_id = entry.get("key_id")
@@ -2054,6 +2052,9 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {start_time}")
+
+    # Step 2: After all new keys are loaded, restore CA's reference to keychain
+    cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
 
     if commit:
         cli_cmds.append("commit")
