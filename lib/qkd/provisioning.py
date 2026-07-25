@@ -589,6 +589,9 @@ def push_certs(dev, name, device):
         stripped = line.strip()
         if not stripped:
             continue
+        # Verification markers are not ls -l output and contain no owner field.
+        if stripped.startswith("OK:"):
+            continue
         for file_name in expected_files:
             suffix = f"/{file_name}"
             if not stripped.endswith(suffix):
