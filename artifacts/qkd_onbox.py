@@ -3094,13 +3094,23 @@ def run_master():
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
-                log("KME HOLD EXPIRED AND LINK ALREADY DECLARED DOWN -> SKIP", "ERROR", iface, "MASTER")
+                # If MACsec is still operational despite declared_down, clear the
+                # stale failure state and allow recovery. declared_down is now a
+                # no-op (macsec_down does not delete the interface binding).
+                if macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                    log("KME HOLD EXPIRED BUT MACSEC STILL INUSE -> CLEAR DECLARED_DOWN AND RECOVER", "INFO", iface, "MASTER")
+                    state = clear_kme_failure(peer, iface, state)
+                    save_db_state(peer, iface, state)
+                    # Fall through to rotation logic
+                else:
+                    log("KME HOLD EXPIRED AND LINK ALREADY DECLARED DOWN -> SKIP", "ERROR", iface, "MASTER")
+                    continue
+            else:
+                log("KME HOLD EXPIRED -> MACSEC DOWN", "ERROR", iface, "MASTER")
+                macsec_down(iface)
+                state["health"]["declared_down"] = True
+                save_db_state(peer, iface, state)
                 continue
-            log("KME HOLD EXPIRED -> MACSEC DOWN", "ERROR", iface, "MASTER")
-            macsec_down(iface)
-            state["health"]["declared_down"] = True
-            save_db_state(peer, iface, state)
-            continue
 
         if link_in_kme_hold(state, KME_FAIL_THRESHOLD, KME_HOLD_DOWN_SECONDS):
             fail_count = int(state['health'].get('kme_fail_count', 0))
