@@ -29,6 +29,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import time
+import datetime
 import requests
 import base64
 import subprocess
