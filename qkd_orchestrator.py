@@ -1135,7 +1135,6 @@ def handle_deploy(args):
     script_user = (
         os.getenv("QKD_SCRIPT_USER")
         or secrets.get("script_user")
-        or secrets.get("default_user")
         or QKD.get("SCRIPT_USER")
         or "etsi_user"
     )
@@ -1406,7 +1405,6 @@ def handle_validate(args):
     QKD["SCRIPT_USER"] = (
         os.getenv("QKD_SCRIPT_USER")
         or secrets.get("script_user")
-        or secrets.get("default_user")
         or QKD.get("SCRIPT_USER")
         or "etsi_user"
     )

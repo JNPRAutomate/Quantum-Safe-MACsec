@@ -360,24 +360,6 @@ def epoch_from_junos_start_time(start_time):
         return None
 
 
-def pending_sort_key(item):
-    start_epoch = epoch_from_junos_start_time(item.get("start_time"))
-    if start_epoch is None:
-        start_epoch = 2**31
-
-    generation = item.get("generation")
-    try:
-        generation = int(generation) if generation is not None else 2**31
-    except Exception:
-        generation = 2**31
-
-    return (
-        int(start_epoch),
-        generation,
-        str(item.get("key_id") or ""),
-    )
-
-
 def pending_seconds_until(start_time):
     epoch = epoch_from_junos_start_time(start_time)
     if epoch is None:
@@ -468,19 +450,14 @@ def log_runtime_mode(iface, mode_ctx):
 
 
 def max_installed_keys():
-    value = int(
-        qkd_policy().get(
-            "key_window_size",
-            qkd_policy().get("max_installed_keys", 5),
-        )
-    )
+    value = int(qkd_policy().get("max_installed_keys", 5))
     if value < 1:
         return 1
     return value
 
 
 def key_batch_size():
-    value = int(qkd_policy().get("key_batch_size", max_installed_keys()))
+    value = int(qkd_policy().get("key_batch_size", 5))
     if value < 1:
         return 1
     return min(value, max_installed_keys())
@@ -505,7 +482,6 @@ def default_keychain_state(link):
     return {
         "generation": 0,
         "active_generation": None,
-        "slot_cursor": 0,
         "ca_name": stable_ca_name(link),
         "keychain_name": stable_keychain_name(link),
         "active_key_id": None,
@@ -591,13 +567,13 @@ def normalize_pending_keys(state):
                 },
             )
 
-    normalized.sort(key=pending_sort_key)
-
-    # Keep pending queue bounded to the configured key window. We only need
-    # the near-future ring, not an unbounded historical queue.
-    max_pending = max_installed_keys()
-    if len(normalized) > max_pending:
-        normalized = normalized[:max_pending]
+    normalized.sort(
+        key=lambda item: (
+            item.get("generation") if item.get("generation") is not None else 2**31,
+            str(item.get("start_time") or ""),
+            item.get("key_id") or "",
+        )
+    )
 
     state["pending_keys"] = normalized
     return sync_pending_legacy_fields(state)
@@ -681,7 +657,7 @@ def trim_installed_keys_preserve_active(state):
         state["installed_keys"] = []
         return state
 
-    keep = min(KEYCHAIN_KEEP_LAST, max_installed_keys())
+    keep = KEYCHAIN_KEEP_LAST
     if keep < 1:
         keep = 1
 
@@ -890,6 +866,8 @@ def compare_peer_keychain_state(local_state, peer_state):
         return False
     if not keychain_state_valid(peer_state):
         return False
+    if int(local_state.get("generation", -1)) != int(peer_state.get("generation", -2)):
+        return False
     if local_state.get("ca_name") != peer_state.get("ca_name"):
         return False
     if local_state.get("keychain_name") != peer_state.get("keychain_name"):
@@ -912,9 +890,8 @@ def compare_peer_keychain_state(local_state, peer_state):
             return False
         if local_head.get("start_time") != peer_head.get("start_time"):
             return False
-
-    # Generation is a local scheduling counter and may drift across peers.
-    # Key identity and start-time alignment are the authoritative checks.
+        if int(local_head.get("generation") or -1) != int(peer_head.get("generation") or -2):
+            return False
     return True
 
 
@@ -1609,69 +1586,6 @@ def verify_local_config_state(link, state):
     return True
 
 
-def _active_slot_from_state(state):
-    active_key_id = state.get("active_key_id")
-    if not active_key_id:
-        return None
-
-    installed = state.get("installed_keys", [])
-    if not isinstance(installed, list):
-        return None
-
-    for item in reversed(installed):
-        if not isinstance(item, dict):
-            continue
-        if item.get("key_id") != active_key_id:
-            continue
-        slot = item.get("slot")
-        try:
-            if slot is not None:
-                return int(slot)
-        except Exception:
-            return None
-    return None
-
-
-def assign_slots_for_entries(state, entries):
-    """Assign keychain slots from a configurable ring, independent of generation.
-
-    Slots are selected by a moving cursor and avoid reusing the active slot
-    inside the same commit whenever possible.
-    """
-    ring_size = max_installed_keys()
-    if ring_size < 1:
-        ring_size = 1
-
-    try:
-        cursor = int(state.get("slot_cursor", 0)) % ring_size
-    except Exception:
-        cursor = 0
-
-    active_slot = _active_slot_from_state(state)
-    used = set()
-
-    for entry in entries:
-        attempts = 0
-        slot = cursor
-        while attempts < ring_size:
-            if slot in used:
-                slot = (slot + 1) % ring_size
-                attempts += 1
-                continue
-            if ring_size > 1 and active_slot is not None and slot == active_slot:
-                slot = (slot + 1) % ring_size
-                attempts += 1
-                continue
-            break
-
-        entry["slot"] = int(slot)
-        used.add(int(slot))
-        cursor = (int(slot) + 1) % ring_size
-
-    state["slot_cursor"] = cursor
-    return entries
-
-
 # ----------------------------
 # MACSEC KEYCHAIN HELPERS
 # ----------------------------
@@ -1680,18 +1594,14 @@ def ckn_from_key_id(key_id):
     return hashlib.sha256(key_id.encode()).hexdigest()
 
 
-def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, commit=True):
+def install_keychain_batch(iface, entries, ca_name, keychain_name, commit=True):
     if not entries:
         log("KEYCHAIN INSTALL BATCH EMPTY", "ERROR", iface, "MACSEC")
         return False
 
-    if state is None:
-        state = {}
-
-    entries = assign_slots_for_entries(state, entries)
-
     cli_cmds = ["configure"]
-    # Keep CA wiring stable; update keychain entries without rebuilding CA each cycle.
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key")
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
@@ -1721,10 +1631,10 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cak = k[:32].hex()
         ckn = ckn_from_key_id(key_id)
 
-        try:
-            key_index = int(entry.get("slot"))
-        except Exception:
+        if generation is None:
             key_index = qkd_key_index_from_time()
+        else:
+            key_index = qkd_key_index_from_generation(generation)
 
         if not start_time:
             start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time())))
@@ -1778,7 +1688,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
     return True
 
 
-def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, state=None, generation=None, start_time=None, commit=True):
+def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, generation=None, start_time=None, commit=True):
     return install_keychain_batch(
         iface,
         [
@@ -1791,7 +1701,6 @@ def install_keychain_key(iface, key_id, key_b64, ca_name, keychain_name, state=N
         ],
         ca_name,
         keychain_name,
-        state=state,
         commit=commit,
     )
 
@@ -2141,16 +2050,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     install_start_ms = now_ms()
     customer_event("PEER_KEYCHAIN_INSTALL_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, ca=ca_name, keychain=keychain, start_time=start_time)
 
-    if not install_keychain_key(
-        iface,
-        key_id,
-        key,
-        ca_name,
-        keychain,
-        state=state,
-        generation=generation,
-        start_time=start_time,
-    ):
+    if not install_keychain_key(iface, key_id, key, ca_name, keychain, generation=generation, start_time=start_time):
         print(f"ERROR KEYCHAIN INSTALL FAIL key_id={key_id}")
         log(f"INSTALL-KEY ABORTED reason=KEYCHAIN_INSTALL_FAILED ca={ca_name} keychain={keychain} key_id={key_id}", "ERROR", iface, "SLAVE")
         return False
@@ -2169,16 +2069,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     state = append_pending_key(state, state.get("generation"), key_id, start_time)
     state["last_rotation"] = int(time.time())
     state.setdefault("installed_keys", [])
-    state["installed_keys"].append(
-        {
-            "generation": state.get("generation"),
-            "key_id": key_id,
-            "slot": (int(state.get("slot_cursor", 0)) - 1) % max_installed_keys(),
-            "installed_at": int(time.time()),
-            "start_time": start_time,
-            "status": "pending",
-        }
-    )
+    state["installed_keys"].append({"generation": state.get("generation"), "key_id": key_id, "installed_at": int(time.time()), "start_time": start_time, "status": "pending"})
     state = trim_installed_keys_preserve_active(state)
     state = clear_kme_failure(peer, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
@@ -2274,7 +2165,7 @@ def run_slave_install_key_batch(batch_b64, iface):
             }
         )
 
-    if not install_keychain_batch(iface, install_entries, ca_name, keychain, state=state, commit=True):
+    if not install_keychain_batch(iface, install_entries, ca_name, keychain, commit=True):
         record_kme_failure(peer, iface, state, "BATCH_INSTALL_FAILED")
         print("ERROR KEYCHAIN BATCH INSTALL FAIL")
         return False
@@ -2283,30 +2174,11 @@ def run_slave_install_key_batch(batch_b64, iface):
         print(f"ERROR INTERFACE BIND FAIL ca={ca_name}")
         return False
 
-    # Purge stale queue heads once per incoming batch, not per-entry.
-    # If we purge on every generation in the same batch, we collapse the
-    # pending queue to the last key and delay activation unnecessarily.
-    batch_generations = []
-    for entry in install_entries:
-        generation = entry.get("generation")
-        try:
-            if generation is not None:
-                batch_generations.append(int(generation))
-        except Exception:
-            pass
-
-    if batch_generations:
-        state = purge_pending_older_than_generation(
-            state,
-            min(batch_generations),
-            iface=iface,
-            mode_ctx="SLAVE",
-        )
-
     for entry in install_entries:
         generation = entry.get("generation")
         key_id = entry.get("key_id")
         start_time = entry.get("start_time")
+        state = purge_pending_older_than_generation(state, generation, iface=iface, mode_ctx="SLAVE")
         if generation is not None:
             state["generation"] = int(generation)
         state = append_pending_key(state, generation, key_id, start_time)
@@ -2315,7 +2187,6 @@ def run_slave_install_key_batch(batch_b64, iface):
             {
                 "generation": generation,
                 "key_id": key_id,
-                "slot": entry.get("slot"),
                 "installed_at": int(time.time()),
                 "start_time": start_time,
                 "status": "pending",
@@ -2406,9 +2277,6 @@ def bootstrap_keychain_link(link, force=False):
     bootstrap_fallback_keys = int(qkd_policy().get("bootstrap_fallback_keys", 1))
     if bootstrap_fallback_keys < 0:
         bootstrap_fallback_keys = 0
-    max_fallback = max(0, max_installed_keys() - 1)
-    if bootstrap_fallback_keys > max_fallback:
-        bootstrap_fallback_keys = max_fallback
 
     bootstrap_records = []
 
@@ -2482,7 +2350,7 @@ def bootstrap_keychain_link(link, force=False):
     time.sleep(0.5)
 
     if len(bootstrap_records) > 1:
-        if not install_keychain_batch(iface, bootstrap_records, ca_name, keychain, state=state, commit=True):
+        if not install_keychain_batch(iface, bootstrap_records, ca_name, keychain, commit=True):
             log("KEYCHAIN BOOTSTRAP FAILED local install-key-batch", "ERROR", iface, "BOOTSTRAP")
             return False
     else:
@@ -2493,7 +2361,6 @@ def bootstrap_keychain_link(link, force=False):
             item["key"],
             ca_name,
             keychain,
-            state=state,
             generation=item["generation"],
             start_time=item["start_time"],
         ):
@@ -2512,7 +2379,6 @@ def bootstrap_keychain_link(link, force=False):
             {
                 "generation": item["generation"],
                 "key_id": item["key_id"],
-                "slot": item.get("slot"),
                 "installed_at": int(time.time()),
                 "start_time": item["start_time"],
                 "status": "pending",
@@ -2778,9 +2644,42 @@ def run_master():
                 }
             )
 
+        peer_notify_start_ms = now_ms()
+        if batch_size > 1:
+            payload_json = json.dumps(peer_payload, separators=(",", ":"))
+            payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
+                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
+                log("PEER INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                continue
+        else:
+            item = batch_records[0]
+            if not send_command(
+                link,
+                "install-key",
+                iface,
+                key_id=item["key_id"],
+                generation=item["generation"],
+                start_time=item["start_time"],
+            ):
+                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_FAILED")
+                log("PEER INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                continue
+
+        customer_event(
+            "PEER_ACK",
+            iface=iface,
+            mode="MASTER",
+            rotation=rotation,
+            generation=batch_records[-1]["generation"],
+            key_id=batch_records[0]["key_id"],
+            peer=peer,
+            peer_latency_ms=elapsed_ms(peer_notify_start_ms),
+        )
+
         local_install_start_ms = now_ms()
         if batch_size > 1:
-            install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, state=state, commit=True)
+            install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, commit=True)
             fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
             fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
         else:
@@ -2791,7 +2690,6 @@ def run_master():
                 item["key"],
                 ca_name,
                 keychain,
-                state=state,
                 generation=item["generation"],
                 start_time=item["start_time"],
                 commit=True,
@@ -2820,39 +2718,6 @@ def run_master():
             enc_latency_ms=elapsed_ms(enc_batch_start_ms),
         )
 
-        peer_notify_start_ms = now_ms()
-        if batch_size > 1:
-            payload_json = json.dumps(peer_payload, separators=(",", ":"))
-            payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
-                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
-                log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                continue
-        else:
-            item = batch_records[0]
-            if not send_command(
-                link,
-                "install-key",
-                iface,
-                key_id=item["key_id"],
-                generation=item["generation"],
-                start_time=item["start_time"],
-            ):
-                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_FAILED")
-                log("PEER INSTALL-KEY FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                continue
-
-        customer_event(
-            "PEER_ACK",
-            iface=iface,
-            mode="MASTER",
-            rotation=rotation,
-            generation=batch_records[-1]["generation"],
-            key_id=batch_records[0]["key_id"],
-            peer=peer,
-            peer_latency_ms=elapsed_ms(peer_notify_start_ms),
-        )
-
         time.sleep(POST_KEY_INSTALL_SETTLE_SECONDS)
 
         first_start_time = batch_records[0]["start_time"]
@@ -2875,7 +2740,6 @@ def run_master():
                 {
                     "generation": item["generation"],
                     "key_id": item["key_id"],
-                    "slot": item.get("slot"),
                     "start_time": item["start_time"],
                     "status": "pending",
                     "installed_at": int(time.time()),
