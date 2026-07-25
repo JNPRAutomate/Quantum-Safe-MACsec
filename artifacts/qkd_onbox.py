@@ -1898,7 +1898,18 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
     if not pending_key_id:
         return state, False
 
-    if not mka_confirms_key(iface, pending_key_id, generation=pending_generation):
+    # Batch-aware promotion: if MKA has already moved to a later pending key,
+    # advance the pending window instead of remaining stuck on the stale head.
+    mka_block = get_mka_session_block_for_iface(iface)
+    if not mka_block:
+        return state, False
+
+    fields = parse_mka_session_fields(mka_block)
+    secured = mka_session_secured(fields)
+    cak_name = normalize_hex_string(fields.get("cak_name") or "")
+    key_number = fields.get("key_number")
+
+    if not secured:
         log(
             f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={format_next_start_time_with_millis(pending_start_time)}",
             "INFO",
@@ -1906,6 +1917,68 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             "MKA",
         )
         return state, False
+
+    now_epoch = int(time.time())
+    confirmed_idx = None
+    confirmed_item = None
+    for idx, item in enumerate(pending_keys):
+        if not isinstance(item, dict):
+            continue
+        item_key_id = item.get("key_id")
+        if not item_key_id:
+            continue
+
+        # Never promote keys scheduled in the future.
+        item_start_epoch = epoch_from_junos_start_time(item.get("start_time"))
+        if item_start_epoch is not None and int(item_start_epoch) > now_epoch:
+            continue
+
+        expected_ckn = normalize_hex_string(ckn_from_key_id(str(item_key_id)))
+        if expected_ckn and expected_ckn == cak_name:
+            confirmed_idx = idx
+            confirmed_item = item
+            break
+
+    if confirmed_item is None:
+        log(
+            f"MKA KEY NOT CONFIRMED key_id={pending_key_id} secured={secured} ckn_match=False key_number={key_number} "
+            f"interface_state={fields.get('interface_state')} mka_suspended={fields.get('mka_suspended')}",
+            "INFO",
+            iface,
+            "MKA",
+        )
+        log(
+            f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={format_next_start_time_with_millis(pending_start_time)}",
+            "INFO",
+            iface,
+            "MKA",
+        )
+        return state, False
+
+    pending_key_id = confirmed_item.get("key_id")
+    pending_generation = confirmed_item.get("generation")
+    pending_start_time = confirmed_item.get("start_time")
+
+    # Drop the confirmed key and any older pending keys ahead of it.
+    skipped_pending_count = int(confirmed_idx or 0)
+    state["pending_keys"] = pending_keys[int(confirmed_idx) + 1 :]
+    state = sync_pending_legacy_fields(state)
+
+    if skipped_pending_count > 0:
+        log(
+            f"PENDING WINDOW ADVANCED skipped_pending_count={skipped_pending_count} promoted_key_id={pending_key_id}",
+            "WARN",
+            iface,
+            "MKA",
+        )
+
+    log(
+        f"MKA KEY CONFIRMED key_id={pending_key_id} key_number={key_number} "
+        f"latest_sak_an={fields.get('latest_sak_an')} previous_sak_an={fields.get('previous_sak_an')}",
+        "INFO",
+        iface,
+        "MKA",
+    )
 
     promotion_time = int(time.time())
     next_start_time = pending_start_time
@@ -1921,7 +1994,6 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         state["generation"] = int(pending_generation)
         state["active_generation"] = int(pending_generation)
     state["active_confirmed_at"] = promotion_time
-    state["pending_keys"] = pending_keys[1:]
     state["pending_stuck_at"] = None  # Clear stuck timer when promoted
     state = sync_pending_legacy_fields(state)
 
