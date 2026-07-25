@@ -493,6 +493,33 @@ def rotation_interval_seconds():
     return value
 
 
+def pending_confirm_grace_seconds():
+    value = int(
+        qkd_policy().get(
+            "pending_confirm_grace_seconds",
+            rotation_interval_seconds(),
+        )
+    )
+    if value < 0:
+        return 0
+    return value
+
+
+def pending_stuck_recovery_seconds():
+    derived_default = pending_confirm_grace_seconds() + (
+        rotation_interval_seconds() * key_batch_size()
+    )
+    value = int(
+        qkd_policy().get(
+            "pending_stuck_recovery_seconds",
+            derived_default,
+        )
+    )
+    if value < pending_confirm_grace_seconds():
+        return pending_confirm_grace_seconds()
+    return value
+
+
 def qkd_key_index_from_generation(generation):
     return int(generation) % max_installed_keys()
 
@@ -661,6 +688,50 @@ def purge_pending_older_than_generation(state, incoming_generation, iface=None, 
         log(
             f"STALE PENDING KEYS PURGED(incoming_generation) incoming_generation={incoming_generation} "
             f"dropped={len(dropped)} dropped_generations={[item.get('generation') for item in dropped]}",
+            "WARN",
+            iface,
+            mode_ctx,
+        )
+
+    return state
+
+
+def purge_pending_older_than_start_time(state, incoming_start_time, iface=None, mode_ctx="STATE"):
+    """Drop pending entries scheduled before an incoming start-time.
+
+    This keeps the runtime queue aligned to the time-ordered key window and
+    avoids relying on generation arithmetic as the primary control signal.
+    """
+    incoming_epoch = epoch_from_junos_start_time(incoming_start_time)
+    if incoming_epoch is None:
+        return state
+
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if not pending:
+        return state
+
+    kept = []
+    dropped = []
+    for item in pending:
+        item_start = item.get("start_time")
+        item_epoch = epoch_from_junos_start_time(item_start)
+        if item_epoch is None:
+            kept.append(item)
+            continue
+
+        if int(item_epoch) < int(incoming_epoch):
+            dropped.append(item)
+            continue
+        kept.append(item)
+
+    if dropped:
+        state["pending_keys"] = kept
+        state = sync_pending_legacy_fields(state)
+        log(
+            f"STALE PENDING KEYS PURGED(incoming_start_time) incoming_start_time={incoming_start_time} "
+            f"dropped={len(dropped)} dropped_start_times={[item.get('start_time') for item in dropped]} "
+            f"dropped_generations={[item.get('generation') for item in dropped]}",
             "WARN",
             iface,
             mode_ctx,
@@ -2122,7 +2193,10 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     state = load_link_state(peer, iface, link)
-    state = purge_pending_older_than_generation(state, generation, iface=iface, mode_ctx="SLAVE")
+    state = purge_pending_older_than_start_time(state, start_time, iface=iface, mode_ctx="SLAVE")
+    if epoch_from_junos_start_time(start_time) is None:
+        # Legacy fallback if incoming start-time is missing/invalid.
+        state = purge_pending_older_than_generation(state, generation, iface=iface, mode_ctx="SLAVE")
 
     dec_start_ms = now_ms()
     customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
@@ -2286,16 +2360,29 @@ def run_slave_install_key_batch(batch_b64, iface):
     # Purge stale queue heads once per incoming batch, not per-entry.
     # If we purge on every generation in the same batch, we collapse the
     # pending queue to the last key and delay activation unnecessarily.
+    batch_start_times = []
     batch_generations = []
     for entry in install_entries:
         generation = entry.get("generation")
+        start_time = entry.get("start_time")
+        if epoch_from_junos_start_time(start_time) is not None:
+            batch_start_times.append(start_time)
         try:
             if generation is not None:
                 batch_generations.append(int(generation))
         except Exception:
             pass
 
-    if batch_generations:
+    if batch_start_times:
+        incoming_start_time = min(batch_start_times, key=lambda value: epoch_from_junos_start_time(value))
+        state = purge_pending_older_than_start_time(
+            state,
+            incoming_start_time,
+            iface=iface,
+            mode_ctx="SLAVE",
+        )
+    elif batch_generations:
+        # Legacy fallback if no valid start-time is present in the batch.
         state = purge_pending_older_than_generation(
             state,
             min(batch_generations),
@@ -2598,18 +2685,58 @@ def run_master():
         # MKA confirmation to avoid premature peer-mismatch bootstrap loops.
         if state.get("pending_key_id") and state.get("next_start_time"):
             pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
-            pending_confirm_grace_seconds = int(
-                qkd_policy().get("pending_confirm_grace_seconds", 90)
-            )
-            if pending_epoch is not None and int(time.time()) < (int(pending_epoch) + pending_confirm_grace_seconds):
+            confirm_grace_seconds = pending_confirm_grace_seconds()
+            if pending_epoch is not None and int(time.time()) < (int(pending_epoch) + confirm_grace_seconds):
                 log(
                     f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
-                    f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={pending_confirm_grace_seconds}",
+                    f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={confirm_grace_seconds}",
                     "INFO",
                     iface,
                     "MASTER",
                 )
                 continue
+
+        # Simplified control rule:
+        # While a pending key exists and is not MKA-confirmed, do not enter
+        # peer mismatch / lag / bootstrap branches. Keep waiting up to a single
+        # bounded recovery window, then allow recovery.
+        if state.get("pending_key_id") and state.get("next_start_time"):
+            pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
+            confirm_grace_seconds = pending_confirm_grace_seconds()
+            stuck_recovery_seconds = pending_stuck_recovery_seconds()
+
+            now_epoch = int(time.time())
+            if pending_epoch is None:
+                log(
+                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
+                    f"reason=PENDING_AWAITING_MKA_CONFIRMATION",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
+                continue
+
+            confirm_deadline = int(pending_epoch) + confirm_grace_seconds
+            overdue_seconds = now_epoch - confirm_deadline
+            if overdue_seconds <= stuck_recovery_seconds:
+                log(
+                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
+                    f"reason=PENDING_AWAITING_MKA_CONFIRMATION overdue_seconds={max(0, overdue_seconds)} "
+                    f"pending_stuck_recovery_seconds={stuck_recovery_seconds}",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
+                continue
+
+            log(
+                f"PENDING STUCK EXCEEDED -> ALLOW RECOVERY pending_key_id={state.get('pending_key_id')} "
+                f"next_start_time={state.get('next_start_time')} overdue_seconds={overdue_seconds} "
+                f"pending_stuck_recovery_seconds={stuck_recovery_seconds}",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
@@ -2664,6 +2791,58 @@ def run_master():
             peer_next_start = peer_state.get("next_start_time")
             local_active = state.get("active_key_id")
             local_pending = state.get("pending_key_id")
+
+            # If both sides already agree on the active key and only pending
+            # heads differ, prefer bounded reconciliation over immediate
+            # bootstrap. This avoids resetting healthy links on transient
+            # scheduling drift.
+            if (
+                local_active
+                and peer_active
+                and local_active == peer_active
+                and local_pending
+                and peer_pending
+                and local_pending != peer_pending
+            ):
+                now_epoch = int(time.time())
+                local_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
+                peer_epoch = epoch_from_junos_start_time(peer_next_start)
+
+                local_overdue_seconds = None
+                peer_overdue_seconds = None
+                if local_epoch is not None:
+                    local_overdue_seconds = now_epoch - int(local_epoch)
+                if peer_epoch is not None:
+                    peer_overdue_seconds = now_epoch - int(peer_epoch)
+
+                pending_mismatch_recovery_seconds = int(
+                    qkd_policy().get(
+                        "pending_mismatch_recovery_seconds",
+                        max(180, rotation_interval_seconds() * 3),
+                    )
+                )
+
+                local_within_recovery = (
+                    local_overdue_seconds is None
+                    or local_overdue_seconds <= pending_mismatch_recovery_seconds
+                )
+                peer_within_recovery = (
+                    peer_overdue_seconds is None
+                    or peer_overdue_seconds <= pending_mismatch_recovery_seconds
+                )
+
+                if local_within_recovery and peer_within_recovery:
+                    log(
+                        f"PEER STATE MISMATCH (PENDING DRIFT) -> SKIP BOOTSTRAP local_active_key={local_active} "
+                        f"peer_active_key={peer_active} local_pending_key={local_pending} peer_pending_key={peer_pending} "
+                        f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_next_start} "
+                        f"local_overdue_seconds={local_overdue_seconds} peer_overdue_seconds={peer_overdue_seconds} "
+                        f"pending_mismatch_recovery_seconds={pending_mismatch_recovery_seconds}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
 
             if local_active and not local_pending and (not peer_active) and peer_pending:
                 # Allow peer to lag transiently, but do not skip forever.
