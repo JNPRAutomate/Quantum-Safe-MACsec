@@ -2792,6 +2792,52 @@ def run_master():
             local_active = state.get("active_key_id")
             local_pending = state.get("pending_key_id")
 
+            # If local side has already promoted and peer is still on the
+            # previous active key while holding a pending key, treat it as
+            # transient promotion lag and wait within a bounded window.
+            if (
+                local_active
+                and not local_pending
+                and peer_pending
+                and peer_active != local_active
+            ):
+                lag_overdue_seconds = None
+                peer_epoch = epoch_from_junos_start_time(peer_next_start)
+                if peer_epoch is not None:
+                    lag_overdue_seconds = int(time.time()) - int(peer_epoch)
+
+                peer_promotion_recovery_seconds = int(
+                    qkd_policy().get(
+                        "peer_promotion_recovery_seconds",
+                        pending_stuck_recovery_seconds(),
+                    )
+                )
+
+                if (
+                    lag_overdue_seconds is None
+                    or lag_overdue_seconds <= peer_promotion_recovery_seconds
+                ):
+                    log(
+                        f"PEER STATE MISMATCH (PROMOTION LAG) -> SKIP BOOTSTRAP local_active_key={local_active} "
+                        f"peer_active_key={peer_active} peer_pending_key={peer_pending} "
+                        f"peer_next_start_time={peer_next_start} lag_overdue_seconds={lag_overdue_seconds} "
+                        f"peer_promotion_recovery_seconds={peer_promotion_recovery_seconds}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
+
+                log(
+                    f"PEER PROMOTION LAG EXCEEDED -> ALLOW CONTROLLED BOOTSTRAP local_active_key={local_active} "
+                    f"peer_active_key={peer_active} peer_pending_key={peer_pending} "
+                    f"peer_next_start_time={peer_next_start} lag_overdue_seconds={lag_overdue_seconds} "
+                    f"peer_promotion_recovery_seconds={peer_promotion_recovery_seconds}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+
             # If both sides already agree on the active key and only pending
             # heads differ, prefer bounded reconciliation over immediate
             # bootstrap. This avoids resetting healthy links on transient
