@@ -1028,7 +1028,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
     state = normalize_slot_ring(state)
 
     log(
-        f"PENDING STUCK RECOVERY APPLIED -> ADVANCE PENDING WINDOW pending_key_id={pending_key_id} start_time={pending_start_time} "
+        f"PENDING STUCK RECOVERY APPLIED -> ADVANCE PENDING WINDOW pending_key_id={pending_key_id} start_time={format_next_start_time_with_millis(pending_start_time)} "
         f"reason={reason} dropped_generation={dropped.get('generation')}",
         "ERROR",
         iface,
@@ -1303,13 +1303,13 @@ def format_start_time_cli(start_time):
 
 
 def format_next_start_time_with_millis(start_time_str):
-    """Format next_start_time as YYYY-MM-DD HH:MM:SS with current seconds."""
+    """Format start_time for logs as YYYY-MM-DD HH:MM:SS."""
     if not start_time_str:
         return "None"
-    current_seconds = int(time.time()) % 60
-    # start_time_str format: "2026-07-25.14:53" → "2026-07-25 14:53:SS"
-    formatted = start_time_str.replace(".", " ")
-    return f"{formatted}:{current_seconds:02d}"
+    value = str(start_time_str).strip().replace(".", " ")
+    if value.count(":") == 1:
+        return f"{value}:00"
+    return value
 
 
 def start_time_is_future(start_time, grace_seconds=0):
@@ -1893,7 +1893,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
 
     if not mka_confirms_key(iface, pending_key_id, generation=pending_generation):
         log(
-            f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={pending_start_time}",
+            f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={format_next_start_time_with_millis(pending_start_time)}",
             "INFO",
             iface,
             "MKA",
@@ -1929,7 +1929,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
 
     log(
         f"PENDING KEY PROMOTED active_key_id={state.get('active_key_id')} generation={state.get('generation')} "
-        f"scheduled_start_time={next_start_time} promotion_delay_ms={promotion_delay_ms}",
+        f"scheduled_start_time={format_next_start_time_with_millis(next_start_time)} promotion_delay_ms={promotion_delay_ms}",
         "INFO",
         iface,
         "MKA",
@@ -2145,7 +2145,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             return False
 
         log(
-            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} idx={idx} key_index={key_index} start_time={start_time} key_id={key_id} cak={cak[:16]}... ckn={ckn[:16]}...",
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} idx={idx} key_index={key_index} start_time={format_next_start_time_with_millis(start_time)} key_id={key_id} cak={cak[:16]}... ckn={ckn[:16]}...",
             "INFO",
             iface,
             "MACSEC",
@@ -2531,7 +2531,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     rotation = rotation_id_for(iface, generation, key_id)
     customer_event("PEER_INSTALL_REQUEST", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, start_time=start_time)
     log(
-        f"INSTALL-KEY SCHEDULE key_id={key_id} generation={generation} start_time={start_time} runtime_mode={runtime_mode} effective_batch={effective_batch}",
+        f"INSTALL-KEY SCHEDULE key_id={key_id} generation={generation} start_time={format_next_start_time_with_millis(start_time)} runtime_mode={runtime_mode} effective_batch={effective_batch}",
         "INFO",
         iface,
         "SLAVE",
@@ -2619,7 +2619,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
 
     log(
         f"KEYCHAIN PENDING KEY INSTALLED ca={ca_name} keychain={keychain} generation={state.get('generation')} "
-        f"pending_key_id={key_id} start_time={start_time} pending_seconds={pending_seconds_until(start_time)} promoted={promoted}",
+        f"pending_key_id={key_id} start_time={format_next_start_time_with_millis(start_time)} pending_seconds={pending_seconds_until(start_time)} promoted={promoted}",
         "INFO",
         iface,
         "SLAVE",
@@ -2839,7 +2839,7 @@ def bootstrap_keychain_link(link, force=False):
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
 
-    log(f"KEYCHAIN BOOTSTRAP START force={force} ca={ca_name} keychain={keychain} generation={generation} start_time={start_time}", "INFO", iface, "BOOTSTRAP")
+    log(f"KEYCHAIN BOOTSTRAP START force={force} ca={ca_name} keychain={keychain} generation={generation} start_time={format_next_start_time_with_millis(start_time)}", "INFO", iface, "BOOTSTRAP")
 
     bootstrap_records = []
 
@@ -2927,7 +2927,7 @@ def bootstrap_keychain_link(link, force=False):
             return False
         log(
             f"KEYCHAIN BOOTSTRAP SCHEDULED ca={ca_name} keychain={keychain} first_generation={generation} "
-            f"pending_key_id={state.get('pending_key_id')} start_time={start_time} key_count={len(bootstrap_records)}",
+            f"pending_key_id={state.get('pending_key_id')} start_time={format_next_start_time_with_millis(start_time)} key_count={len(bootstrap_records)}",
             "INFO",
             iface,
             "BOOTSTRAP",
@@ -2945,7 +2945,7 @@ def bootstrap_keychain_link(link, force=False):
 
     log(
         f"KEYCHAIN READY ca={ca_name} keychain={keychain} generation={generation} pending_key_id={state.get('pending_key_id')} "
-        f"active_key_id={state.get('active_key_id')} start_time={start_time} promoted={promoted}",
+        f"active_key_id={state.get('active_key_id')} start_time={format_next_start_time_with_millis(start_time)} promoted={promoted}",
         "INFO",
         iface,
         "BOOTSTRAP",
@@ -3078,7 +3078,7 @@ def run_master():
 
             log(
                 f"PENDING STUCK EXCEEDED -> ALLOW RECOVERY pending_key_id={state.get('pending_key_id')} "
-                f"next_start_time={state.get('next_start_time')} overdue_seconds={overdue_seconds} "
+                f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} overdue_seconds={overdue_seconds} "
                 f"pending_stuck_recovery_seconds={stuck_recovery_seconds}",
                 "ERROR",
                 iface,
@@ -3211,7 +3211,7 @@ def run_master():
                 local_cache_empty = True
                 log(
                     f"PEER STATE MISMATCH BUT LOCAL CACHE EMPTY -> ALLOW ROTATION peer_active_key={peer_active} "
-                    f"peer_pending_key={peer_pending} peer_next_start_time={peer_state.get('next_start_time')}",
+                    f"peer_pending_key={peer_pending} peer_next_start_time={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
                     "WARN",
                     iface,
                     "MASTER",
@@ -3229,7 +3229,7 @@ def run_master():
                 log(
                     f"PEER STATE MISMATCH -> SKIP BOOTSTRAP local_active_key={local_active} peer_active_key={peer_active} "
                     f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
-                    f"local_next_start_time={state.get('next_start_time')} peer_next_start_time={peer_state.get('next_start_time')}",
+                    f"local_next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} peer_next_start_time={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
                     "WARN",
                     iface,
                     "MASTER",
@@ -3310,7 +3310,7 @@ def run_master():
                     save_db_state(peer, iface, state)
                     continue
 
-            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
+            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
             continue
 
         # DEBUG: Log what's blocking rotation
@@ -3488,7 +3488,7 @@ def run_master():
                 log("MACSEC NOT INUSE AFTER KEYCHAIN INSTALL -> MARK DEGRADED", "ERROR", iface, "MASTER")
                 continue
         else:
-            log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={first_start_time}", "INFO", iface, "MASTER")
+            log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={format_next_start_time_with_millis(first_start_time)}", "INFO", iface, "MASTER")
 
         state["generation"] = batch_records[-1]["generation"]
         state["ca_name"] = ca_name
@@ -3534,14 +3534,14 @@ def run_master():
             )
             
             if is_transient_mismatch:
-                log(f"POST-ROTATION PEER STATE TRANSIENT MISMATCH (pending key aligned, tolerating) local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} pending_key={local_pending_key} pending_start={local_pending_start}", "INFO", iface, "MASTER")
+                log(f"POST-ROTATION PEER STATE TRANSIENT MISMATCH (pending key aligned, tolerating) local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} pending_key={local_pending_key} pending_start={format_next_start_time_with_millis(local_pending_start)}", "INFO", iface, "MASTER")
             else:
                 log(f"POST-ROTATION PEER STATE MISMATCH local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} peer_keychain={peer_state.get('keychain_name')} local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}", "ERROR", iface, "MASTER")
                 continue
 
         log(
             f"KEYCHAIN ROTATION BATCH DONE rotation={rotation} ca={ca_name} keychain={keychain} generation={state.get('generation')} pending_key_id={state.get('pending_key_id')} "
-            f"start_time={state.get('next_start_time')} pending_seconds={pending_seconds_until(state.get('next_start_time'))} promoted={promoted} key_count={len(batch_records)} cycle_duration_ms={elapsed_ms(rotation_start_ms)}",
+            f"start_time={format_next_start_time_with_millis(state.get('next_start_time'))} pending_seconds={pending_seconds_until(state.get('next_start_time'))} promoted={promoted} key_count={len(batch_records)} cycle_duration_ms={elapsed_ms(rotation_start_ms)}",
             "INFO",
             iface,
             "MASTER",
