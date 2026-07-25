@@ -358,10 +358,19 @@ def elapsed_ms(start_ms):
 def epoch_from_junos_start_time(start_time):
     if not start_time:
         return None
-    try:
-        return int(time.mktime(time.strptime(start_time, "%Y-%m-%d.%H:%M")))
-    except Exception:
-        return None
+    value = str(start_time).strip()
+    formats = (
+        "%Y-%m-%d.%H:%M:%S",
+        "%Y-%m-%d.%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    )
+    for fmt in formats:
+        try:
+            return int(time.mktime(time.strptime(value, fmt)))
+        except Exception:
+            continue
+    return None
 
 
 def pending_sort_key(item):
@@ -484,12 +493,10 @@ def max_installed_keys():
 
 
 def key_batch_size():
-    # FORCE single-key for stability testing
-    return 1
-    # value = int(qkd_policy().get("key_batch_size", max_installed_keys()))
-    # if value < 1:
-    #     return 1
-    # return min(value, max_installed_keys())
+    value = int(qkd_policy().get("key_batch_size", max_installed_keys()))
+    if value < 1:
+        return 1
+    return min(value, max_installed_keys())
 
 
 def rotation_interval_seconds():
@@ -1284,11 +1291,11 @@ def link_stagger_minutes(link):
 
 
 def junos_start_time_from_epoch(epoch_seconds):
-    return time.strftime("%Y-%m-%d.%H:%M", time.localtime(int(epoch_seconds)))
+    return time.strftime("%Y-%m-%d.%H:%M:%S", time.localtime(int(epoch_seconds)))
 
 
 def format_start_time_cli(start_time):
-    """Convert internal start_time format (YYYY-MM-DD.HH:MM) to Junos CLI format.
+    """Convert internal start_time format to Junos CLI format.
 
     Junos CLI expects: YYYY-MM-DD.HH:MM:SS
     Example: "2026-07-25.14:13" -> "2026-07-25.14:13:00"
@@ -2413,7 +2420,14 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
     if batch_b64:
         cmd += f" batch-b64 {batch_b64}"
 
-    log(f"SSH EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} cmd=\"{cmd}\"", "INFO", iface, "MASTER")
+    start_time_human = format_next_start_time_with_millis(start_time) if start_time else "None"
+    log(
+        f"SSH EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
+        f"scheduled_start_time={start_time_human} cmd=\"{cmd}\"",
+        "INFO",
+        iface,
+        "MASTER",
+    )
 
     ssh_cmd = [
         "ssh",
