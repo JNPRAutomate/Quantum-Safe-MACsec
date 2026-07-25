@@ -3107,9 +3107,23 @@ def run_master():
                 iface,
                 "MASTER",
             )
-            if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
-                log("KME HOLD ACTIVE BUT MACSEC NOT INUSE -> KEEP HOLD", "ERROR", iface, "MASTER")
-            continue
+            
+            # BATCH MODE RECOVERY: If batch mode + failure is recent (<5min), allow ONE recovery attempt
+            if runtime_mode == "batch":
+                now = int(time.time())
+                unavailable_since = int(state['health'].get('kme_unavailable_since', 0))
+                hold_age_seconds = now - unavailable_since
+                if hold_age_seconds < 300:  # 5 minutes
+                    log(f"BATCH MODE RECOVERY: KME HOLD is recent ({hold_age_seconds}s) - skip hold and try install", "INFO", iface, "MASTER")
+                    # Fall through to rotation logic instead of continue
+                else:
+                    if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                        log("KME HOLD ACTIVE BUT MACSEC NOT INUSE -> KEEP HOLD", "ERROR", iface, "MASTER")
+                    continue
+            else:
+                if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
+                    log("KME HOLD ACTIVE BUT MACSEC NOT INUSE -> KEEP HOLD", "ERROR", iface, "MASTER")
+                continue
 
         if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
             log(f"MACSEC NOT INUSE ca={ca_name} -> CONTROLLED BOOTSTRAP", "ERROR", iface, "MASTER")
