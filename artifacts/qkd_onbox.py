@@ -481,6 +481,7 @@ def qkd_key_index_from_time():
 def default_keychain_state(link):
     return {
         "generation": 0,
+        "active_generation": None,
         "ca_name": stable_ca_name(link),
         "keychain_name": stable_keychain_name(link),
         "active_key_id": None,
@@ -746,13 +747,20 @@ def prune_stale_pending_keys(state, iface=None):
             )
         return state
 
-    # Use the generation of the actually active key, not the latest scheduled
-    # batch generation. Otherwise freshly queued pending keys can be purged
-    # immediately after batch install.
+    # Use an explicit active_generation first; it tracks the generation that
+    # has been confirmed/promoted by MKA and is robust against batch scheduling.
     active_generation = None
+    stored_active_generation = state.get("active_generation")
+    try:
+        if stored_active_generation is not None:
+            active_generation = int(stored_active_generation)
+    except Exception:
+        active_generation = None
+
+    # Fallback for legacy states: derive from installed_keys active entry.
     active_key_id = state.get("active_key_id")
     installed = state.get("installed_keys", [])
-    if active_key_id and isinstance(installed, list):
+    if active_generation is None and active_key_id and isinstance(installed, list):
         for item in installed:
             if not isinstance(item, dict):
                 continue
@@ -770,12 +778,6 @@ def prune_stale_pending_keys(state, iface=None):
         # Do not fall back to state['generation'] here: during batch install it
         # can represent the newest scheduled generation, not the confirmed
         # active one, and that would purge all fresh pending keys.
-        log(
-            "STALE PURGE SKIPPED unable_to_resolve_active_generation",
-            "WARN",
-            iface,
-            "STATE",
-        )
         return state
 
     kept = []
@@ -1524,6 +1526,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
     state["active_key_id"] = pending_key_id
     if pending_generation is not None:
         state["generation"] = int(pending_generation)
+        state["active_generation"] = int(pending_generation)
     state["active_confirmed_at"] = promotion_time
     state["pending_keys"] = pending_keys[1:]
     state = sync_pending_legacy_fields(state)
