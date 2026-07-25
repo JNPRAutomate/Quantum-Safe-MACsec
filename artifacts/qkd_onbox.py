@@ -2109,6 +2109,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         if generation is None:
             key_index = qkd_key_index_from_time()
         else:
+            # Cycle through all key slots: gen 0→key 0, gen 1→key 1, etc.
             key_index = int(generation) % max_installed_keys()
 
         # VALIDATION: Check key_index
@@ -2141,11 +2142,6 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {cli_start_time}")
-
-    # PHASE 3: Remove bootstrap key (key 1 with start-time 2026-1-1) after first rotation batch
-    if len(entries) > 0:
-        log(f"KEYCHAIN BOOTSTRAP CLEANUP ca={ca_name} keychain={keychain_name} batch_entries={len(entries)} action=remove_bootstrap_key", "DEBUG", iface, "MACSEC")
-        cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key 1")
 
     if commit:
         cli_cmds.append("commit")
@@ -2818,7 +2814,8 @@ def bootstrap_keychain_link(link, force=False):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     old_state = load_link_state(peer, iface, link)
-    generation = next_generation(old_state)
+    # Bootstrap starts at generation 0 (uses key 0), not generation 1
+    generation = 0
     start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time()) + 60))
     state = default_keychain_state(link)
     state["generation"] = generation
