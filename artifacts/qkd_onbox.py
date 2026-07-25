@@ -597,15 +597,95 @@ def append_pending_key(state, generation, key_id, start_time):
     return normalize_pending_keys(state)
 
 
+def purge_pending_older_than_generation(state, incoming_generation, iface=None, mode_ctx="STATE"):
+    """Drop pending queue entries older than a newly received generation.
+
+    This protects slave state from being wedged by stale queue heads when a
+    fresh install-key/install-key-batch arrives after delays or retries.
+    """
+    if incoming_generation is None:
+        return state
+
+    try:
+        incoming_generation = int(incoming_generation)
+    except Exception:
+        return state
+
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if not pending:
+        return state
+
+    kept = []
+    dropped = []
+    for item in pending:
+        generation = item.get("generation")
+        try:
+            generation = int(generation) if generation is not None else None
+        except Exception:
+            generation = None
+
+        if generation is not None and generation < incoming_generation:
+            dropped.append(item)
+            continue
+        kept.append(item)
+
+    if dropped:
+        state["pending_keys"] = kept
+        state = sync_pending_legacy_fields(state)
+        log(
+            f"STALE PENDING KEYS PURGED(incoming_generation) incoming_generation={incoming_generation} "
+            f"dropped={len(dropped)} dropped_generations={[item.get('generation') for item in dropped]}",
+            "WARN",
+            iface,
+            mode_ctx,
+        )
+
+    return state
+
+
 def prune_stale_pending_keys(state, iface=None):
     state = normalize_pending_keys(state)
     pending = state.get("pending_keys", [])
     if not pending:
         return state
 
-    # If there is no active key yet, pending entries are bootstrap candidates,
-    # not stale keys. Dropping them causes endless bootstrap loops.
+    # If there is no active key yet, pending entries are bootstrap candidates.
+    # However, very old pending heads can wedge the queue forever and block
+    # promotion of newly installed keys. Purge only overdue entries.
     if not state.get("active_key_id"):
+        stale_after_seconds = int(
+            qkd_policy().get("pending_no_active_recovery_seconds", max(180, rotation_interval_seconds() * 3))
+        )
+        now_epoch = int(time.time())
+        kept = []
+        dropped = []
+
+        for item in pending:
+            start_time = item.get("start_time")
+            start_epoch = epoch_from_junos_start_time(start_time)
+            if start_epoch is None:
+                kept.append(item)
+                continue
+
+            overdue_seconds = now_epoch - int(start_epoch)
+            if overdue_seconds > stale_after_seconds:
+                dropped.append((item, overdue_seconds))
+                continue
+            kept.append(item)
+
+        if dropped:
+            state["pending_keys"] = kept
+            state = sync_pending_legacy_fields(state)
+            log(
+                f"STALE PENDING KEYS PURGED(no_active) dropped={len(dropped)} "
+                f"stale_after_seconds={stale_after_seconds} "
+                f"dropped_generations={[d[0].get('generation') for d in dropped]} "
+                f"dropped_overdue_seconds={[d[1] for d in dropped]}",
+                "WARN",
+                iface,
+                "STATE",
+            )
         return state
 
     try:
@@ -1862,6 +1942,7 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     state = load_link_state(peer, iface, link)
+    state = purge_pending_older_than_generation(state, generation, iface=iface, mode_ctx="SLAVE")
 
     dec_start_ms = now_ms()
     customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
@@ -2008,6 +2089,7 @@ def run_slave_install_key_batch(batch_b64, iface):
         generation = entry.get("generation")
         key_id = entry.get("key_id")
         start_time = entry.get("start_time")
+        state = purge_pending_older_than_generation(state, generation, iface=iface, mode_ctx="SLAVE")
         if generation is not None:
             state["generation"] = int(generation)
         state = append_pending_key(state, generation, key_id, start_time)
@@ -2054,8 +2136,12 @@ def _status_payload_for_link(link):
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
+    before_state_fingerprint = json.dumps(state, sort_keys=True)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-    if promoted:
+    after_state_fingerprint = json.dumps(state, sort_keys=True)
+    # Persist any state normalization/promotion performed during status so
+    # stale queue cleanup is not lost between cycles.
+    if promoted or before_state_fingerprint != after_state_fingerprint:
         save_db_state(peer, iface, state)
     state["iface"] = iface
     state["runtime_mode"] = runtime_mode
@@ -2284,6 +2370,23 @@ def run_master():
         if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
             continue
+
+        # When pending key start-time is due, allow a short grace window for
+        # MKA confirmation to avoid premature peer-mismatch bootstrap loops.
+        if state.get("pending_key_id") and state.get("next_start_time"):
+            pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
+            pending_confirm_grace_seconds = int(
+                qkd_policy().get("pending_confirm_grace_seconds", 90)
+            )
+            if pending_epoch is not None and int(time.time()) < (int(pending_epoch) + pending_confirm_grace_seconds):
+                log(
+                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={state.get('next_start_time')} "
+                    f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={pending_confirm_grace_seconds}",
+                    "INFO",
+                    iface,
+                    "MASTER",
+                )
+                continue
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
