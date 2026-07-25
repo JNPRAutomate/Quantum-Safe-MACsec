@@ -528,6 +528,11 @@ def qkd_key_index_from_time():
     return int(time.time()) % max_installed_keys()
 
 
+def qkd_key_index_from_generation(generation):
+    """Convert generation number to keychain key index (0-4 for batch_size=5)."""
+    return generation % max_installed_keys()
+
+
 def default_keychain_state(link):
     return {
         "generation": 0,
