@@ -38,7 +38,12 @@ from lib.common.config import (
     load_runtime_pki_profile,
     load_qkd_policy_template,
 )
-from lib.common.script_user_bootstrap import bootstrap_script_users
+from lib.common.script_user_bootstrap import (
+    bootstrap_script_users,
+    ensure_local_script_user_keypair,
+    mirror_local_script_user_keypair_to_ssh,
+    write_local_ssh_alias_config,
+)
 from lib.qkd.inventory_builder import (
     build_full_inventory,
     build_runtime_qkd_policy,
@@ -1243,6 +1248,27 @@ def handle_deploy(args):
     else:
         print("[SKIP] script-user bootstrap skipped by CLI option")
     print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
+
+    if script_auth_mode == "key-only":
+        # Always ensure the local account running qkd_orchestrator has the
+        # script_user private key available for direct SSH access.
+        try:
+            source_private_key_path, _ = ensure_local_script_user_keypair(script_user)
+            local_private_key_path = mirror_local_script_user_keypair_to_ssh(
+                script_user,
+                source_private_key_path,
+            )
+            local_ssh_config_path = write_local_ssh_alias_config(
+                devices,
+                script_user,
+                local_private_key_path,
+            )
+            print(f"Local script_user key prepared: {local_private_key_path}")
+            print(f"Local SSH alias config updated: {local_ssh_config_path}")
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to prepare local script_user SSH access for current account user={script_user}: {exc}"
+            )
 
     if script_auth_mode == "password" and not script_password:
         raise RuntimeError(
