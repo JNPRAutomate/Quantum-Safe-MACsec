@@ -183,6 +183,14 @@ def ensure_runtime_dirs():
         except Exception:
             pass
 
+    # Queue transport uses a different SSH identity than runtime user.
+    # Keep shared exchange directories writable/readable across both users.
+    for shared_dir in (PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
+        try:
+            os.chmod(shared_dir, 0o777)
+        except Exception:
+            pass
+
 
 def _set_mode_if_needed(path_obj, target_mode):
     try:
@@ -1432,6 +1440,10 @@ def write_peer_batch_ack(iface, ack_id, status="ok", message=None):
         except Exception:
             pass
         tmp.replace(path)
+        try:
+            os.chmod(str(path), 0o644)
+        except Exception:
+            pass
         log(f"BATCH ACK WRITTEN file={path} ack_id={ack_id} status={status}", "INFO", iface, "SLAVE")
         return True
     except Exception as e:
@@ -2713,6 +2725,10 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
     local_tmp = Path(f"/tmp/qkd_scp_upload_{os.getpid()}_{int(time.time()*1000)}.tmp")
     try:
         local_tmp.write_text(str(payload_text), encoding="utf-8")
+        try:
+            os.chmod(str(local_tmp), 0o644)
+        except Exception:
+            pass
         cmd = [
             "scp",
             *ssh_transport_options(PEER_SSH_KEY),
@@ -3407,6 +3423,10 @@ def export_peer_status_snapshot(link, state=None):
         except Exception:
             pass
         tmp.replace(path)
+        try:
+            os.chmod(str(path), 0o644)
+        except Exception:
+            pass
         log(f"PEER STATUS SNAPSHOT EXPORTED file={path}", "DEBUG", iface, "STATUS")
         return True
     except Exception as e:
