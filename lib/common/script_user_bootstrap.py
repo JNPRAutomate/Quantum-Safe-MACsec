@@ -1089,6 +1089,13 @@ def bootstrap_script_user_on_device(
         )
 
         cu = Config(dev, mode="private")
+        try:
+            # Start from active config in this private session to avoid
+            # unrelated stale candidate fragments blocking user bootstrap.
+            cu.rollback(rb_id=0)
+        except Exception:
+            pass
+
         # Bootstrap is intentionally idempotent: first run may delete statements
         # that are not present yet, which emits "statement not found" warnings.
         cu.load(
@@ -1101,7 +1108,10 @@ def bootstrap_script_user_on_device(
 
         if diff:
             print("[%s] candidate diff:\n%s" % (name, diff))
-            cu.commit(comment="QKD bootstrap SCRIPT_USER %s" % script_user)
+            cu.commit(
+                comment="QKD bootstrap SCRIPT_USER %s" % script_user,
+                sync=True,
+            )
             print("[%s] OK SCRIPT_USER bootstrap committed" % name)
         else:
             print("[%s] no SCRIPT_USER config change required" % name)
