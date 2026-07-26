@@ -1193,6 +1193,36 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         peer_pending = peer_state.get("pending_key_id")
 
     if peer_state is not None and peer_pending and peer_pending != pending_key_id:
+        # In strict-sync deadlock (different stale pending keys on each side),
+        # waiting for the long force-clear threshold keeps rotation blocked.
+        # Allow earlier recovery once the normal stuck window is exceeded.
+        if reason == "PENDING_STUCK_AND_STRICT_SYNC_BLOCK" and overdue_seconds is not None:
+            strict_block_clear_seconds = int(
+                qkd_policy().get(
+                    "pending_stuck_strict_block_clear_seconds",
+                    max(pending_stuck_recovery_seconds(), 900),
+                )
+            )
+            if int(overdue_seconds) >= strict_block_clear_seconds:
+                log(
+                    f"PENDING STUCK STRICT-SYNC RECOVERY -> FORCE CLEAR pending_key_id={pending_key_id} "
+                    f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
+                    f"pending_stuck_strict_block_clear_seconds={strict_block_clear_seconds}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+            else:
+                log(
+                    f"PENDING STUCK STRICT-SYNC RECOVERY DEFERRED pending_key_id={pending_key_id} "
+                    f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
+                    f"pending_stuck_strict_block_clear_seconds={strict_block_clear_seconds}",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
+                return state, False
+
         force_clear_seconds = int(
             qkd_policy().get(
                 "pending_stuck_force_clear_seconds",
