@@ -39,6 +39,7 @@ import json
 import os
 import hashlib
 import pwd
+import stat
 
 
 urllib3.disable_warnings()
@@ -179,6 +180,70 @@ def ensure_runtime_dirs():
             Path(path).mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
+
+
+def _set_mode_if_needed(path_obj, target_mode):
+    try:
+        current_mode = stat.S_IMODE(path_obj.stat().st_mode)
+    except Exception:
+        return False, "stat-failed"
+
+    if current_mode == target_mode:
+        return True, "unchanged"
+
+    try:
+        os.chmod(str(path_obj), target_mode)
+    except Exception as exc:
+        return False, f"chmod-failed:{type(exc).__name__}:{str(exc)}"
+
+    try:
+        updated_mode = stat.S_IMODE(path_obj.stat().st_mode)
+    except Exception:
+        return False, "restat-failed"
+
+    if updated_mode != target_mode:
+        return False, f"mode-mismatch:{oct(updated_mode)}"
+
+    return True, "updated"
+
+
+def enforce_runtime_file_permissions():
+    """
+    Runtime local hardening performed on-box at each invocation:
+      - qkd_onbox.py in op/event must be executable but non-writable
+      - runtime JSON sidecars in op must remain owner-writable only
+
+    This guard does not rely on offbox provisioning scripts.
+    """
+    op_script = Path(OP_RUNTIME_DIR) / "qkd_onbox.py"
+    event_script = Path(SCRIPT_DIR) / "event" / "qkd_onbox.py"
+    config_json = Path(CONFIG_PATH)
+    inventory_json = Path(INVENTORY_PATH)
+
+    readonly_targets = [op_script, event_script]
+    owner_rw_targets = [config_json, inventory_json]
+
+    for target in readonly_targets:
+        if not target.exists():
+            log(f"PERM GUARD missing script target={target}", "WARN")
+            continue
+        ok, detail = _set_mode_if_needed(target, 0o555)
+        if not ok:
+            log(f"PERM GUARD readonly enforce failed target={target} detail={detail}", "WARN")
+        # Hard safety check: script must not be writable by current user.
+        if os.access(str(target), os.W_OK):
+            log(f"PERM GUARD writable script detected target={target}", "ERROR")
+            return False
+
+    for target in owner_rw_targets:
+        if not target.exists():
+            log(f"PERM GUARD missing runtime json target={target}", "WARN")
+            continue
+        ok, detail = _set_mode_if_needed(target, 0o600)
+        if not ok:
+            log(f"PERM GUARD json mode enforce failed target={target} detail={detail}", "WARN")
+
+    return True
 
 
 # ----------------------------
@@ -2899,6 +2964,14 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
+        if peer_transport_mode() == "queue" and PEER_CMD_USER != SCRIPT_USER:
+            log(
+                f"SSH STATUS FALLBACK DISABLED mode=queue peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
+            return None
         peer_user = SCRIPT_USER
         cmd = f"op qkd_onbox.py action status iface {peer_iface}"
         log(f"SSH EXEC {peer_user}@{peer_ip} action=status-fallback-op local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
@@ -3740,18 +3813,35 @@ def run_master():
 
         peer_state = get_peer_status(link, iface)
         if peer_state is None:
-            log("PEER STATUS unavailable -> SKIP ROTATION", "ERROR", iface, "MASTER")
-            if pending_stuck_exceeded:
-                state, evicted = evict_pending_head_for_recovery(
-                    state,
+            if peer_transport_mode() == "queue" and not state.get("pending_key_id"):
+                log(
+                    "PEER STATUS unavailable -> ALLOW ROTATION (queue+no-pending, ACK-gated)",
+                    "WARN",
                     iface,
-                    reason="PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE",
-                    peer_state=None,
-                    overdue_seconds=pending_stuck_overdue_seconds,
+                    "MASTER",
                 )
-                if evicted:
-                    save_db_state(peer, iface, state)
-            continue
+                peer_state = {
+                    "ca_name": state.get("ca_name"),
+                    "keychain_name": state.get("keychain_name"),
+                    "active_key_id": state.get("active_key_id"),
+                    "pending_keys": [],
+                    "pending_key_id": None,
+                    "next_start_time": None,
+                    "installed_keys": state.get("installed_keys", []),
+                }
+            else:
+                log("PEER STATUS unavailable -> SKIP ROTATION", "ERROR", iface, "MASTER")
+                if pending_stuck_exceeded:
+                    state, evicted = evict_pending_head_for_recovery(
+                        state,
+                        iface,
+                        reason="PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE",
+                        peer_state=None,
+                        overdue_seconds=pending_stuck_overdue_seconds,
+                    )
+                    if evicted:
+                        save_db_state(peer, iface, state)
+                continue
 
         if not keychain_state_valid(peer_state):
             log(
@@ -4175,6 +4265,11 @@ def run_master():
 
 def main():
     log("SCRIPT START", "INFO")
+
+    if not enforce_runtime_file_permissions():
+        log("PERM GUARD FAILED -> EXIT", "ERROR")
+        print("ERROR PERM GUARD FAILED")
+        sys.exit(1)
 
     if MACSEC_MODEL != "keychain":
         log(f"UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain", "ERROR")
