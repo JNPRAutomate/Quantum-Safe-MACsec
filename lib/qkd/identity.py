@@ -765,11 +765,14 @@ def check_peer_ssh_from_device(device):
     started = time.perf_counter()
 
     def probe_peer_ssh(peer_link, peer_ip):
-        # Auth-only probe for peer_cmd_user: transport must work, CLI privileges are intentionally minimal.
-        peer_payload = "exit"
-
+        # Transport-auth probe for peer_cmd_user: validate the same scp channel
+        # used by runtime queue/status exchange, without requiring remote shell.
+        peer_ip_safe = str(peer_ip).replace(".", "_")
+        local_probe = f"/var/tmp/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
+        remote_probe = f"/var/tmp/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
         cmd = (
-            f"ssh -i {key_path} "
+            f"echo qkd-peer-probe > {shlex.quote(local_probe)}; "
+            f"scp -i {shlex.quote(key_path)} "
             f"-o IdentitiesOnly=yes "
             f"-o StrictHostKeyChecking=no "
             f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
@@ -778,8 +781,11 @@ def check_peer_ssh_from_device(device):
             f"-o ServerAliveInterval={alive_interval} "
             f"-o ServerAliveCountMax={alive_max} "
             f"-o LogLevel=ERROR "
-            f"{peer_cmd_user}@{peer_ip} "
-            f"{shlex.quote(peer_payload)}"
+            f"{shlex.quote(local_probe)} "
+            f"{peer_cmd_user}@{peer_ip}:{shlex.quote(remote_probe)}; "
+            f"rc=$?; "
+            f"rm -f {shlex.quote(local_probe)}; "
+            f"exit $rc"
         )
         result = ssh_script_user_onbox_cmd(device, cmd, timeout=peer_timeout)
         stdout = result.stdout or ""
@@ -815,7 +821,7 @@ def check_peer_ssh_from_device(device):
 
         raise RuntimeError(
             f"peer SSH probe command did not succeed from {name} to {peer_ip} as {peer_cmd_user}\n"
-            f"probe_command={peer_payload}\n"
+            f"probe_command=scp-upload\n"
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )
