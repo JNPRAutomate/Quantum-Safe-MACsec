@@ -672,11 +672,11 @@ def configure_qkd_scripts(dev, name, base):
     op_cfg = render_common_template("op_script.j2", context)
     class_cfg = "\n".join(
         [
-            f"delete system login class {script_user_class} permissions super-user",
             f"delete system login class {script_user_class} permissions all",
             f"delete system login class {script_user_class} permissions view",
             f"delete system login class {script_user_class} permissions view-configuration",
             f"delete system login class {script_user_class} permissions configure",
+            f"set system login user {script_user} class {script_user_class}",
             f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py .*\"",
             f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py\"",
             f"set system login class {script_user_class} deny-commands \"configure\"",
