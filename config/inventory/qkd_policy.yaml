@@ -15,10 +15,12 @@ qkd_policy:
   key_batch_size: 4
   max_installed_keys: 4
 
-  pending_confirm_grace_seconds: 60
-  pending_stuck_recovery_seconds: 900
-  pending_recovery_window_seconds: 600
-  pending_stuck_aggressive_evict_seconds: 1800
+  pending_confirm_grace_seconds: 20
+  pending_stuck_recovery_seconds: 120
+  pending_recovery_window_seconds: 90
+  pending_stuck_aggressive_clear_seconds: 180
+  pending_stuck_strict_block_clear_seconds: 120
+  pending_stuck_force_clear_seconds: 240
 
   # Queue transport safety controls
   peer_enqueue_min_margin_seconds: 30
