@@ -659,6 +659,9 @@ def build_set_commands(
 
 
 def build_script_user_class_commands(script_user_class: str) -> List[str]:
+    if str(script_user_class).strip().lower() == "super-user":
+        return []
+
     return [
         "delete system login class %s permissions all" % script_user_class,
         "delete system login class %s deny-commands \"configure\"" % script_user_class,
@@ -1086,7 +1089,14 @@ def bootstrap_script_user_on_device(
         )
 
         cu = Config(dev, mode="private")
-        cu.load("\n".join(commands), format="set", merge=True)
+        # Bootstrap is intentionally idempotent: first run may delete statements
+        # that are not present yet, which emits "statement not found" warnings.
+        cu.load(
+            "\n".join(commands),
+            format="set",
+            merge=True,
+            ignore_warning=["statement not found"],
+        )
         diff = cu.diff()
 
         if diff:

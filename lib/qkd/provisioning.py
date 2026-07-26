@@ -673,28 +673,30 @@ def configure_qkd_scripts(dev, name, base):
 
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    class_cfg = (
-        "replace:\n"
-        "system {\n"
-        "  login {\n"
-        f"    class {script_user_class} {{\n"
-        "      permissions [ configure security view view-configuration ];\n"
-        "      allow-commands \"configure\";\n"
-        "      allow-commands \"configure private\";\n"
-        "      allow-commands \"commit.*\";\n"
-        "      allow-commands \"rollback.*\";\n"
-        "      allow-commands \"delete security authentication-key-chains .*\";\n"
-        "      allow-commands \"set security authentication-key-chains .*\";\n"
-        "      allow-commands \"delete security macsec .*\";\n"
-        "      allow-commands \"set security macsec .*\";\n"
-        "      allow-commands \"op qkd_onbox.py\";\n"
-        "      allow-commands \"op qkd_onbox.py .*\";\n"
-        "      allow-commands \"start shell\";\n"
-        "      allow-commands \"start shell command .*\";\n"
-        "    }\n"
-        "  }\n"
-        "}\n"
-    )
+    class_cfg = None
+    if str(script_user_class).strip().lower() != "super-user":
+        class_cfg = (
+            "replace:\n"
+            "system {\n"
+            "  login {\n"
+            f"    class {script_user_class} {{\n"
+            "      permissions [ configure security view view-configuration ];\n"
+            "      allow-commands \"configure\";\n"
+            "      allow-commands \"configure private\";\n"
+            "      allow-commands \"commit.*\";\n"
+            "      allow-commands \"rollback.*\";\n"
+            "      allow-commands \"delete security authentication-key-chains .*\";\n"
+            "      allow-commands \"set security authentication-key-chains .*\";\n"
+            "      allow-commands \"delete security macsec .*\";\n"
+            "      allow-commands \"set security macsec .*\";\n"
+            "      allow-commands \"op qkd_onbox.py\";\n"
+            "      allow-commands \"op qkd_onbox.py .*\";\n"
+            "      allow-commands \"start shell\";\n"
+            "      allow-commands \"start shell command .*\";\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+        )
     full_cfg = f"set system login user {script_user} class {script_user_class}\n" + event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
@@ -704,7 +706,8 @@ def configure_qkd_scripts(dev, name, base):
         sync_qkd_scripts_dual_re(dev, name, script_name)
 
     with Config(dev) as cu:
-        cu.load(class_cfg, format="text", merge=True)
+        if class_cfg:
+            cu.load(class_cfg, format="text", merge=True)
         cu.load(
             full_cfg,
             format="set",
