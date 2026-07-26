@@ -26,6 +26,11 @@ def qkd_peer_cmd_user():
     return QKD.get("PEER_CMD_USER", qkd_script_user())
 
 
+def qkd_peer_cmd_user_for_device(device):
+    device = normalize_device(device)
+    return str(device.get("peer_cmd_user") or qkd_peer_cmd_user())
+
+
 def qkd_deploy_user():
     return QKD.get("DEPLOY_USER", "root")
 
@@ -48,6 +53,18 @@ def qkd_ssh_public_key():
 
 def qkd_authorized_keys():
     return f"{qkd_ssh_dir()}/authorized_keys"
+
+
+def qkd_peer_cmd_ssh_home(peer_cmd_user):
+    return f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{peer_cmd_user}"
+
+
+def qkd_peer_cmd_ssh_dir(peer_cmd_user):
+    return f"{qkd_peer_cmd_ssh_home(peer_cmd_user)}/.ssh"
+
+
+def qkd_peer_cmd_authorized_keys(peer_cmd_user):
+    return f"{qkd_peer_cmd_ssh_dir(peer_cmd_user)}/authorized_keys"
 
 
 def qkd_remote_op_script():
@@ -578,6 +595,38 @@ def check_script_user_authorized_keys(device):
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"authorized_keys check failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+    print(result.stdout)
+
+
+def check_peer_cmd_user_presence_optional(device):
+    device = normalize_device(device)
+    name = device_name(device)
+    peer_cmd_user = qkd_peer_cmd_user_for_device(device)
+    result = ssh_deploy_cmd(device, f"id {peer_cmd_user}", timeout=30, include_failed_marker=False)
+    if result.returncode != 0:
+        print(
+            f"[WARN] peer_cmd_user not present yet on {name}: user={peer_cmd_user}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+        return
+    print(result.stdout)
+
+
+def check_peer_cmd_authorized_keys_optional(device):
+    device = normalize_device(device)
+    name = device_name(device)
+    peer_cmd_user = qkd_peer_cmd_user_for_device(device)
+    auth_path = qkd_peer_cmd_authorized_keys(peer_cmd_user)
+    cmd = f"ls -l {auth_path}; wc -l {auth_path}"
+    result = ssh_deploy_cmd(device, cmd, timeout=30, include_failed_marker=False)
+    if result.returncode != 0:
+        print(
+            f"[WARN] peer_cmd_user authorized_keys not ready on {name}: user={peer_cmd_user} path={auth_path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+        return
     print(result.stdout)
 
 
@@ -1135,11 +1184,14 @@ def validate_device_identity_predeploy(device):
         return
 
     print(f"=== QKD pre-deploy validation: {name} ===")
+    print(f"peer_cmd_user={qkd_peer_cmd_user_for_device(device)}")
     check_script_user_exists(device)
     check_script_user_home_simple(device)
     check_script_dirs_simple(device)
     check_script_user_ssh_identity(device)
     check_script_user_authorized_keys(device)
+    check_peer_cmd_user_presence_optional(device)
+    check_peer_cmd_authorized_keys_optional(device)
     check_runtime_cleanup_simple(device)
     print(f"[OK] QKD pre-deploy validation passed: {name}")
 
@@ -1194,6 +1246,7 @@ def validate_all_devices_predeploy(devices):
         print(f"[{index}/{len(devices)}] {name}")
         print(f"  host        : {host}")
         print(f"  script_user : {qkd_script_user()}")
+        print(f"  peer_cmd_user : {qkd_peer_cmd_user_for_device(device)}")
         print("")
         try:
             validate_device_identity_predeploy(device)
@@ -1236,6 +1289,7 @@ def validate_all_devices_postdeploy(devices):
         print(f"[{index}/{len(devices)}] {name}")
         print(f"  host        : {host}")
         print(f"  script_user : {qkd_script_user()}")
+        print(f"  peer_cmd_user : {qkd_peer_cmd_user_for_device(device)}")
         print("")
         try:
             validate_device_identity_postdeploy(device)
