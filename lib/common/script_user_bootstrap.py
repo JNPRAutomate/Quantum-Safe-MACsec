@@ -660,6 +660,7 @@ def build_set_commands(
 
 def build_script_user_class_commands(script_user_class: str) -> List[str]:
     return [
+        "delete system login class %s permissions all" % script_user_class,
         "delete system login class %s deny-commands \"configure\"" % script_user_class,
         "delete system login class %s deny-commands \"configure .*\"" % script_user_class,
         "delete system login class %s deny-commands \"commit\"" % script_user_class,
@@ -668,7 +669,10 @@ def build_script_user_class_commands(script_user_class: str) -> List[str]:
         "delete system login class %s deny-commands \"rollback .*\"" % script_user_class,
         "delete system login class %s deny-commands \"show\"" % script_user_class,
         "delete system login class %s deny-commands \"show .*\"" % script_user_class,
-        "set system login class %s permissions all" % script_user_class,
+        "set system login class %s permissions configure" % script_user_class,
+        "set system login class %s permissions security" % script_user_class,
+        "set system login class %s permissions view" % script_user_class,
+        "set system login class %s permissions view-configuration" % script_user_class,
         "set system login class %s allow-commands \"op qkd_onbox.py\"" % script_user_class,
         "set system login class %s allow-commands \"op qkd_onbox.py .*\"" % script_user_class,
         "set system login class %s allow-commands \"start shell\"" % script_user_class,

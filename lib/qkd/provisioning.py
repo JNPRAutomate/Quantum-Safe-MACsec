@@ -678,7 +678,7 @@ def configure_qkd_scripts(dev, name, base):
         "system {\n"
         "  login {\n"
         f"    class {script_user_class} {{\n"
-        "      permissions all;\n"
+        "      permissions [ configure security view view-configuration ];\n"
         "      allow-commands \"configure\";\n"
         "      allow-commands \"configure private\";\n"
         "      allow-commands \"commit.*\";\n"
