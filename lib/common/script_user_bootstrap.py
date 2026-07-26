@@ -609,6 +609,33 @@ def build_set_commands(
     return commands
 
 
+def build_script_user_class_commands(script_user_class: str) -> List[str]:
+    return [
+        "set system login class %s allow-commands \"op qkd_onbox.py\"" % script_user_class,
+        "set system login class %s allow-commands \"op qkd_onbox.py .*\"" % script_user_class,
+        "set system login class %s allow-commands \"start shell\"" % script_user_class,
+        "set system login class %s allow-commands \"start shell command .*\"" % script_user_class,
+        "set system login class %s deny-commands \"configure\"" % script_user_class,
+        "set system login class %s deny-commands \"configure .*\"" % script_user_class,
+        "set system login class %s deny-commands \"show\"" % script_user_class,
+        "set system login class %s deny-commands \"show .*\"" % script_user_class,
+    ]
+
+
+def build_peer_cmd_class_commands(peer_cmd_user_class: str) -> List[str]:
+    return [
+        "set system login class %s allow-commands \"exit\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"show\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"show .*\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"configure\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"configure .*\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"op .*\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"start shell.*\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"request .*\"" % peer_cmd_user_class,
+        "set system login class %s deny-commands \"file .*\"" % peer_cmd_user_class,
+    ]
+
+
 def build_peer_cmd_set_commands(
     peer_cmd_user: str,
     peer_cmd_user_class: str,
@@ -874,7 +901,10 @@ def bootstrap_script_user_on_device(
                 except Exception:
                     remove_encrypted_password = False
 
-        commands = build_set_commands(
+        commands = []
+        commands.extend(build_script_user_class_commands(script_user_class))
+        commands.extend(build_peer_cmd_class_commands(peer_cmd_user_class))
+        commands.extend(build_set_commands(
             script_user,
             script_user_class,
             encrypted_password,
@@ -882,7 +912,7 @@ def bootstrap_script_user_on_device(
             auth_mode=script_auth_mode,
             public_key_line=public_key_line,
             remove_encrypted_password=remove_encrypted_password,
-        )
+        ))
         commands.extend(
             build_peer_cmd_set_commands(
                 peer_cmd_user,
