@@ -535,8 +535,42 @@ def peer_inbox_file(device_name, iface):
     return f"{PEER_INBOX_DIR}/qkd_peer_inbox_{safe_device}_{safe_iface}.b64"
 
 
+def peer_inbox_file_for_ack(device_name, iface, ack_id):
+    base = peer_inbox_file(device_name, iface)
+    token = str(ack_id or "").strip()
+    if not token:
+        return base
+    if token.endswith(".b64"):
+        token = token[:-4]
+    return base[:-4] + f"_{token}.b64"
+
+
 def local_peer_inbox_file(iface):
     return peer_inbox_file(DEVICE, iface)
+
+
+def local_peer_inbox_candidates(iface):
+    safe_iface = str(iface or "unknown").replace("/", "_")
+    pattern = f"qkd_peer_inbox_{DEVICE}_{safe_iface}*.b64"
+    try:
+        candidates = [p for p in Path(PEER_INBOX_DIR).glob(pattern) if p.is_file()]
+    except Exception:
+        candidates = []
+
+    if not candidates:
+        legacy = Path(local_peer_inbox_file(iface))
+        if legacy.exists() and legacy.is_file():
+            return [legacy]
+        return []
+
+    def _candidate_key(path_obj):
+        try:
+            return (path_obj.stat().st_mtime, str(path_obj))
+        except Exception:
+            return (0, str(path_obj))
+
+    candidates.sort(key=_candidate_key)
+    return candidates
 
 
 def peer_ack_file(device_name, iface):
@@ -2928,7 +2962,9 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
 
     if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
         peer_user = PEER_CMD_USER
-        remote_inbox = peer_inbox_file(link.get("peer_sae"), peer_iface)
+        if not ack_id:
+            ack_id = compute_batch_ack_id(batch_b64)
+        remote_inbox = peer_inbox_file_for_ack(link.get("peer_sae"), peer_iface, ack_id)
         if first_start_epoch is not None:
             remaining_seconds = int(first_start_epoch - time.time())
             min_margin = peer_enqueue_min_margin_seconds()
@@ -2942,8 +2978,6 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
                 )
                 return False
 
-        if not ack_id:
-            ack_id = compute_batch_ack_id(batch_b64)
         envelope = {
             "kind": "install-key-batch",
             "ack_id": ack_id,
@@ -3466,9 +3500,10 @@ def process_inbound_transport_for_slave(link):
     if not iface:
         return False
 
-    inbox_path = Path(local_peer_inbox_file(iface))
-    if not inbox_path.exists():
+    inbox_candidates = local_peer_inbox_candidates(iface)
+    if not inbox_candidates:
         return False
+    inbox_path = inbox_candidates[0]
 
     processing_path = Path(f"{inbox_path}.processing.{os.getpid()}")
     try:
