@@ -1,16 +1,28 @@
 qkd_policy:
+  # 60s lab profile: strict synchronization and queue+ACK transport
   rekey_enabled: true
   batch_enabled: true
+  strict_sync_enabled: true
+  pending_auto_evict_enabled: false
+  peer_transport_mode: queue
+
   bootstrap_with_fallback_key: true
   bootstrap_fallback_keys: 1
-  interval_seconds: 200
+  interval_seconds: 60
 
-  key_batch_size: 3
-  max_installed_keys: 5
+  # Keep batch size aligned with installed window for deterministic rotation.
+  # Increase to 5 only if max_installed_keys is also increased to 5.
+  key_batch_size: 4
+  max_installed_keys: 4
+
   pending_confirm_grace_seconds: 60
-  pending_stuck_recovery_seconds: 600
+  pending_stuck_recovery_seconds: 900
   pending_recovery_window_seconds: 600
-  pending_stuck_aggressive_evict_seconds: 300
+  pending_stuck_aggressive_evict_seconds: 1800
+
+  # Queue transport safety controls
+  peer_enqueue_min_margin_seconds: 30
+  peer_batch_ack_timeout_seconds: 60
 
   key_ttl_seconds: 0
 

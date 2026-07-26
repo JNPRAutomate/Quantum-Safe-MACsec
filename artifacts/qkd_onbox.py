@@ -132,6 +132,7 @@ CA_CERT = CONFIG["ca_cert"]
 LINKS = CONFIG.get("links", [])
 
 SCRIPT_USER = CONFIG["script_user"]
+PEER_CMD_USER = str(CONFIG.get("peer_cmd_user", SCRIPT_USER) or SCRIPT_USER)
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
 OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
@@ -141,11 +142,14 @@ LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
 LOG_BACKUP_COUNT = int(CONFIG["log_backup_count"])
 STATE_DIR = CONFIG.get("state_dir", f"/var/home/{SCRIPT_USER}")
 LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
+PEER_STATUS_DIR = CONFIG.get("peer_status_dir", f"{STATE_DIR}/peer_status")
+PEER_INBOX_DIR = CONFIG.get("peer_inbox_dir", f"{STATE_DIR}/peer_inbox")
+PEER_ACK_DIR = CONFIG.get("peer_ack_dir", f"{STATE_DIR}/peer_ack")
 
 QKD_KEY_SIZE = 256
 
 DEC_RETRY = int(CONFIG.get("dec_retry", 0))
-MIN_ROTATION_INTERVAL = int(CONFIG.get("min_rotation_interval", 50))
+MIN_ROTATION_INTERVAL = int(CONFIG.get("min_rotation_interval", 60))
 KME_FAIL_THRESHOLD = int(CONFIG.get("kme_fail_threshold", 5))
 KME_HOLD_DOWN_SECONDS = int(CONFIG.get("kme_hold_down_seconds", 3600))
 MACSEC_INUSE_GRACE_SECONDS = int(CONFIG.get("macsec_inuse_grace_seconds", 60))
@@ -170,7 +174,7 @@ KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
 CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
 def ensure_runtime_dirs():
-    for path in (STATE_DIR, LOG_DIR):
+    for path in (STATE_DIR, LOG_DIR, PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
         try:
             Path(path).mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -439,8 +443,77 @@ def db_state_file(peer, iface):
     return f"{STATE_DIR}/qkd_db_{peer}_{iface.replace('/','_')}.json"
 
 
+def peer_status_file(iface):
+    safe_iface = str(iface or "unknown").replace("/", "_")
+    return f"{PEER_STATUS_DIR}/qkd_peer_status_{DEVICE}_{safe_iface}.json"
+
+
+def remote_peer_status_file(peer_sae, iface):
+    safe_iface = str(iface or "unknown").replace("/", "_")
+    peer_device = str(peer_sae or "unknown")
+    return f"{PEER_STATUS_DIR}/qkd_peer_status_{peer_device}_{safe_iface}.json"
+
+
+def peer_inbox_file(device_name, iface):
+    safe_iface = str(iface or "unknown").replace("/", "_")
+    safe_device = str(device_name or "unknown")
+    return f"{PEER_INBOX_DIR}/qkd_peer_inbox_{safe_device}_{safe_iface}.b64"
+
+
+def local_peer_inbox_file(iface):
+    return peer_inbox_file(DEVICE, iface)
+
+
+def peer_ack_file(device_name, iface):
+    safe_iface = str(iface or "unknown").replace("/", "_")
+    safe_device = str(device_name or "unknown")
+    return f"{PEER_ACK_DIR}/qkd_peer_ack_{safe_device}_{safe_iface}.json"
+
+
+def remote_peer_ack_file(peer_sae, iface):
+    return peer_ack_file(peer_sae, iface)
+
+
+def local_peer_ack_file(iface):
+    return peer_ack_file(DEVICE, iface)
+
+
 def qkd_policy():
     return CONFIG.get("qkd_policy", {})
+
+
+def peer_transport_mode():
+    value = qkd_policy().get("peer_transport_mode", CONFIG.get("peer_transport_mode", "queue"))
+    return str(value or "queue").strip().lower()
+
+
+def strict_sync_enabled():
+    return bool(qkd_policy().get("strict_sync_enabled", True))
+
+
+def pending_auto_evict_enabled():
+    return bool(qkd_policy().get("pending_auto_evict_enabled", False))
+
+
+def peer_enqueue_min_margin_seconds():
+    default_value = max(15, rotation_interval_seconds() // 2)
+    value = int(qkd_policy().get("peer_enqueue_min_margin_seconds", default_value))
+    if value < 0:
+        return 0
+    return value
+
+
+def peer_batch_ack_timeout_seconds():
+    default_value = max(20, rotation_interval_seconds())
+    value = int(qkd_policy().get("peer_batch_ack_timeout_seconds", default_value))
+    if value < 1:
+        return 1
+    return value
+
+
+def compute_batch_ack_id(batch_b64):
+    payload = str(batch_b64 or "")
+    return hashlib.sha256(payload.encode()).hexdigest()[:24]
 
 
 def rekey_enabled():
@@ -484,7 +557,7 @@ def max_installed_keys():
     value = int(
         qkd_policy().get(
             "key_window_size",
-            qkd_policy().get("max_installed_keys", 5),
+            qkd_policy().get("max_installed_keys", 4),
         )
     )
     if value < 1:
@@ -943,6 +1016,16 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
     """
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
+
+    if not pending_auto_evict_enabled():
+        log(
+            f"PENDING STUCK RECOVERY DISABLED pending_auto_evict_enabled=false reason={reason}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        return state, False
+
     pending = state.get("pending_keys", [])
     if not pending:
         return state, False
@@ -965,7 +1048,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
     cooldown_seconds = int(
         qkd_policy().get(
             "pending_stuck_evict_cooldown_seconds",
-            max(120, rotation_interval_seconds() * 2),
+            max(1800, rotation_interval_seconds() * 20),
         )
     )
 
@@ -989,7 +1072,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         force_evict_seconds = int(
             qkd_policy().get(
                 "pending_stuck_force_evict_seconds",
-                max(900, pending_stuck_recovery_seconds() * 3),
+                max(7200, pending_stuck_recovery_seconds() * 10),
             )
         )
 
@@ -1229,6 +1312,140 @@ def compare_peer_keychain_state(local_state, peer_state):
     return True
 
 
+def peer_states_aligned_strict(local_state, peer_state):
+    if not compare_peer_keychain_state(local_state, peer_state):
+        return False
+
+    local_active = local_state.get("active_key_id")
+    peer_active = peer_state.get("active_key_id")
+    if local_active != peer_active:
+        return False
+
+    local_state = normalize_pending_keys(local_state)
+    peer_state = normalize_pending_keys(peer_state)
+
+    local_pending = local_state.get("pending_keys", [])
+    peer_pending = peer_state.get("pending_keys", [])
+
+    if len(local_pending) != len(peer_pending):
+        return False
+
+    if local_pending:
+        local_head = local_pending[0]
+        peer_head = peer_pending[0]
+        if local_head.get("key_id") != peer_head.get("key_id"):
+            return False
+        if local_head.get("start_time") != peer_head.get("start_time"):
+            return False
+
+    return True
+
+
+def write_peer_batch_ack(iface, ack_id, status="ok", message=None):
+    if not ack_id:
+        return False
+
+    path = Path(local_peer_ack_file(iface))
+    tmp = Path(f"{path}.{os.getpid()}.tmp")
+    payload = {
+        "ack_id": str(ack_id),
+        "status": str(status),
+        "iface": str(iface or ""),
+        "device": DEVICE,
+        "message": str(message or ""),
+        "processed_at": int(time.time()),
+    }
+
+    try:
+        ensure_runtime_dirs()
+        tmp.write_text(json.dumps(payload, indent=2))
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+        tmp.replace(path)
+        log(f"BATCH ACK WRITTEN file={path} ack_id={ack_id} status={status}", "INFO", iface, "SLAVE")
+        return True
+    except Exception as e:
+        log(f"BATCH ACK WRITE FAIL file={path} ack_id={ack_id} status={status} error={str(e)}", "ERROR", iface, "SLAVE")
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        return False
+
+
+def read_remote_peer_batch_ack(link, iface):
+    if not validate_link_runtime(link, require_peer_transport=True):
+        return None
+
+    peer_ip = link.get("peer_ip")
+    peer_iface = link.get("peer_interface")
+    if not peer_ip or not peer_iface:
+        return None
+
+    ack_path = remote_peer_ack_file(link.get("peer_sae"), peer_iface)
+    ssh_cmd = [
+        "ssh",
+        "-i", SSH_KEY,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+        f"{PEER_CMD_USER}@{peer_ip}",
+        f"cat {ack_path}",
+    ]
+    try:
+        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    if not stdout:
+        return None
+
+    try:
+        payload = json.loads(stdout)
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def wait_for_peer_batch_ack(link, iface, ack_id):
+    if not ack_id:
+        return False
+
+    timeout_seconds = peer_batch_ack_timeout_seconds()
+    deadline = time.time() + timeout_seconds
+
+    while time.time() < deadline:
+        ack = read_remote_peer_batch_ack(link, iface)
+        if isinstance(ack, dict):
+            if str(ack.get("ack_id")) == str(ack_id):
+                status = str(ack.get("status", "")).lower()
+                if status == "ok":
+                    log(f"PEER BATCH ACK OK ack_id={ack_id}", "INFO", iface, "MASTER")
+                    return True
+                log(
+                    f"PEER BATCH ACK FAIL ack_id={ack_id} status={ack.get('status')} message={ack.get('message')}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                return False
+        time.sleep(1)
+
+    log(f"PEER BATCH ACK TIMEOUT ack_id={ack_id} timeout_seconds={timeout_seconds}", "ERROR", iface, "MASTER")
+    return False
+
+
 def save_db_state(peer, iface, state):
     state = normalize_pending_keys(state)
     state = normalize_slot_ring(state)
@@ -1250,6 +1467,9 @@ def save_db_state(peer, iface, state):
             iface,
             "STATE"
         )
+        link = link_by_interface(iface)
+        if link:
+            export_peer_status_snapshot(link, state)
         return True
     except Exception as e:
         log(f"STATE SAVE ERROR file={path} tmp={tmp} error={str(e)}", "ERROR", iface, "STATE")
@@ -2427,6 +2647,13 @@ def runtime_user():
 
 def validate_ssh_runtime_for_master():
     user = runtime_user()
+    if PEER_CMD_USER != SCRIPT_USER:
+        log(
+            f"PEER CMD USER CONFIGURED peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER} "
+            f"status=ACTIVE_FOR_STATUS_AND_BATCH_TRANSPORT_ONLY",
+            "INFO",
+            mode="MASTER",
+        )
     if not SSH_KEY:
         log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=SSH_KEY_EMPTY", "ERROR", mode="MASTER")
         return False
@@ -2475,12 +2702,11 @@ def validate_ssh_runtime_for_master():
     return True
 
 
-def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None):
+def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None, ack_id=None):
     if not validate_link_runtime(link, require_peer_transport=True):
         return False
 
     peer_ip = link["peer_ip"]
-    peer_user = SCRIPT_USER
     peer_iface = link["peer_interface"]
     cmd = f"op qkd_onbox.py action {action} iface {peer_iface}"
     if key_id:
@@ -2493,6 +2719,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         cmd += f" batch-b64 {batch_b64}"
 
     start_time_human = format_next_start_time_with_millis(start_time) if start_time else "None"
+    first_start_epoch = None
     if (not start_time) and batch_b64:
         try:
             decoded = base64.urlsafe_b64decode(batch_b64.encode()).decode()
@@ -2508,6 +2735,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
                 if starts:
                     starts.sort(key=lambda s: epoch_from_junos_start_time(s) or (2**31))
                     first_start = starts[0]
+                    first_start_epoch = epoch_from_junos_start_time(first_start)
                     if len(starts) == 1:
                         start_time_human = format_next_start_time_with_millis(first_start)
                     else:
@@ -2520,6 +2748,76 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         except Exception:
             pass
 
+    ssh_options = [
+        "ssh",
+        "-i", SSH_KEY,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+    ]
+
+    if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
+        peer_user = PEER_CMD_USER
+        remote_inbox = peer_inbox_file(link.get("peer_sae"), peer_iface)
+        remote_tmp = f"{remote_inbox}.{int(time.time())}.{os.getpid()}.tmp"
+        enqueue_cmd = f"umask 077; mkdir -p {PEER_INBOX_DIR}; cat > {remote_tmp}; mv {remote_tmp} {remote_inbox}"
+        if first_start_epoch is not None:
+            remaining_seconds = int(first_start_epoch - time.time())
+            min_margin = peer_enqueue_min_margin_seconds()
+            if remaining_seconds < min_margin:
+                log(
+                    f"SSH ENQUEUE BLOCKED margin_too_small remaining_seconds={remaining_seconds} min_margin={min_margin} "
+                    f"peer_iface={peer_iface} start_time={start_time_human}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                return False
+
+        if not ack_id:
+            ack_id = compute_batch_ack_id(batch_b64)
+        envelope = {
+            "kind": "install-key-batch",
+            "ack_id": ack_id,
+            "batch_b64": batch_b64,
+            "source_device": DEVICE,
+            "source_iface": iface,
+            "target_iface": peer_iface,
+            "created_at": int(time.time()),
+        }
+        transport_payload = json.dumps(envelope, separators=(",", ":"))
+        log(
+            f"SSH EXEC {peer_user}@{peer_ip} action=enqueue-batch local_iface={iface} peer_iface={peer_iface} "
+            f"scheduled_start_time={start_time_human} inbox={remote_inbox} ack_id={ack_id}",
+            "INFO",
+            iface,
+            "MASTER",
+        )
+
+        try:
+            result = subprocess.run(
+                ssh_options + [f"{peer_user}@{peer_ip}", enqueue_cmd],
+                input=transport_payload.encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            log(f"SSH ENQUEUE TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
+            return False
+        except Exception as e:
+            log(f"SSH ENQUEUE ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
+            return False
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+        stderr = result.stderr.decode(errors="ignore").strip()
+        log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
+        if result.returncode != 0:
+            log(f"SSH ENQUEUE FAIL action={action} stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
+            return False
+        return True
+
+    peer_user = SCRIPT_USER
     log(
         f"SSH EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
         f"scheduled_start_time={start_time_human} cmd=\"{cmd}\"",
@@ -2529,11 +2827,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
     )
 
     ssh_cmd = [
-        "ssh",
-        "-i", SSH_KEY,
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
+        *ssh_options,
         f"{peer_user}@{peer_ip}",
         cmd,
     ]
@@ -2562,29 +2856,77 @@ def get_peer_status(link, iface):
         return None
 
     peer_ip = link["peer_ip"]
-    peer_user = SCRIPT_USER
     peer_iface = link["peer_interface"]
-    cmd = f"op qkd_onbox.py action status iface {peer_iface}"
-    log(f"SSH EXEC {peer_user}@{peer_ip} action=status local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
+    snapshot_path = remote_peer_status_file(link.get("peer_sae"), peer_iface)
 
-    ssh_cmd = ["ssh", "-i", SSH_KEY, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", f"{peer_user}@{peer_ip}", cmd]
+    ssh_options = [
+        "ssh",
+        "-i", SSH_KEY,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+    ]
+
+    stdout = ""
+    result = None
+
+    snapshot_user = PEER_CMD_USER
+    snapshot_cmd = f"cat {snapshot_path}"
+    log(
+        f"SSH EXEC {snapshot_user}@{peer_ip} action=status-readonly local_iface={iface} peer_iface={peer_iface} snapshot={snapshot_path}",
+        "INFO",
+        iface,
+        "MASTER",
+    )
     try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    except subprocess.TimeoutExpired:
-        log(f"SSH STATUS TIMEOUT peer={peer_ip}", "ERROR", iface, "MASTER")
-        return None
-    except Exception as e:
-        log(f"SSH STATUS ERROR peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
-        return None
-
-    log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
-    if result.returncode != 0:
-        stderr = result.stderr.decode(errors="ignore").strip()
+        result = subprocess.run(
+            ssh_options + [f"{snapshot_user}@{peer_ip}", snapshot_cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
         stdout = result.stdout.decode(errors="ignore").strip()
-        log(f"SSH STATUS FAIL stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
-        return None
+        stderr = result.stderr.decode(errors="ignore").strip()
+        if result.returncode != 0 or not stdout:
+            log(
+                f"SSH STATUS SNAPSHOT MISS user={snapshot_user} snapshot={snapshot_path} rc={result.returncode} stderr={stderr}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
+            result = None
+    except subprocess.TimeoutExpired:
+        log(f"SSH STATUS SNAPSHOT TIMEOUT peer={peer_ip} snapshot={snapshot_path}", "WARN", iface, "MASTER")
+    except Exception as e:
+        log(f"SSH STATUS SNAPSHOT ERROR peer={peer_ip} snapshot={snapshot_path} error={str(e)}", "WARN", iface, "MASTER")
 
-    stdout = result.stdout.decode(errors="ignore").strip()
+    if result is None:
+        peer_user = SCRIPT_USER
+        cmd = f"op qkd_onbox.py action status iface {peer_iface}"
+        log(f"SSH EXEC {peer_user}@{peer_ip} action=status-fallback-op local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
+        try:
+            result = subprocess.run(
+                ssh_options + [f"{peer_user}@{peer_ip}", cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            log(f"SSH STATUS TIMEOUT peer={peer_ip}", "ERROR", iface, "MASTER")
+            return None
+        except Exception as e:
+            log(f"SSH STATUS ERROR peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
+            return None
+
+        log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="ignore").strip()
+            stdout = result.stdout.decode(errors="ignore").strip()
+            log(f"SSH STATUS FAIL stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
+            return None
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+
     try:
         return json.loads(stdout)
     except Exception:
@@ -2918,12 +3260,57 @@ def _status_payload_for_link(link):
     return state
 
 
+def export_peer_status_snapshot(link, state=None):
+    iface = link.get("interface")
+    if not iface:
+        return False
+
+    if state is None:
+        payload = _status_payload_for_link(link)
+    else:
+        payload = dict(state)
+        payload = normalize_pending_keys(payload)
+        payload["iface"] = iface
+        payload["runtime_mode"] = active_rotation_mode()
+        payload["batch_enabled"] = batch_mode_enabled()
+        payload["effective_batch_size"] = key_batch_size() if batch_mode_enabled() else 1
+
+    if payload is None:
+        return False
+
+    payload["exported_at"] = int(time.time())
+    payload["exported_by"] = runtime_user()
+
+    path = Path(peer_status_file(iface))
+    tmp = Path(f"{path}.{os.getpid()}.tmp")
+    try:
+        ensure_runtime_dirs()
+        tmp.write_text(json.dumps(payload, indent=2))
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+        tmp.replace(path)
+        log(f"PEER STATUS SNAPSHOT EXPORTED file={path}", "DEBUG", iface, "STATUS")
+        return True
+    except Exception as e:
+        log(f"PEER STATUS SNAPSHOT EXPORT FAIL file={path} error={str(e)}", "WARN", iface, "STATUS")
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        return False
+
+
 def run_slave_status(iface):
     if not iface:
         payload = []
         for link in managed_links():
             state = _status_payload_for_link(link)
             if state is not None:
+                export_peer_status_snapshot(link, state)
                 payload.append(state)
         print(json.dumps(payload))
         return True
@@ -2934,8 +3321,106 @@ def run_slave_status(iface):
     state = _status_payload_for_link(link)
     if state is None:
         return False
+    export_peer_status_snapshot(link, state)
     print(json.dumps(state))
     return True
+
+
+def process_inbound_transport_for_slave(link):
+    iface = link.get("interface")
+    if not iface:
+        return False
+
+    inbox_path = Path(local_peer_inbox_file(iface))
+    if not inbox_path.exists():
+        return False
+
+    processing_path = Path(f"{inbox_path}.processing.{os.getpid()}")
+    try:
+        inbox_path.replace(processing_path)
+    except Exception:
+        return False
+
+    try:
+        raw_payload = processing_path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        log(f"INBOUND BATCH READ FAIL file={processing_path} error={str(e)}", "ERROR", iface, "SLAVE")
+        try:
+            processing_path.replace(inbox_path)
+        except Exception:
+            pass
+        return False
+
+    if not raw_payload:
+        log(f"INBOUND BATCH EMPTY file={processing_path}", "WARN", iface, "SLAVE")
+        try:
+            processing_path.unlink()
+        except Exception:
+            pass
+        return False
+
+    ack_id = None
+    batch_b64 = raw_payload
+    try:
+        decoded_payload = json.loads(raw_payload)
+        if isinstance(decoded_payload, dict) and decoded_payload.get("kind") == "install-key-batch":
+            ack_id = decoded_payload.get("ack_id")
+            batch_b64 = str(decoded_payload.get("batch_b64") or "")
+    except Exception:
+        pass
+
+    if not batch_b64:
+        log(f"INBOUND BATCH INVALID envelope missing batch_b64 file={processing_path}", "ERROR", iface, "SLAVE")
+        if ack_id:
+            write_peer_batch_ack(iface, ack_id, status="fail", message="missing batch_b64")
+        try:
+            processing_path.unlink()
+        except Exception:
+            pass
+        return False
+
+    if not acquire_action_lock(iface, "install-key-batch"):
+        log(f"INBOUND BATCH LOCK BUSY iface={iface}", "WARN", iface, "LOCK")
+        try:
+            processing_path.replace(inbox_path)
+        except Exception:
+            pass
+        return False
+
+    try:
+        log(f"INBOUND BATCH PROCESS START file={processing_path} ack_id={ack_id}", "INFO", iface, "SLAVE")
+        ok = run_slave_install_key_batch(batch_b64, iface)
+    finally:
+        release_action_lock(iface, "install-key-batch")
+
+    if ok:
+        if ack_id:
+            write_peer_batch_ack(iface, ack_id, status="ok", message="batch installed")
+        try:
+            processing_path.unlink()
+        except Exception:
+            pass
+        log(f"INBOUND BATCH PROCESS OK iface={iface} ack_id={ack_id}", "INFO", iface, "SLAVE")
+        return True
+
+    if ack_id:
+        write_peer_batch_ack(iface, ack_id, status="fail", message="batch processing failed")
+    try:
+        processing_path.replace(inbox_path)
+    except Exception:
+        pass
+    log(f"INBOUND BATCH PROCESS FAIL iface={iface} ack_id={ack_id} action=RETRY_NEXT_CYCLE", "ERROR", iface, "SLAVE")
+    return False
+
+
+def process_slave_inbound_transports():
+    processed = False
+    for link in managed_links():
+        if link.get("role") != "slave":
+            continue
+        if process_inbound_transport_for_slave(link):
+            processed = True
+    return processed
 
 
 def bootstrap_keychain_link(link, force=False):
@@ -3013,9 +3498,15 @@ def bootstrap_keychain_link(link, force=False):
     ]
     payload_json = json.dumps(peer_payload, separators=(",", ":"))
     payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
-    if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
+    bootstrap_ack_id = compute_batch_ack_id(payload_b64)
+    if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=bootstrap_ack_id):
         log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
         return False
+
+    if peer_transport_mode() == "queue":
+        if not wait_for_peer_batch_ack(link, iface, bootstrap_ack_id):
+            log("KEYCHAIN BOOTSTRAP FAILED peer ACK timeout/fail AFTER enqueue", "ERROR", iface, "BOOTSTRAP")
+            return False
 
     time.sleep(0.5)
 
@@ -3282,6 +3773,18 @@ def run_master():
                 )
                 if evicted:
                     save_db_state(peer, iface, state)
+            continue
+
+        if strict_sync_enabled() and not peer_states_aligned_strict(state, peer_state):
+            log(
+                f"STRICT SYNC BLOCK ROTATION local_active={state.get('active_key_id')} peer_active={peer_state.get('active_key_id')} "
+                f"local_pending={state.get('pending_key_id')} peer_pending={peer_state.get('pending_key_id')} "
+                f"local_next_start={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                f"peer_next_start={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
             continue
 
         # AGGRESSIVE EVICT: If pending is stuck for >3min, evict immediately to unblock rotation
@@ -3563,10 +4066,16 @@ def run_master():
         if batch_size > 1:
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64):
+            ack_id = compute_batch_ack_id(payload_b64)
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id):
                 record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
                 log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                 continue
+            if peer_transport_mode() == "queue":
+                if not wait_for_peer_batch_ack(link, iface, ack_id):
+                    record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_ACK_FAILED")
+                    log("PEER INSTALL-KEY-BATCH ACK FAILED AFTER ENQUEUE -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
+                    continue
         else:
             item = batch_records[0]
             if not send_command(
@@ -3714,6 +4223,8 @@ def main():
         log(f"UNKNOWN ACTION action={action}", "ERROR")
         print(f"ERROR UNKNOWN ACTION action={action}")
         sys.exit(1)
+
+    process_slave_inbound_transports()
 
     if not validate_ssh_runtime_for_master():
         sys.exit(1)
