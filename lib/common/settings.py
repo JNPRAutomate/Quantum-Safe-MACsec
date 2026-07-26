@@ -69,6 +69,10 @@ QKD = {
     # Root must only be used by the orchestrator for deploy/clean/setup.
     "SCRIPT_USER": "etsi_user",
 
+    # Dedicated low-privilege SSH transport identity used by qkd_onbox
+    # for peer status reads and queue batch delivery.
+    "PEER_CMD_USER": "etsi_peer_view",
+
     # Privileged deploy/cleanup user.
     #
     # Used only by the offbox orchestrator for:

@@ -689,12 +689,46 @@ def configure_qkd_scripts(dev, name, base):
     print(f"[{name}] QKD scripts event and op configured OK")
 
 
+def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_class="operator", public_key_line=None):
+    if not peer_cmd_user:
+        raise ValueError("peer_cmd_user is required")
+
+    with Config(dev) as cu:
+        cu.load(
+            f"set system login user {peer_cmd_user} class {peer_cmd_user_class}",
+            format="set",
+            ignore_warning=["statement not found"],
+        )
+
+        if public_key_line:
+            parts = public_key_line.strip().split()
+            if len(parts) >= 2:
+                key_type = parts[0]
+                key_payload = public_key_line.replace('"', '\\"')
+                cu.load(
+                    f"set system login user {peer_cmd_user} authentication {key_type} \"{key_payload}\"",
+                    format="set",
+                    ignore_warning=["statement not found"],
+                )
+
+        if cu.diff():
+            print(f"[{device_name}] Applying peer_cmd_user login bootstrap user={peer_cmd_user} class={peer_cmd_user_class}")
+            commit_safely(
+                dev,
+                cu,
+                device_name,
+                sync=True,
+                phase="PEER_CMD_USER_BOOTSTRAP",
+                detail=f"user={peer_cmd_user} class={peer_cmd_user_class}",
+            )
+        else:
+            print(f"[{device_name}] peer_cmd_user login already aligned user={peer_cmd_user}")
+
+
 def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_dict, base):
     from lib.qkd.identity import (
         collect_script_user_public_keys,
         qkd_script_user,
-        qkd_authorized_keys,
-        qkd_ssh_dir,
         ssh_deploy_cmd,
     )
 
@@ -702,7 +736,11 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     if not isinstance(secrets, dict):
         secrets = {}
 
-    peer_cmd_user = secrets.get("script_user") or secrets.get("default_user") or qkd_script_user()
+    peer_cmd_user = (
+        secrets.get("peer_cmd_user")
+        or device_dict.get("peer_cmd_user")
+        or qkd_script_user()
+    )
     all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
 
     try:
@@ -746,9 +784,25 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         print(f"[{device_name}] No valid peer SSH keys to configure")
         return
 
-    auth_path = qkd_authorized_keys()
-    ssh_dir = qkd_ssh_dir()
+    peer_cmd_user_class = secrets.get("peer_cmd_user_class") or device_dict.get("peer_cmd_user_class") or "operator"
+    try:
+        ensure_peer_cmd_user_login(
+            dev,
+            device_name,
+            peer_cmd_user,
+            peer_cmd_user_class=peer_cmd_user_class,
+            public_key_line=key_lines[0],
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"peer_cmd_user login bootstrap failed on {device_name} user={peer_cmd_user} class={peer_cmd_user_class}: {exc}"
+        )
+
+    ssh_home_base = "/var/home"
+    ssh_dir = f"{ssh_home_base}/{peer_cmd_user}/.ssh"
+    auth_path = f"{ssh_dir}/authorized_keys"
     cmd_parts = [
+        f"id {peer_cmd_user}",
         f"mkdir -p {ssh_dir}",
         f"touch {auth_path}",
     ]
@@ -757,6 +811,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         cmd_parts.append(f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}")
     cmd_parts.extend(
         [
+            f"chown {peer_cmd_user} {ssh_dir} {auth_path}",
             f"chmod 600 {auth_path}",
             f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}",
         ]

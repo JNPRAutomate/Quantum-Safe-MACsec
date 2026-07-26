@@ -46,6 +46,23 @@ All paths are under `state_dir` (default `/var/home/<script_user>`).
 - Batch ACK file (per target device+interface):
   - `peer_ack/qkd_peer_ack_<device>_<iface>.json`
 
+### Deploy-time user bootstrap requirements
+
+Deploy now bootstraps `peer_cmd_user` explicitly on each device and aligns:
+
+- login class (default: `operator`, configurable via `peer_cmd_user_class`),
+- initial SSH authentication key in Junos login user config,
+- `/var/home/<peer_cmd_user>/.ssh/authorized_keys` synchronization.
+
+Queue transport/status/ACK paths are generated as shared runtime directories under `/var/tmp`:
+
+- `/var/tmp/qkd_peer_status`
+- `/var/tmp/qkd_peer_inbox`
+- `/var/tmp/qkd_peer_ack`
+
+This avoids permission coupling to `/var/home/<script_user>` and allows low-privilege
+peer transport to function even when script_user home is private.
+
 ### Inbox envelope (queue mode)
 
 The payload written into peer inbox is a JSON envelope:

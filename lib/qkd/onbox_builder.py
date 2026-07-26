@@ -260,10 +260,15 @@ def build_onbox_config(name, device):
 
         # Runtime identity
         "script_user": device.get("script_user") or QKD["SCRIPT_USER"],
+        "peer_cmd_user": device.get("peer_cmd_user") or QKD.get("PEER_CMD_USER") or QKD["SCRIPT_USER"],
         "script_dir": script_dir,
         "ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{ssh_key_name}",
         "state_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}",
         "log_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs",
+        # Shared paths used by low-privilege peer_cmd_user transport channel.
+        "peer_status_dir": "/var/tmp/qkd_peer_status",
+        "peer_inbox_dir": "/var/tmp/qkd_peer_inbox",
+        "peer_ack_dir": "/var/tmp/qkd_peer_ack",
 
         # Logging
         "log_file": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs/qkd_debug.log",
