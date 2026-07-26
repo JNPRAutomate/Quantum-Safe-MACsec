@@ -42,7 +42,6 @@ from lib.common.script_user_bootstrap import (
     bootstrap_script_users,
     ensure_local_peer_cmd_user_keypair,
     ensure_local_script_user_keypair,
-    mirror_local_peer_cmd_user_keypair_to_ssh,
     mirror_local_script_user_keypair_to_ssh,
     write_local_ssh_alias_config,
 )
@@ -1262,14 +1261,10 @@ def handle_deploy(args):
         # script_user private key available for direct SSH access.
         try:
             source_private_key_path, _ = ensure_local_script_user_keypair(script_user)
-            peer_source_private_key_path, _ = ensure_local_peer_cmd_user_keypair(peer_cmd_user)
+            ensure_local_peer_cmd_user_keypair(peer_cmd_user)
             local_private_key_path = mirror_local_script_user_keypair_to_ssh(
                 script_user,
                 source_private_key_path,
-            )
-            local_peer_private_key_path = mirror_local_peer_cmd_user_keypair_to_ssh(
-                peer_cmd_user,
-                peer_source_private_key_path,
             )
             local_ssh_config_path = write_local_ssh_alias_config(
                 devices,
@@ -1277,7 +1272,6 @@ def handle_deploy(args):
                 local_private_key_path,
             )
             print(f"Local script_user key prepared: {local_private_key_path}")
-            print(f"Local peer_cmd_user key prepared: {local_peer_private_key_path}")
             print(f"Local SSH alias config updated: {local_ssh_config_path}")
         except Exception as exc:
             raise RuntimeError(

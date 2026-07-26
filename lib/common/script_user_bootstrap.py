@@ -307,9 +307,11 @@ def mirror_local_user_keypair_to_ssh(local_private_key: str, destination_prefix:
     dst_priv = ssh_dir / destination_prefix
     dst_pub = ssh_dir / f"{destination_prefix}.pub"
 
-    shutil.copy2(str(src_priv), str(dst_priv))
+    # Use copyfile (not copy2) so each deploy refreshes local key material
+    # without preserving stale timestamps from older projects.
+    shutil.copyfile(str(src_priv), str(dst_priv))
     if src_pub.exists():
-        shutil.copy2(str(src_pub), str(dst_pub))
+        shutil.copyfile(str(src_pub), str(dst_pub))
 
     try:
         dst_priv.chmod(0o600)
@@ -318,6 +320,15 @@ def mirror_local_user_keypair_to_ssh(local_private_key: str, destination_prefix:
     try:
         if dst_pub.exists():
             dst_pub.chmod(0o644)
+    except Exception:
+        pass
+
+    # Stamp current mtime to make the local refresh explicit and observable.
+    try:
+        now = None
+        os.utime(str(dst_priv), now)
+        if dst_pub.exists():
+            os.utime(str(dst_pub), now)
     except Exception:
         pass
 
@@ -1210,10 +1221,9 @@ def bootstrap_script_users(
             resolved_script_user,
             source_private_key_path,
         )
-        peer_local_private_key_path = mirror_local_peer_cmd_user_keypair_to_ssh(
-            resolved_peer_cmd_user,
-            peer_source_private_key_path,
-        )
+        # Keep peer transport key material out of local ~/.ssh by default.
+        # It is only needed as a canonical source for on-device sync.
+        peer_local_private_key_path = peer_source_private_key_path
         local_ssh_config_path = None
         if write_local_ssh_config and not dry_run:
             local_ssh_config_path = write_local_ssh_alias_config(
@@ -1255,8 +1265,6 @@ def bootstrap_script_users(
     print("deploy_pwd   = %s" % ("configured/prompted" if resolved_deploy_password else "none"))
     if local_private_key_path:
         print("local_key    = %s" % local_private_key_path)
-    if peer_local_private_key_path:
-        print("peer_key     = %s" % peer_local_private_key_path)
     if local_ssh_config_path:
         print("local_ssh_cfg= %s" % local_ssh_config_path)
     print("idempotent   = true")
