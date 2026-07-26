@@ -1063,7 +1063,7 @@ def bootstrap_script_user_on_device(
             )
         )
 
-        cu = Config(dev)
+        cu = Config(dev, mode="private")
         cu.load("\n".join(commands), format="set", merge=True)
         diff = cu.diff()
 

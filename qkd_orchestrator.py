@@ -1151,6 +1151,12 @@ def handle_deploy(args):
         or QKD.get("SCRIPT_USER")
         or "etsi_user"
     )
+    peer_cmd_user = (
+        os.getenv("QKD_PEER_CMD_USER")
+        or secrets.get("peer_cmd_user")
+        or QKD.get("PEER_CMD_USER")
+        or script_user
+    )
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
