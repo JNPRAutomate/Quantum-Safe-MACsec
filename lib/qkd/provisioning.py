@@ -672,22 +672,22 @@ def configure_qkd_scripts(dev, name, base):
 
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    class_cfg = "\n".join(
-        [
-            f"delete system login class {script_user_class} permissions all",
-            f"delete system login class {script_user_class} permissions view",
-            f"delete system login class {script_user_class} permissions view-configuration",
-            f"delete system login class {script_user_class} permissions configure",
-            f"set system login user {script_user} class {script_user_class}",
-            f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py .*\"",
-            f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py\"",
-            f"set system login class {script_user_class} deny-commands \"configure\"",
-            f"set system login class {script_user_class} deny-commands \"configure .*\"",
-            f"set system login class {script_user_class} deny-commands \"show\"",
-            f"set system login class {script_user_class} deny-commands \"show .*\"",
-        ]
+    class_cfg = (
+        "replace:\n"
+        "system {\n"
+        "  login {\n"
+        f"    class {script_user_class} {{\n"
+        "      allow-commands \"op qkd_onbox.py\";\n"
+        "      allow-commands \"op qkd_onbox.py .*\";\n"
+        "      deny-commands \"configure\";\n"
+        "      deny-commands \"configure .*\";\n"
+        "      deny-commands \"show\";\n"
+        "      deny-commands \"show .*\";\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
     )
-    full_cfg = class_cfg + "\n" + event_cfg + "\n" + op_cfg
+    full_cfg = f"set system login user {script_user} class {script_user_class}\n" + event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
 
@@ -696,7 +696,12 @@ def configure_qkd_scripts(dev, name, base):
         sync_qkd_scripts_dual_re(dev, name, script_name)
 
     with Config(dev) as cu:
-        cu.load(full_cfg, format="set", merge=False)
+        cu.load(class_cfg, format="text", merge=True)
+        cu.load(
+            full_cfg,
+            format="set",
+            merge=False,
+        )
         commit_safely(
             dev,
             cu,
