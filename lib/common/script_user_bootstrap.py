@@ -634,8 +634,6 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
     authorized_keys = "%s/authorized_keys" % ssh_dir
-    private_key = "%s/%s" % (ssh_dir, QKD.get("SSH_KEY_NAME", "qkd_id_ed25519"))
-    public_key = "%s.pub" % private_key
 
     append_public_key = ""
     if public_key_line:
@@ -651,21 +649,14 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         "{append_public_key}"
         "chown -R {user} {ssh_dir}; "
         "chown {user} {authorized_keys}; "
-        "chown {user} {private_key} {public_key} 2>/dev/null || true; "
         "chmod 700 {ssh_dir}; "
         "chmod 600 {authorized_keys}; "
-        "chmod 600 {private_key} 2>/dev/null || true; "
-        "chmod 644 {public_key} 2>/dev/null || true; "
         "ls -ld {ssh_dir}; "
-        "ls -l {authorized_keys}; "
-        "ls -l {private_key} 2>/dev/null || true; "
-        "ls -l {public_key} 2>/dev/null || true"
+        "ls -l {authorized_keys}"
     ).format(
         user=script_user,
         ssh_dir=ssh_dir,
         authorized_keys=authorized_keys,
-        private_key=private_key,
-        public_key=public_key,
         append_public_key=append_public_key,
     )
 
