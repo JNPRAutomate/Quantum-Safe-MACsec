@@ -1193,6 +1193,8 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         peer_pending = peer_state.get("pending_key_id")
 
     if peer_state is not None and peer_pending and peer_pending != pending_key_id:
+        strict_sync_override_clear = False
+
         # In strict-sync deadlock (different stale pending keys on each side),
         # waiting for the long force-clear threshold keeps rotation blocked.
         # Allow earlier recovery once the normal stuck window is exceeded.
@@ -1212,6 +1214,7 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
                     iface,
                     "MASTER",
                 )
+                strict_sync_override_clear = True
             else:
                 log(
                     f"PENDING STUCK STRICT-SYNC RECOVERY DEFERRED pending_key_id={pending_key_id} "
@@ -1223,34 +1226,35 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
                 )
                 return state, False
 
-        force_clear_seconds = int(
-            qkd_policy().get(
-                "pending_stuck_force_clear_seconds",
+        if not strict_sync_override_clear:
+            force_clear_seconds = int(
                 qkd_policy().get(
-                    "pending_stuck_force_evict_seconds",
-                    max(7200, pending_stuck_recovery_seconds() * 10),
-                ),
+                    "pending_stuck_force_clear_seconds",
+                    qkd_policy().get(
+                        "pending_stuck_force_evict_seconds",
+                        max(7200, pending_stuck_recovery_seconds() * 10),
+                    ),
+                )
             )
-        )
 
-        if overdue_seconds is not None and int(overdue_seconds) > force_clear_seconds:
-            log(
-                f"PENDING STUCK RECOVERY OVERRIDE -> FORCE ADVANCE pending_key_id={pending_key_id} "
-                f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
-                f"pending_stuck_force_clear_seconds={force_clear_seconds} reason={reason}",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-        else:
-            log(
-                f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
-                f"reason={reason} overdue_seconds={overdue_seconds} pending_stuck_force_clear_seconds={force_clear_seconds}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-            return state, False
+            if overdue_seconds is not None and int(overdue_seconds) > force_clear_seconds:
+                log(
+                    f"PENDING STUCK RECOVERY OVERRIDE -> FORCE ADVANCE pending_key_id={pending_key_id} "
+                    f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
+                    f"pending_stuck_force_clear_seconds={force_clear_seconds} reason={reason}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+            else:
+                log(
+                    f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
+                    f"reason={reason} overdue_seconds={overdue_seconds} pending_stuck_force_clear_seconds={force_clear_seconds}",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
+                return state, False
 
 
     dropped = pending.pop(0)
