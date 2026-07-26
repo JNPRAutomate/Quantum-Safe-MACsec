@@ -691,8 +691,6 @@ def configure_qkd_scripts(dev, name, base):
         "      allow-commands \"op qkd_onbox.py .*\";\n"
         "      allow-commands \"start shell\";\n"
         "      allow-commands \"start shell command .*\";\n"
-        "      deny-commands \"show\";\n"
-        "      deny-commands \"show .*\";\n"
         "    }\n"
         "  }\n"
         "}\n"
