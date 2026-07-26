@@ -2695,6 +2695,10 @@ def runtime_user():
         return "unknown"
 
 
+def runtime_has_config_privilege():
+    return runtime_user() == "root"
+
+
 def ssh_transport_options(key_path=None):
     key_path = key_path or SSH_KEY
     return [
