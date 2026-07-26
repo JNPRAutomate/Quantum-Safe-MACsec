@@ -76,6 +76,7 @@ def _validate_runtime_contract_or_die(config):
         "script_user",
         "script_dir",
         "ssh_key",
+        "peer_ssh_key",
         "log_file",
         "log_max_bytes",
         "log_backup_count",
@@ -136,6 +137,7 @@ SCRIPT_USER = CONFIG["script_user"]
 PEER_CMD_USER = str(CONFIG.get("peer_cmd_user", SCRIPT_USER) or SCRIPT_USER)
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
+PEER_SSH_KEY = str(CONFIG.get("peer_ssh_key", SSH_KEY) or SSH_KEY)
 OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
 
 LOG_FILE = CONFIG["log_file"]
@@ -2693,9 +2695,10 @@ def runtime_user():
         return "unknown"
 
 
-def ssh_transport_options():
+def ssh_transport_options(key_path=None):
+    key_path = key_path or SSH_KEY
     return [
-        "-i", SSH_KEY,
+        "-i", key_path,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",
@@ -2708,7 +2711,7 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
         local_tmp.write_text(str(payload_text), encoding="utf-8")
         cmd = [
             "scp",
-            *ssh_transport_options(),
+            *ssh_transport_options(PEER_SSH_KEY),
             str(local_tmp),
             f"{peer_user}@{peer_ip}:{remote_path}",
         ]
@@ -2743,7 +2746,7 @@ def scp_download_text(peer_user, peer_ip, remote_path):
     try:
         cmd = [
             "scp",
-            *ssh_transport_options(),
+            *ssh_transport_options(PEER_SSH_KEY),
             f"{peer_user}@{peer_ip}:{remote_path}",
             str(local_tmp),
         ]
@@ -2785,6 +2788,29 @@ def validate_ssh_runtime_for_master():
         print(f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}")
         return False
 
+    if not PEER_SSH_KEY:
+        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=PEER_SSH_KEY_EMPTY", "ERROR", mode="MASTER")
+        return False
+    if PEER_CMD_USER != SCRIPT_USER and os.path.abspath(PEER_SSH_KEY) == os.path.abspath(SSH_KEY):
+        log(
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER} "
+            f"ssh_key={SSH_KEY} peer_ssh_key={PEER_SSH_KEY} reason=COUPLED_KEYS_NOT_ALLOWED",
+            "ERROR",
+            mode="MASTER",
+        )
+        return False
+    if not Path(PEER_SSH_KEY).exists():
+        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} peer_ssh_key={PEER_SSH_KEY} reason=KEY_NOT_FOUND", "ERROR", mode="MASTER")
+        return False
+    if not os.access(PEER_SSH_KEY, os.R_OK):
+        log(
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} peer_ssh_key={PEER_SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            "ERROR",
+            mode="MASTER",
+        )
+        print(f"ERROR PEER_SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} peer_ssh_key={PEER_SSH_KEY}")
+        return False
+
     runtime_files = [
         ("cert", CERT),
         ("key", KEY),
@@ -2813,7 +2839,11 @@ def validate_ssh_runtime_for_master():
             )
             return False
 
-    log(f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}", "INFO", mode="MASTER")
+    log(
+        f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY} peer_ssh_key={PEER_SSH_KEY}",
+        "INFO",
+        mode="MASTER",
+    )
     log(f"TLS RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} cert={CERT} key={KEY} ca={CA}", "INFO", mode="MASTER")
     return True
 
@@ -2864,7 +2894,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         except Exception:
             pass
 
-    ssh_options = ["ssh", *ssh_transport_options()]
+    ssh_options = ["ssh", *ssh_transport_options(PEER_SSH_KEY)]
 
     if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
         peer_user = PEER_CMD_USER
@@ -2946,7 +2976,7 @@ def get_peer_status(link, iface):
     peer_iface = link["peer_interface"]
     snapshot_path = remote_peer_status_file(link.get("peer_sae"), peer_iface)
 
-    ssh_options = ["ssh", *ssh_transport_options()]
+    ssh_options = ["ssh", *ssh_transport_options(PEER_SSH_KEY)]
 
     snapshot_user = PEER_CMD_USER
     log(

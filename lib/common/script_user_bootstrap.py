@@ -57,6 +57,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
+from jnpr.junos.utils.scp import SCP
 
 try:
     import crypt  # type: ignore
@@ -74,6 +75,8 @@ except Exception:  # pragma: no cover
         "SCRIPT_USER": "etsi_user",
         "SCRIPT_USER_CLASS": "qkd-script-class",
         "PEER_CMD_USER": "etsi_peer_view",
+        "SSH_KEY_NAME": "qkd_id_ed25519",
+        "PEER_SSH_KEY_NAME": "qkd_peer_cmd_ed25519",
         "DEPLOY_USER": "root",
     }
 
@@ -238,11 +241,11 @@ def get_script_user_auth_mode(
     return mode
 
 
-def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
-    key_dir = Path.home() / ".qkd" / "script_user_keys" / script_user
+def ensure_local_user_keypair(username: str, key_name: str, comment_suffix: str) -> Tuple[str, str]:
+    key_dir = Path.home() / ".qkd" / "script_user_keys" / username
     key_dir.mkdir(parents=True, exist_ok=True)
-    private_key = key_dir / "qkd_id_ed25519"
-    public_key = key_dir / "qkd_id_ed25519.pub"
+    private_key = key_dir / key_name
+    public_key = key_dir / f"{key_name}.pub"
 
     if not private_key.exists() or not public_key.exists():
         cmd = [
@@ -252,7 +255,7 @@ def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
             "-N",
             "",
             "-C",
-            "%s@qkd-bootstrap" % script_user,
+            "%s@%s" % (username, comment_suffix),
             "-f",
             str(private_key),
         ]
@@ -260,7 +263,7 @@ def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
         if result.returncode != 0:
             raise RuntimeError(
                 "Failed to generate local keypair for SCRIPT_USER %s\nstdout=%s\nstderr=%s"
-                % (script_user, result.stdout, result.stderr)
+                % (username, result.stdout, result.stderr)
             )
 
     try:
@@ -279,17 +282,30 @@ def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
     return str(private_key), line
 
 
-def mirror_local_script_user_keypair_to_ssh(
-    script_user: str,
-    source_private_key: str,
-) -> str:
+def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
+    return ensure_local_user_keypair(
+        script_user,
+        str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
+        "qkd-script-bootstrap",
+    )
+
+
+def ensure_local_peer_cmd_user_keypair(peer_cmd_user: str) -> Tuple[str, str]:
+    return ensure_local_user_keypair(
+        peer_cmd_user,
+        str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
+        "qkd-peer-bootstrap",
+    )
+
+
+def mirror_local_user_keypair_to_ssh(local_private_key: str, destination_prefix: str) -> str:
     ssh_dir = Path.home() / ".ssh"
     ssh_dir.mkdir(parents=True, exist_ok=True)
 
-    src_priv = Path(source_private_key)
-    src_pub = Path(source_private_key + ".pub")
-    dst_priv = ssh_dir / ("qkd_%s_id_ed25519" % script_user)
-    dst_pub = ssh_dir / ("qkd_%s_id_ed25519.pub" % script_user)
+    src_priv = Path(local_private_key)
+    src_pub = Path(local_private_key + ".pub")
+    dst_priv = ssh_dir / destination_prefix
+    dst_pub = ssh_dir / f"{destination_prefix}.pub"
 
     shutil.copy2(str(src_priv), str(dst_priv))
     if src_pub.exists():
@@ -306,6 +322,28 @@ def mirror_local_script_user_keypair_to_ssh(
         pass
 
     return str(dst_priv)
+
+
+def mirror_local_script_user_keypair_to_ssh(
+    script_user: str,
+    source_private_key: str,
+) -> str:
+    key_name = str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519"))
+    return mirror_local_user_keypair_to_ssh(
+        source_private_key,
+        "qkd_%s_%s" % (script_user, key_name),
+    )
+
+
+def mirror_local_peer_cmd_user_keypair_to_ssh(
+    peer_cmd_user: str,
+    source_private_key: str,
+) -> str:
+    key_name = str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519"))
+    return mirror_local_user_keypair_to_ssh(
+        source_private_key,
+        "qkd_%s_%s" % (peer_cmd_user, key_name),
+    )
 
 
 def write_local_ssh_alias_config(
@@ -832,6 +870,107 @@ def run_script_user_key_fix(
         return False
 
 
+def sync_user_keypair_from_local(
+    dev: Device,
+    name: str,
+    script_user: str,
+    local_private_key_path: str,
+    key_name: str,
+) -> bool:
+    """
+    Push the canonical local script_user keypair onto the router.
+
+    This avoids per-device key drift when running key-only bootstrap across
+    multiple routers: all routers get the same private/public keypair.
+    """
+    ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
+    ssh_dir = f"{ssh_home_base}/{script_user}/.ssh"
+    key_path = f"{ssh_dir}/{key_name}"
+    pub_path = f"{key_path}.pub"
+
+    local_priv = Path(local_private_key_path)
+    local_pub = Path(local_private_key_path + ".pub")
+    if not local_priv.exists() or not local_pub.exists():
+        print(
+            "[%s] FAIL local canonical keypair missing private=%s public=%s"
+            % (name, str(local_priv), str(local_pub))
+        )
+        return False
+
+
+def sync_script_user_keypair_from_local(
+    dev: Device,
+    name: str,
+    script_user: str,
+    local_private_key_path: str,
+) -> bool:
+    return sync_user_keypair_from_local(
+        dev,
+        name,
+        script_user,
+        local_private_key_path,
+        str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
+    )
+
+
+def sync_peer_transport_keypair_from_local(
+    dev: Device,
+    name: str,
+    script_user: str,
+    local_private_key_path: str,
+) -> bool:
+    return sync_user_keypair_from_local(
+        dev,
+        name,
+        script_user,
+        local_private_key_path,
+        str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
+    )
+
+    remote_tmp_priv = f"/var/tmp/{key_name}.sync"
+    remote_tmp_pub = f"/var/tmp/{key_name}.sync.pub"
+
+    try:
+        with SCP(dev) as scp:
+            scp.put(str(local_priv), remote_path=remote_tmp_priv)
+            scp.put(str(local_pub), remote_path=remote_tmp_pub)
+
+        result = dev.rpc.request_shell_execute(
+            command=(
+                f"mkdir -p {ssh_dir}; "
+                f"mv -f {remote_tmp_priv} {key_path}; "
+                f"mv -f {remote_tmp_pub} {pub_path}; "
+                f"chown {script_user} {ssh_dir} {key_path} {pub_path}; "
+                f"chmod 700 {ssh_dir}; "
+                f"chmod 600 {key_path}; "
+                f"chmod 644 {pub_path}; "
+                f"ls -l {key_path}; "
+                f"ls -l {pub_path}"
+            )
+        )
+        text = _rpc_text(result).strip()
+        if text:
+            print("[%s] canonical key sync output:\n%s" % (name, text))
+
+        low = text.lower()
+        error_markers = [
+            "permission denied",
+            "operation not permitted",
+            "invalid user",
+            "no such file or directory",
+            "cannot",
+            "error:",
+        ]
+        if any(marker in low for marker in error_markers):
+            print("[%s] FAIL canonical key sync detected shell errors" % name)
+            return False
+
+        return True
+    except Exception as exc:
+        print("[%s] FAIL canonical key sync: %s" % (name, exc))
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Junos bootstrap
 # ---------------------------------------------------------------------------
@@ -847,8 +986,11 @@ def bootstrap_script_user_on_device(
     peer_cmd_user: str,
     peer_cmd_user_class: str,
     script_password: Optional[str],
+    local_private_key_path: Optional[str] = None,
+    peer_local_private_key_path: Optional[str] = None,
     script_auth_mode: str = "password",
     public_key_line: Optional[str] = None,
+    peer_public_key_line: Optional[str] = None,
     port: int = 22,
     dry_run: bool = False,
 ) -> bool:
@@ -917,7 +1059,7 @@ def bootstrap_script_user_on_device(
             build_peer_cmd_set_commands(
                 peer_cmd_user,
                 peer_cmd_user_class,
-                public_key_line=public_key_line if script_auth_mode == "key-only" else None,
+                public_key_line=peer_public_key_line if script_auth_mode == "key-only" else None,
             )
         )
 
@@ -951,6 +1093,29 @@ def bootstrap_script_user_on_device(
                 "[%s] hint: predeploy/provisioning will continue with runtime checks and config-based peer SSH auth" %
                 name
             )
+
+        if script_auth_mode == "key-only" and local_private_key_path:
+            if not sync_script_user_keypair_from_local(
+                dev,
+                name,
+                script_user,
+                local_private_key_path,
+            ):
+                print(
+                    "[%s] WARN canonical local key sync did not complete; continuing with on-box key repair fallback"
+                    % name
+                )
+        if script_auth_mode == "key-only" and peer_local_private_key_path:
+            if not sync_peer_transport_keypair_from_local(
+                dev,
+                name,
+                script_user,
+                peer_local_private_key_path,
+            ):
+                print(
+                    "[%s] WARN peer transport key sync did not complete; continuing with current on-box key material"
+                    % name
+                )
 
         if not run_script_user_key_fix(dev, name, script_user, deploy_user):
             print(
@@ -1016,13 +1181,20 @@ def bootstrap_script_users(
         resolved_script_password = get_script_password(inventory_base, script_password)
         local_private_key_path = None
         local_public_key_line = None
+        peer_local_private_key_path = None
+        peer_public_key_line = None
         local_ssh_config_path = None
     else:
         resolved_script_password = None
         source_private_key_path, local_public_key_line = ensure_local_script_user_keypair(resolved_script_user)
+        peer_source_private_key_path, peer_public_key_line = ensure_local_peer_cmd_user_keypair(resolved_peer_cmd_user)
         local_private_key_path = mirror_local_script_user_keypair_to_ssh(
             resolved_script_user,
             source_private_key_path,
+        )
+        peer_local_private_key_path = mirror_local_peer_cmd_user_keypair_to_ssh(
+            resolved_peer_cmd_user,
+            peer_source_private_key_path,
         )
         local_ssh_config_path = None
         if write_local_ssh_config and not dry_run:
@@ -1065,6 +1237,8 @@ def bootstrap_script_users(
     print("deploy_pwd   = %s" % ("configured/prompted" if resolved_deploy_password else "none"))
     if local_private_key_path:
         print("local_key    = %s" % local_private_key_path)
+    if peer_local_private_key_path:
+        print("peer_key     = %s" % peer_local_private_key_path)
     if local_ssh_config_path:
         print("local_ssh_cfg= %s" % local_ssh_config_path)
     print("idempotent   = true")
@@ -1081,8 +1255,11 @@ def bootstrap_script_users(
             peer_cmd_user=resolved_peer_cmd_user,
             peer_cmd_user_class=resolved_peer_cmd_user_class,
             script_password=resolved_script_password,
+            local_private_key_path=local_private_key_path,
+            peer_local_private_key_path=peer_local_private_key_path,
             script_auth_mode=resolved_script_auth_mode,
             public_key_line=local_public_key_line,
+            peer_public_key_line=peer_public_key_line,
             dry_run=dry_run,
         )
         if success:

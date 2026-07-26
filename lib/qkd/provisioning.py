@@ -793,7 +793,7 @@ def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_cl
 
 def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_dict, base):
     from lib.qkd.identity import (
-        collect_script_user_public_keys,
+        collect_peer_transport_public_keys,
         qkd_script_user,
         ssh_deploy_cmd,
     )
@@ -810,7 +810,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
 
     try:
-        pub_keys = collect_script_user_public_keys(all_devices_list)
+        pub_keys = collect_peer_transport_public_keys(all_devices_list)
     except Exception as exc:
         print(f"[{device_name}] WARN failed to collect peer SSH keys: {exc}")
         return

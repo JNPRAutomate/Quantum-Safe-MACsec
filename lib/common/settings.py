@@ -108,6 +108,7 @@ QKD = {
     # SSH runtime identity
     "SSH_HOME_BASE": "/var/home",
     "SSH_KEY_NAME": "qkd_id_ed25519",
+    "PEER_SSH_KEY_NAME": "qkd_peer_cmd_ed25519",
     "SSH_KEY_TYPE": "ed25519",
     "SSH_KEY_BITS": 4096,
     "SSH_KEY_COMMENT": "qkd-orchestrator-andrea.terren@hpe.com",
