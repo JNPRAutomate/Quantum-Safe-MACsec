@@ -72,6 +72,8 @@ except Exception:  # pragma: no cover
     }
     QKD = {
         "SCRIPT_USER": "etsi_user",
+        "SCRIPT_USER_CLASS": "qkd-script-class",
+        "PEER_CMD_USER": "etsi_peer_view",
         "DEPLOY_USER": "root",
     }
 
@@ -146,6 +148,44 @@ def get_script_user(inventory_base: Dict[str, Any], override: Optional[str] = No
         or secrets.get("script_user")
         or QKD.get("SCRIPT_USER")
         or "etsi_user"
+    )
+
+
+def get_script_user_class(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
+    if override:
+        return override
+
+    secrets = _secrets_block(inventory_base)
+    return str(
+        os.getenv("QKD_SCRIPT_USER_CLASS")
+        or secrets.get("script_user_class")
+        or QKD.get("SCRIPT_USER_CLASS")
+        or "qkd-script-class"
+    )
+
+
+def get_peer_cmd_user(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
+    if override:
+        return override
+
+    secrets = _secrets_block(inventory_base)
+    return str(
+        os.getenv("QKD_PEER_CMD_USER")
+        or secrets.get("peer_cmd_user")
+        or QKD.get("PEER_CMD_USER")
+        or get_script_user(inventory_base)
+    )
+
+
+def get_peer_cmd_user_class(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
+    if override:
+        return override
+
+    secrets = _secrets_block(inventory_base)
+    return str(
+        os.getenv("QKD_PEER_CMD_USER_CLASS")
+        or secrets.get("peer_cmd_user_class")
+        or "operator"
     )
 
 
@@ -524,6 +564,7 @@ def script_user_exists(dev: Device, script_user: str) -> bool:
 
 def build_set_commands(
     script_user: str,
+    script_user_class: str,
     encrypted_password: Optional[str],
     user_exists: bool,
     auth_mode: str = "password",
@@ -531,7 +572,7 @@ def build_set_commands(
     remove_encrypted_password: bool = False,
 ) -> List[str]:
     commands = [
-        "set system login user %s class super-user" % script_user,
+        "set system login user %s class %s" % (script_user, script_user_class),
     ]
 
     if auth_mode == "password":
@@ -567,10 +608,34 @@ def build_set_commands(
     return commands
 
 
+def build_peer_cmd_set_commands(
+    peer_cmd_user: str,
+    peer_cmd_user_class: str,
+    public_key_line: Optional[str] = None,
+) -> List[str]:
+    commands = [
+        "set system login user %s class %s" % (peer_cmd_user, peer_cmd_user_class),
+    ]
+
+    if public_key_line:
+        parts = public_key_line.strip().split()
+        if len(parts) >= 2:
+            key_type = parts[0]
+            key_payload = public_key_line.replace('"', '\\"')
+            commands.append(
+                "set system login user %s authentication %s \"%s\""
+                % (peer_cmd_user, key_type, key_payload)
+            )
+
+    return commands
+
+
 def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = None) -> str:
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
     authorized_keys = "%s/authorized_keys" % ssh_dir
+    private_key = "%s/%s" % (ssh_dir, QKD.get("SSH_KEY_NAME", "qkd_id_ed25519"))
+    public_key = "%s.pub" % private_key
 
     append_public_key = ""
     if public_key_line:
@@ -584,15 +649,23 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         "mkdir -p {ssh_dir}; "
         "touch {authorized_keys}; "
         "{append_public_key}"
-        "chown {user} {ssh_dir} {authorized_keys}; "
+        "chown -R {user} {ssh_dir}; "
+        "chown {user} {authorized_keys}; "
+        "chown {user} {private_key} {public_key} 2>/dev/null || true; "
         "chmod 700 {ssh_dir}; "
         "chmod 600 {authorized_keys}; "
+        "chmod 600 {private_key} 2>/dev/null || true; "
+        "chmod 644 {public_key} 2>/dev/null || true; "
         "ls -ld {ssh_dir}; "
-        "ls -l {authorized_keys}"
+        "ls -l {authorized_keys}; "
+        "ls -l {private_key} 2>/dev/null || true; "
+        "ls -l {public_key} 2>/dev/null || true"
     ).format(
         user=script_user,
         ssh_dir=ssh_dir,
         authorized_keys=authorized_keys,
+        private_key=private_key,
+        public_key=public_key,
         append_public_key=append_public_key,
     )
 
@@ -751,6 +824,9 @@ def bootstrap_script_user_on_device(
     deploy_user: str,
     deploy_password: Optional[str],
     script_user: str,
+    script_user_class: str,
+    peer_cmd_user: str,
+    peer_cmd_user_class: str,
     script_password: Optional[str],
     script_auth_mode: str = "password",
     public_key_line: Optional[str] = None,
@@ -761,12 +837,14 @@ def bootstrap_script_user_on_device(
     if not host:
         raise ValueError("Device %s has no ip/mgmt_ip" % name)
 
-    print("[%s] bootstrap SCRIPT_USER %s via deploy user %s@%s" % (name, script_user, deploy_user, host))
+    print("[%s] bootstrap SCRIPT_USER %s class=%s via deploy user %s@%s" % (name, script_user, script_user_class, deploy_user, host))
+    print("[%s] bootstrap PEER_CMD_USER %s class=%s" % (name, peer_cmd_user, peer_cmd_user_class))
 
     if dry_run:
         print("[%s] DRY-RUN check if SCRIPT_USER exists" % name)
         print("[%s] DRY-RUN create user only if missing" % name)
-        print("[%s] DRY-RUN ensure class super-user" % name)
+        print("[%s] DRY-RUN ensure SCRIPT_USER class %s" % (name, script_user_class))
+        print("[%s] DRY-RUN ensure PEER_CMD_USER class %s" % (name, peer_cmd_user_class))
         if script_auth_mode == "key-only":
             print("[%s] DRY-RUN configure SCRIPT_USER key-only authentication" % name)
         print("[%s] DRY-RUN fix /var/home/%s/.ssh ownership and permissions" % (name, script_user))
@@ -806,11 +884,19 @@ def bootstrap_script_user_on_device(
 
         commands = build_set_commands(
             script_user,
+            script_user_class,
             encrypted_password,
             exists,
             auth_mode=script_auth_mode,
             public_key_line=public_key_line,
             remove_encrypted_password=remove_encrypted_password,
+        )
+        commands.extend(
+            build_peer_cmd_set_commands(
+                peer_cmd_user,
+                peer_cmd_user_class,
+                public_key_line=public_key_line if script_auth_mode == "key-only" else None,
+            )
         )
 
         cu = Config(dev)
@@ -900,6 +986,9 @@ def bootstrap_script_users(
     selected = filter_devices(devices, only=only)
 
     resolved_script_user = get_script_user(inventory_base, script_user)
+    resolved_script_user_class = get_script_user_class(inventory_base)
+    resolved_peer_cmd_user = get_peer_cmd_user(inventory_base)
+    resolved_peer_cmd_user_class = get_peer_cmd_user_class(inventory_base)
     resolved_script_auth_mode = get_script_user_auth_mode(inventory_base, script_auth_mode)
     if resolved_script_auth_mode == "password":
         resolved_script_password = get_script_password(inventory_base, script_password)
@@ -946,6 +1035,9 @@ def bootstrap_script_users(
     print("devices      = %d" % len(selected))
     print("deploy_user  = %s" % resolved_deploy_user)
     print("script_user  = %s" % resolved_script_user)
+    print("script_class = %s" % resolved_script_user_class)
+    print("peer_cmd_user= %s" % resolved_peer_cmd_user)
+    print("peer_cmd_cls = %s" % resolved_peer_cmd_user_class)
     print("auth_mode    = %s" % resolved_script_auth_mode)
     print("dry_run      = %s" % dry_run)
     print("deploy_pwd   = %s" % ("configured/prompted" if resolved_deploy_password else "none"))
@@ -963,6 +1055,9 @@ def bootstrap_script_users(
             deploy_user=resolved_deploy_user,
             deploy_password=resolved_deploy_password,
             script_user=resolved_script_user,
+            script_user_class=resolved_script_user_class,
+            peer_cmd_user=resolved_peer_cmd_user,
+            peer_cmd_user_class=resolved_peer_cmd_user_class,
             script_password=resolved_script_password,
             script_auth_mode=resolved_script_auth_mode,
             public_key_line=local_public_key_line,
