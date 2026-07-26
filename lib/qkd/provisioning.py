@@ -529,8 +529,7 @@ def push_certs(dev, name, device):
             command=(
                 f"mkdir -p {remote_dir}; "
                 f"chown root {remote_dir}; "
-                f"chgrp {script_user} {remote_dir}; "
-                f"chmod 750 {remote_dir}; "
+                f"chmod 755 {remote_dir}; "
                 f"ls -ld {remote_dir}"
             )
         )
@@ -546,13 +545,11 @@ def push_certs(dev, name, device):
 
     verify_cmd = (
         f"chown root {remote_dir}; "
-        f"chgrp {script_user} {remote_dir}; "
-        f"chmod 750 {remote_dir}; "
+        f"chmod 755 {remote_dir}; "
         f"chown root {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
-        f"chgrp {script_user} {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
-        f"chmod 640 {remote_dir}/{local_cert.name}; "
-        f"chmod 640 {remote_dir}/{local_key.name}; "
-        f"chmod 640 {remote_dir}/{local_ca.name}; "
+        f"chmod 644 {remote_dir}/{local_cert.name}; "
+        f"chmod 644 {remote_dir}/{local_key.name}; "
+        f"chmod 644 {remote_dir}/{local_ca.name}; "
         f"test -s {remote_dir}/{local_cert.name} && echo OK:{remote_dir}/{local_cert.name}; "
         f"test -s {remote_dir}/{local_key.name} && echo OK:{remote_dir}/{local_key.name}; "
         f"test -s {remote_dir}/{local_ca.name} && echo OK:{remote_dir}/{local_ca.name}; "
