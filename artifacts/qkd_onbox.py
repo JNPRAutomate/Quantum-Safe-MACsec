@@ -2824,7 +2824,17 @@ def validate_ssh_runtime_for_master():
                 mode="MASTER",
             )
             return False
-        if not Path(path).exists():
+        try:
+            exists = Path(path).exists()
+        except Exception as exc:
+            log(
+                f"TLS RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} file_type={label} "
+                f"path={path} reason=STAT_FAILED error_type={type(exc).__name__} error={str(exc)}",
+                "ERROR",
+                mode="MASTER",
+            )
+            return False
+        if not exists:
             log(
                 f"TLS RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} file_type={label} path={path} reason=NOT_FOUND",
                 "ERROR",
