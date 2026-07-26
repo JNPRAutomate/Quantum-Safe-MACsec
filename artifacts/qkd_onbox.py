@@ -203,6 +203,15 @@ def _set_mode_if_needed(path_obj, target_mode):
 
     try:
         os.chmod(str(path_obj), target_mode)
+    except PermissionError:
+        # Non-root runtime cannot chmod provisioned script files under /var/db.
+        # Skip hardening attempt if the file is not writable by this user.
+        try:
+            if not os.access(str(path_obj), os.W_OK):
+                return True, "not-owner-skip"
+        except Exception:
+            pass
+        return False, "chmod-permission-denied"
     except Exception as exc:
         return False, f"chmod-failed:{type(exc).__name__}:{str(exc)}"
 
@@ -240,6 +249,8 @@ def enforce_runtime_file_permissions():
         ok, detail = _set_mode_if_needed(target, 0o555)
         if not ok:
             log(f"PERM GUARD readonly enforce failed target={target} detail={detail}", "WARN")
+        elif detail == "not-owner-skip":
+            log(f"PERM GUARD readonly skip target={target} reason=not-owner", "DEBUG")
         # Hard safety check: script must not be writable by current user.
         if os.access(str(target), os.W_OK):
             log(f"PERM GUARD writable script detected target={target}", "ERROR")
@@ -600,8 +611,9 @@ def strict_sync_enabled():
     return bool(qkd_policy().get("strict_sync_enabled", True))
 
 
-def pending_auto_evict_enabled():
-    return bool(qkd_policy().get("pending_auto_evict_enabled", True))
+def pending_auto_clear_enabled():
+    # Keep backward compatibility with legacy "evict" key name.
+    return bool(qkd_policy().get("pending_auto_clear_enabled", qkd_policy().get("pending_auto_evict_enabled", True)))
 
 
 def peer_enqueue_min_margin_seconds():
@@ -1117,7 +1129,7 @@ def ensure_health_state(state):
     return state
 
 
-def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overdue_seconds=None):
+def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overdue_seconds=None):
     """Drop the pending head when it is provably stuck and unblock rotation.
 
     This is intentionally non-destructive: CA/keychain stay untouched; we only
@@ -1126,9 +1138,9 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
 
-    if not pending_auto_evict_enabled():
+    if not pending_auto_clear_enabled():
         log(
-            f"PENDING STUCK RECOVERY DISABLED pending_auto_evict_enabled=false reason={reason}",
+            f"PENDING STUCK RECOVERY DISABLED pending_auto_clear_enabled=false reason={reason}",
             "WARN",
             iface,
             "MASTER",
@@ -1150,46 +1162,52 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
     health = state.get("health", {})
     last_key = health.get("last_pending_stuck_key_id")
     try:
-        last_evict_at = int(health.get("last_pending_stuck_evict_at", 0))
+        last_clear_at = int(health.get("last_pending_stuck_clear_at", health.get("last_pending_stuck_evict_at", 0)))
     except Exception:
-        last_evict_at = 0
+        last_clear_at = 0
 
     cooldown_seconds = int(
         qkd_policy().get(
-            "pending_stuck_evict_cooldown_seconds",
-            max(1800, rotation_interval_seconds() * 20),
+            "pending_stuck_clear_cooldown_seconds",
+            qkd_policy().get(
+                "pending_stuck_evict_cooldown_seconds",
+                max(1800, rotation_interval_seconds() * 20),
+            ),
         )
     )
 
-    if pending_key_id == last_key and (now_epoch - last_evict_at) < cooldown_seconds:
+    if pending_key_id == last_key and (now_epoch - last_clear_at) < cooldown_seconds:
         log(
             f"PENDING STUCK RECOVERY COOLDOWN -> HOLD CURRENT PENDING pending_key_id={pending_key_id} "
-            f"cooldown_seconds={cooldown_seconds} elapsed_seconds={now_epoch - last_evict_at}",
+            f"cooldown_seconds={cooldown_seconds} elapsed_seconds={now_epoch - last_clear_at}",
             "WARN",
             iface,
             "MASTER",
         )
         return state, False
 
-    # Only evict automatically when peer is either aligned on the same stuck
+    # Only clear automatically when peer is either aligned on the same stuck
     # head or unavailable as a cache authority for pending convergence.
     peer_pending = None
     if isinstance(peer_state, dict):
         peer_pending = peer_state.get("pending_key_id")
 
     if peer_state is not None and peer_pending and peer_pending != pending_key_id:
-        force_evict_seconds = int(
+        force_clear_seconds = int(
             qkd_policy().get(
-                "pending_stuck_force_evict_seconds",
-                max(7200, pending_stuck_recovery_seconds() * 10),
+                "pending_stuck_force_clear_seconds",
+                qkd_policy().get(
+                    "pending_stuck_force_evict_seconds",
+                    max(7200, pending_stuck_recovery_seconds() * 10),
+                ),
             )
         )
 
-        if overdue_seconds is not None and int(overdue_seconds) > force_evict_seconds:
+        if overdue_seconds is not None and int(overdue_seconds) > force_clear_seconds:
             log(
                 f"PENDING STUCK RECOVERY OVERRIDE -> FORCE ADVANCE pending_key_id={pending_key_id} "
                 f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
-                f"pending_stuck_force_evict_seconds={force_evict_seconds} reason={reason}",
+                f"pending_stuck_force_clear_seconds={force_clear_seconds} reason={reason}",
                 "ERROR",
                 iface,
                 "MASTER",
@@ -1197,7 +1215,7 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         else:
             log(
                 f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
-                f"reason={reason} overdue_seconds={overdue_seconds} pending_stuck_force_evict_seconds={force_evict_seconds}",
+                f"reason={reason} overdue_seconds={overdue_seconds} pending_stuck_force_clear_seconds={force_clear_seconds}",
                 "WARN",
                 iface,
                 "MASTER",
@@ -1207,22 +1225,24 @@ def evict_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
 
     dropped = pending.pop(0)
     state["pending_keys"] = pending
-    state["pending_stuck_at"] = None  # Clear stuck timer when evicted
+    state["pending_stuck_at"] = None  # Clear stuck timer when stale pending is cleared
     state = sync_pending_legacy_fields(state)
 
     for item in state.get("installed_keys", []):
         if not isinstance(item, dict):
             continue
         if item.get("key_id") == pending_key_id and item.get("status") == "pending":
-            item["status"] = "stale-pending-evicted"
+            item["status"] = "stale-pending-cleared"
 
     health["last_pending_stuck_key_id"] = pending_key_id
+    health["last_pending_stuck_clear_at"] = now_epoch
     health["last_pending_stuck_evict_at"] = now_epoch
     try:
-        health["pending_stuck_evict_count"] = int(health.get("pending_stuck_evict_count", 0)) + 1
+        health["pending_stuck_clear_count"] = int(health.get("pending_stuck_clear_count", health.get("pending_stuck_evict_count", 0))) + 1
     except Exception:
-        health["pending_stuck_evict_count"] = 1
-    health["last_kme_error"] = f"PENDING_STUCK_EVICTED:{pending_key_id}"
+        health["pending_stuck_clear_count"] = 1
+    health["pending_stuck_evict_count"] = health.get("pending_stuck_clear_count", 1)
+    health["last_kme_error"] = f"PENDING_STUCK_CLEARED:{pending_key_id}"
     state["health"] = health
     state = normalize_slot_ring(state)
 
@@ -3817,14 +3837,14 @@ def run_master():
 
             now_epoch = int(time.time())
             if pending_epoch is None:
-                state, evicted = evict_pending_head_for_recovery(
+                state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
                     reason="INVALID_PENDING_START_TIME",
                     peer_state=None,
                     overdue_seconds=None,
                 )
-                if evicted:
+                if cleared:
                     save_db_state(peer, iface, state)
                     continue
 
@@ -3860,7 +3880,7 @@ def run_master():
             )
             pending_stuck_exceeded = True
             pending_stuck_overdue_seconds = overdue_seconds
-            # Track when pending first became stuck for aggressive evict threshold
+            # Track when pending first became stuck for aggressive clear threshold
             if not state.get("pending_stuck_at"):
                 state["pending_stuck_at"] = int(time.time())
 
@@ -3931,14 +3951,14 @@ def run_master():
             else:
                 log("PEER STATUS unavailable -> SKIP ROTATION", "ERROR", iface, "MASTER")
                 if pending_stuck_exceeded:
-                    state, evicted = evict_pending_head_for_recovery(
+                    state, cleared = clear_pending_head_for_recovery(
                         state,
                         iface,
                         reason="PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE",
                         peer_state=None,
                         overdue_seconds=pending_stuck_overdue_seconds,
                     )
-                    if evicted:
+                    if cleared:
                         save_db_state(peer, iface, state)
                 continue
 
@@ -3951,14 +3971,14 @@ def run_master():
                 "MASTER",
             )
             if pending_stuck_exceeded:
-                state, evicted = evict_pending_head_for_recovery(
+                state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
                     reason="PENDING_STUCK_AND_PEER_STATE_INVALID",
                     peer_state=peer_state,
                     overdue_seconds=pending_stuck_overdue_seconds,
                 )
-                if evicted:
+                if cleared:
                     save_db_state(peer, iface, state)
             continue
 
@@ -3972,30 +3992,41 @@ def run_master():
                 iface,
                 "MASTER",
             )
+
+            if pending_stuck_exceeded and state.get("pending_key_id"):
+                state, cleared = clear_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason="PENDING_STUCK_AND_STRICT_SYNC_BLOCK",
+                    peer_state=peer_state,
+                    overdue_seconds=pending_stuck_overdue_seconds,
+                )
+                if cleared:
+                    save_db_state(peer, iface, state)
             continue
 
-        # AGGRESSIVE EVICT: If pending is stuck for >3min, evict immediately to unblock rotation
+        # AGGRESSIVE CLEAR: If pending is stuck for >3min, clear immediately to unblock rotation
         if state.get("pending_key_id") and pending_stuck_exceeded:
             pending_stuck_start = state.get("pending_stuck_at")
             if pending_stuck_start:
                 stuck_duration_seconds = int(time.time()) - pending_stuck_start
-                aggressive_evict_threshold = int(qkd_policy().get("pending_stuck_aggressive_evict_seconds", 180))
-                if stuck_duration_seconds > aggressive_evict_threshold:
+                aggressive_clear_threshold = int(qkd_policy().get("pending_stuck_aggressive_clear_seconds", qkd_policy().get("pending_stuck_aggressive_evict_seconds", 180)))
+                if stuck_duration_seconds > aggressive_clear_threshold:
                     log(
-                        f"AGGRESSIVE EVICT PENDING -> UNBLOCK ROTATION pending_key_id={state.get('pending_key_id')} "
-                        f"stuck_duration={stuck_duration_seconds}s threshold={aggressive_evict_threshold}s",
+                        f"AGGRESSIVE CLEAR STALE PENDING -> UNBLOCK ROTATION pending_key_id={state.get('pending_key_id')} "
+                        f"stuck_duration={stuck_duration_seconds}s threshold={aggressive_clear_threshold}s",
                         "WARN",
                         iface,
                         "MASTER",
                     )
-                    state, evicted = evict_pending_head_for_recovery(
+                    state, cleared = clear_pending_head_for_recovery(
                         state,
                         iface,
-                        reason="PENDING_STUCK_AGGRESSIVE_EVICT",
+                        reason="PENDING_STUCK_AGGRESSIVE_CLEAR",
                         peer_state=peer_state,
                         overdue_seconds=stuck_duration_seconds,
                     )
-                    if evicted:
+                    if cleared:
                         save_db_state(peer, iface, state)
                         continue  # Skip to next cycle with cleared pending, allow batch install
 
@@ -4070,14 +4101,14 @@ def run_master():
                             log(f"PEER STALE PENDING CHECK FAIL: {e}", "WARN", iface, "MASTER")
 
                 if pending_stuck_exceeded:
-                    state, evicted = evict_pending_head_for_recovery(
+                    state, cleared = clear_pending_head_for_recovery(
                         state,
                         iface,
                         reason="PENDING_STUCK_AND_PEER_MISMATCH",
                         peer_state=peer_state,
                         overdue_seconds=pending_stuck_overdue_seconds,
                     )
-                    if evicted:
+                    if cleared:
                         save_db_state(peer, iface, state)
                 
                 # Allow rotation to proceed if local has no pending key and has an active key.
@@ -4102,14 +4133,14 @@ def run_master():
 
         if state.get("pending_key_id"):
             if pending_stuck_exceeded:
-                state, evicted = evict_pending_head_for_recovery(
+                state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
                     reason="PENDING_STUCK_CONFIRMED_BY_PEER_STATUS",
                     peer_state=peer_state,
                     overdue_seconds=pending_stuck_overdue_seconds,
                 )
-                if evicted:
+                if cleared:
                     save_db_state(peer, iface, state)
                     continue
 
