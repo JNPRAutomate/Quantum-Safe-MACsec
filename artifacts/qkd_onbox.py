@@ -32,6 +32,7 @@ import time
 import datetime
 import requests
 import base64
+import re
 import subprocess
 import urllib3
 from pathlib import Path
@@ -2163,10 +2164,13 @@ def parse_mka_session_fields(mka_block):
     # Validation: Check CAK format
     cak_name = fields.get("cak_name")
     if cak_name:
-        if len(cak_name) != 64:
-            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)} cak={cak_name[:20]}...", "ERROR", None, "MKA")
+        # Junos can surface the CAK name in different normalized hex lengths
+        # depending on platform/output format. Accept the observed 32/64-char
+        # forms and only warn on truly unexpected lengths.
+        if len(cak_name) not in (32, 64):
+            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)} cak={cak_name[:20]}...", "WARN", None, "MKA")
         if not all(c in '0123456789abcdef' for c in cak_name.lower()):
-            log(f"MKA_PARSE CAK NOT HEX cak={cak_name[:20]}...", "ERROR", None, "MKA")
+            log(f"MKA_PARSE CAK NOT HEX cak={cak_name[:20]}...", "WARN", None, "MKA")
     
     return fields
 
@@ -2494,6 +2498,61 @@ def assign_slots_for_entries(state, entries):
     return entries
 
 
+def configured_qkd_keychain_names():
+    names = set()
+    for link in managed_links():
+        name = stable_keychain_name(link)
+        if name and str(name).startswith("QKD_"):
+            names.add(str(name))
+    return sorted(names)
+
+
+def existing_qkd_keychain_names():
+    try:
+        result = subprocess.run(
+            [CLI_PATH, "-c", "show configuration security authentication-key-chains | display set"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+        )
+    except Exception:
+        return []
+
+    stdout = result.stdout.decode(errors="ignore")
+    names = set()
+    pattern = re.compile(r"set security authentication-key-chains key-chain\s+(\S+)")
+    for line in stdout.splitlines():
+        match = pattern.search(line)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        if name.startswith("QKD_"):
+            names.add(name)
+    return sorted(names)
+
+
+def purge_stale_qkd_keychains(target_keychain_name=None):
+    keep = set(configured_qkd_keychain_names())
+    if target_keychain_name:
+        keep.add(str(target_keychain_name))
+
+    stale = []
+    for name in existing_qkd_keychain_names():
+        if name not in keep:
+            stale.append(name)
+
+    if not stale:
+        return []
+
+    log(
+        f"STALE QKD KEYCHAINS PURGE START keep={sorted(keep)} stale={stale}",
+        "WARN",
+        None,
+        "MACSEC",
+    )
+    return stale
+
+
 # ----------------------------
 # MACSEC KEYCHAIN HELPERS
 # ----------------------------
@@ -2518,11 +2577,22 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         log(f"KEYCHAIN INSTALL CLI_PATH INVALID cli_path={CLI_PATH}", "ERROR", iface, "MACSEC")
         return False
 
+    stale_keychains = purge_stale_qkd_keychains(target_keychain_name=keychain_name)
+
     cli_cmds = ["configure"]
+    for stale_keychain in stale_keychains:
+        log(
+            f"KEYCHAIN INSTALL PURGE STALE QKD KEYCHAIN stale_keychain={stale_keychain} target_keychain={keychain_name}",
+            "WARN",
+            iface,
+            "MACSEC",
+        )
+        cli_cmds.append(f"delete security authentication-key-chains key-chain {stale_keychain}")
     
     # PHASE 1: Disconnect old keychain from CA (keep fallback-key)
     log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=delete_pre_shared_key_chain", "DEBUG", iface, "MACSEC")
     cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
+    cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name}")
     
     # PHASE 2: Reconfigure CA with new keychain
     log(f"KEYCHAIN INSTALL PHASE2 ca={ca_name} action=reconfigure_ca security_mode=static-cak cipher=gcm-aes-xpn-256", "DEBUG", iface, "MACSEC")
