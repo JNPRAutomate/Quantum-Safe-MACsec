@@ -653,7 +653,7 @@ def configure_qkd_scripts(dev, name, base):
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
     peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", script_user)
-    script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "operator")
+    script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "super-user")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))

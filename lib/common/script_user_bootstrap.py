@@ -73,7 +73,7 @@ except Exception:  # pragma: no cover
     }
     QKD = {
         "SCRIPT_USER": "etsi_user",
-        "SCRIPT_USER_CLASS": "qkd-script-class",
+        "SCRIPT_USER_CLASS": "super-user",
         "PEER_CMD_USER": "etsi_peer_view",
         "SSH_KEY_NAME": "qkd_id_ed25519",
         "PEER_SSH_KEY_NAME": "qkd_peer_cmd_ed25519",
@@ -163,7 +163,7 @@ def get_script_user_class(inventory_base: Dict[str, Any], override: Optional[str
         os.getenv("QKD_SCRIPT_USER_CLASS")
         or secrets.get("script_user_class")
         or QKD.get("SCRIPT_USER_CLASS")
-        or "qkd-script-class"
+        or "super-user"
     )
 
 

@@ -16,7 +16,7 @@ env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
 
 def render_template(template_path, context):
     template = env.get_template(template_path)
-    return template.render(context)
+    return template.render(**context)
 
 
 def build_device_config(device_name, device, platform, base, topology):
@@ -42,6 +42,8 @@ def build_device_config(device_name, device, platform, base, topology):
         "kme": base.get("kme", {}),
         "script_name": ONBOX_SCRIPT_NAME,
         "script_user": QKD.get("SCRIPT_USER", "etsi_user"),
+        "script_user_class": base.get("secrets", {}).get("script_user_class")
+        or QKD.get("SCRIPT_USER_CLASS", "super-user"),
         "rotation_interval_seconds": rotation_interval_seconds,
     }
 

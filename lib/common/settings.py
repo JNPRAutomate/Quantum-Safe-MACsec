@@ -70,8 +70,8 @@ QKD = {
     "SCRIPT_USER": "etsi_user",
 
     # Runtime login class for SCRIPT_USER.
-    # Keep this non-superuser; override from inventory secrets if needed.
-    "SCRIPT_USER_CLASS": "qkd-script-class",
+    # Inventory may override this, but the default must match the lab baseline.
+    "SCRIPT_USER_CLASS": "super-user",
 
     # Dedicated low-privilege SSH transport identity used by qkd_onbox
     # for peer status reads and queue batch delivery.
