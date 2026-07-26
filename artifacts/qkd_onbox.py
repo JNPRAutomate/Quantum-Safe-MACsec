@@ -1203,7 +1203,7 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
             strict_block_clear_seconds = int(
                 qkd_policy().get(
                     "pending_stuck_strict_block_clear_seconds",
-                    max(pending_stuck_recovery_seconds(), 120),
+                    max(pending_stuck_recovery_seconds(), 10),
                 )
             )
             if int(overdue_seconds) >= strict_block_clear_seconds:

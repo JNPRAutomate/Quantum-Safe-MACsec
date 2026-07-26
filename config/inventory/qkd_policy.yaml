@@ -1,5 +1,5 @@
 qkd_policy:
-  # 60s lab profile: strict synchronization and queue+ACK transport
+  # 10s lab profile: strict synchronization and queue+ACK transport
   rekey_enabled: true
   batch_enabled: true
   strict_sync_enabled: true
@@ -15,12 +15,12 @@ qkd_policy:
   key_batch_size: 4
   max_installed_keys: 4
 
-  pending_confirm_grace_seconds: 20
-  pending_stuck_recovery_seconds: 120
-  pending_recovery_window_seconds: 90
-  pending_stuck_aggressive_clear_seconds: 180
-  pending_stuck_strict_block_clear_seconds: 120
-  pending_stuck_force_clear_seconds: 240
+  pending_confirm_grace_seconds: 10
+  pending_stuck_recovery_seconds: 10
+  pending_recovery_window_seconds: 10
+  pending_stuck_aggressive_clear_seconds: 20
+  pending_stuck_strict_block_clear_seconds: 10
+  pending_stuck_force_clear_seconds: 20
 
   # Queue transport safety controls
   peer_enqueue_min_margin_seconds: 30
