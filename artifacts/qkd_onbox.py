@@ -4027,6 +4027,32 @@ def run_master():
                 "MASTER",
             )
 
+            strict_sync_bypass = False
+
+            # If local pending is already clear but peer still reports a stale
+            # pending window, do not keep strict-sync blocked forever.
+            local_pending_key = state.get("pending_key_id")
+            peer_pending_key = peer_state.get("pending_key_id") if isinstance(peer_state, dict) else None
+            peer_next_start = peer_state.get("next_start_time") if isinstance(peer_state, dict) else None
+            if (not local_pending_key) and peer_pending_key and peer_next_start:
+                peer_pending_epoch = epoch_from_junos_start_time(peer_next_start)
+                if peer_pending_epoch is not None:
+                    peer_pending_age = int(time.time()) - int(peer_pending_epoch)
+                    stale_window = int(qkd_policy().get("pending_recovery_window_seconds", 360))
+                    if peer_pending_age > stale_window:
+                        log(
+                            f"STRICT SYNC BYPASS peer_pending_stale local_pending=None peer_pending_key={peer_pending_key} "
+                            f"peer_pending_age={peer_pending_age}s stale_window={stale_window}s",
+                            "WARN",
+                            iface,
+                            "MASTER",
+                        )
+                        strict_sync_bypass = True
+                    else:
+                        continue
+                else:
+                    continue
+
             if pending_stuck_exceeded and state.get("pending_key_id"):
                 state, cleared = clear_pending_head_for_recovery(
                     state,
@@ -4037,7 +4063,11 @@ def run_master():
                 )
                 if cleared:
                     save_db_state(peer, iface, state)
-            continue
+                    continue
+
+            # If strict-sync bypass was not selected above, keep strict block.
+            if not strict_sync_bypass:
+                continue
 
         # AGGRESSIVE CLEAR: If pending is stuck for >3min, clear immediately to unblock rotation
         if state.get("pending_key_id") and pending_stuck_exceeded:
