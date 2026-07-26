@@ -448,10 +448,13 @@ def run_ssh_cmd(log, name, ip, user, cmds):
 def print_identity_plan():
     print("=== QKD identity plan ===")
     script_user = QKD.get("SCRIPT_USER", "etsi_user")
+    peer_cmd_user = QKD.get("PEER_CMD_USER", script_user)
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
     runtime_home = f"{ssh_home_base}/{script_user}"
     print(f"deploy_user       = {QKD['DEPLOY_USER']}")
     print(f"script_user       = {script_user}")
+    print(f"peer_cmd_user     = {peer_cmd_user}")
+    print("peer_cmd_source   = inventory.devices.<name>.peer_cmd_user | inventory.secrets.peer_cmd_user | QKD.PEER_CMD_USER")
     print(f"script_name       = {ONBOX_SCRIPT_NAME}")
     print(f"remote_op_script  = {QKD['REMOTE_OP_SCRIPT_PATH']}")
     print(f"ssh_home          = {runtime_home}")

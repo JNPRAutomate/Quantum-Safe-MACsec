@@ -651,6 +651,7 @@ def configure_qkd_scripts(dev, name, base):
     script_name = ONBOX_SCRIPT_NAME
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
+    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", script_user)
     script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "operator")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
@@ -660,6 +661,7 @@ def configure_qkd_scripts(dev, name, base):
 
     print(f"[{name}] Rendering event/op templates")
     print(f"[{name}] Using script_user={script_user}")
+    print(f"[{name}] Using peer_cmd_user(default)={peer_cmd_user}")
 
     context = {
         "script_name": script_name,
