@@ -782,9 +782,11 @@ def run_script_user_key_fix(
     name: str,
     script_user: str,
     deploy_user: str,
+    key_name: Optional[str] = None,
+    key_comment: Optional[str] = None,
 ) -> bool:
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
-    key_name = QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")
+    key_name = key_name or QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")
     key_path = f"{ssh_home_base}/{script_user}/.ssh/{key_name}"
     pub_path = f"{key_path}.pub"
 
@@ -795,7 +797,7 @@ def run_script_user_key_fix(
         )
         return True
 
-    key_comment = f"{script_user}@qkd-bootstrap"
+    key_comment = key_comment or f"{script_user}@qkd-bootstrap"
 
     def _run(command: str) -> str:
         result = dev.rpc.request_shell_execute(command=command)
@@ -897,36 +899,6 @@ def sync_user_keypair_from_local(
         )
         return False
 
-
-def sync_script_user_keypair_from_local(
-    dev: Device,
-    name: str,
-    script_user: str,
-    local_private_key_path: str,
-) -> bool:
-    return sync_user_keypair_from_local(
-        dev,
-        name,
-        script_user,
-        local_private_key_path,
-        str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
-    )
-
-
-def sync_peer_transport_keypair_from_local(
-    dev: Device,
-    name: str,
-    script_user: str,
-    local_private_key_path: str,
-) -> bool:
-    return sync_user_keypair_from_local(
-        dev,
-        name,
-        script_user,
-        local_private_key_path,
-        str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
-    )
-
     remote_tmp_priv = f"/var/tmp/{key_name}.sync"
     remote_tmp_pub = f"/var/tmp/{key_name}.sync.pub"
 
@@ -969,6 +941,36 @@ def sync_peer_transport_keypair_from_local(
     except Exception as exc:
         print("[%s] FAIL canonical key sync: %s" % (name, exc))
         return False
+
+
+def sync_script_user_keypair_from_local(
+    dev: Device,
+    name: str,
+    script_user: str,
+    local_private_key_path: str,
+) -> bool:
+    return sync_user_keypair_from_local(
+        dev,
+        name,
+        script_user,
+        local_private_key_path,
+        str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
+    )
+
+
+def sync_peer_transport_keypair_from_local(
+    dev: Device,
+    name: str,
+    script_user: str,
+    local_private_key_path: str,
+) -> bool:
+    return sync_user_keypair_from_local(
+        dev,
+        name,
+        script_user,
+        local_private_key_path,
+        str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1105,6 +1107,14 @@ def bootstrap_script_user_on_device(
                     "[%s] WARN canonical local key sync did not complete; continuing with on-box key repair fallback"
                     % name
                 )
+                run_script_user_key_fix(
+                    dev,
+                    name,
+                    script_user,
+                    deploy_user,
+                    key_name=str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
+                    key_comment=f"{script_user}@qkd-bootstrap",
+                )
         if script_auth_mode == "key-only" and peer_local_private_key_path:
             if not sync_peer_transport_keypair_from_local(
                 dev,
@@ -1115,6 +1125,14 @@ def bootstrap_script_user_on_device(
                 print(
                     "[%s] WARN peer transport key sync did not complete; continuing with current on-box key material"
                     % name
+                )
+                run_script_user_key_fix(
+                    dev,
+                    name,
+                    script_user,
+                    deploy_user,
+                    key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
+                    key_comment=f"{peer_cmd_user}@qkd-peer-bootstrap",
                 )
 
         if not run_script_user_key_fix(dev, name, script_user, deploy_user):
