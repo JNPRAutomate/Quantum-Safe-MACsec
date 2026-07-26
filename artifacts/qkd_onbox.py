@@ -492,7 +492,7 @@ def strict_sync_enabled():
 
 
 def pending_auto_evict_enabled():
-    return bool(qkd_policy().get("pending_auto_evict_enabled", False))
+    return bool(qkd_policy().get("pending_auto_evict_enabled", True))
 
 
 def peer_enqueue_min_margin_seconds():
@@ -1387,24 +1387,7 @@ def read_remote_peer_batch_ack(link, iface):
         return None
 
     ack_path = remote_peer_ack_file(link.get("peer_sae"), peer_iface)
-    ssh_cmd = [
-        "ssh",
-        "-i", SSH_KEY,
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-        f"{PEER_CMD_USER}@{peer_ip}",
-        f"cat {ack_path}",
-    ]
-    try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    except Exception:
-        return None
-
-    if result.returncode != 0:
-        return None
-
-    stdout = result.stdout.decode(errors="ignore").strip()
+    stdout = scp_download_text(PEER_CMD_USER, peer_ip, ack_path)
     if not stdout:
         return None
 
@@ -2645,6 +2628,74 @@ def runtime_user():
         return "unknown"
 
 
+def ssh_transport_options():
+    return [
+        "-i", SSH_KEY,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+    ]
+
+
+def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, mode_ctx="MASTER"):
+    local_tmp = Path(f"/tmp/qkd_scp_upload_{os.getpid()}_{int(time.time()*1000)}.tmp")
+    try:
+        local_tmp.write_text(str(payload_text), encoding="utf-8")
+        cmd = [
+            "scp",
+            *ssh_transport_options(),
+            str(local_tmp),
+            f"{peer_user}@{peer_ip}:{remote_path}",
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="ignore").strip()
+            stdout = result.stdout.decode(errors="ignore").strip()
+            log(
+                f"SCP UPLOAD FAIL user={peer_user} peer={peer_ip} path={remote_path} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                iface,
+                mode_ctx,
+            )
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        log(f"SCP UPLOAD TIMEOUT user={peer_user} peer={peer_ip} path={remote_path}", "ERROR", iface, mode_ctx)
+        return False
+    except Exception as e:
+        log(f"SCP UPLOAD ERROR user={peer_user} peer={peer_ip} path={remote_path} error={str(e)}", "ERROR", iface, mode_ctx)
+        return False
+    finally:
+        try:
+            if local_tmp.exists():
+                local_tmp.unlink()
+        except Exception:
+            pass
+
+
+def scp_download_text(peer_user, peer_ip, remote_path):
+    local_tmp = Path(f"/tmp/qkd_scp_download_{os.getpid()}_{int(time.time()*1000)}.tmp")
+    try:
+        cmd = [
+            "scp",
+            *ssh_transport_options(),
+            f"{peer_user}@{peer_ip}:{remote_path}",
+            str(local_tmp),
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        if result.returncode != 0:
+            return None
+        return local_tmp.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    finally:
+        try:
+            if local_tmp.exists():
+                local_tmp.unlink()
+        except Exception:
+            pass
+
+
 def validate_ssh_runtime_for_master():
     user = runtime_user()
     if PEER_CMD_USER != SCRIPT_USER:
@@ -2748,19 +2799,11 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         except Exception:
             pass
 
-    ssh_options = [
-        "ssh",
-        "-i", SSH_KEY,
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-    ]
+    ssh_options = ["ssh", *ssh_transport_options()]
 
     if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
         peer_user = PEER_CMD_USER
         remote_inbox = peer_inbox_file(link.get("peer_sae"), peer_iface)
-        remote_tmp = f"{remote_inbox}.{int(time.time())}.{os.getpid()}.tmp"
-        enqueue_cmd = f"umask 077; mkdir -p {PEER_INBOX_DIR}; cat > {remote_tmp}; mv {remote_tmp} {remote_inbox}"
         if first_start_epoch is not None:
             remaining_seconds = int(first_start_epoch - time.time())
             min_margin = peer_enqueue_min_margin_seconds()
@@ -2787,35 +2830,14 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         }
         transport_payload = json.dumps(envelope, separators=(",", ":"))
         log(
-            f"SSH EXEC {peer_user}@{peer_ip} action=enqueue-batch local_iface={iface} peer_iface={peer_iface} "
+            f"SCP PUT {peer_user}@{peer_ip} action=enqueue-batch local_iface={iface} peer_iface={peer_iface} "
             f"scheduled_start_time={start_time_human} inbox={remote_inbox} ack_id={ack_id}",
             "INFO",
             iface,
             "MASTER",
         )
 
-        try:
-            result = subprocess.run(
-                ssh_options + [f"{peer_user}@{peer_ip}", enqueue_cmd],
-                input=transport_payload.encode(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=10,
-            )
-        except subprocess.TimeoutExpired:
-            log(f"SSH ENQUEUE TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
-            return False
-        except Exception as e:
-            log(f"SSH ENQUEUE ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
-            return False
-
-        stdout = result.stdout.decode(errors="ignore").strip()
-        stderr = result.stderr.decode(errors="ignore").strip()
-        log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
-        if result.returncode != 0:
-            log(f"SSH ENQUEUE FAIL action={action} stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
-            return False
-        return True
+        return scp_upload_text(peer_user, peer_ip, remote_inbox, transport_payload, iface=iface, mode_ctx="MASTER")
 
     peer_user = SCRIPT_USER
     log(
@@ -2859,48 +2881,24 @@ def get_peer_status(link, iface):
     peer_iface = link["peer_interface"]
     snapshot_path = remote_peer_status_file(link.get("peer_sae"), peer_iface)
 
-    ssh_options = [
-        "ssh",
-        "-i", SSH_KEY,
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-    ]
-
-    stdout = ""
-    result = None
+    ssh_options = ["ssh", *ssh_transport_options()]
 
     snapshot_user = PEER_CMD_USER
-    snapshot_cmd = f"cat {snapshot_path}"
     log(
-        f"SSH EXEC {snapshot_user}@{peer_ip} action=status-readonly local_iface={iface} peer_iface={peer_iface} snapshot={snapshot_path}",
+        f"SCP GET {snapshot_user}@{peer_ip} action=status-readonly local_iface={iface} peer_iface={peer_iface} snapshot={snapshot_path}",
         "INFO",
         iface,
         "MASTER",
     )
-    try:
-        result = subprocess.run(
-            ssh_options + [f"{snapshot_user}@{peer_ip}", snapshot_cmd],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=10,
-        )
-        stdout = result.stdout.decode(errors="ignore").strip()
-        stderr = result.stderr.decode(errors="ignore").strip()
-        if result.returncode != 0 or not stdout:
-            log(
-                f"SSH STATUS SNAPSHOT MISS user={snapshot_user} snapshot={snapshot_path} rc={result.returncode} stderr={stderr}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-            result = None
-    except subprocess.TimeoutExpired:
-        log(f"SSH STATUS SNAPSHOT TIMEOUT peer={peer_ip} snapshot={snapshot_path}", "WARN", iface, "MASTER")
-    except Exception as e:
-        log(f"SSH STATUS SNAPSHOT ERROR peer={peer_ip} snapshot={snapshot_path} error={str(e)}", "WARN", iface, "MASTER")
+    stdout = scp_download_text(snapshot_user, peer_ip, snapshot_path)
 
-    if result is None:
+    if not stdout:
+        log(
+            f"SSH STATUS SNAPSHOT MISS user={snapshot_user} snapshot={snapshot_path}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
         peer_user = SCRIPT_USER
         cmd = f"op qkd_onbox.py action status iface {peer_iface}"
         log(f"SSH EXEC {peer_user}@{peer_ip} action=status-fallback-op local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
