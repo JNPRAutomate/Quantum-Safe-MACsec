@@ -5,6 +5,7 @@ secrets:
   default_user: labuser
   bootstrap_user: labuser
   script_user: etsi_user
+  script_user_class: qkd-script-class
   peer_cmd_user: etsi_peer_view
   script_user_auth_mode: key-only
 kme:

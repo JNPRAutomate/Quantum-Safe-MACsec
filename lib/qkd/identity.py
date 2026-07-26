@@ -22,6 +22,10 @@ def qkd_script_user():
     return QKD.get("SCRIPT_USER", "etsi_user")
 
 
+def qkd_peer_cmd_user():
+    return QKD.get("PEER_CMD_USER", qkd_script_user())
+
+
 def qkd_deploy_user():
     return QKD.get("DEPLOY_USER", "root")
 
@@ -331,6 +335,7 @@ def check_validation_plan():
     print("=== QKD validation plan ===")
     print(f"deploy_user_fallback = {qkd_deploy_user()}")
     print(f"script_user          = {qkd_script_user()}")
+    print(f"peer_cmd_user        = {qkd_peer_cmd_user()}")
     print(f"ssh_home             = {qkd_ssh_home()}")
     print(f"ssh_dir              = {qkd_ssh_dir()}")
     print(f"ssh_key              = {qkd_ssh_private_key()}")
@@ -650,6 +655,7 @@ def check_peer_ssh_from_device(device):
     device = normalize_device(device)
     name = device_name(device)
     script_user = qkd_script_user()
+    peer_cmd_user = str(device.get("peer_cmd_user") or qkd_peer_cmd_user())
     key_path = qkd_ssh_private_key()
     peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 4))
     max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 0))
@@ -679,11 +685,7 @@ def check_peer_ssh_from_device(device):
     started = time.perf_counter()
 
     def probe_peer_ssh(peer_link, peer_ip):
-        marker = f"QKD_PEER_SSH_OK_{name}_{str(peer_ip).replace('.', '_')}"
-        if platform_is_legacy_qfx(device):
-            peer_payload = f"echo {marker}"
-        else:
-            peer_payload = "start shell command " + junos_cli_quote(f"echo {marker}")
+        peer_payload = "show system uptime | no-more"
 
         cmd = (
             f"ssh -i {key_path} "
@@ -695,7 +697,7 @@ def check_peer_ssh_from_device(device):
             f"-o ServerAliveInterval={alive_interval} "
             f"-o ServerAliveCountMax={alive_max} "
             f"-o LogLevel=ERROR "
-            f"{script_user}@{peer_ip} "
+            f"{peer_cmd_user}@{peer_ip} "
             f"{shlex.quote(peer_payload)}"
         )
         result = ssh_script_user_onbox_cmd(device, cmd, timeout=peer_timeout)
@@ -704,7 +706,7 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
-        if marker in combined:
+        if result.returncode == 0 and "unknown command" not in combined_low and "syntax error" not in combined_low:
             return {"peer_ip": peer_ip, "ok": True}
 
         hard_fail_markers = [
@@ -717,7 +719,7 @@ def check_peer_ssh_from_device(device):
         ]
         if any(m in combined_low for m in hard_fail_markers):
             raise RuntimeError(
-                f"peer SSH authentication failed from {name} to {peer_ip} as {script_user}\n"
+                f"peer SSH authentication failed from {name} to {peer_ip} as {peer_cmd_user}\n"
                 f"stdout={stdout}\n"
                 f"stderr={stderr}"
             )
@@ -731,8 +733,8 @@ def check_peer_ssh_from_device(device):
             }
 
         raise RuntimeError(
-            f"peer SSH marker not observed from {name} to {peer_ip} as {script_user}\n"
-            f"expected_marker={marker}\n"
+            f"peer SSH probe command did not succeed from {name} to {peer_ip} as {peer_cmd_user}\n"
+            f"probe_command={peer_payload}\n"
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )
@@ -759,12 +761,12 @@ def check_peer_ssh_from_device(device):
     for result in peer_results:
         peer_ip = result["peer_ip"]
         if result.get("ok"):
-            print(f"[OK] peer SSH {name} -> {peer_ip} as {script_user}")
+            print(f"[OK] peer SSH {name} -> {peer_ip} as {peer_cmd_user}")
             continue
         if result.get("timeout"):
             timeout_count += 1
             print(
-                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {script_user}; "
+                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {peer_cmd_user}; "
                 "manual SSH may still be valid"
             )
             print_if_verbose(result.get("stdout", ""))

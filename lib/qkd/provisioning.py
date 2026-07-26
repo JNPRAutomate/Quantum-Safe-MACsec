@@ -543,10 +543,11 @@ def push_certs(dev, name, device):
             scp.put(str(local_file), remote_path=remote_file)
 
     verify_cmd = (
-        f"chown {script_user} {remote_dir}; "
-        f"chown {script_user} {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
+        f"chown root {remote_dir}; "
+        f"chown root {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
+        f"chgrp wheel {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
         f"chmod 644 {remote_dir}/{local_cert.name}; "
-        f"chmod 600 {remote_dir}/{local_key.name}; "
+        f"chmod 640 {remote_dir}/{local_key.name}; "
         f"chmod 644 {remote_dir}/{local_ca.name}; "
         f"test -s {remote_dir}/{local_cert.name} && echo OK:{remote_dir}/{local_cert.name}; "
         f"test -s {remote_dir}/{local_key.name} && echo OK:{remote_dir}/{local_key.name}; "
@@ -590,8 +591,8 @@ def push_certs(dev, name, device):
             f"output={output}"
         )
 
-    # Ensure the runtime key/cert/CA files are actually owned by script_user,
-    # otherwise qkd_onbox running as script_user can fail with PermissionError.
+    # Ensure runtime key/cert/CA files are root-owned (read-only for script_user),
+    # while remaining readable by policy-defined permissions.
     expected_files = [local_cert.name, local_key.name, local_ca.name]
     owner_violations = []
     for line in (output or "").splitlines():
@@ -610,7 +611,7 @@ def push_certs(dev, name, device):
                 owner_violations.append((file_name, "<unparsed>", stripped))
                 continue
             owner = parts[2]
-            if owner != script_user:
+            if owner != "root":
                 owner_violations.append((file_name, owner, stripped))
 
     if owner_violations:
@@ -619,7 +620,7 @@ def push_certs(dev, name, device):
             for file_name, owner, line in owner_violations
         )
         raise RuntimeError(
-            f"[{name}] Remote cert owner mismatch. Expected owner={script_user}\n{details}"
+            f"[{name}] Remote cert owner mismatch. Expected owner=root\n{details}"
         )
 
     sync_certs_dual_re(dev, name, remote_dir, [local_cert.name, local_key.name, local_ca.name])
@@ -650,6 +651,7 @@ def configure_qkd_scripts(dev, name, base):
     script_name = ONBOX_SCRIPT_NAME
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
+    script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "operator")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
@@ -662,12 +664,28 @@ def configure_qkd_scripts(dev, name, base):
     context = {
         "script_name": script_name,
         "script_user": script_user,
+        "script_user_class": script_user_class,
         "rotation_interval_seconds": rotation_interval_seconds,
     }
 
     event_cfg = render_common_template("event.j2", context)
     op_cfg = render_common_template("op_script.j2", context)
-    full_cfg = event_cfg + "\n" + op_cfg
+    class_cfg = "\n".join(
+        [
+            f"delete system login class {script_user_class} permissions super-user",
+            f"delete system login class {script_user_class} permissions all",
+            f"delete system login class {script_user_class} permissions view",
+            f"delete system login class {script_user_class} permissions view-configuration",
+            f"delete system login class {script_user_class} permissions configure",
+            f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py .*\"",
+            f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py\"",
+            f"set system login class {script_user_class} deny-commands \"configure\"",
+            f"set system login class {script_user_class} deny-commands \"configure .*\"",
+            f"set system login class {script_user_class} deny-commands \"show\"",
+            f"set system login class {script_user_class} deny-commands \"show .*\"",
+        ]
+    )
+    full_cfg = class_cfg + "\n" + event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
 
