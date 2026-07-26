@@ -185,7 +185,8 @@ def get_peer_cmd_user_class(inventory_base: Dict[str, Any], override: Optional[s
     return str(
         os.getenv("QKD_PEER_CMD_USER_CLASS")
         or secrets.get("peer_cmd_user_class")
-        or "operator"
+        or QKD.get("PEER_CMD_USER_CLASS")
+        or "qkd-peer-cmd-class"
     )
 
 

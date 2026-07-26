@@ -76,6 +76,7 @@ QKD = {
     # Dedicated low-privilege SSH transport identity used by qkd_onbox
     # for peer status reads and queue batch delivery.
     "PEER_CMD_USER": "etsi_peer_view",
+    "PEER_CMD_USER_CLASS": "qkd-peer-cmd-class",
 
     # Privileged deploy/cleanup user.
     #

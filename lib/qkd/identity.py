@@ -734,7 +734,8 @@ def check_peer_ssh_from_device(device):
     started = time.perf_counter()
 
     def probe_peer_ssh(peer_link, peer_ip):
-        peer_payload = "show system uptime | no-more"
+        # Auth-only probe for peer_cmd_user: transport must work, CLI privileges are intentionally minimal.
+        peer_payload = "exit"
 
         cmd = (
             f"ssh -i {key_path} "
@@ -755,7 +756,7 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
-        if result.returncode == 0 and "unknown command" not in combined_low and "syntax error" not in combined_low:
+        if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
             return {"peer_ip": peer_ip, "ok": True}
 
         hard_fail_markers = [

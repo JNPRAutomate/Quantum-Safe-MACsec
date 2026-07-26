@@ -720,7 +720,42 @@ def configure_qkd_scripts(dev, name, base):
     print(f"[{name}] QKD scripts event and op configured OK")
 
 
-def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_class="operator", public_key_line=None):
+def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
+    class_cfg = (
+        "replace:\n"
+        "system {\n"
+        "  login {\n"
+        f"    class {peer_cmd_user_class} {{\n"
+        "      allow-commands \"exit\";\n"
+        "      deny-commands \"show\";\n"
+        "      deny-commands \"show .*\";\n"
+        "      deny-commands \"configure\";\n"
+        "      deny-commands \"configure .*\";\n"
+        "      deny-commands \"op .*\";\n"
+        "      deny-commands \"start shell.*\";\n"
+        "      deny-commands \"request .*\";\n"
+        "      deny-commands \"file .*\";\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    with Config(dev) as cu:
+        cu.load(class_cfg, format="text", merge=True)
+        if cu.diff():
+            print(f"[{device_name}] Applying peer_cmd_user class policy class={peer_cmd_user_class}")
+            commit_safely(
+                dev,
+                cu,
+                device_name,
+                sync=True,
+                phase="PEER_CMD_USER_CLASS_POLICY",
+                detail=f"class={peer_cmd_user_class}",
+            )
+        else:
+            print(f"[{device_name}] peer_cmd_user class policy already aligned class={peer_cmd_user_class}")
+
+
+def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_class="qkd-peer-cmd-class", public_key_line=None):
     if not peer_cmd_user:
         raise ValueError("peer_cmd_user is required")
 
@@ -815,7 +850,17 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         print(f"[{device_name}] No valid peer SSH keys to configure")
         return
 
-    peer_cmd_user_class = secrets.get("peer_cmd_user_class") or device_dict.get("peer_cmd_user_class") or "operator"
+    peer_cmd_user_class = (
+        secrets.get("peer_cmd_user_class")
+        or device_dict.get("peer_cmd_user_class")
+        or QKD.get("PEER_CMD_USER_CLASS", "qkd-peer-cmd-class")
+    )
+    try:
+        ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class)
+    except Exception as exc:
+        raise RuntimeError(
+            f"peer_cmd_user class policy bootstrap failed on {device_name} class={peer_cmd_user_class}: {exc}"
+        )
     try:
         ensure_peer_cmd_user_login(
             dev,
