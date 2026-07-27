@@ -927,11 +927,14 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
 
     key_args = " ".join(shlex.quote(line) for line in key_lines)
     if key_args:
-        append_expr = f"printf '%s\\n' {key_args} >> {quoted_tmp_auth_path}"
+        append_expr = (
+            f"set -- {key_args}; "
+            f"for key in \"$@\"; do echo \"$key\" >> {quoted_tmp_auth_path}; done"
+        )
     else:
         append_expr = f": > {quoted_tmp_auth_path}"
 
-    sync_cmd = (
+    sync_payload = (
         "set -e; "
         f"id {quoted_user}; "
         f"mkdir -p {quoted_ssh_dir}; "
@@ -948,6 +951,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         f"chmod 600 {quoted_auth_path}; "
         f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}"
     )
+    sync_cmd = f"/bin/sh -c {shlex.quote(sync_payload)}"
     _run_or_raise("authorized-keys-sync", sync_cmd)
 
     _run_or_raise(
