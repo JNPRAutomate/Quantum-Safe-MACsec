@@ -1406,17 +1406,16 @@ def reconcile_state_with_router(link, iface, state):
     router_ckn = fields.get("cak_name")
     router_key_id = find_key_id_for_ckn(state, router_ckn)
     if not router_key_id:
-        last_seen_key_id = state.get("last_seen_key_id")
-        if last_seen_key_id:
-            if state.get("active_key_id") != last_seen_key_id:
-                log(
-                    f"STATE RECONCILED FROM LAST_SEEN old_active_key_id={state.get('active_key_id')} new_active_key_id={last_seen_key_id}",
-                    "INFO",
-                    iface,
-                    "STATE",
-                )
-            state["active_key_id"] = last_seen_key_id
-            state["active_confirmed_at"] = int(time.time())
+        # Do not force active_key_id from last_seen when router key cannot be
+        # mapped deterministically. Forcing a fallback here can roll state
+        # backwards and keep pending confirmation in a loop.
+        if state.get("last_seen_key_id"):
+            log(
+                f"STATE RECONCILE NO_ROUTER_MATCH keep_active_key_id={state.get('active_key_id')} last_seen_key_id={state.get('last_seen_key_id')}",
+                "WARN",
+                iface,
+                "STATE",
+            )
         return state
 
     if state.get("active_key_id") != router_key_id:
