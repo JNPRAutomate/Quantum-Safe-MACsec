@@ -579,6 +579,56 @@ def get_configured_keychain_key_indices(keychain_name, iface=None):
     return indices, key_names_by_index, stdout
 
 
+def get_configured_next_pending_slot(keychain_name, iface=None, now_epoch=None):
+    cmd = f"show configuration security authentication-key-chains key-chain {keychain_name} | display set"
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except Exception:
+        return None
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        return None
+
+    if now_epoch is None:
+        now_epoch = int(time.time())
+
+    pattern = re.compile(
+        rf"set\s+security\s+authentication-key-chains\s+key-chain\s+{re.escape(keychain_name)}\s+key\s+(\d+)\s+start-time\s+(.+)$"
+    )
+
+    candidates = []
+    for line in stdout.splitlines():
+        match = pattern.search(line)
+        if not match:
+            continue
+        try:
+            slot = int(match.group(1))
+        except Exception:
+            continue
+
+        start_raw = str(match.group(2) or "").strip().rstrip(";")
+        if start_raw.startswith('"') and start_raw.endswith('"'):
+            start_raw = start_raw[1:-1]
+
+        # Junos may include timezone suffix in config output; keep the core
+        # timestamp expected by epoch parser.
+        start_core = start_raw.split()[0] if start_raw else ""
+        start_epoch = epoch_from_junos_start_time(start_core)
+        if start_epoch is None:
+            continue
+        if int(start_epoch) <= int(now_epoch):
+            continue
+        candidates.append((int(start_epoch), int(slot)))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0])
+    return int(candidates[0][1])
+
+
 def db_state_file(peer, iface):
     return f"{STATE_DIR}/qkd_db_{peer}_{iface.replace('/','_')}.json"
 
@@ -891,6 +941,47 @@ def sync_pending_legacy_fields(state):
     return state
 
 
+def find_slot_for_key_id_in_installed(state, key_id):
+    if not key_id:
+        return None
+
+    try:
+        ring_size = max_installed_keys()
+    except Exception:
+        ring_size = 1
+    if ring_size < 1:
+        ring_size = 1
+
+    installed = state.get("installed_keys", [])
+    if not isinstance(installed, list):
+        installed = []
+
+    for item in reversed(installed):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("key_id") or "") != str(key_id):
+            continue
+        slot = item.get("slot")
+        try:
+            return int(slot) % ring_size
+        except Exception:
+            continue
+
+    slots = state.get("slots", [])
+    if isinstance(slots, list):
+        for idx, item in enumerate(slots):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("key_id") or "") != str(key_id):
+                continue
+            try:
+                return int(idx) % ring_size
+            except Exception:
+                continue
+
+    return None
+
+
 def normalize_pending_keys(state):
     pending = state.get("pending_keys")
     if not isinstance(pending, list):
@@ -917,11 +1008,20 @@ def normalize_pending_keys(state):
         except Exception:
             generation = None
 
+        slot = item.get("slot")
+        try:
+            slot = int(slot) if slot is not None else None
+        except Exception:
+            slot = None
+        if slot is None:
+            slot = find_slot_for_key_id_in_installed(state, key_id)
+
         normalized.append(
             {
                 "generation": generation,
                 "key_id": key_id,
                 "start_time": item.get("start_time"),
+                "slot": slot,
             }
         )
         seen.add(key_id)
@@ -942,6 +1042,7 @@ def normalize_pending_keys(state):
                     "generation": generation,
                     "key_id": legacy_key,
                     "start_time": state.get("next_start_time"),
+                    "slot": find_slot_for_key_id_in_installed(state, legacy_key),
                 },
             )
 
@@ -1010,20 +1111,31 @@ def record_installed_key(state, generation, key_id, start_time, slot, status):
     return state
 
 
-def append_pending_key(state, generation, key_id, start_time):
+def append_pending_key(state, generation, key_id, start_time, slot=None):
     if not key_id:
         return normalize_pending_keys(state)
 
     state = normalize_pending_keys(state)
     for item in state.get("pending_keys", []):
         if item.get("key_id") == key_id:
+            if item.get("slot") is None:
+                resolved_slot = slot if slot is not None else find_slot_for_key_id_in_installed(state, key_id)
+                if resolved_slot is not None:
+                    item["slot"] = int(resolved_slot)
             return state
+
+    resolved_slot = slot if slot is not None else find_slot_for_key_id_in_installed(state, key_id)
+    try:
+        resolved_slot = int(resolved_slot) if resolved_slot is not None else None
+    except Exception:
+        resolved_slot = None
 
     state["pending_keys"].append(
         {
             "generation": int(generation) if generation is not None else None,
             "key_id": key_id,
             "start_time": start_time,
+            "slot": resolved_slot,
         }
     )
     return normalize_pending_keys(state)
@@ -3616,14 +3728,15 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
         state["generation"] = int(generation)
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
-    state = append_pending_key(state, state.get("generation"), key_id, start_time)
+    installed_slot = (int(state.get("slot_cursor", 0)) - 1) % max_installed_keys()
+    state = append_pending_key(state, state.get("generation"), key_id, start_time, slot=installed_slot)
     state["last_rotation"] = int(time.time())
     state = record_installed_key(
         state,
         state.get("generation"),
         key_id,
         start_time,
-        (int(state.get("slot_cursor", 0)) - 1) % max_installed_keys(),
+        installed_slot,
         "pending",
     )
     state = clear_kme_failure(peer, iface, state)
@@ -3770,7 +3883,7 @@ def run_slave_install_key_batch(batch_b64, iface):
         start_time = entry.get("start_time")
         if generation is not None:
             state["generation"] = int(generation)
-        state = append_pending_key(state, generation, key_id, start_time)
+        state = append_pending_key(state, generation, key_id, start_time, slot=entry.get("slot"))
         state = record_installed_key(
             state,
             generation,
@@ -4097,7 +4210,7 @@ def bootstrap_keychain_link(link, force=False):
     time.sleep(0.5)
 
     for item in bootstrap_records:
-        state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"])
+        state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"], slot=item.get("slot"))
     state["last_rotation"] = int(time.time())
     for item in bootstrap_records:
         state = record_installed_key(
@@ -4201,7 +4314,41 @@ def run_master():
             continue
 
         if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
-            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} reason=PENDING_KEY_SCHEDULED_NOT_DUE", "INFO", iface, "MASTER")
+            if not state.get("pending_stuck_at"):
+                state["pending_stuck_at"] = int(time.time())
+                save_db_state(peer, iface, state)
+
+            pending_future_age_seconds = int(time.time()) - int(state.get("pending_stuck_at") or int(time.time()))
+            future_stuck_recovery_seconds = pending_stuck_recovery_seconds() + pending_confirm_grace_seconds()
+
+            if pending_future_age_seconds > future_stuck_recovery_seconds:
+                state, cleared = clear_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason="PENDING_FUTURE_STUCK",
+                    peer_state=None,
+                    overdue_seconds=pending_future_age_seconds,
+                )
+                if cleared:
+                    save_db_state(peer, iface, state)
+                    log(
+                        f"PENDING FUTURE STUCK RECOVERY APPLIED age_seconds={pending_future_age_seconds} "
+                        f"future_stuck_recovery_seconds={future_stuck_recovery_seconds}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
+
+            log(
+                f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} "
+                f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                f"reason=PENDING_KEY_SCHEDULED_NOT_DUE pending_age_seconds={max(0, pending_future_age_seconds)} "
+                f"future_stuck_recovery_seconds={future_stuck_recovery_seconds}",
+                "INFO",
+                iface,
+                "MASTER",
+            )
             continue
 
         pending_stuck_exceeded = False
@@ -4502,6 +4649,7 @@ def run_master():
         batch_size = effective_batch
         ring_size = max_installed_keys()
         active_slot = active_slot_index(state, iface=iface, keychain_name=keychain)
+        protected_pending_slot = get_configured_next_pending_slot(keychain, iface=iface)
 
         # Non-destructive ring preload strategy:
         # - Keep active slot untouched
@@ -4536,6 +4684,8 @@ def run_master():
                     candidate = (int(active_slot) + offset) % ring_size
                     if int(candidate) == int(active_slot):
                         continue
+                    if protected_pending_slot is not None and int(candidate) == int(protected_pending_slot):
+                        continue
                     target_slots.append(int(candidate))
                     if len(target_slots) >= int(install_count):
                         break
@@ -4559,9 +4709,20 @@ def run_master():
                     probe += 1
                     if active_slot is not None and int(candidate) == int(active_slot):
                         continue
+                    if protected_pending_slot is not None and int(candidate) == int(protected_pending_slot):
+                        continue
                     if int(candidate) in target_slots:
                         continue
                     target_slots.append(int(candidate))
+
+            if len(target_slots) < int(install_count):
+                log(
+                    f"BATCH TARGET SLOTS REDUCED requested={install_count} actual={len(target_slots)} "
+                    f"active_slot={active_slot} protected_pending_slot={protected_pending_slot} ring_size={ring_size}",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
 
             for slot in target_slots:
                 generation = int(generation_cursor)
@@ -4725,7 +4886,7 @@ def run_master():
         state["keychain_name"] = keychain
         state["last_rotation"] = int(time.time())
         for item in batch_records:
-            state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"])
+            state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"], slot=item.get("slot"))
             state = record_installed_key(
                 state,
                 item["generation"],
