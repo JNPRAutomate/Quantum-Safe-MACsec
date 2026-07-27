@@ -1100,7 +1100,9 @@ def format_tunnel_status(health_data):
             p = item.get('pending_key_id')
             a_short = a[:8] if a else 'None'
             p_short = p[:8] if p else 'None'
-            pair_chunks.append(f"{local_device}-{peer}@{iface}:{a_short}/{p_short}")
+            pair_chunks.append(
+                f"{local_device}-{peer}@{iface}:Active({a_short})/Pending({p_short})"
+            )
 
         if len(pair_chunks) == 1:
             status += f" | Pairs: {pair_chunks[0]}"
