@@ -3172,24 +3172,14 @@ def get_peer_status(link, iface):
     )
     stdout = scp_download_text(snapshot_user, peer_ip, snapshot_path)
 
-    if not stdout:
+    def _run_remote_status_command(peer_user, action_label):
+        cmd = f"op qkd_onbox.py action status iface {peer_iface}"
         log(
-            f"SSH STATUS SNAPSHOT MISS user={snapshot_user} snapshot={snapshot_path}",
-            "WARN",
+            f"SSH EXEC {peer_user}@{peer_ip} action={action_label} local_iface={iface} peer_iface={peer_iface}",
+            "INFO",
             iface,
             "MASTER",
         )
-        if peer_transport_mode() == "queue" and PEER_CMD_USER != SCRIPT_USER:
-            log(
-                f"SSH STATUS FALLBACK DISABLED mode=queue peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-            return None
-        peer_user = SCRIPT_USER
-        cmd = f"op qkd_onbox.py action status iface {peer_iface}"
-        log(f"SSH EXEC {peer_user}@{peer_ip} action=status-fallback-op local_iface={iface} peer_iface={peer_iface}", "INFO", iface, "MASTER")
         try:
             result = subprocess.run(
                 ssh_options + [f"{peer_user}@{peer_ip}", cmd],
@@ -3198,35 +3188,85 @@ def get_peer_status(link, iface):
                 timeout=10,
             )
         except subprocess.TimeoutExpired:
-            log(f"SSH STATUS TIMEOUT peer={peer_ip}", "ERROR", iface, "MASTER")
+            log(f"SSH STATUS TIMEOUT peer={peer_ip} user={peer_user}", "ERROR", iface, "MASTER")
             return None
         except Exception as e:
-            log(f"SSH STATUS ERROR peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
+            log(f"SSH STATUS ERROR peer={peer_ip} user={peer_user} error={str(e)}", "ERROR", iface, "MASTER")
             return None
 
         log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="ignore").strip()
-            stdout = result.stdout.decode(errors="ignore").strip()
-            log(f"SSH STATUS FAIL stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
+            out = result.stdout.decode(errors="ignore").strip()
+            log(f"SSH STATUS FAIL user={peer_user} stderr={stderr} stdout={out}", "ERROR", iface, "MASTER")
             return None
 
-        stdout = result.stdout.decode(errors="ignore").strip()
-
-    try:
-        return json.loads(stdout)
-    except Exception:
-        pass
-    try:
-        start = stdout.find("{")
-        end = stdout.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(stdout[start:end + 1])
-    except Exception as e:
-        log(f"PEER STATUS JSON FAIL error={str(e)} stdout={stdout}", "ERROR", iface, "MASTER")
+        out = result.stdout.decode(errors="ignore").strip()
+        try:
+            return json.loads(out)
+        except Exception:
+            try:
+                start = out.find("{")
+                end = out.rfind("}")
+                if start >= 0 and end > start:
+                    return json.loads(out[start:end + 1])
+            except Exception:
+                pass
+        log(f"SSH STATUS JSON FAIL user={peer_user} stdout={out}", "ERROR", iface, "MASTER")
         return None
-    log(f"PEER STATUS JSON FAIL stdout={stdout}", "ERROR", iface, "MASTER")
-    return None
+
+    def _parse_status_payload(payload_text):
+        try:
+            return json.loads(payload_text)
+        except Exception:
+            pass
+        try:
+            start = payload_text.find("{")
+            end = payload_text.rfind("}")
+            if start >= 0 and end > start:
+                return json.loads(payload_text[start:end + 1])
+        except Exception:
+            pass
+        return None
+
+    if not stdout:
+        log(
+            f"SSH STATUS SNAPSHOT MISS user={snapshot_user} snapshot={snapshot_path}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        state = _run_remote_status_command(PEER_CMD_USER, "status-live-miss")
+        if state is None and SCRIPT_USER != PEER_CMD_USER:
+            state = _run_remote_status_command(SCRIPT_USER, "status-live-miss-fallback")
+        return state
+
+    state = _parse_status_payload(stdout)
+    if state is None:
+        log(f"PEER STATUS JSON FAIL stdout={stdout}", "ERROR", iface, "MASTER")
+        return None
+
+    exported_at = state.get("exported_at") if isinstance(state, dict) else None
+    if exported_at is not None:
+        try:
+            stale_threshold = max(rotation_interval_seconds() * 2, 120)
+            age = int(time.time()) - int(exported_at)
+            if age > stale_threshold:
+                log(
+                    f"PEER STATUS SNAPSHOT STALE age={age}s threshold={stale_threshold}s -> QUERY LIVE",
+                    "WARN",
+                    iface,
+                    "MASTER",
+                )
+                fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale")
+                if fresh_state is None and SCRIPT_USER != PEER_CMD_USER:
+                    fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale-fallback")
+                if fresh_state is not None:
+                    return fresh_state
+        except Exception:
+            pass
+
+    return state
 
 
 def parse_slave():
