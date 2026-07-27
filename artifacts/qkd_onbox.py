@@ -1437,17 +1437,36 @@ def compare_peer_keychain_state(local_state, peer_state):
         return False
     if local_state.get("keychain_name") != peer_state.get("keychain_name"):
         return False
-    local_active = local_state.get("active_key_id")
-    peer_active = peer_state.get("active_key_id")
-    if local_active and peer_active and local_active != peer_active:
-        return False
     local_state = normalize_pending_keys(local_state)
     peer_state = normalize_pending_keys(peer_state)
 
+    local_active = local_state.get("active_key_id")
+    peer_active = peer_state.get("active_key_id")
     local_pending = local_state.get("pending_keys", [])
     peer_pending = peer_state.get("pending_keys", [])
 
-    if len(local_pending) != len(peer_pending):
+    def _pending_head_matches_active(pending_list, active_key_id):
+        if not active_key_id or not isinstance(pending_list, list) or len(pending_list) != 1:
+            return False
+        head = pending_list[0] if pending_list else None
+        if not isinstance(head, dict):
+            return False
+        if head.get("key_id") != active_key_id:
+            return False
+        start_time = head.get("start_time")
+        if start_time_is_future(start_time):
+            return False
+        return True
+
+    transitional_aligned = (
+        (not local_pending and _pending_head_matches_active(peer_pending, local_active))
+        or (not peer_pending and _pending_head_matches_active(local_pending, peer_active))
+    )
+
+    if local_active and peer_active and local_active != peer_active and not transitional_aligned:
+        return False
+
+    if len(local_pending) != len(peer_pending) and not transitional_aligned:
         return False
 
     if local_pending:
@@ -1467,18 +1486,36 @@ def peer_states_aligned_strict(local_state, peer_state):
     if not compare_peer_keychain_state(local_state, peer_state):
         return False
 
-    local_active = local_state.get("active_key_id")
-    peer_active = peer_state.get("active_key_id")
-    if local_active != peer_active:
-        return False
-
     local_state = normalize_pending_keys(local_state)
     peer_state = normalize_pending_keys(peer_state)
 
+    local_active = local_state.get("active_key_id")
+    peer_active = peer_state.get("active_key_id")
     local_pending = local_state.get("pending_keys", [])
     peer_pending = peer_state.get("pending_keys", [])
 
-    if len(local_pending) != len(peer_pending):
+    def _pending_head_matches_active(pending_list, active_key_id):
+        if not active_key_id or not isinstance(pending_list, list) or len(pending_list) != 1:
+            return False
+        head = pending_list[0] if pending_list else None
+        if not isinstance(head, dict):
+            return False
+        if head.get("key_id") != active_key_id:
+            return False
+        start_time = head.get("start_time")
+        if start_time_is_future(start_time):
+            return False
+        return True
+
+    transitional_aligned = (
+        (not local_pending and _pending_head_matches_active(peer_pending, local_active))
+        or (not peer_pending and _pending_head_matches_active(local_pending, peer_active))
+    )
+
+    if local_active != peer_active and not transitional_aligned:
+        return False
+
+    if len(local_pending) != len(peer_pending) and not transitional_aligned:
         return False
 
     if local_pending:
