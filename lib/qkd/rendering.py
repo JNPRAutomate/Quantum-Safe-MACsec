@@ -62,7 +62,7 @@ def build_device_config(device_name, device, platform, base, topology):
 
     def fallback_ckn_hex(ca_name):
         seed = f"{ca_name}:fallback:ckn"
-        return hashlib.sha256(seed.encode()).hexdigest()[:32]
+        return hashlib.sha256(seed.encode()).hexdigest()
 
     def fallback_cak_hex(ca_name):
         seed = f"{ca_name}:fallback:cak"

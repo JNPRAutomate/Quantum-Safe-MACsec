@@ -976,7 +976,7 @@ def push_config(device_name, device, commands, base, devices_dict=None):
 
     def _fallback_ckn_hex(ca_name):
         seed = f"{ca_name}:fallback:ckn"
-        return hashlib.sha256(seed.encode()).hexdigest()[:32]
+        return hashlib.sha256(seed.encode()).hexdigest()
 
     def _fallback_cak_hex(ca_name):
         seed = f"{ca_name}:fallback:cak"
@@ -1047,6 +1047,13 @@ def push_config(device_name, device, commands, base, devices_dict=None):
         extras = []
         all_ca = set(ckn_by_ca.keys()) | set(cak_by_ca.keys())
         for ca_name in sorted(all_ca):
+            current_ckn = ckn_by_ca.get(ca_name)
+            # Keep fallback-key CKN at full 64 hex to avoid Junos warnings.
+            if current_ckn and len(current_ckn.strip()) != 64:
+                cmd = f"{prefix}{ca_name} fallback-key ckn {_fallback_ckn_hex(ca_name)}"
+                if cmd not in existing:
+                    extras.append(cmd)
+                    existing.add(cmd)
             if ca_name not in ckn_by_ca:
                 cmd = f"{prefix}{ca_name} fallback-key ckn {_fallback_ckn_hex(ca_name)}"
                 if cmd not in existing:
