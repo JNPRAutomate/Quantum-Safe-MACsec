@@ -633,6 +633,15 @@ def peer_batch_ack_timeout_seconds():
     return value
 
 
+def peer_batch_ack_poll_interval_seconds():
+    # Avoid per-second SSH churn on peer_cmd_user during ACK waits.
+    default_value = 3
+    value = int(qkd_policy().get("peer_batch_ack_poll_interval_seconds", default_value))
+    if value < 1:
+        return 1
+    return value
+
+
 def compute_batch_ack_id(batch_b64):
     payload = str(batch_b64 or "")
     return hashlib.sha256(payload.encode()).hexdigest()[:24]
@@ -1574,6 +1583,7 @@ def wait_for_peer_batch_ack(link, iface, ack_id):
         return False
 
     timeout_seconds = peer_batch_ack_timeout_seconds()
+    poll_interval_seconds = peer_batch_ack_poll_interval_seconds()
     deadline = time.time() + timeout_seconds
 
     while time.time() < deadline:
@@ -1591,9 +1601,14 @@ def wait_for_peer_batch_ack(link, iface, ack_id):
                     "MASTER",
                 )
                 return False
-        time.sleep(1)
+        time.sleep(poll_interval_seconds)
 
-    log(f"PEER BATCH ACK TIMEOUT ack_id={ack_id} timeout_seconds={timeout_seconds}", "ERROR", iface, "MASTER")
+    log(
+        f"PEER BATCH ACK TIMEOUT ack_id={ack_id} timeout_seconds={timeout_seconds} poll_interval_seconds={poll_interval_seconds}",
+        "ERROR",
+        iface,
+        "MASTER",
+    )
     return False
 
 
@@ -4408,7 +4423,11 @@ def run_master():
         )
 
         peer_notify_start_ms = now_ms()
-        if batch_size > 1:
+        # In queue mode, always use install-key-batch (even with one key)
+        # so we can wait for peer ACK before continuing.
+        use_batch_transport = (batch_size > 1) or (peer_transport_mode() == "queue")
+
+        if use_batch_transport:
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
             ack_id = compute_batch_ack_id(payload_b64)
