@@ -1,0 +1,1660 @@
+#!/usr/bin/env python3
+"""
+MACsec Tunnel Health Monitor - Continuous monitoring of MACsec links
+Checks MKA session status, operational state, key status, and tunnel connectivity.
+
+Monitors all 11 QKD/MACsec devices for tunnel stability.
+Alerts on MKA flaps, key transitions, and tunnel state changes.
+"""
+
+import warnings
+import sys
+import os
+import socket
+import argparse
+import subprocess
+import time
+import threading
+import re
+import json
+import yaml
+from pathlib import Path
+from getpass import getpass
+from datetime import datetime
+from collections import defaultdict
+
+warnings.filterwarnings("ignore")
+import paramiko
+
+# Auto-detect workspace root
+WORKSPACE_ROOT = Path(__file__).parent.parent
+os.chdir(WORKSPACE_ROOT)
+
+
+def get_device_interfaces_from_qkd_inventory(shell):
+    """Read interfaces from device's qkd_onbox_inventory.json (source of truth).
+    
+    Returns set of interface names, or empty set if file not found.
+    """
+    try:
+        inv_path = "/var/db/scripts/op/qkd_onbox_inventory.json"
+        inv_data = load_remote_qkd_json(shell, inv_path)
+        if not inv_data:
+            return set()
+
+        # Current runtime structure uses links[].interface.
+        interfaces = set()
+        links = inv_data.get('links', [])
+        if isinstance(links, list):
+            for link in links:
+                if isinstance(link, dict):
+                    iface = link.get('interface')
+                    if iface:
+                        interfaces.add(str(iface))
+
+        # Legacy fallback fields.
+        if not interfaces:
+            if 'interfaces' in inv_data and isinstance(inv_data['interfaces'], list):
+                interfaces.update(str(i) for i in inv_data['interfaces'] if i)
+            elif 'macsec_interfaces' in inv_data and isinstance(inv_data['macsec_interfaces'], list):
+                interfaces.update(str(i) for i in inv_data['macsec_interfaces'] if i)
+
+        return interfaces
+    except Exception:
+        pass
+    
+    return set()
+
+
+def get_device_links_from_qkd_inventory(shell):
+    """Read peer/interface link tuples from device qkd_onbox_inventory.json.
+
+    Returns list of dicts: [{"peer": "MX2", "interface": "et-0/0/0"}, ...]
+    """
+    try:
+        inv_path = "/var/db/scripts/op/qkd_onbox_inventory.json"
+        inv_data = load_remote_qkd_json(shell, inv_path)
+        if not inv_data:
+            return []
+
+        links = []
+        raw_links = inv_data.get('links', [])
+        if isinstance(raw_links, list):
+            for item in raw_links:
+                if not isinstance(item, dict):
+                    continue
+                peer = item.get('peer') or item.get('peer_name')
+                iface = item.get('interface') or item.get('iface')
+                if peer and iface:
+                    links.append({
+                        'peer': str(peer),
+                        'interface': str(iface),
+                    })
+        return links
+    except Exception:
+        return []
+
+
+def load_remote_qkd_json(shell, path):
+    """Load a JSON file from remote shell output safely."""
+    output = send_shell_command(shell, f"file show {path} | no-more", verbose=False)
+    if not output or '{' not in output:
+        output = send_shell_command(shell, f"cat {path}", verbose=False)
+    if not output:
+        return None
+    output = output.strip()
+    start_idx = output.find('{')
+    end_idx = output.rfind('}')
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return None
+    try:
+        return json.loads(output[start_idx:end_idx + 1])
+    except Exception:
+        return None
+
+
+def parse_first_json_object(raw_text):
+    """Extract and parse the first valid JSON object from mixed shell output."""
+    if not raw_text:
+        return None
+
+    text = str(raw_text).strip()
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return None
+
+    depth = 0
+    end_idx = -1
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(text[start_idx:], start=start_idx):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end_idx = i
+                break
+
+    if end_idx == -1 or end_idx <= start_idx:
+        return None
+
+    try:
+        parsed = json.loads(text[start_idx:end_idx + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def get_qkd_state_dirs_from_config(shell):
+    """Resolve runtime state directories from qkd_onbox_config.json.
+
+    Primary source of truth is /var/home/{script_user}, where qkd_onbox stores
+    qkd_db_*.json in current deployments.
+    """
+    config_path = "/var/db/scripts/op/qkd_onbox_config.json"
+    cfg = load_remote_qkd_json(shell, config_path) or {}
+
+    dirs = []
+    script_user = cfg.get("script_user") or "etsi_user"
+    home_dir = f"/var/home/{script_user}"
+    dirs.append(home_dir)
+
+    state_dir = cfg.get("state_dir")
+    if state_dir and str(state_dir) not in dirs:
+        dirs.append(str(state_dir))
+
+    if "/var/tmp" not in dirs:
+        dirs.append("/var/tmp")
+
+    return dirs
+
+# Device mapping: sae_id -> (device_name, device_ip, ring_ip)
+DEVICES = {
+    "001": ("MX1", "100.123.113.151", "10.100.255.5"),
+    "002": ("MX2", "100.123.113.152", "10.100.255.6"),
+    "003": ("MX3", "100.123.113.2", "10.100.255.2"),
+    "004": ("MX4", "100.123.113.4", "10.100.255.4"),
+    "005": ("MX5", "100.123.113.3", "10.100.255.3"),
+    "006": ("MX6", "100.123.113.1", "10.100.255.1"),
+    "007": ("ACX1", "100.123.170.202", "10.100.255.7"),
+    "008": ("ACX2", "100.123.170.201", "10.100.255.8"),
+    "009": ("ACX3", "100.123.170.203", "10.100.255.9"),
+    "010": ("ACX4", "100.123.182.2", "10.100.255.11"),
+    "011": ("ACX5", "100.123.182.1", "10.100.255.10"),
+}
+
+class MACsecTunnelState:
+    """Track MACsec tunnel state and detect anomalies."""
+    def __init__(self, device_id):
+        self.device_id = device_id
+        self.current_state = {}
+        self.previous_state = {}
+        self.anomalies = []
+        self.last_update = None
+    
+    def update(self, interface, state_data):
+        """Update tunnel state and detect changes."""
+        self.previous_state[interface] = self.current_state.get(interface, {}).copy()
+        self.current_state[interface] = state_data.copy()
+        self.last_update = datetime.now()
+        
+        # Detect meaningful state changes (not just "0 -> 0")
+        if self.previous_state[interface]:
+            # Extract key metrics for comparison
+            prev_mka = self.previous_state[interface].get('mka_status', {}).get('secured', 0)
+            curr_mka = self.current_state[interface].get('mka_status', {}).get('secured', 0)
+            prev_stale = self.previous_state[interface].get('key_status', {}).get('pending_stale_count', 0)
+            curr_stale = self.current_state[interface].get('key_status', {}).get('pending_stale_count', 0)
+            prev_not_found = self.previous_state[interface].get('mka_status', {}).get('not_found', 0)
+            curr_not_found = self.current_state[interface].get('mka_status', {}).get('not_found', 0)
+            
+            # Extract CAK/ICV mismatches
+            prev_cak = sum(s.get('cak_mismatch', 0) for s in self.previous_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            curr_cak = sum(s.get('cak_mismatch', 0) for s in self.current_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            prev_icv = sum(s.get('icv_mismatch', 0) for s in self.previous_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            curr_icv = sum(s.get('icv_mismatch', 0) for s in self.current_state[interface].get('mka_stats', {}).get('interfaces', {}).values())
+            
+            # Only flag if something actually changed
+            if prev_mka != curr_mka or prev_stale != curr_stale or prev_not_found != curr_not_found or prev_cak != curr_cak or prev_icv != curr_icv:
+                change = {
+                    'timestamp': self.last_update.isoformat(),
+                    'device': self.device_id,
+                    'interface': interface,
+                    'prev_mka': prev_mka,
+                    'curr_mka': curr_mka,
+                    'prev_stale': prev_stale,
+                    'curr_stale': curr_stale,
+                    'prev_not_found': prev_not_found,
+                    'curr_not_found': curr_not_found,
+                    'prev_cak': prev_cak,
+                    'curr_cak': curr_cak,
+                    'prev_icv': prev_icv,
+                    'curr_icv': curr_icv,
+                }
+                self.anomalies.append(change)
+                return True
+        return False
+    
+    def get_anomalies(self, clear=True):
+        """Get recent anomalies."""
+        result = self.anomalies.copy()
+        if clear:
+            self.anomalies = []
+        return result
+
+
+def get_auth():
+    """Determine SSH key or password for authentication."""
+    key_sample = Path("certs/hierarchical_ca/juniper_pki/certs/sae-001/sae-001_id_ed25519")
+    if key_sample.exists():
+        return None
+    password = getpass("Enter SSH password (same for all devices): ")
+    return password
+
+
+def send_shell_command(shell, command, timeout=5.0, verbose=False):
+    """Send command to shell and wait for prompt, returning output."""
+    shell.send(command + "\n")
+    time.sleep(0.2)
+    
+    output = ""
+    max_attempts = 50
+    attempts = 0
+    
+    while attempts < max_attempts:
+        try:
+            chunk = shell.recv(1024).decode()
+            if chunk:
+                output += chunk
+                stripped = output.rstrip()
+                # Stop only when prompt appears at the end, not merely anywhere
+                # in the chunk (hostnames and echoed commands include '>').
+                if stripped.endswith(">") or stripped.endswith("%"):
+                    # If more bytes are immediately ready, keep draining first.
+                    if hasattr(shell, "recv_ready") and shell.recv_ready():
+                        pass
+                    else:
+                        break
+        except socket.timeout:
+            break
+        except Exception:
+            break
+        time.sleep(0.1)
+        attempts += 1
+    
+    # Flush remaining buffer
+    shell.settimeout(0.1)
+    try:
+        while True:
+            leftover = shell.recv(1024).decode()
+            if not leftover:
+                break
+            output += leftover
+    except (socket.timeout, Exception):
+        pass
+    shell.settimeout(timeout)
+    
+    return output
+
+
+def send_cli_command(client, command, timeout=8):
+    """Run a single Junos CLI command via exec_command and return combined output."""
+    try:
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        out = stdout.read().decode(errors='ignore')
+        err = stderr.read().decode(errors='ignore')
+        return (out or "") + (err or "")
+    except Exception:
+        return ""
+
+
+def reset_mka_statistics(password=None, verbose=False):
+    """Reset MKA statistics counters on all devices for clean baseline."""
+    print("[*] Resetting MKA statistics on all devices...")
+    for sae_id in DEVICES.keys():
+        device_name, device_ip, ring_ip = DEVICES[sae_id]
+        key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
+        
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            if Path(key_path).exists():
+                client.connect(
+                    device_ip,
+                    username="labuser",
+                    key_filename=key_path,
+                    timeout=5,
+                    look_for_keys=False,
+                    allow_agent=False
+                )
+            elif password:
+                client.connect(
+                    device_ip,
+                    username="labuser",
+                    password=password,
+                    timeout=5,
+                    look_for_keys=False,
+                    allow_agent=False
+                )
+            else:
+                continue
+            
+            shell = client.invoke_shell()
+            shell.settimeout(3.0)
+            
+            # Send clear command
+            send_shell_command(shell, "clear security mka statistics", verbose=False)
+            
+            shell.close()
+            client.close()
+            if verbose:
+                print(f"  ✓ {device_name} - statistics cleared")
+        except Exception as e:
+            if verbose:
+                print(f"  ✗ {device_name} - error: {str(e)[:50]}")
+    
+    print()
+
+
+def parse_macsec_connections(output, verbose=False):
+    """Parse MACsec connections output to extract interface status."""
+    status = {
+        'interfaces': [],
+        'total_interfaces': 0,
+        'inuse': 0,
+        'standby': 0,
+    }
+    
+    lines = output.split('\n')
+    iface_map = {}  # interface_name -> best_status
+    
+    for line in lines:
+        # Extract interface names - each appears once
+        if 'Interface name:' in line:
+            iface_name = line.split('Interface name:')[-1].strip()
+            if iface_name and iface_name not in iface_map:
+                status['interfaces'].append(iface_name)
+                status['total_interfaces'] += 1
+                iface_map[iface_name] = 'unknown'
+                if verbose:
+                    print(f"  [PARSE] Found interface: {iface_name}")
+        
+        # Track status for most recent interface
+        if 'Status: inuse' in line and status['interfaces']:
+            recent = status['interfaces'][-1]
+            # Prefer "inuse" over "standby"
+            if iface_map[recent] != 'inuse':
+                iface_map[recent] = 'inuse'
+                status['inuse'] += 1
+                if verbose:
+                    print(f"  [PARSE] {recent} -> inuse")
+        elif 'Status: standby' in line and status['interfaces']:
+            recent = status['interfaces'][-1]
+            if iface_map[recent] == 'unknown':
+                iface_map[recent] = 'standby'
+                status['standby'] += 1
+                if verbose:
+                    print(f"  [PARSE] {recent} -> standby")
+    
+    if verbose:
+        print(f"  [RESULT] MACsec: {status['total_interfaces']} interfaces, {status['inuse']} inuse, {status['standby']} standby")
+    
+    return status
+
+
+def parse_mka_sessions(output):
+    """Parse MKA sessions output to extract session status."""
+    sessions = {
+        'total': 0,
+        'secured': 0,
+        'not_found': 0,
+        'peers_live': 0,
+    }
+    
+    lines = output.split('\n')
+    seen_ifaces = set()
+    current_iface = None
+    current_state = None
+    
+    for line in lines:
+        # Extract interface name
+        if 'Interface name:' in line:
+            current_iface = line.split('Interface name:')[-1].strip()
+            if current_iface and current_iface not in seen_ifaces:
+                sessions['total'] += 1
+                seen_ifaces.add(current_iface)
+                current_state = None
+        
+        # Extract interface state
+        if 'Interface state:' in line:
+            if current_iface:
+                if 'Secured' in line or 'Primary' in line:
+                    if current_state != 'Secured':  # Only count once per interface
+                        sessions['secured'] += 1
+                        current_state = 'Secured'
+                elif 'Not found' in line or 'not found' in line:
+                    if current_state != 'Not found':  # Only count once per interface
+                        sessions['not_found'] += 1
+                        current_state = 'Not found'
+        
+        # Count live peers
+        if 'Member identifier:' in line and '(live)' in line:
+            sessions['peers_live'] += 1
+    
+    return sessions
+
+
+def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False):
+    """Parse QKD key status using Python's json.loads() - SIMPLE & RELIABLE.
+    
+    Reads actual JSON files and extracts:
+    - active_key_id (from active_key_id field, with installed_keys fallback)
+    - pending_key_id
+    - pending_count
+    - pending_stale_count (explicit stale indicator only; not equal to pending_count)
+    """
+    key_status = {
+        'active_key_id': None,
+        'pending_key_id': None,
+        'active_count': 0,
+        'pending_count': 0,
+        'pending_stale_count': 0,
+        'confirmed_count': 0,
+        'promoted_count': 0,
+        'error_count': 0,
+    }
+    
+    if not json_data_str:
+        return key_status
+    
+    # Extract ONLY the first complete JSON object from shell output.
+    # Shell output may contain command echo, prompt, or even concatenated
+    # objects if an upstream command is malformed.
+    json_data_str = json_data_str.strip()
+
+    # Find start of JSON (first '{').
+    start_idx = json_data_str.find('{')
+    if start_idx == -1:
+        return key_status
+
+    # Brace-balanced scan to find the end of the first JSON object.
+    depth = 0
+    end_idx = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(json_data_str[start_idx:], start=start_idx):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end_idx = i
+                break
+
+    if end_idx == -1 or end_idx < start_idx:
+        return key_status
+
+    json_data_str = json_data_str[start_idx:end_idx + 1]
+    
+    try:
+        data = json.loads(json_data_str)
+        
+        # Debug: print available keys to understand JSON structure
+        if verbose:
+            print(f"[DEBUG] JSON keys available: {list(data.keys())}")
+        
+        # Try multiple possible field names for key IDs
+        # (in case qkd_onbox.py changed the naming)
+        
+        # Option 1: direct fields
+        if 'active_key_id' in data and data['active_key_id']:
+            key_status['active_key_id'] = data['active_key_id']
+            key_status['active_count'] = 1
+        elif 'activeKeyId' in data and data['activeKeyId']:  # camelCase variant
+            key_status['active_key_id'] = data['activeKeyId']
+            key_status['active_count'] = 1
+        elif 'active_id' in data and data['active_id']:  # short variant
+            key_status['active_key_id'] = data['active_id']
+            key_status['active_count'] = 1
+        
+        # Extract pending_key_id  
+        if 'pending_key_id' in data and data['pending_key_id']:
+            key_status['pending_key_id'] = data['pending_key_id']
+        elif 'pendingKeyId' in data and data['pendingKeyId']:  # camelCase variant
+            key_status['pending_key_id'] = data['pendingKeyId']
+        elif 'pending_id' in data and data['pending_id']:  # short variant
+            key_status['pending_key_id'] = data['pending_id']
+        
+        # Count pending_keys array
+        if 'pending_keys' in data and isinstance(data['pending_keys'], list):
+            key_status['pending_count'] = len(data['pending_keys'])
+            if verbose and data['pending_keys']:
+                print(f"[DEBUG] Pending keys: {data['pending_keys']}")
+
+        # Fallback for active key: derive from installed_keys if explicit
+        # active_key_id is missing/None in some state transitions.
+        if not key_status['active_key_id'] and isinstance(data.get('installed_keys'), list):
+            installed_entries = [
+                item for item in data['installed_keys']
+                if isinstance(item, dict) and item.get('key_id')
+            ]
+
+            def _safe_generation(entry):
+                try:
+                    return int(entry.get('generation', 0) or 0)
+                except Exception:
+                    return 0
+
+            # Preferred: explicit active/current/inuse status.
+            active_entries = [
+                item for item in installed_entries
+                if str(item.get('status', '')).lower() in ('active', 'current', 'inuse')
+            ]
+
+            selected = None
+            if active_entries:
+                active_entries.sort(key=_safe_generation)
+                selected = active_entries[-1]
+            else:
+                # Legacy fallback: state generation points to current active key.
+                try:
+                    current_gen = int(data.get('generation', 0) or 0)
+                except Exception:
+                    current_gen = 0
+                gen_matches = [item for item in installed_entries if _safe_generation(item) == current_gen]
+                if gen_matches:
+                    gen_matches.sort(key=_safe_generation)
+                    selected = gen_matches[-1]
+                elif installed_entries:
+                    # Last-resort fallback for legacy states with no status fields.
+                    installed_entries.sort(key=_safe_generation)
+                    selected = installed_entries[-1]
+
+            if selected and selected.get('key_id'):
+                key_status['active_key_id'] = selected.get('key_id')
+                key_status['active_count'] = 1
+
+        # Pending key fallback from queue head if pending_key_id field is absent.
+        if not key_status['pending_key_id'] and isinstance(data.get('pending_keys'), list) and data['pending_keys']:
+            head = data['pending_keys'][0]
+            if isinstance(head, dict) and head.get('key_id'):
+                key_status['pending_key_id'] = head.get('key_id')
+            elif isinstance(head, str) and head:
+                key_status['pending_key_id'] = head
+
+        # Stale must be explicit. Do not mark every pending key as stale.
+        if isinstance(data.get('pending_stale_count'), int):
+            key_status['pending_stale_count'] = int(data.get('pending_stale_count') or 0)
+        elif isinstance(data.get('pending_stale_keys'), list):
+            key_status['pending_stale_count'] = len(data.get('pending_stale_keys') or [])
+        else:
+            key_status['pending_stale_count'] = 0
+            
+    except json.JSONDecodeError as e:
+        raw = all_json_str or json_data_str or ""
+        # Fallback parser: tolerate shell noise/prompts around JSON.
+        try:
+            active_match = re.search(r'"active_key_id"\s*:\s*"([a-f0-9\-]+)"', raw)
+            pending_match = re.search(r'"pending_key_id"\s*:\s*"([a-f0-9\-]+)"', raw)
+
+            if active_match:
+                key_status['active_key_id'] = active_match.group(1)
+                key_status['active_count'] = 1
+
+            if pending_match:
+                key_status['pending_key_id'] = pending_match.group(1)
+
+            pending_block = re.search(r'"pending_keys"\s*:\s*\[(.*?)\]', raw, flags=re.S)
+            if pending_block:
+                key_status['pending_count'] = len(re.findall(r'"key_id"\s*:', pending_block.group(1)))
+
+            if not key_status['pending_count'] and key_status['pending_key_id']:
+                key_status['pending_count'] = 1
+        except Exception:
+            pass
+
+        if verbose:
+            print(f"[DEBUG] JSON parse error: {str(e)[:100]}")
+    except Exception as e:
+        if verbose:
+            print(f"[DEBUG] Error parsing JSON: {str(e)[:100]}")
+    
+    return key_status
+
+
+def parse_key_status_from_log(log_content, sae_id):
+    """DEPRECATED: Parse key status from QKD log file.
+    
+    NOTE: This function counts historical log entries and should not be used.
+    Use parse_key_status_from_json_files() instead to read actual state.
+    """
+    key_status = {
+        'active_key_id': None,
+        'pending_key_id': None,
+        'pending_stale_count': 0,
+        'confirmed_count': 0,
+        'promoted_count': 0,
+        'error_count': 0,
+    }
+    
+    lines = log_content.split('\n')
+    
+    for line in lines:
+        if 'active_key_id=' in line:
+            match = re.search(r'active_key_id=([a-f0-9\-]+)', line)
+            if match:
+                key_status['active_key_id'] = match.group(1)
+        
+        if 'pending_key_id=' in line and 'None' not in line:
+            match = re.search(r'pending_key_id=([a-f0-9\-]+)', line)
+            if match:
+                key_status['pending_key_id'] = match.group(1)
+        
+        # NOTE: This counts historical entries, not actual state
+        if 'PENDING STALE DROP' in line:
+            key_status['pending_stale_count'] += 1
+        
+        if 'MKA KEY CONFIRMED' in line or 'MKA_KEY_CONFIRMED' in line:
+            key_status['confirmed_count'] += 1
+        
+        if 'PENDING_KEY_PROMOTED' in line or 'PENDING KEY PROMOTED' in line:
+            key_status['promoted_count'] += 1
+        
+        if 'ERROR' in line and '[ERROR]' in line:
+            key_status['error_count'] += 1
+    
+    return key_status
+
+
+def parse_macsec_statistics(output):
+    """Parse MACsec statistics for traffic flow."""
+    stats = {
+        'interfaces': {},
+    }
+    
+    lines = output.split('\n')
+    current_iface = None
+    
+    for line in lines:
+        if 'Interface name:' in line:
+            current_iface = line.split('Interface name:')[-1].strip()
+            stats['interfaces'][current_iface] = {
+                'encrypted_packets': 0,
+                'encrypted_bytes': 0,
+                'accepted_packets': 0,
+                'decrypted_bytes': 0,
+            }
+        
+        if current_iface:
+            if 'Encrypted packets:' in line and 'transmitted' in lines[max(0, lines.index(line)-1)]:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['encrypted_packets'] = int(match.group(1))
+            
+            if 'Accepted packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['accepted_packets'] = int(match.group(1))
+    
+    return stats
+
+
+def parse_mka_statistics(output):
+    """Parse MKA statistics for error detection."""
+    stats = {
+        'interfaces': {},
+    }
+    
+    lines = output.split('\n')
+    current_iface = None
+    
+    for line in lines:
+        if 'Interface name:' in line:
+            current_iface = line.split('Interface name:')[-1].strip()
+            stats['interfaces'][current_iface] = {
+                'cak_mismatch': 0,
+                'icv_mismatch': 0,
+                'version_mismatch': 0,
+                'received_packets': 0,
+                'transmitted_packets': 0,
+            }
+        
+        if current_iface:
+            if 'CAK mismatch packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['cak_mismatch'] = int(match.group(1))
+            
+            if 'ICV mismatch packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['icv_mismatch'] = int(match.group(1))
+            
+            if 'Version mismatch packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['version_mismatch'] = int(match.group(1))
+            
+            if 'Received packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['received_packets'] = int(match.group(1))
+            
+            if 'Transmitted packets:' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    stats['interfaces'][current_iface]['transmitted_packets'] = int(match.group(1))
+    
+    return stats
+
+
+def parse_admin_status(output, expected_ifaces=None):
+    """Parse interface admin status from 'show interfaces terse'.
+    
+    Output format:
+        et-0/0/6                up   down
+        ae0                      up   up
+        ae1                      up   up
+    
+    If expected_ifaces provided (set of interface names), filter to only those.
+    Returns dict: {iface_name: (admin_status, oper_status)}
+    """
+    iface_status = {}
+    lines = output.split('\n')
+    
+    for line in lines:
+        # Skip empty lines and headers
+        if not line.strip() or 'Physical interface' in line:
+            continue
+        
+        parts = line.split()
+        if len(parts) >= 3:
+            iface_name = parts[0]
+            admin_status = parts[-2].strip()
+            oper_status = parts[-1].strip()
+            
+            # Only track interfaces from expected set
+            if expected_ifaces and iface_name in expected_ifaces:
+                iface_status[iface_name] = (admin_status, oper_status)
+    
+    return iface_status
+
+
+def parse_lacp_interfaces(output):
+    """Parse LACP interfaces output to extract LAG/LACP status.
+    
+    Junos output format:
+        Aggregated interface: ae0
+            LACP state: ...
+              et-0/0/0   Actor   No  No  Yes Yes Yes Yes  Fast  Active
+            LACP protocol:
+              et-0/0/0   Current  Fast periodic  Collecting distributing
+    """
+    lacp_status = {
+        'total': 0,
+        'up': 0,
+        'down': 0,
+        'interfaces': {},
+    }
+    
+    lines = output.split('\n')
+    current_lag = None
+    seen_lags = set()
+    
+    for line in lines:
+        # Junos: "Aggregated interface: ae0"
+        if 'Aggregated interface:' in line:
+            current_lag = line.split('Aggregated interface:')[-1].strip()
+            if current_lag and current_lag not in seen_lags:
+                seen_lags.add(current_lag)
+                lacp_status['total'] += 1
+                lacp_status['interfaces'][current_lag] = {'state': 'unknown'}
+        
+        # Check member port Mux state in LACP protocol section
+        # "Collecting distributing" = up, anything else = degraded
+        if current_lag and 'Collecting distributing' in line:
+            lacp_status['interfaces'][current_lag]['state'] = 'up'
+        elif current_lag and 'Defaulted' in line:
+            lacp_status['interfaces'][current_lag]['state'] = 'down'
+    
+    # Count up/down based on final state per LAG
+    for iface, data in lacp_status['interfaces'].items():
+        if data['state'] == 'up':
+            lacp_status['up'] += 1
+        else:
+            lacp_status['down'] += 1
+    
+    return lacp_status
+
+
+def get_macsec_health(sae_id, password=None, verbose=False):
+    """Get MACsec tunnel health from a device."""
+    device_name, device_ip, ring_ip = DEVICES[sae_id]
+    key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
+    log_file = "/var/home/admin/logs/qkd_debug.log"
+    
+    health_data = {
+        'device_name': device_name,
+        'macsec_status': {},
+        'mka_status': {},
+        'lacp_status': {},
+        'admin_down': {},  # NEW: Track interface statuses from topology (iface -> (admin, oper))
+        'macsec_stats': {},
+        'mka_stats': {},
+        'key_status': {},
+        'error': None,
+    }
+    
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        if Path(key_path).exists():
+            client.connect(
+                device_ip,
+                username="labuser",
+                key_filename=key_path,
+                timeout=10,
+                look_for_keys=False,
+                allow_agent=False
+            )
+        elif password:
+            client.connect(
+                device_ip,
+                username="labuser",
+                password=password,
+                timeout=10,
+                look_for_keys=False,
+                allow_agent=False
+            )
+        else:
+            return health_data
+        
+        # Get MACsec connections via CLI (no shell needed)
+        shell = client.invoke_shell()
+        shell.settimeout(5.0)
+        
+        # Disable paging to avoid ---(more X%)--- prompts corrupting output
+        send_shell_command(shell, "set cli pager off", verbose=False)
+        
+        # Get MACsec connections status
+        macsec_output = send_shell_command(shell, "show security macsec connections | no-more", verbose=False)
+        health_data['macsec_status'] = parse_macsec_connections(macsec_output)
+        
+        # Get MKA sessions detail
+        mka_output = send_shell_command(shell, "show security mka sessions detail | no-more", verbose=False)
+        health_data['mka_status'] = parse_mka_sessions(mka_output)
+        
+        # Get MACsec statistics
+        macsec_stats_output = send_shell_command(shell, "show security macsec statistics | no-more", verbose=False)
+        health_data['macsec_stats'] = parse_macsec_statistics(macsec_stats_output)
+        
+        # Get MKA statistics
+        mka_stats_output = send_shell_command(shell, "show security mka statistics | no-more", verbose=False)
+        health_data['mka_stats'] = parse_mka_statistics(mka_stats_output)
+        
+        # Get LACP interfaces status
+        lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=False)
+        health_data['lacp_status'] = parse_lacp_interfaces(lacp_output)
+        
+        # Get expected interfaces from device's qkd_onbox_inventory.json
+        device_ifaces = get_device_interfaces_from_qkd_inventory(shell)
+        device_links = get_device_links_from_qkd_inventory(shell)
+        
+        # Get interface admin status (to detect admin-down vs operational-down)
+        ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
+        health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
+        
+        # Get key status from JSON state files in configured runtime state_dir.
+        # Use exec_command for deterministic, non-interactive output.
+        qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
+
+        json_file_map = {}
+
+        def add_json_candidate(path):
+            candidate = str(path or '').strip()
+            if not candidate:
+                return
+            base = os.path.basename(candidate)
+            if not (base.startswith('qkd_db_') and base.endswith('.json')):
+                return
+            # Keep first hit by priority order (home_dir -> configured state_dir -> /var/tmp).
+            if base not in json_file_map:
+                json_file_map[base] = candidate
+
+        # Primary deterministic source: build DB filenames from inventory links.
+        # qkd_onbox persists files as qkd_db_<PEER>_<IFACE_WITH_UNDERSCORES>.json
+        # under /var/home/<script_user> (or configured state_dir).
+        for link in device_links:
+            peer = (link.get('peer') or '').strip()
+            iface = (link.get('interface') or '').strip()
+            if not peer or not iface:
+                continue
+            compact_iface = iface.replace('/', '_')
+            base_name = f"qkd_db_{peer}_{compact_iface}.json"
+            for qkd_state_dir in qkd_state_dirs:
+                full_path = f"{qkd_state_dir}/{base_name}"
+                add_json_candidate(full_path)
+
+        # Fallback source: directory listing in case inventory is incomplete.
+        for qkd_state_dir in qkd_state_dirs:
+            ls_output = send_cli_command(
+                client,
+                f"start shell command \"ls -1 {qkd_state_dir}/qkd_db_*.json 2>/dev/null\"",
+            )
+            # Fallback: Junos CLI listing.
+            if 'qkd_db_' not in (ls_output or ''):
+                ls_output = send_cli_command(client, f"file list {qkd_state_dir} | no-more")
+
+            for raw_line in (ls_output or "").split('\n'):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith('%') or line.startswith('error:'):
+                    continue
+
+                # file list output can contain either absolute paths or bare names.
+                candidates = re.findall(r'(?:/\S*qkd_db_\S*\.json|qkd_db_\S*\.json)', line)
+                for candidate in candidates:
+                    if '*' in candidate:
+                        continue
+                    json_pos = candidate.find('.json')
+                    if json_pos == -1:
+                        continue
+                    candidate = candidate[:json_pos + 5]
+
+                    full_path = candidate if candidate.startswith('/') else f"{qkd_state_dir}/{candidate}"
+                    add_json_candidate(full_path)
+
+        json_files = list(json_file_map.values())
+
+        if verbose:
+            print(f"[DEBUG] qkd_db files discovered: {json_files}")
+
+        aggregated_key_status = {
+            'active_key_id': None,
+            'pending_key_id': None,
+            'active_count': 0,
+            'pending_count': 0,
+            'pending_stale_count': 0,
+            'confirmed_count': 0,
+            'promoted_count': 0,
+            'error_count': 0,
+            'per_link': [],
+        }
+        seen_per_link = set()
+
+        for jfile in json_files:
+            raw_obj = load_remote_qkd_json(shell, jfile)
+            if not isinstance(raw_obj, dict):
+                file_content = send_cli_command(
+                    client,
+                    f"start shell command \"cat {jfile} 2>/dev/null\"",
+                )
+
+                if '{' not in (file_content or ''):
+                    base_name = os.path.basename(jfile)
+                    for qkd_state_dir in qkd_state_dirs:
+                        rel_try = send_cli_command(
+                            client,
+                            f"start shell command \"cd {qkd_state_dir} && cat {base_name} 2>/dev/null\"",
+                        )
+                        if '{' in (rel_try or ''):
+                            file_content = rel_try
+                            break
+
+                if '{' not in (file_content or ''):
+                    file_content = send_cli_command(client, f"file show {jfile} | no-more")
+
+                raw_obj = parse_first_json_object(file_content)
+
+            if not isinstance(raw_obj, dict):
+                continue
+
+            file_content = json.dumps(raw_obj)
+            parsed = parse_key_status_via_python_json(
+                json_data_str=file_content,
+                all_json_str=file_content,
+                verbose=verbose,
+            )
+
+            if not aggregated_key_status['active_key_id'] and parsed.get('active_key_id'):
+                aggregated_key_status['active_key_id'] = parsed.get('active_key_id')
+
+            if not aggregated_key_status['pending_key_id'] and parsed.get('pending_key_id'):
+                aggregated_key_status['pending_key_id'] = parsed.get('pending_key_id')
+
+            aggregated_key_status['active_count'] += int(parsed.get('active_count', 0) or 0)
+            aggregated_key_status['pending_count'] += int(parsed.get('pending_count', 0) or 0)
+
+            aggregated_key_status['pending_stale_count'] += int(parsed.get('pending_stale_count', 0) or 0)
+
+            # Keep per-link view (peer + interface) so multi-link devices like MX1
+            # show one key state per pair (e.g. MX1-MX2 and MX1-MX6).
+            base = os.path.basename(str(jfile).strip())
+            peer_name = None
+            iface_name = None
+
+            # Parse qkd_db_<PEER>_<IFACE>.json using explicit prefix/suffix.
+            if base.startswith("qkd_db_") and base.endswith(".json"):
+                core = base[len("qkd_db_"):-len(".json")]
+                if "_" in core:
+                    peer_name, iface_compact = core.split("_", 1)
+                    iface_name = iface_compact.replace("_", "/")
+
+            pair_key = (peer_name or 'UNKNOWN', iface_name or 'UNKNOWN')
+            if pair_key in seen_per_link:
+                continue
+            seen_per_link.add(pair_key)
+
+            aggregated_key_status['per_link'].append(
+                {
+                    'peer': peer_name or 'UNKNOWN',
+                    'iface': iface_name or 'UNKNOWN',
+                    'active_key_id': parsed.get('active_key_id'),
+                    'pending_key_id': parsed.get('pending_key_id'),
+                    'active_count': int(parsed.get('active_count', 0) or 0),
+                    'pending_count': int(parsed.get('pending_count', 0) or 0),
+                }
+            )
+
+        aggregated_key_status['per_link'].sort(key=lambda x: (x.get('peer') or '', x.get('iface') or ''))
+
+        health_data['key_status'] = aggregated_key_status
+
+        
+        shell.close()
+        client.close()
+        
+        return health_data
+        
+    except Exception as e:
+        health_data['error'] = str(e)[:50]
+        return health_data
+
+
+def format_tunnel_status(health_data):
+    """Format tunnel status for display."""
+    if health_data.get('error'):
+        return f"🔴 ERROR: {health_data['error']}"
+    
+    macsec = health_data.get('macsec_status', {})
+    mka = health_data.get('mka_status', {})
+    keys = health_data.get('key_status', {})
+    local_device = health_data.get('device_name', 'LOCAL')
+    lacp = health_data.get('lacp_status', {})
+    mka_stats = health_data.get('mka_stats', {}).get('interfaces', {})
+    
+    # MACsec and MKA summary
+    macsec_ifaces = macsec.get('total_interfaces', 0)
+    macsec_inuse = macsec.get('inuse', 0)
+    
+    mka_total = mka.get('total', 0)
+    mka_secured = mka.get('secured', 0)
+    mka_not_found = mka.get('not_found', 0)
+    
+    # LACP summary
+    lacp_total = lacp.get('total', 0)
+    lacp_up = lacp.get('up', 0)
+    lacp_down = lacp.get('down', 0)
+    
+    # Key summary - handle None values
+    pending_stale = keys.get('pending_stale_count', 0)
+    active_count = keys.get('active_count', 0)
+    pending_count = keys.get('pending_count', 0)
+    active_key = keys.get('active_key_id')
+    pending_key = keys.get('pending_key_id')
+    per_link = keys.get('per_link') or []
+    
+    # Safely slice keys - handle None and short UUIDs
+    if active_key and len(active_key) > 0:
+        active_key_short = active_key[:8]
+    else:
+        active_key_short = 'None'
+    
+    if pending_key and len(pending_key) > 0:
+        pending_key_short = pending_key[:8]
+    else:
+        pending_key_short = 'None'
+    
+    # CAK/ICV mismatch - cumulative hardware counters (show delta if prev available)
+    cak_mismatch_total = sum(s.get('cak_mismatch', 0) for s in mka_stats.values())
+    icv_mismatch_total = sum(s.get('icv_mismatch', 0) for s in mka_stats.values())
+    prev_cak = health_data.get('_prev_cak_total', None)
+    prev_icv = health_data.get('_prev_icv_total', None)
+    
+    # Status indicators - ONLY show ✓ if things are actually working
+    macsec_status = "✓" if (macsec_ifaces > 0 and macsec_inuse == macsec_ifaces) else "✗"
+    mka_status = "✓" if (mka_total > 0 and mka_secured == mka_total and mka_not_found == 0) else "✗"
+    lacp_indicator = "✓" if (lacp_total > 0 and lacp_up == lacp_total) else ("✗" if lacp_total > 0 else "-")
+    lacp_part = f"LACP: {lacp_up}/{lacp_total}{lacp_indicator}" if lacp_total > 0 else "LACP: n/a"
+    
+    status = f"MACsec: {macsec_inuse}/{macsec_ifaces}{macsec_status} | MKA: {mka_secured}/{mka_total}{mka_status} | {lacp_part}"
+    
+    # Show per-pair key state when per-link files are available.
+    if per_link:
+        pair_chunks = []
+        for item in per_link:
+            peer = item.get('peer') or 'UNK'
+            iface = item.get('iface') or 'unk'
+            a = item.get('active_key_id')
+            p = item.get('pending_key_id')
+            a_short = a[:8] if a else 'None'
+            p_short = p[:8] if p else 'None'
+            pair_chunks.append(
+                f"{local_device}-{peer}@{iface}:Active({a_short})/Pending({p_short})"
+            )
+
+        if len(pair_chunks) == 1:
+            status += f" | Pairs: {pair_chunks[0]}"
+        else:
+            status += " | Pairs:"
+            for pair in pair_chunks:
+                status += f"\n    - {pair}"
+    else:
+        # When active key is not yet promoted but pending exists, show explicit
+        # bootstrap/pending state instead of misleading "None(0)".
+        if (not active_key) and pending_key:
+            status += f" | Active: bootstrap/pending | Pending: {pending_key_short}({pending_count})"
+        else:
+            status += f" | Active: {active_key_short}({active_count}) | Pending: {pending_key_short}({pending_count})"
+    
+    if pending_stale > 0:
+        status += f" | ⚠️  STALE: {pending_stale}"
+    
+    # Show CAK/ICV as delta per round (+N) rather than scary cumulative total
+    if cak_mismatch_total > 0:
+        if prev_cak is not None and cak_mismatch_total > prev_cak:
+            delta = cak_mismatch_total - prev_cak
+            status += f" | 🔴 CAK+{delta}"
+        elif prev_cak is None:
+            status += f" | 🔴 CAK:{cak_mismatch_total}(total)"
+    
+    if icv_mismatch_total > 0:
+        if prev_icv is not None and icv_mismatch_total > prev_icv:
+            delta = icv_mismatch_total - prev_icv
+            status += f" | 🔴 ICV+{delta}"
+        elif prev_icv is None:
+            status += f" | 🔴 ICV:{icv_mismatch_total}(total)"
+    
+    # Show interface statuses from topology (admin/operational)
+    admin_status_dict = health_data.get('admin_down', {})
+    if admin_status_dict:
+        # Separate up and down interfaces
+        up_ifaces = []
+        down_ifaces = []
+        for iface, (admin, oper) in sorted(admin_status_dict.items()):
+            if oper == 'down':
+                down_ifaces.append(f"{iface} {admin}/{oper}")
+            else:
+                up_ifaces.append(f"{iface} {admin}/{oper}")
+        
+        # Show only down interfaces (up ones are expected)
+        if down_ifaces:
+            status += f" | 🔴 DOWN: {', '.join(down_ifaces)}"
+    elif lacp_total > 0 and lacp_down > 0:
+        status += f" | 🔴 LACP_DOWN: {lacp_down}"
+    
+    return status
+
+
+def print_device_status_line(sae_id, device_name, status_str):
+    """Print one device status, supporting multiline status output."""
+    prefix = f"sae-{sae_id}  {device_name:<15} │ "
+    lines = (status_str or "").splitlines() or [""]
+
+    print(f"{prefix}{lines[0]}")
+    if len(lines) > 1:
+        continuation_prefix = " " * len(prefix)
+        for line in lines[1:]:
+            print(f"{continuation_prefix}{line}")
+
+
+def classify_link_pair(endpoint_a, endpoint_b, async_skew_threshold=20):
+    """Classify key-state relationship for one bidirectional link."""
+    active_a = endpoint_a.get('active_key_id')
+    pending_a = endpoint_a.get('pending_key_id')
+    active_b = endpoint_b.get('active_key_id')
+    pending_b = endpoint_b.get('pending_key_id')
+
+    ts_a = float(endpoint_a.get('collected_at', 0) or 0)
+    ts_b = float(endpoint_b.get('collected_at', 0) or 0)
+    skew = abs(ts_a - ts_b)
+
+    if active_a and active_b and active_a == active_b and pending_a == pending_b:
+        return 'MATCH', skew
+
+    if active_a and pending_b and active_a == pending_b and active_b and pending_a and active_b == pending_a:
+        return 'TRANSITION_CROSS', skew
+
+    if active_a and pending_b and active_a == pending_b:
+        return 'TRANSITION_LAG_B', skew
+
+    if active_b and pending_a and active_b == pending_a:
+        return 'TRANSITION_LAG_A', skew
+
+    if pending_a and pending_b and pending_a == pending_b:
+        return 'TRANSITION_PENDING_ALIGNED', skew
+
+    if skew > async_skew_threshold:
+        return 'ASYNC_SAMPLE', skew
+
+    return 'MISMATCH', skew
+
+
+def build_link_correlation(round_health_by_device, async_skew_threshold=20):
+    """Build link-level key-state correlation from per-device pair views."""
+    link_map = defaultdict(list)
+
+    for sae_id, health in round_health_by_device.items():
+        local_device = health.get('device_name') or f"sae-{sae_id}"
+        collected_at = float(health.get('_collected_at', 0) or 0)
+        per_link = ((health.get('key_status') or {}).get('per_link') or [])
+
+        for item in per_link:
+            peer = item.get('peer')
+            if not peer:
+                continue
+            link_key = tuple(sorted([str(local_device), str(peer)]))
+            link_map[link_key].append(
+                {
+                    'device': str(local_device),
+                    'peer': str(peer),
+                    'iface': item.get('iface') or 'UNKNOWN',
+                    'active_key_id': item.get('active_key_id'),
+                    'pending_key_id': item.get('pending_key_id'),
+                    'collected_at': collected_at,
+                }
+            )
+
+    result = []
+    for link_key, endpoints in sorted(link_map.items()):
+        # Keep one freshest endpoint per device to avoid duplicates.
+        latest_by_device = {}
+        for ep in endpoints:
+            device = ep.get('device')
+            if device not in latest_by_device or float(ep.get('collected_at', 0) or 0) > float(latest_by_device[device].get('collected_at', 0) or 0):
+                latest_by_device[device] = ep
+
+        deduped = list(latest_by_device.values())
+        if len(deduped) < 2:
+            result.append(
+                {
+                    'link_key': link_key,
+                    'status': 'ONE_SIDED',
+                    'skew_seconds': None,
+                    'endpoint_a': deduped[0] if deduped else None,
+                    'endpoint_b': None,
+                }
+            )
+            continue
+
+        endpoint_a, endpoint_b = deduped[0], deduped[1]
+        status, skew = classify_link_pair(endpoint_a, endpoint_b, async_skew_threshold=async_skew_threshold)
+        result.append(
+            {
+                'link_key': link_key,
+                'status': status,
+                'skew_seconds': int(skew),
+                'endpoint_a': endpoint_a,
+                'endpoint_b': endpoint_b,
+            }
+        )
+
+    return result
+
+
+def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=False):
+    """Continuously monitor MACsec tunnel health."""
+    
+    start_time_abs = datetime.now()
+    start_time_epoch = time.time()
+    
+    print("\n" + "="*100)
+    print("MACsec TUNNEL HEALTH MONITOR - CONTINUOUS MODE")
+    print(f"Duration: {duration}s | Poll Interval: {interval}s | Start: {start_time_abs.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*100)
+    print()
+    
+    # Initialize state tracking
+    tunnel_states = {}
+    prev_cak_totals = {}  # Per-device previous CAK mismatch totals
+    prev_icv_totals = {}  # Per-device previous ICV mismatch totals
+    prev_cak_iface_totals = {}  # Per-device per-interface previous CAK totals
+    link_mismatch_streak = {}  # Per-link consecutive mismatch rounds
+    for sae_id in DEVICES.keys():
+        tunnel_states[sae_id] = MACsecTunnelState(sae_id)
+        prev_cak_totals[sae_id] = None
+        prev_icv_totals[sae_id] = None
+        prev_cak_iface_totals[sae_id] = {}
+    
+    start_time = time.time()
+    iteration = 0
+    
+    # Reset MKA statistics on all devices for clean baseline
+    reset_mka_statistics(password, verbose)
+    
+    print("[*] Monitoring MACsec tunnel health...\n")
+    
+    try:
+        while time.time() - start_time < duration:
+            iteration += 1
+            now = datetime.now()
+            elapsed = time.time() - start_time
+            elapsed_str = f"t{int(elapsed)}={int(elapsed)}s"
+            if elapsed >= 60:
+                mins = int(elapsed // 60)
+                secs = int(elapsed % 60)
+                elapsed_str = f"t{mins}:{secs:02d}={mins}m{secs}s"
+            
+            print(f"\n{'='*100}")
+            print(f"ROUND {iteration} at {now.strftime('%H:%M:%S')} ({elapsed_str})")
+            print(f"{'='*100}\n")
+            
+            # Collect health data from all devices
+            all_anomalies = []
+            summary = {
+                'total_devices': 0,
+                'macsec_interfaces': 0,
+                'macsec_inuse': 0,
+                'mka_secured': 0,
+                'mka_not_found': 0,
+                'stale_keys': 0,
+                'cak_delta': 0,   # sum of NEW mismatches this round
+                'icv_delta': 0,
+                'cak_total': 0,   # cumulative (for first round display)
+                'icv_total': 0,
+                'first_round': iteration == 1,
+            }
+            round_health_by_device = {}
+            round_cak_iface_deltas = []
+            
+            for sae_id in sorted(DEVICES.keys()):
+                device_name, device_ip, ring_ip = DEVICES[sae_id]
+                health = get_macsec_health(sae_id, password, verbose)
+                health['_collected_at'] = time.time()
+                round_health_by_device[sae_id] = health
+                
+                # Inject previous CAK/ICV totals for delta display
+                mka_stats_ifaces = health.get('mka_stats', {}).get('interfaces', {})
+                curr_cak = sum(s.get('cak_mismatch', 0) for s in mka_stats_ifaces.values())
+                curr_icv = sum(s.get('icv_mismatch', 0) for s in mka_stats_ifaces.values())
+                
+                # RESET BASELINE on first round (every script restart)
+                # This makes delta start from 0, not cumulative device uptime
+                if prev_cak_totals[sae_id] is None:
+                    prev_cak_totals[sae_id] = curr_cak
+                    prev_icv_totals[sae_id] = curr_icv
+                
+                health['_prev_cak_total'] = prev_cak_totals[sae_id]
+                health['_prev_icv_total'] = prev_icv_totals[sae_id]
+                
+                # Print device status
+                status_str = format_tunnel_status(health)
+                print_device_status_line(sae_id, device_name, status_str)
+                
+                # Update summary
+                summary['total_devices'] += 1
+                macsec = health.get('macsec_status', {})
+                mka = health.get('mka_status', {})
+                keys = health.get('key_status', {})
+                
+                summary['macsec_interfaces'] += macsec.get('total_interfaces', 0)
+                summary['macsec_inuse'] += macsec.get('inuse', 0)
+                summary['mka_secured'] += mka.get('secured', 0)
+                summary['mka_not_found'] += mka.get('not_found', 0)
+                summary['stale_keys'] += keys.get('pending_stale_count', 0)
+                summary['cak_total'] += curr_cak
+                summary['icv_total'] += curr_icv
+                if prev_cak_totals[sae_id] is not None:
+                    summary['cak_delta'] += max(0, curr_cak - prev_cak_totals[sae_id])
+                    summary['icv_delta'] += max(0, curr_icv - prev_icv_totals[sae_id])
+
+                # Track per-interface CAK deltas to identify real problem links.
+                for iface_name, iface_stats in mka_stats_ifaces.items():
+                    curr_iface_cak = int(iface_stats.get('cak_mismatch', 0) or 0)
+                    prev_iface_cak = int(prev_cak_iface_totals[sae_id].get(iface_name, curr_iface_cak) or 0)
+                    delta_iface_cak = max(0, curr_iface_cak - prev_iface_cak)
+                    if delta_iface_cak > 0:
+                        round_cak_iface_deltas.append(
+                            {
+                                'sae_id': sae_id,
+                                'device_name': device_name,
+                                'iface': iface_name,
+                                'delta': delta_iface_cak,
+                                'total': curr_iface_cak,
+                            }
+                        )
+                    prev_cak_iface_totals[sae_id][iface_name] = curr_iface_cak
+                
+                # Save for next round delta
+                prev_cak_totals[sae_id] = curr_cak
+                prev_icv_totals[sae_id] = curr_icv
+                
+                # Detect changes
+                tunnel_states[sae_id].update(f"device", health)
+                changes = tunnel_states[sae_id].get_anomalies()
+                all_anomalies.extend(changes)
+            
+            # Print summary statistics
+            print(f"\n{'─'*100}")
+            print("📊 SUMMARY:")
+            print(f"{'─'*100}")
+            print(f"MACsec Interfaces: {summary['macsec_inuse']}/{summary['macsec_interfaces']} inuse")
+            print(f"MKA Sessions: {summary['mka_secured']} secured | {summary['mka_not_found']} not found")
+            print(f"Stale Keys: {summary['stale_keys']}")
+            if summary['first_round']:
+                print(f"CAK Mismatches: {summary['cak_total']} (cumulative total - first round baseline)")
+                print(f"ICV Mismatches: {summary['icv_total']} (cumulative total - first round baseline)")
+            else:
+                cak_str = f"+{summary['cak_delta']} this round" if summary['cak_delta'] > 0 else "none this round"
+                icv_str = f"+{summary['icv_delta']} this round" if summary['icv_delta'] > 0 else "none this round"
+                print(f"CAK Mismatches: {cak_str} (total: {summary['cak_total']})")
+                print(f"ICV Mismatches: {icv_str} (total: {summary['icv_total']})")
+            
+            # Health assessment
+            macsec_health_percent = 0
+            if summary['macsec_interfaces'] > 0:
+                macsec_health_percent = (summary['macsec_inuse'] / summary['macsec_interfaces']) * 100
+            
+            if summary['total_devices'] > 0:
+                if summary['mka_not_found'] > 0:
+                    print(f"Status: 🔴 CRITICAL - {summary['mka_not_found']} MKA session(s) NOT FOUND")
+                elif summary['icv_delta'] > 0:
+                    print(f"Status: 🔴 CRITICAL - DATA INTEGRITY FAILURE - {summary['icv_delta']} new ICV mismatches this round")
+                elif macsec_health_percent < 50:
+                    print(f"Status: 🔴 CRITICAL - Only {macsec_health_percent:.0f}% MACsec interfaces working ({summary['macsec_inuse']}/{summary['macsec_interfaces']})")
+                elif macsec_health_percent < 100:
+                    print(f"Status: ⚠️  DEGRADED - {macsec_health_percent:.0f}% MACsec interfaces working ({summary['macsec_inuse']}/{summary['macsec_interfaces']})")
+                elif summary['stale_keys'] > 0:
+                    print(f"Status: ⚠️  PENDING STALE KEYS - {summary['stale_keys']} key(s) becoming stale")
+                elif summary['cak_delta'] > 0 and (
+                    summary['mka_not_found'] > 0
+                    or summary['icv_delta'] > 0
+                    or macsec_health_percent < 100
+                ):
+                    print(
+                        "Status: 🔴 CRITICAL - KEY AGREEMENT FAILURE - "
+                        f"{summary['cak_delta']} new CAK mismatches with transport/session degradation"
+                    )
+                elif summary['cak_delta'] > 0:
+                    print(
+                        "Status: ⚠️  TRANSIENT KEY NEGOTIATION - "
+                        f"{summary['cak_delta']} new CAK mismatches this round "
+                        "(MKA secured, ICV clean)"
+                    )
+                else:
+                    print("Status: ✅ ALL TUNNELS HEALTHY")
+
+            # Cross-endpoint key-state correlation across each bidirectional link.
+            link_results = build_link_correlation(round_health_by_device, async_skew_threshold=max(20, interval * 2))
+            counts = {
+                'MATCH': 0,
+                'TRANSITION_CROSS': 0,
+                'TRANSITION_LAG_A': 0,
+                'TRANSITION_LAG_B': 0,
+                'TRANSITION_PENDING_ALIGNED': 0,
+                'ASYNC_SAMPLE': 0,
+                'MISMATCH': 0,
+                'ONE_SIDED': 0,
+            }
+
+            persistent = []
+            for item in link_results:
+                status = item.get('status')
+                counts[status] = counts.get(status, 0) + 1
+                link_key = "<->".join(item.get('link_key') or ())
+
+                if status == 'MISMATCH':
+                    link_mismatch_streak[link_key] = int(link_mismatch_streak.get(link_key, 0) or 0) + 1
+                    if link_mismatch_streak[link_key] >= 2:
+                        persistent.append((item, link_mismatch_streak[link_key]))
+                else:
+                    link_mismatch_streak[link_key] = 0
+
+            print(f"\n{'─'*100}")
+            print("🔗 LINK KEY CORRELATION:")
+            print(f"{'─'*100}")
+            transition_total = (
+                counts['TRANSITION_CROSS']
+                + counts['TRANSITION_LAG_A']
+                + counts['TRANSITION_LAG_B']
+                + counts['TRANSITION_PENDING_ALIGNED']
+            )
+            print(
+                f"Links: {len(link_results)} | Match: {counts['MATCH']} | Transition: {transition_total} "
+                f"| Async-window: {counts['ASYNC_SAMPLE']} | One-sided: {counts['ONE_SIDED']} | Mismatch: {counts['MISMATCH']}"
+            )
+
+            if persistent:
+                print("Persistent mismatch links (>=2 consecutive rounds):")
+                for item, streak in persistent:
+                    ep_a = item.get('endpoint_a') or {}
+                    ep_b = item.get('endpoint_b') or {}
+                    a_dev = ep_a.get('device') or '?'
+                    b_dev = ep_b.get('device') or '?'
+                    a_active = (ep_a.get('active_key_id') or 'None')[:8]
+                    b_active = (ep_b.get('active_key_id') or 'None')[:8]
+                    a_pending = (ep_a.get('pending_key_id') or 'None')[:8]
+                    b_pending = (ep_b.get('pending_key_id') or 'None')[:8]
+                    print(
+                        f"  - {a_dev}<->{b_dev} streak={streak} "
+                        f"A({a_active}/{a_pending}) vs B({b_active}/{b_pending})"
+                    )
+
+            if round_cak_iface_deltas:
+                round_cak_iface_deltas.sort(key=lambda x: (-int(x.get('delta', 0) or 0), x.get('device_name') or '', x.get('iface') or ''))
+                print("CAK deltas by interface this round:")
+                for row in round_cak_iface_deltas[:12]:
+                    print(
+                        f"  - sae-{row['sae_id']} {row['device_name']} {row['iface']}: +{row['delta']} (total {row['total']})"
+                    )
+                if len(round_cak_iface_deltas) > 12:
+                    print(f"  ... and {len(round_cak_iface_deltas) - 12} more interface delta entries")
+            
+            # Print anomalies
+            if all_anomalies:
+                print(f"\n{'─'*100}")
+                print("⚠️  STATE CHANGES DETECTED:")
+                print(f"{'─'*100}")
+                for change in all_anomalies:
+                    # Calculate elapsed time for this event
+                    event_timestamp = datetime.fromisoformat(change['timestamp'])
+                    event_elapsed = (event_timestamp - start_time_abs).total_seconds()
+                    event_elapsed_str = f"t{int(event_elapsed)}={int(event_elapsed)}s"
+                    if event_elapsed >= 60:
+                        mins = int(event_elapsed // 60)
+                        secs = int(event_elapsed % 60)
+                        event_elapsed_str = f"t{mins}:{secs:02d}={mins}m{secs}s"
+                    
+                    # Get device name from SAE ID
+                    device_name, _, _ = DEVICES.get(change['device'], (change['device'], '', ''))
+                    
+                    print(f"[{change['timestamp']}] ({event_elapsed_str}) sae-{change['device']} ({device_name}): State changed")
+                    if change['prev_mka'] != change['curr_mka']:
+                        print(f"  MKA: {change['prev_mka']}✓ → {change['curr_mka']}✓")
+                    if change['prev_stale'] != change['curr_stale']:
+                        print(f"  ⚠️  Stale keys: {change['prev_stale']} → {change['curr_stale']}")
+                    if change['prev_not_found'] != change['curr_not_found']:
+                        print(f"  🔴 Not found: {change['prev_not_found']} → {change['curr_not_found']}")
+                    if change['prev_cak'] != change['curr_cak']:
+                        print(f"  🔴 CAK mismatch: {change['prev_cak']} → {change['curr_cak']}")
+                    if change['prev_icv'] != change['curr_icv']:
+                        print(f"  🔴 ICV mismatch: {change['prev_icv']} → {change['curr_icv']}")
+            
+            # Wait for next poll
+            time.sleep(interval)
+    
+    except KeyboardInterrupt:
+        print("\n\n[*] Monitoring stopped by user")
+    
+    print("\n" + "="*100)
+    print("MONITOR COMPLETE")
+    print("="*100)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="MACsec Tunnel Health Monitor - Monitor MKA sessions, key states, and tunnel connectivity"
+    )
+    parser.add_argument(
+        "-d", "--duration",
+        type=int,
+        default=300,
+        help="Monitoring duration in seconds (default: 300s = 5min)"
+    )
+    parser.add_argument(
+        "-i", "--interval",
+        type=int,
+        default=10,
+        help="Poll interval in seconds (default: 10s)"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose debug output"
+    )
+    args = parser.parse_args()
+    
+    password = get_auth()
+    print()
+    
+    monitor_macsec_continuous(
+        password=password,
+        duration=args.duration,
+        interval=args.interval,
+        verbose=args.verbose
+    )
+
+
+if __name__ == "__main__":
+    main()
