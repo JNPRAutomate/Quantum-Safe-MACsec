@@ -940,7 +940,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     for key_line in key_lines:
         quoted_key = shlex.quote(key_line)
         quoted_tmp_auth_path = shlex.quote(tmp_auth_path)
-        append_cmd = f"printf '%s\n' {quoted_key} >> {quoted_tmp_auth_path}"
+        append_cmd = f"printf '%s\\n' {quoted_key} >> {quoted_tmp_auth_path}"
         _run_or_raise("append-key", append_cmd)
 
     _run_or_raise("install-auth", f"mv {shlex.quote(tmp_auth_path)} {shlex.quote(auth_path)}")
