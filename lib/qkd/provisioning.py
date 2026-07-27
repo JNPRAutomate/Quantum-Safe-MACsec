@@ -807,11 +807,11 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     if not isinstance(secrets, dict):
         secrets = {}
 
-    peer_cmd_user = (
+    peer_cmd_user = str(
         secrets.get("peer_cmd_user")
         or device_dict.get("peer_cmd_user")
         or qkd_script_user()
-    )
+    ).strip()
     all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
 
     try:
@@ -820,9 +820,25 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         print(f"[{device_name}] WARN failed to collect peer SSH keys: {exc}")
         return
 
-    # Keep all runtime peers mutually trusted even if inventory links omit
-    # explicit peer names (some topologies provide only peer_ip).
-    source_names = sorted(pub_keys.keys())
+    # Prefer direct link peers to keep payload small and deterministic.
+    # Fall back to all runtime peers only when link metadata is incomplete.
+    ip_to_name = {}
+    for n, d in (all_devices_dict or {}).items():
+        ip = d.get("ip") or d.get("mgmt_ip") or d.get("host")
+        if ip:
+            ip_to_name[str(ip)] = n
+
+    direct_peer_names = []
+    for link in device_dict.get("links", []) or []:
+        peer_name = link.get("peer")
+        if not peer_name:
+            peer_ip = link.get("peer_ip")
+            if peer_ip:
+                peer_name = ip_to_name.get(str(peer_ip))
+        if peer_name and peer_name in pub_keys and peer_name not in direct_peer_names:
+            direct_peer_names.append(peer_name)
+
+    source_names = sorted(direct_peer_names) if direct_peer_names else sorted(pub_keys.keys())
 
     if not source_names:
         print(f"[{device_name}] No peer sources for SSH authorized-keys sync")
@@ -879,34 +895,51 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
             f"peer_cmd_user login bootstrap failed on {device_name} user={peer_cmd_user} class={peer_cmd_user_class}: {exc}"
         )
 
-    ssh_home_base = "/var/home"
+    ssh_home_base = str(QKD.get("SSH_HOME_BASE", "/var/home")).strip() or "/var/home"
     ssh_dir = f"{ssh_home_base}/{peer_cmd_user}/.ssh"
     auth_path = f"{ssh_dir}/authorized_keys"
-    cmd_parts = [
-        f"id {peer_cmd_user}",
-        f"mkdir -p {ssh_dir}",
-        f"touch {auth_path}",
-    ]
-    for key_line in key_lines:
-        quoted_key = shlex.quote(key_line)
-        cmd_parts.append(f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}")
-    cmd_parts.extend(
-        [
-            f"chown {peer_cmd_user} {ssh_dir} {auth_path}",
-            f"chmod 600 {auth_path}",
-            f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}",
-        ]
-    )
-    sync_cmd = "; ".join(cmd_parts)
+
+    def _run_or_raise(step_label, command):
+        result = ssh_deploy_cmd(device_dict, command, timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"peer SSH authorized_keys sync failed on {device_name} step={step_label}\n"
+                f"cmd={command}\n"
+                f"stdout={result.stdout}\n"
+                f"stderr={result.stderr}"
+            )
+        return result
 
     print(f"[{device_name}] Applying peer SSH authorized_keys sync")
-    result = ssh_deploy_cmd(device_dict, sync_cmd, timeout=60, include_failed_marker=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"peer SSH authorized_keys sync failed on {device_name}\n"
-            f"stdout={result.stdout}\n"
-            f"stderr={result.stderr}"
-        )
+    _run_or_raise("id", f"id {shlex.quote(peer_cmd_user)}")
+    _run_or_raise("mkdir", f"mkdir -p {shlex.quote(ssh_dir)}")
+    _run_or_raise("touch", f"touch {shlex.quote(auth_path)}")
+    _run_or_raise(
+        "owner",
+        f"chown {shlex.quote(peer_cmd_user)} {shlex.quote(ssh_dir)} {shlex.quote(auth_path)}",
+    )
+    _run_or_raise("chmod-dir", f"chmod 700 {shlex.quote(ssh_dir)}")
+    _run_or_raise("chmod-auth", f"chmod 600 {shlex.quote(auth_path)}")
+    _run_or_raise(
+        "verify",
+        f"ls -ld {shlex.quote(ssh_dir)}; ls -l {shlex.quote(auth_path)}",
+    )
+
+    for key_line in key_lines:
+        quoted_key = shlex.quote(key_line)
+        quoted_auth_path = shlex.quote(auth_path)
+        append_cmd = f"grep -q -F {quoted_key} {quoted_auth_path} || echo {quoted_key} >> {quoted_auth_path}"
+        _run_or_raise("append-key", append_cmd)
+
+    _run_or_raise(
+        "finalize",
+        (
+            f"chown {shlex.quote(peer_cmd_user)} {shlex.quote(ssh_dir)} {shlex.quote(auth_path)}; "
+            f"chmod 700 {shlex.quote(ssh_dir)}; "
+            f"chmod 600 {shlex.quote(auth_path)}; "
+            f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}"
+        ),
+    )
     print(f"[{device_name}] Peer SSH authorized_keys synchronized OK")
 
 
@@ -1034,10 +1067,7 @@ def push_config(device_name, device, commands, base, devices_dict=None):
         push_certs(dev, device_name, device)
         configure_qkd_scripts(dev, device_name, base)
         if devices_dict:
-            try:
-                apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
-            except Exception as exc:
-                print(f"[{device_name}] WARN failed to apply peer SSH authorized-keys config: {exc}")
+            apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         max_lock_retries = 6

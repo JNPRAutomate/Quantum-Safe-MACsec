@@ -2889,6 +2889,7 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
             pass
         cmd = [
             "scp",
+            "-O",
             *ssh_transport_options(PEER_SSH_KEY),
             str(local_tmp),
             f"{peer_user}@{peer_ip}:{remote_path}",
@@ -2924,6 +2925,7 @@ def scp_download_text(peer_user, peer_ip, remote_path):
     try:
         cmd = [
             "scp",
+            "-O",
             *ssh_transport_options(PEER_SSH_KEY),
             f"{peer_user}@{peer_ip}:{remote_path}",
             str(local_tmp),

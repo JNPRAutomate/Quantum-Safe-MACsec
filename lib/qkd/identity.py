@@ -772,7 +772,7 @@ def check_peer_ssh_from_device(device):
         remote_probe = f"/var/tmp/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
         cmd = (
             f"echo qkd-peer-probe > {shlex.quote(local_probe)}; "
-            f"scp -i {shlex.quote(key_path)} "
+            f"scp -O -i {shlex.quote(key_path)} "
             f"-o IdentitiesOnly=yes "
             f"-o StrictHostKeyChecking=no "
             f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
@@ -783,7 +783,7 @@ def check_peer_ssh_from_device(device):
             f"-o LogLevel=ERROR "
             f"{shlex.quote(local_probe)} "
             f"{peer_cmd_user}@{peer_ip}:{shlex.quote(remote_probe)}; "
-            f"rc=$?; "
+            f"set rc=$status; "
             f"rm -f {shlex.quote(local_probe)}; "
             f"exit $rc"
         )
