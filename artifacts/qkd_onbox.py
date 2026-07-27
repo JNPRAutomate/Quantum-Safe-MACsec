@@ -2255,6 +2255,30 @@ def mka_session_secured(mka_fields):
     return True
 
 
+def mka_ckn_matches(expected_ckn_norm, observed_cak_name_norm):
+    expected = normalize_hex_string(expected_ckn_norm)
+    observed = normalize_hex_string(observed_cak_name_norm)
+    if not expected or not observed:
+        return False
+
+    if expected == observed:
+        return True
+
+    # Some Junos platforms expose CAK name as a shortened hex token (commonly 32 chars)
+    # even when key-name is configured as full 64-char SHA256. Accept deterministic
+    # prefix/suffix containment to avoid false negatives in confirmation.
+    min_len = min(len(expected), len(observed))
+    if min_len < 32:
+        return False
+
+    if expected.startswith(observed) or expected.endswith(observed):
+        return True
+    if observed.startswith(expected) or observed.endswith(expected):
+        return True
+
+    return False
+
+
 def mka_confirms_key(iface, key_id, generation=None):
     expected_ckn = ckn_from_key_id(key_id)
     expected_ckn_norm = normalize_hex_string(expected_ckn)
@@ -2267,7 +2291,7 @@ def mka_confirms_key(iface, key_id, generation=None):
     cak_name = fields.get("cak_name")
     cak_name_norm = cak_name if cak_name else ""
     secured = mka_session_secured(fields)
-    ckn_match = expected_ckn_norm == cak_name_norm
+    ckn_match = mka_ckn_matches(expected_ckn_norm, cak_name_norm)
     key_number = fields.get("key_number")
 
     if secured and ckn_match:
@@ -2313,7 +2337,8 @@ def mka_confirms_key(iface, key_id, generation=None):
     # Debug mismatch without exposing CKN/CAK values.
     log(
         f"MKA CKN_DEBUG expected_len={len(expected_ckn_norm)} cak_len={len(cak_name_norm)} "
-        f"match={ckn_match}",
+        f"match={ckn_match} expected_prefix_match={expected_ckn_norm.startswith(cak_name_norm) if cak_name_norm else False} "
+        f"expected_suffix_match={expected_ckn_norm.endswith(cak_name_norm) if cak_name_norm else False}",
         "DEBUG",
         iface,
         "MKA",
@@ -2373,7 +2398,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             continue
 
         expected_ckn = normalize_hex_string(ckn_from_key_id(str(item_key_id)))
-        if expected_ckn and expected_ckn == cak_name:
+        if expected_ckn and mka_ckn_matches(expected_ckn, cak_name):
             confirmed_idx = idx
             confirmed_item = item
             break
