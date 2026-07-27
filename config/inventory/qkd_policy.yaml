@@ -17,7 +17,7 @@ qkd_policy:
 
   # Single pending-control window family.
   pending_confirm_grace_seconds: 120
-  pending_stuck_recovery_seconds: 720
+  pending_stuck_recovery_seconds: 420
 
   # Queue transport safety controls
   peer_enqueue_min_margin_seconds: 30
