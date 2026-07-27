@@ -4338,6 +4338,18 @@ def run_master():
                 "installed_keys": state.get("installed_keys", []),
             }
 
+        local_pending_id = state.get("pending_key_id")
+        peer_pending_id = peer_state.get("pending_key_id")
+        local_pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
+        peer_pending_epoch = epoch_from_junos_start_time(peer_state.get("next_start_time"))
+        pending_head_aligned_with_peer = (
+            bool(local_pending_id)
+            and str(local_pending_id) == str(peer_pending_id)
+            and local_pending_epoch is not None
+            and peer_pending_epoch is not None
+            and int(local_pending_epoch) == int(peer_pending_epoch)
+        )
+
         if strict_sync_enabled() and not peer_states_aligned_strict(state, peer_state):
             log(
                 f"STRICT SYNC MISMATCH OBSERVE local_active={state.get('active_key_id')} peer_active={peer_state.get('active_key_id')} "
@@ -4350,6 +4362,15 @@ def run_master():
             )
 
             if pending_stuck_exceeded:
+                if pending_head_aligned_with_peer:
+                    log(
+                        f"PENDING STUCK BUT PEER ALIGNED -> KEEP PENDING pending_key_id={state.get('pending_key_id')} "
+                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
                 state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
@@ -4382,6 +4403,15 @@ def run_master():
                 "MASTER",
             )
             if pending_stuck_exceeded and state.get("pending_key_id"):
+                if pending_head_aligned_with_peer:
+                    log(
+                        f"PENDING STUCK BUT PEER ALIGNED -> SKIP MISMATCH CLEAR pending_key_id={state.get('pending_key_id')} "
+                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
                 state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
@@ -4395,6 +4425,15 @@ def run_master():
 
         if state.get("pending_key_id"):
             if pending_stuck_exceeded:
+                if pending_head_aligned_with_peer:
+                    log(
+                        f"PENDING STUCK BUT PEER ALIGNED -> SKIP STATUS CLEAR pending_key_id={state.get('pending_key_id')} "
+                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
                 state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
