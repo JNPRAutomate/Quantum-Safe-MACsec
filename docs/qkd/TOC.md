@@ -22,3 +22,7 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 
 9. [Release Notes v3.3.1](RELEASE_NOTES_VER3.3.1.md)
 10. [Release Notes v3.3.2](RELEASE_NOTES_VER3.3.2.md)
+
+## Runtime Policies
+
+11. [On-Box Runtime Ring Policy (2026-07-27)](QKD_ONBOX_RUNTIME_RING_POLICY_2026-07-27.md)

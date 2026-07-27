@@ -3974,7 +3974,9 @@ def bootstrap_keychain_link(link, force=False):
     old_state = load_link_state(peer, iface, link)
     # Bootstrap starts at generation 0 (uses key 0), not generation 1
     generation = 0
-    start_time = junos_start_time_from_epoch(ceil_epoch_to_next_minute(int(time.time()) + 60))
+    # Deterministic bootstrap baseline requested by design:
+    # key 0 must be the initial active anchor with fixed epoch-like start-time.
+    start_time = "2026-1-1.00:00:00"
     state = default_keychain_state(link)
     state["generation"] = generation
     state["ca_name"] = ca_name
@@ -4407,11 +4409,12 @@ def run_master():
 
         # Non-destructive ring preload strategy:
         # - Keep active slot untouched
-        # - Fill only future slots in one pass
-        if ring_size > 1 and batch_size >= ring_size:
-            install_count = ring_size - 1
+        # - Keep one pending and preload only additional future capacity
+        #   (ring 4 -> install 2, ring 5 -> install 3)
+        if ring_size > 2:
+            install_count = min(batch_size, ring_size - 2)
         else:
-            install_count = batch_size
+            install_count = min(batch_size, 1)
 
         first_generation = next_generation(state)
         rotation = rotation_id_for(iface, first_generation)

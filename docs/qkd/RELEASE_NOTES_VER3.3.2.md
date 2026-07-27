@@ -106,3 +106,27 @@ Use this order when judging runtime health:
 4. Runtime logs (`STATE RECONCILED FROM ROUTER`, `ROTATION_DONE`, pending schedule behavior)
 
 If MKA is secured and ICV is clean, CAK-only increments should be treated as negotiation noise unless correlated degradation appears.
+
+---
+
+## 6) Runtime ring policy updates (2026-07-27)
+
+### What changed
+
+- Reconcile no longer rolls active key back from `last_seen_key_id` when router mapping is not deterministic.
+- `pending_stuck_recovery_seconds` now honors explicit policy values (no hidden runtime floor override).
+- Active slot derivation now prefers `active_key_id` mapping and live MKA `key_number` before `active_generation` fallback.
+- Bootstrap t0 behavior is pinned to slot/key `0` with fixed start-time baseline `2026-1-1.00:00:00`.
+- Ring preload capacity now follows active/pending preservation:
+  - ring 4 -> install 2 keys
+  - ring 5 -> install 3 keys
+
+### Why
+
+- Prevent active rollback loops and stale pending deadlocks.
+- Keep runtime behavior deterministic and policy-driven.
+- Reduce over-preload that can produce unused pending/future entries.
+
+### Reference
+
+- See `QKD_ONBOX_RUNTIME_RING_POLICY_2026-07-27.md` for full runtime contract.
