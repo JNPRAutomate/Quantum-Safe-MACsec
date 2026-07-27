@@ -723,8 +723,12 @@ def pending_confirm_grace_seconds():
 
 
 def pending_stuck_recovery_seconds():
-    derived_default = pending_confirm_grace_seconds() + (
-        rotation_interval_seconds() * key_batch_size()
+    # Runtime safety floor: avoid premature stuck recovery when policy values
+    # are accidentally set too low for the active rotation cadence.
+    min_safe = rotation_interval_seconds() * 3
+    derived_default = max(
+        pending_confirm_grace_seconds() + (rotation_interval_seconds() * key_batch_size()),
+        min_safe,
     )
     value = int(
         qkd_policy().get(
@@ -732,8 +736,8 @@ def pending_stuck_recovery_seconds():
             derived_default,
         )
     )
-    if value < pending_confirm_grace_seconds():
-        return pending_confirm_grace_seconds()
+    if value < derived_default:
+        return derived_default
     return value
 
 
@@ -1209,11 +1213,15 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         # waiting for the long force-clear threshold keeps rotation blocked.
         # Allow earlier recovery once the normal stuck window is exceeded.
         if reason == "PENDING_STUCK_AND_STRICT_SYNC_BLOCK" and overdue_seconds is not None:
-            strict_block_clear_seconds = int(
+            strict_block_policy_value = int(
                 qkd_policy().get(
                     "pending_stuck_strict_block_clear_seconds",
-                    max(pending_stuck_recovery_seconds(), 10),
+                    pending_stuck_recovery_seconds(),
                 )
+            )
+            strict_block_clear_seconds = max(
+                strict_block_policy_value,
+                pending_stuck_recovery_seconds(),
             )
             if int(overdue_seconds) >= strict_block_clear_seconds:
                 log(
