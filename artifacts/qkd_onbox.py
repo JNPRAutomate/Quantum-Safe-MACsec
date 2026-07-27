@@ -2279,6 +2279,14 @@ def mka_ckn_matches(expected_ckn_norm, observed_cak_name_norm):
     return False
 
 
+def key_index_for_generation_or_slot(generation=None, slot=None):
+    if slot is not None:
+        return int(slot) % max_installed_keys()
+    if generation is None:
+        return None
+    return int(generation) % max_installed_keys()
+
+
 def mka_confirms_key(iface, key_id, generation=None):
     expected_ckn = ckn_from_key_id(key_id)
     expected_ckn_norm = normalize_hex_string(expected_ckn)
@@ -2293,13 +2301,16 @@ def mka_confirms_key(iface, key_id, generation=None):
     secured = mka_session_secured(fields)
     ckn_match = mka_ckn_matches(expected_ckn_norm, cak_name_norm)
     key_number = fields.get("key_number")
+    expected_key_number = key_index_for_generation_or_slot(generation=generation, slot=None)
+    key_number_match = expected_key_number is not None and key_number is not None and int(key_number) == int(expected_key_number)
 
-    if secured and ckn_match:
+    if secured and (ckn_match or key_number_match):
         latest_an = fields.get("latest_sak_an")
         previous_an = fields.get("previous_sak_an")
         log(
             f"MKA KEY CONFIRMED key_id={key_id} key_number={key_number} "
-            f"latest_sak_an={latest_an} previous_sak_an={previous_an}",
+            f"latest_sak_an={latest_an} previous_sak_an={previous_an} "
+            f"confirm_path={'ckn' if ckn_match else 'key_number'}",
             "INFO",
             iface,
             "MKA"
@@ -2328,7 +2339,7 @@ def mka_confirms_key(iface, key_id, generation=None):
 
     log(
         f"MKA KEY NOT CONFIRMED key_id={key_id} secured={secured} ckn_match={ckn_match} "
-        f"key_number={key_number} interface_state={fields.get('interface_state')} "
+        f"key_number={key_number} expected_key_number={expected_key_number} key_number_match={key_number_match} interface_state={fields.get('interface_state')} "
         f"mka_suspended={fields.get('mka_suspended')}",
         "INFO",
         iface,
@@ -2385,6 +2396,11 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
     now_epoch = int(time.time())
     confirmed_idx = None
     confirmed_item = None
+    confirmed_via_key_number = False
+
+    def _item_expected_key_number(item):
+        return key_index_for_generation_or_slot(generation=item.get("generation"), slot=item.get("slot"))
+
     for idx, item in enumerate(pending_keys):
         if not isinstance(item, dict):
             continue
@@ -2402,6 +2418,28 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             confirmed_idx = idx
             confirmed_item = item
             break
+
+    if confirmed_item is None and key_number is not None:
+        for idx, item in enumerate(pending_keys):
+            if not isinstance(item, dict):
+                continue
+            item_key_id = item.get("key_id")
+            if not item_key_id:
+                continue
+
+            item_start_epoch = epoch_from_junos_start_time(item.get("start_time"))
+            if item_start_epoch is not None and int(item_start_epoch) > now_epoch:
+                continue
+
+            expected_key_number = _item_expected_key_number(item)
+            if expected_key_number is None:
+                continue
+
+            if int(expected_key_number) == int(key_number):
+                confirmed_idx = idx
+                confirmed_item = item
+                confirmed_via_key_number = True
+                break
 
     if confirmed_item is None:
         log(
@@ -2438,7 +2476,8 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
 
     log(
         f"MKA KEY CONFIRMED key_id={pending_key_id} key_number={key_number} "
-        f"latest_sak_an={fields.get('latest_sak_an')} previous_sak_an={fields.get('previous_sak_an')}",
+        f"latest_sak_an={fields.get('latest_sak_an')} previous_sak_an={fields.get('previous_sak_an')} "
+        f"confirm_path={'key_number' if confirmed_via_key_number else 'ckn'}",
         "INFO",
         iface,
         "MKA",
