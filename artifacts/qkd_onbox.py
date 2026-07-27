@@ -792,7 +792,16 @@ def qkd_key_index_from_generation(generation):
     return generation % max_installed_keys()
 
 
-def active_slot_index(state, iface=None):
+def active_slot_index(state, iface=None, keychain_name=None):
+    configured_indices = None
+    if keychain_name and iface:
+        try:
+            idx_set, _, _ = get_configured_keychain_key_indices(keychain_name, iface=iface)
+            if isinstance(idx_set, set):
+                configured_indices = set(int(x) for x in idx_set)
+        except Exception:
+            configured_indices = None
+
     active_key_id = state.get("active_key_id")
     if active_key_id:
         for item in reversed(state.get("installed_keys", [])):
@@ -802,7 +811,9 @@ def active_slot_index(state, iface=None):
                 continue
             slot = item.get("slot")
             try:
-                return int(slot) % max_installed_keys()
+                mapped = int(slot) % max_installed_keys()
+                if configured_indices is None or mapped in configured_indices:
+                    return mapped
             except Exception:
                 continue
 
@@ -816,16 +827,28 @@ def active_slot_index(state, iface=None):
                 if mka_session_secured(fields):
                     key_number = fields.get("key_number")
                     if key_number is not None:
-                        return int(key_number) % max_installed_keys()
+                        mapped = int(key_number) % max_installed_keys()
+                        if configured_indices is None or mapped in configured_indices:
+                            return mapped
         except Exception:
             pass
 
     try:
         active_generation = state.get("active_generation")
         if active_generation is not None:
-            return int(active_generation) % max_installed_keys()
+            mapped = int(active_generation) % max_installed_keys()
+            if configured_indices is None or mapped in configured_indices:
+                return mapped
     except Exception:
         pass
+
+    # Last deterministic fallback: if exactly one slot is configured, treat it
+    # as current active anchor for next ring preload decisions.
+    if configured_indices and len(configured_indices) == 1:
+        try:
+            return int(next(iter(configured_indices))) % max_installed_keys()
+        except Exception:
+            pass
 
     return None
 
@@ -4405,7 +4428,7 @@ def run_master():
 
         batch_size = effective_batch
         ring_size = max_installed_keys()
-        active_slot = active_slot_index(state, iface=iface)
+        active_slot = active_slot_index(state, iface=iface, keychain_name=keychain)
 
         # Non-destructive ring preload strategy:
         # - Keep active slot untouched
