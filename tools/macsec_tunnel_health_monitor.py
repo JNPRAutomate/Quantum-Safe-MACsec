@@ -891,7 +891,18 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         # Use exec_command for deterministic, non-interactive output.
         qkd_state_dirs = get_qkd_state_dirs_from_config(shell)
 
-        json_files = []
+        json_file_map = {}
+
+        def add_json_candidate(path):
+            candidate = str(path or '').strip()
+            if not candidate:
+                return
+            base = os.path.basename(candidate)
+            if not (base.startswith('qkd_db_') and base.endswith('.json')):
+                return
+            # Keep first hit by priority order (home_dir -> configured state_dir -> /var/tmp).
+            if base not in json_file_map:
+                json_file_map[base] = candidate
 
         # Primary deterministic source: build DB filenames from inventory links.
         # qkd_onbox persists files as qkd_db_<PEER>_<IFACE_WITH_UNDERSCORES>.json
@@ -905,8 +916,7 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             base_name = f"qkd_db_{peer}_{compact_iface}.json"
             for qkd_state_dir in qkd_state_dirs:
                 full_path = f"{qkd_state_dir}/{base_name}"
-                if full_path not in json_files:
-                    json_files.append(full_path)
+                add_json_candidate(full_path)
 
         # Fallback source: directory listing in case inventory is incomplete.
         for qkd_state_dir in qkd_state_dirs:
@@ -936,8 +946,9 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                     candidate = candidate[:json_pos + 5]
 
                     full_path = candidate if candidate.startswith('/') else f"{qkd_state_dir}/{candidate}"
-                    if full_path not in json_files:
-                        json_files.append(full_path)
+                    add_json_candidate(full_path)
+
+        json_files = list(json_file_map.values())
 
         if verbose:
             print(f"[DEBUG] qkd_db files discovered: {json_files}")
@@ -953,25 +964,14 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             'error_count': 0,
             'per_link': [],
         }
+        seen_per_link = set()
 
         for jfile in json_files:
-            file_content = send_cli_command(
-                client,
-                f"start shell command \"cat {jfile} 2>/dev/null\"",
-            )
-            if '{' not in (file_content or ''):
-                base_name = os.path.basename(jfile)
-                for qkd_state_dir in qkd_state_dirs:
-                    rel_try = send_cli_command(
-                        client,
-                        f"start shell command \"cd {qkd_state_dir} && cat {base_name} 2>/dev/null\"",
-                    )
-                    if '{' in (rel_try or ''):
-                        file_content = rel_try
-                        break
-            # Fallback: Junos CLI file show.
-            if '{' not in (file_content or ''):
-                file_content = send_cli_command(client, f"file show {jfile} | no-more")
+            raw_obj = load_remote_qkd_json(shell, jfile)
+            if not isinstance(raw_obj, dict):
+                continue
+
+            file_content = json.dumps(raw_obj)
             parsed = parse_key_status_via_python_json(
                 json_data_str=file_content,
                 all_json_str=file_content,
@@ -1002,9 +1002,10 @@ def get_macsec_health(sae_id, password=None, verbose=False):
                     peer_name, iface_compact = core.split("_", 1)
                     iface_name = iface_compact.replace("_", "/")
 
-            # Skip anonymous rows with no parsed key data to avoid UNKNOWN@UNKNOWN noise.
-            if not peer_name and not parsed.get('active_key_id') and not parsed.get('pending_key_id'):
+            pair_key = (peer_name or 'UNKNOWN', iface_name or 'UNKNOWN')
+            if pair_key in seen_per_link:
                 continue
+            seen_per_link.add(pair_key)
 
             aggregated_key_status['per_link'].append(
                 {
