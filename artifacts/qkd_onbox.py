@@ -3580,40 +3580,6 @@ def _status_payload_for_link(link):
     state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
-    # Minimal self-heal for slave status snapshots:
-    # if pending has been stale for too long and never confirmed, clear it so
-    # strict-sync does not remain blocked forever on the peer side.
-    pending_key_id = state.get("pending_key_id")
-    pending_start = state.get("next_start_time")
-    pending_epoch = epoch_from_junos_start_time(pending_start)
-    if pending_key_id and pending_epoch is not None:
-        overdue_seconds = int(time.time()) - (int(pending_epoch) + pending_confirm_grace_seconds())
-        if overdue_seconds > pending_stuck_recovery_seconds():
-            state = normalize_pending_keys(state)
-            state["pending_keys"] = []
-            state["pending_stuck_at"] = None
-            state = sync_pending_legacy_fields(state)
-
-            for item in state.get("installed_keys", []):
-                if isinstance(item, dict) and item.get("status") == "pending":
-                    item["status"] = "stale-pending-cleared"
-
-            if save_db_state(peer, iface, state):
-                log(
-                    f"STATUS STALE PENDING CLEARED pending_key_id={pending_key_id} "
-                    f"overdue_seconds={overdue_seconds} recovery_seconds={pending_stuck_recovery_seconds()}",
-                    "WARN",
-                    iface,
-                    "STATUS",
-                )
-            else:
-                log(
-                    f"STATUS STALE PENDING CLEAR SAVE FAIL pending_key_id={pending_key_id}",
-                    "ERROR",
-                    iface,
-                    "STATUS",
-                )
-
     state["iface"] = iface
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
