@@ -51,6 +51,36 @@ MACsec encrypts traffic
 
 ***
 
+## CKN derivation from `key_id`
+
+In this lab, the CKN is not an independent random value. It is derived deterministically from the QKD `key_ID` using SHA-256:
+
+```text
+CKN = sha256(key_id)
+```
+
+Practical consequences:
+
+* `key_id` is a UUID string, typically 36 ASCII characters.
+* `CKN` is the SHA-256 digest of that string, so it is 32 bytes of binary data.
+* When rendered as hex, the CKN appears as 64 hex characters.
+
+Useful terminal check:
+
+```bash
+printf '%s' 'cd38932a-73a2-48d0-99a9-c6118f1d5ccb' | openssl dgst -sha256 -binary | wc -c
+```
+
+This derivation is what lets the on-box script map a `key_id` from the KME to the CKN expected by MKA / MACsec.
+
+Operational logging rule:
+
+* on-box logs keep `key_id`
+* on-box logs do not print raw `cak` or `ckn` values
+* diagnostic output may show lengths or match status, but not the key material itself
+
+***
+
 👉 Important:
 
 > MKA **manages the entire key lifecycle internally**

@@ -2168,9 +2168,9 @@ def parse_mka_session_fields(mka_block):
         # depending on platform/output format. Accept the observed 32/64-char
         # forms and only warn on truly unexpected lengths.
         if len(cak_name) not in (32, 64):
-            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)} cak={cak_name[:20]}...", "WARN", None, "MKA")
+            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)}", "WARN", None, "MKA")
         if not all(c in '0123456789abcdef' for c in cak_name.lower()):
-            log(f"MKA_PARSE CAK NOT HEX cak={cak_name[:20]}...", "WARN", None, "MKA")
+            log("MKA_PARSE CAK NOT HEX", "WARN", None, "MKA")
     
     return fields
 
@@ -2242,12 +2242,9 @@ def mka_confirms_key(iface, key_id, generation=None):
         iface,
         "MKA",
     )
-    # Debug: show CKN mismatch details
+    # Debug mismatch without exposing CKN/CAK values.
     log(
-        f"MKA CKN_DEBUG expected_ckn={expected_ckn[:16]}... expected_norm={expected_ckn_norm[:16]}... "
-        f"cak_name_raw={cak_name[:16] if cak_name else 'NONE'}... "
-        f"cak_name_norm={cak_name_norm[:16]}... "
-        f"exp_len={len(expected_ckn_norm)} cak_len={len(cak_name_norm)} "
+        f"MKA CKN_DEBUG expected_len={len(expected_ckn_norm)} cak_len={len(cak_name_norm)} "
         f"match={ckn_match}",
         "DEBUG",
         iface,
@@ -2630,10 +2627,10 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
         # VALIDATION: Check CAK and CKN format
         if not isinstance(cak, str) or len(cak) != 64 or not all(c in '0123456789abcdef' for c in cak.lower()):
-            log(f"CAK FORMAT INVALID idx={idx} cak_len={len(cak)} cak={cak[:20]}...", "ERROR", iface, "MACSEC")
+            log(f"CAK FORMAT INVALID idx={idx} cak_len={len(cak)}", "ERROR", iface, "MACSEC")
             return False
         if not isinstance(ckn, str) or len(ckn) != 64 or not all(c in '0123456789abcdef' for c in ckn.lower()):
-            log(f"CKN FORMAT INVALID idx={idx} ckn_len={len(ckn)} ckn={ckn[:20]}...", "ERROR", iface, "MACSEC")
+            log(f"CKN FORMAT INVALID idx={idx} ckn_len={len(ckn)}", "ERROR", iface, "MACSEC")
             return False
 
         if slot is not None:
@@ -2664,7 +2661,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             return False
 
         log(
-            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} idx={idx} key_index={key_index} start_time={format_next_start_time_with_millis(start_time)} key_id={key_id} cak={cak[:16]}... ckn={ckn[:16]}...",
+            f"KEYCHAIN INSTALL STAGE ca={ca_name} keychain={keychain_name} idx={idx} key_index={key_index} start_time={format_next_start_time_with_millis(start_time)} key_id={key_id}",
             "INFO",
             iface,
             "MACSEC",

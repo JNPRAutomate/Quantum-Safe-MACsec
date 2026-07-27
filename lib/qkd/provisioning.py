@@ -840,6 +840,11 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
 
     source_names = sorted(direct_peer_names) if direct_peer_names else sorted(pub_keys.keys())
 
+    # Always include the target device own peer transport key as explicit
+    # bootstrap/self-auth entry in peer_cmd_user authorized_keys.
+    if device_name in pub_keys and device_name not in source_names:
+        source_names.append(device_name)
+
     if not source_names:
         print(f"[{device_name}] No peer sources for SSH authorized-keys sync")
         return
@@ -857,8 +862,11 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
             continue
         key_type = parts[0]
         key_blob = parts[1]
-        key_comment = " ".join(parts[2:]).strip() if len(parts) > 2 else ""
-        if not key_comment:
+        # Enforce deterministic, device-aware comments so operators can map
+        # each key line to its source device quickly.
+        if source_name == device_name:
+            key_comment = f"{peer_cmd_user}@{source_name}_bootstrap"
+        else:
             key_comment = f"{peer_cmd_user}@{source_name}"
 
         # Junos expects the SSH public key in full format inside the key payload:
