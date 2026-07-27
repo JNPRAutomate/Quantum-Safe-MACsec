@@ -113,6 +113,53 @@ def load_remote_qkd_json(shell, path):
         return None
 
 
+def parse_first_json_object(raw_text):
+    """Extract and parse the first valid JSON object from mixed shell output."""
+    if not raw_text:
+        return None
+
+    text = str(raw_text).strip()
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return None
+
+    depth = 0
+    end_idx = -1
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(text[start_idx:], start=start_idx):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end_idx = i
+                break
+
+    if end_idx == -1 or end_idx <= start_idx:
+        return None
+
+    try:
+        parsed = json.loads(text[start_idx:end_idx + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
 def get_qkd_state_dirs_from_config(shell):
     """Resolve runtime state directories from qkd_onbox_config.json.
 
@@ -968,6 +1015,28 @@ def get_macsec_health(sae_id, password=None, verbose=False):
 
         for jfile in json_files:
             raw_obj = load_remote_qkd_json(shell, jfile)
+            if not isinstance(raw_obj, dict):
+                file_content = send_cli_command(
+                    client,
+                    f"start shell command \"cat {jfile} 2>/dev/null\"",
+                )
+
+                if '{' not in (file_content or ''):
+                    base_name = os.path.basename(jfile)
+                    for qkd_state_dir in qkd_state_dirs:
+                        rel_try = send_cli_command(
+                            client,
+                            f"start shell command \"cd {qkd_state_dir} && cat {base_name} 2>/dev/null\"",
+                        )
+                        if '{' in (rel_try or ''):
+                            file_content = rel_try
+                            break
+
+                if '{' not in (file_content or ''):
+                    file_content = send_cli_command(client, f"file show {jfile} | no-more")
+
+                raw_obj = parse_first_json_object(file_content)
+
             if not isinstance(raw_obj, dict):
                 continue
 
