@@ -803,6 +803,30 @@ def qkd_key_index_from_generation(generation):
     return generation % max_installed_keys()
 
 
+def active_slot_index(state):
+    try:
+        active_generation = state.get("active_generation")
+        if active_generation is not None:
+            return int(active_generation) % max_installed_keys()
+    except Exception:
+        pass
+
+    active_key_id = state.get("active_key_id")
+    if active_key_id:
+        for item in reversed(state.get("installed_keys", [])):
+            if not isinstance(item, dict):
+                continue
+            if item.get("key_id") != active_key_id:
+                continue
+            slot = item.get("slot")
+            try:
+                return int(slot) % max_installed_keys()
+            except Exception:
+                continue
+
+    return None
+
+
 def default_keychain_state(link):
     return {
         "generation": 0,
@@ -2676,17 +2700,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         log(f"KEYCHAIN INSTALL CLI_PATH INVALID cli_path={CLI_PATH}", "ERROR", iface, "MACSEC")
         return False
 
-    stale_keychains = purge_stale_qkd_keychains(target_keychain_name=keychain_name)
-
     cli_cmds = ["configure"]
-    for stale_keychain in stale_keychains:
-        log(
-            f"KEYCHAIN INSTALL PURGE STALE QKD KEYCHAIN stale_keychain={stale_keychain} target_keychain={keychain_name}",
-            "WARN",
-            iface,
-            "MACSEC",
-        )
-        cli_cmds.append(f"delete security authentication-key-chains key-chain {stale_keychain}")
     
     # PHASE 1: Non-destructive update path.
     # Keep CA <-> keychain binding stable and update keys in place to reduce MACsec flap risk.
@@ -2778,7 +2792,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         expected_key_indices.add(int(key_index))
         expected_key_names_by_index[int(key_index)] = str(ckn)
 
-        cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
+        # Keep bucket slots stable and update values/timer in-place.
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {cli_start_time}")
@@ -4386,13 +4400,25 @@ def run_master():
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
 
         batch_size = effective_batch
+        ring_size = max_installed_keys()
+        active_slot = active_slot_index(state)
+
+        # Non-destructive ring preload strategy:
+        # - Keep active slot untouched
+        # - Fill only future slots in one pass
+        if ring_size > 1 and batch_size >= ring_size:
+            install_count = ring_size - 1
+        else:
+            install_count = batch_size
+
         first_generation = next_generation(state)
         rotation = rotation_id_for(iface, first_generation)
         rotation_start_ms = now_ms()
 
         log(
             f"KEYCHAIN ROTATION BATCH START rotation={rotation} ca={ca_name} keychain={keychain} "
-            f"first_generation={first_generation} batch_size={batch_size} runtime_mode={runtime_mode} stagger_minutes={link_stagger_minutes(link)}",
+            f"first_generation={first_generation} batch_size={batch_size} install_count={install_count} "
+            f"active_slot={active_slot} runtime_mode={runtime_mode} stagger_minutes={link_stagger_minutes(link)}",
             "INFO",
             iface,
             "MASTER",
@@ -4401,9 +4427,28 @@ def run_master():
         batch_records = []
         enc_batch_start_ms = now_ms()
         try:
-            for offset in range(batch_size):
-                generation = first_generation + offset
-                start_time = scheduled_key_start_time_with_offset(link, offset)
+            generation_cursor = int(first_generation)
+            safety = 0
+            while len(batch_records) < int(install_count):
+                safety += 1
+                if safety > (ring_size * 8):
+                    log(
+                        f"BATCH BUILD SAFETY BREAK install_count={install_count} built={len(batch_records)} ring_size={ring_size}",
+                        "ERROR",
+                        iface,
+                        "MASTER",
+                    )
+                    break
+
+                generation = int(generation_cursor)
+                slot = int(generation) % ring_size
+
+                # Preserve currently active slot to avoid rewriting key in use.
+                if active_slot is not None and int(slot) == int(active_slot):
+                    generation_cursor += 1
+                    continue
+
+                start_time = scheduled_key_start_time_with_offset(link, len(batch_records))
                 customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
                 key_id, key = do_enc(link["peer_sae"])
                 if not key_id:
@@ -4415,11 +4460,13 @@ def run_master():
                 batch_records.append(
                     {
                         "generation": generation,
+                        "slot": slot,
                         "start_time": start_time,
                         "key_id": key_id,
                         "key": key,
                     }
                 )
+                generation_cursor += 1
         except Exception as e:
             log(f"BATCH ENC EXCEPTION {type(e).__name__}: {str(e)}", "ERROR", iface, "MASTER")
             import traceback
@@ -4438,6 +4485,7 @@ def run_master():
                 peer_payload.append(
                     {
                         "generation": item["generation"],
+                        "slot": item.get("slot"),
                         "start_time": item["start_time"],
                         "key_id": item["key_id"],
                     }
