@@ -241,6 +241,8 @@ def enforce_runtime_file_permissions():
     inventory_json = Path(INVENTORY_PATH)
 
     readonly_targets = [op_script, event_script]
+    # Peer read-only status account must read these JSON files.
+    # Keep owner write, world read to preserve read-only introspection.
     owner_rw_targets = [config_json, inventory_json]
 
     for target in readonly_targets:
@@ -261,7 +263,7 @@ def enforce_runtime_file_permissions():
         if not target.exists():
             log(f"PERM GUARD missing runtime json target={target}", "WARN")
             continue
-        ok, detail = _set_mode_if_needed(target, 0o600)
+        ok, detail = _set_mode_if_needed(target, 0o644)
         if not ok:
             log(f"PERM GUARD json mode enforce failed target={target} detail={detail}", "WARN")
 

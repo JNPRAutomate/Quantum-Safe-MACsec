@@ -659,7 +659,7 @@ def deploy_onbox(
         for src, dst in zip(sidecar_remote_tmps, sidecar_remote_ops):
             sidecar_copy_cmds.append(f"cp {src} {dst}")
             sidecar_cleanup_cmds.append(f"rm -f {src}")
-            sidecar_harden_cmds.append(f"chown {resolved_script_user} {dst}; chmod 600 {dst}")
+            sidecar_harden_cmds.append(f"chown {resolved_script_user} {dst}; chmod 644 {dst}")
 
         sidecar_copy = "; ".join(sidecar_copy_cmds)
         sidecar_cleanup = "; ".join(sidecar_cleanup_cmds)
