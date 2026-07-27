@@ -906,6 +906,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     ssh_home_base = str(QKD.get("SSH_HOME_BASE", "/var/home")).strip() or "/var/home"
     ssh_dir = f"{ssh_home_base}/{peer_cmd_user}/.ssh"
     auth_path = f"{ssh_dir}/authorized_keys"
+    tmp_auth_path = f"{auth_path}.new"
 
     def _run_or_raise(step_label, command):
         result = ssh_deploy_cmd(device_dict, command, timeout=60)
@@ -933,11 +934,16 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         f"ls -ld {shlex.quote(ssh_dir)}; ls -l {shlex.quote(auth_path)}",
     )
 
+    # Rebuild authorized_keys from scratch so redeploy removes stale entries.
+    _run_or_raise("reset-auth", f"rm -f {shlex.quote(tmp_auth_path)} && touch {shlex.quote(tmp_auth_path)}")
+
     for key_line in key_lines:
         quoted_key = shlex.quote(key_line)
-        quoted_auth_path = shlex.quote(auth_path)
-        append_cmd = f"grep -q -F {quoted_key} {quoted_auth_path} || echo {quoted_key} >> {quoted_auth_path}"
+        quoted_tmp_auth_path = shlex.quote(tmp_auth_path)
+        append_cmd = f"printf '%s\n' {quoted_key} >> {quoted_tmp_auth_path}"
         _run_or_raise("append-key", append_cmd)
+
+    _run_or_raise("install-auth", f"mv {shlex.quote(tmp_auth_path)} {shlex.quote(auth_path)}")
 
     _run_or_raise(
         "finalize",
