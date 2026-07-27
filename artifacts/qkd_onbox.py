@@ -528,6 +528,44 @@ def junos_output_has_error(stdout="", stderr=""):
     return any(marker in text_lower for marker in hard_error_markers)
 
 
+def get_configured_keychain_key_indices(keychain_name, iface=None):
+    cmd = f"show configuration security authentication-key-chains key-chain {keychain_name} | display set"
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except subprocess.TimeoutExpired:
+        log(f"KEYCHAIN VERIFY TIMEOUT keychain={keychain_name}", "ERROR", iface, "MACSEC")
+        return None, ""
+    except Exception as e:
+        log(f"KEYCHAIN VERIFY ERROR keychain={keychain_name} error={str(e)}", "ERROR", iface, "MACSEC")
+        return None, ""
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        log(
+            f"KEYCHAIN VERIFY FAIL keychain={keychain_name} rc={result.returncode} stderr={stderr} stdout={stdout}",
+            "ERROR",
+            iface,
+            "MACSEC",
+        )
+        return None, stdout
+
+    indices = set()
+    pattern = re.compile(
+        rf"set\s+security\s+authentication-key-chains\s+key-chain\s+{re.escape(keychain_name)}\s+key\s+(\d+)\b"
+    )
+    for line in stdout.splitlines():
+        match = pattern.search(line)
+        if not match:
+            continue
+        try:
+            indices.add(int(match.group(1)))
+        except Exception:
+            continue
+
+    return indices, stdout
+
+
 def db_state_file(peer, iface):
     return f"{STATE_DIR}/qkd_db_{peer}_{iface.replace('/','_')}.json"
 
@@ -2635,6 +2673,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
     # PHASE 3: Install keys
     log(f"KEYCHAIN INSTALL PHASE3 keychain={keychain_name} num_entries={len(entries)}", "DEBUG", iface, "MACSEC")
+    expected_key_indices = set()
     for idx, entry in enumerate(entries):
         key_id = entry.get("key_id")
         key_b64 = entry.get("key")
@@ -2701,6 +2740,8 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             "MACSEC",
         )
 
+        expected_key_indices.add(int(key_index))
+
         cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name} key {key_index}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
@@ -2750,7 +2791,40 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
             log(f"KEYCHAIN INSTALL ROLLBACK ERROR ca={ca_name} keychain={keychain_name} error={str(e)}", "ERROR", iface, "MACSEC")
         return False
 
-    log(f"KEYCHAIN INSTALL OK ca={ca_name} keychain={keychain_name} entries={len(entries)}", "INFO", iface, "MACSEC")
+    actual_indices, running_set_output = get_configured_keychain_key_indices(keychain_name, iface=iface)
+    if actual_indices is None:
+        log(
+            f"KEYCHAIN INSTALL VERIFY FAIL keychain={keychain_name} reason=query_failed expected_indices={sorted(expected_key_indices)}",
+            "ERROR",
+            iface,
+            "MACSEC",
+        )
+        return False
+
+    missing_indices = sorted(expected_key_indices - actual_indices)
+    if missing_indices:
+        log(
+            f"KEYCHAIN INSTALL VERIFY FAIL keychain={keychain_name} missing_indices={missing_indices} "
+            f"actual_indices={sorted(actual_indices)} expected_indices={sorted(expected_key_indices)}",
+            "ERROR",
+            iface,
+            "MACSEC",
+        )
+        if running_set_output:
+            log(
+                f"KEYCHAIN INSTALL VERIFY RUNNING first_400={running_set_output[:400]}",
+                "ERROR",
+                iface,
+                "MACSEC",
+            )
+        return False
+
+    log(
+        f"KEYCHAIN INSTALL OK ca={ca_name} keychain={keychain_name} entries={len(entries)} installed_indices={sorted(actual_indices)}",
+        "INFO",
+        iface,
+        "MACSEC",
+    )
     return True
 
 
