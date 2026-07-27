@@ -776,21 +776,10 @@ def pending_confirm_grace_seconds():
 
 
 def pending_stuck_recovery_seconds():
-    # Runtime safety floor: avoid premature stuck recovery when policy values
-    # are accidentally set too low for the active rotation cadence.
-    min_safe = rotation_interval_seconds() * 3
-    derived_default = max(
-        pending_confirm_grace_seconds() + (rotation_interval_seconds() * key_batch_size()),
-        min_safe,
-    )
-    value = int(
-        qkd_policy().get(
-            "pending_stuck_recovery_seconds",
-            derived_default,
-        )
-    )
-    if value < derived_default:
-        return derived_default
+    derived_default = pending_confirm_grace_seconds() + (rotation_interval_seconds() * key_batch_size())
+    value = int(qkd_policy().get("pending_stuck_recovery_seconds", derived_default))
+    if value < 0:
+        return 0
     return value
 
 
