@@ -4349,6 +4349,7 @@ def run_master():
             and peer_pending_epoch is not None
             and int(local_pending_epoch) == int(peer_pending_epoch)
         )
+        aligned_pending_extra_hold_seconds = rotation_interval_seconds()
 
         if strict_sync_enabled() and not peer_states_aligned_strict(state, peer_state):
             log(
@@ -4363,14 +4364,17 @@ def run_master():
 
             if pending_stuck_exceeded:
                 if pending_head_aligned_with_peer:
-                    log(
-                        f"PENDING STUCK BUT PEER ALIGNED -> KEEP PENDING pending_key_id={state.get('pending_key_id')} "
-                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
+                    overdue_seconds = int(pending_stuck_overdue_seconds or 0)
+                    if overdue_seconds <= (pending_stuck_recovery_seconds() + aligned_pending_extra_hold_seconds):
+                        log(
+                            f"PENDING STUCK BUT PEER ALIGNED -> KEEP PENDING pending_key_id={state.get('pending_key_id')} "
+                            f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                            f"overdue_seconds={overdue_seconds} extra_hold_seconds={aligned_pending_extra_hold_seconds}",
+                            "WARN",
+                            iface,
+                            "MASTER",
+                        )
+                        continue
                 state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
@@ -4404,14 +4408,17 @@ def run_master():
             )
             if pending_stuck_exceeded and state.get("pending_key_id"):
                 if pending_head_aligned_with_peer:
-                    log(
-                        f"PENDING STUCK BUT PEER ALIGNED -> SKIP MISMATCH CLEAR pending_key_id={state.get('pending_key_id')} "
-                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
+                    overdue_seconds = int(pending_stuck_overdue_seconds or 0)
+                    if overdue_seconds <= (pending_stuck_recovery_seconds() + aligned_pending_extra_hold_seconds):
+                        log(
+                            f"PENDING STUCK BUT PEER ALIGNED -> SKIP MISMATCH CLEAR pending_key_id={state.get('pending_key_id')} "
+                            f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                            f"overdue_seconds={overdue_seconds} extra_hold_seconds={aligned_pending_extra_hold_seconds}",
+                            "WARN",
+                            iface,
+                            "MASTER",
+                        )
+                        continue
                 state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
@@ -4426,14 +4433,17 @@ def run_master():
         if state.get("pending_key_id"):
             if pending_stuck_exceeded:
                 if pending_head_aligned_with_peer:
-                    log(
-                        f"PENDING STUCK BUT PEER ALIGNED -> SKIP STATUS CLEAR pending_key_id={state.get('pending_key_id')} "
-                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
+                    overdue_seconds = int(pending_stuck_overdue_seconds or 0)
+                    if overdue_seconds <= (pending_stuck_recovery_seconds() + aligned_pending_extra_hold_seconds):
+                        log(
+                            f"PENDING STUCK BUT PEER ALIGNED -> SKIP STATUS CLEAR pending_key_id={state.get('pending_key_id')} "
+                            f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                            f"overdue_seconds={overdue_seconds} extra_hold_seconds={aligned_pending_extra_hold_seconds}",
+                            "WARN",
+                            iface,
+                            "MASTER",
+                        )
+                        continue
                 state, cleared = clear_pending_head_for_recovery(
                     state,
                     iface,
