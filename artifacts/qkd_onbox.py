@@ -1200,79 +1200,47 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         )
         return state, False
 
-    # Only clear automatically when peer is either aligned on the same stuck
-    # head or unavailable as a cache authority for pending convergence.
+    # Single conservative rule:
+    # - never clear early;
+    # - never clear when peer reports a different pending key;
+    # - clear only after a long forced threshold to avoid churn.
     peer_pending = None
     if isinstance(peer_state, dict):
         peer_pending = peer_state.get("pending_key_id")
 
     if peer_state is not None and peer_pending and peer_pending != pending_key_id:
-        strict_sync_override_clear = False
+        log(
+            f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
+            f"reason={reason} policy=HOLD_ON_PEER_MISMATCH",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        return state, False
 
-        # In strict-sync deadlock (different stale pending keys on each side),
-        # waiting for the long force-clear threshold keeps rotation blocked.
-        # Allow earlier recovery once the normal stuck window is exceeded.
-        if reason == "PENDING_STUCK_AND_STRICT_SYNC_BLOCK" and overdue_seconds is not None:
-            strict_block_policy_value = int(
-                qkd_policy().get(
-                    "pending_stuck_strict_block_clear_seconds",
-                    pending_stuck_recovery_seconds(),
-                )
-            )
-            strict_block_clear_seconds = max(
-                strict_block_policy_value,
-                pending_stuck_recovery_seconds(),
-            )
-            if int(overdue_seconds) >= strict_block_clear_seconds:
-                log(
-                    f"PENDING STUCK STRICT-SYNC RECOVERY -> FORCE CLEAR pending_key_id={pending_key_id} "
-                    f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
-                    f"pending_stuck_strict_block_clear_seconds={strict_block_clear_seconds}",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-                strict_sync_override_clear = True
-            else:
-                log(
-                    f"PENDING STUCK STRICT-SYNC RECOVERY DEFERRED pending_key_id={pending_key_id} "
-                    f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
-                    f"pending_stuck_strict_block_clear_seconds={strict_block_clear_seconds}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                return state, False
+    if overdue_seconds is None:
+        log(
+            f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} reason={reason} "
+            f"policy=REQUIRE_OVERDUE_SECONDS",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        return state, False
 
-        if not strict_sync_override_clear:
-            force_clear_seconds = int(
-                qkd_policy().get(
-                    "pending_stuck_force_clear_seconds",
-                    qkd_policy().get(
-                        "pending_stuck_force_evict_seconds",
-                        max(7200, pending_stuck_recovery_seconds() * 10),
-                    ),
-                )
-            )
-
-            if overdue_seconds is not None and int(overdue_seconds) > force_clear_seconds:
-                log(
-                    f"PENDING STUCK RECOVERY OVERRIDE -> FORCE ADVANCE pending_key_id={pending_key_id} "
-                    f"peer_pending_key_id={peer_pending} overdue_seconds={overdue_seconds} "
-                    f"pending_stuck_force_clear_seconds={force_clear_seconds} reason={reason}",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-            else:
-                log(
-                    f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
-                    f"reason={reason} overdue_seconds={overdue_seconds} pending_stuck_force_clear_seconds={force_clear_seconds}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                return state, False
+    force_clear_seconds = max(
+        rotation_interval_seconds() * 10,
+        pending_stuck_recovery_seconds() * 2,
+    )
+    if int(overdue_seconds) < force_clear_seconds:
+        log(
+            f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} reason={reason} "
+            f"overdue_seconds={overdue_seconds} force_clear_seconds={force_clear_seconds}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        return state, False
 
 
     dropped = pending.pop(0)
@@ -4155,73 +4123,15 @@ def run_master():
                 iface,
                 "MASTER",
             )
-
-            strict_sync_bypass = False
-
-            # If local pending is already clear but peer still reports a stale
-            # pending window, do not keep strict-sync blocked forever.
-            local_pending_key = state.get("pending_key_id")
-            peer_pending_key = peer_state.get("pending_key_id") if isinstance(peer_state, dict) else None
-            peer_next_start = peer_state.get("next_start_time") if isinstance(peer_state, dict) else None
-            if (not local_pending_key) and peer_pending_key and peer_next_start:
-                peer_pending_epoch = epoch_from_junos_start_time(peer_next_start)
-                if peer_pending_epoch is not None:
-                    peer_pending_age = int(time.time()) - int(peer_pending_epoch)
-                    stale_window = int(qkd_policy().get("pending_recovery_window_seconds", 360))
-                    if peer_pending_age > stale_window:
-                        log(
-                            f"STRICT SYNC BYPASS peer_pending_stale local_pending=None peer_pending_key={peer_pending_key} "
-                            f"peer_pending_age={peer_pending_age}s stale_window={stale_window}s",
-                            "WARN",
-                            iface,
-                            "MASTER",
-                        )
-                        strict_sync_bypass = True
-                    else:
-                        continue
-                else:
-                    continue
-
-            if pending_stuck_exceeded and state.get("pending_key_id"):
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
+            if pending_stuck_exceeded:
+                log(
+                    f"PENDING STUCK DETECTED BUT STRICT SYNC ACTIVE -> HOLD pending_key_id={state.get('pending_key_id')} "
+                    f"overdue_seconds={pending_stuck_overdue_seconds}",
+                    "WARN",
                     iface,
-                    reason="PENDING_STUCK_AND_STRICT_SYNC_BLOCK",
-                    peer_state=peer_state,
-                    overdue_seconds=pending_stuck_overdue_seconds,
+                    "MASTER",
                 )
-                if cleared:
-                    save_db_state(peer, iface, state)
-                    continue
-
-            # If strict-sync bypass was not selected above, keep strict block.
-            if not strict_sync_bypass:
-                continue
-
-        # AGGRESSIVE CLEAR: If pending is stuck for >3min, clear immediately to unblock rotation
-        if state.get("pending_key_id") and pending_stuck_exceeded:
-            pending_stuck_start = state.get("pending_stuck_at")
-            if pending_stuck_start:
-                stuck_duration_seconds = int(time.time()) - pending_stuck_start
-                aggressive_clear_threshold = int(qkd_policy().get("pending_stuck_aggressive_clear_seconds", qkd_policy().get("pending_stuck_aggressive_evict_seconds", 180)))
-                if stuck_duration_seconds > aggressive_clear_threshold:
-                    log(
-                        f"AGGRESSIVE CLEAR STALE PENDING -> UNBLOCK ROTATION pending_key_id={state.get('pending_key_id')} "
-                        f"stuck_duration={stuck_duration_seconds}s threshold={aggressive_clear_threshold}s",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    state, cleared = clear_pending_head_for_recovery(
-                        state,
-                        iface,
-                        reason="PENDING_STUCK_AGGRESSIVE_CLEAR",
-                        peer_state=peer_state,
-                        overdue_seconds=stuck_duration_seconds,
-                    )
-                    if cleared:
-                        save_db_state(peer, iface, state)
-                        continue  # Skip to next cycle with cleared pending, allow batch install
+            continue
 
         if not compare_peer_keychain_state(state, peer_state):
             local_active = state.get("active_key_id")
@@ -4261,37 +4171,6 @@ def run_master():
                     iface,
                     "MASTER",
                 )
-
-                force_on_mismatch = bool(qkd_policy().get("force_bootstrap_on_peer_mismatch", False))
-                if force_on_mismatch and not local_pending and not peer_pending and local_active and peer_active and local_active != peer_active:
-                    log(
-                        "PEER STATE HARD MISMATCH -> CONTROLLED BOOTSTRAP (policy override)",
-                        "ERROR",
-                        iface,
-                        "MASTER",
-                    )
-                    bootstrap_keychain_link(link, force=True)
-
-                # NEW: Force bootstrap if peer has stale pending but local doesn't
-                if not local_pending and peer_pending and local_active == peer_active:
-                    peer_next_start = peer_state.get("next_start_time")
-                    if peer_next_start:
-                        try:
-                            peer_start_ts = datetime.datetime.strptime(peer_next_start, "%Y-%m-%d.%H:%M").timestamp()
-                            now_ts = time.time()
-                            peer_age_seconds = now_ts - peer_start_ts
-                            recovery_window = int(qkd_policy().get("pending_recovery_window_seconds", 360))
-                            if peer_age_seconds > recovery_window:
-                                log(
-                                    f"PEER PENDING STALE -> FORCE BOOTSTRAP peer_pending_age={peer_age_seconds}s "
-                                    f"recovery_window={recovery_window}s peer_pending_key={peer_pending}",
-                                    "WARN",
-                                    iface,
-                                    "MASTER",
-                                )
-                                bootstrap_keychain_link(link, force=True)
-                        except Exception as e:
-                            log(f"PEER STALE PENDING CHECK FAIL: {e}", "WARN", iface, "MASTER")
 
                 if pending_stuck_exceeded:
                     state, cleared = clear_pending_head_for_recovery(
