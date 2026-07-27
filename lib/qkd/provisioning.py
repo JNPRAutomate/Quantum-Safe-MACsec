@@ -920,39 +920,39 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         return result
 
     print(f"[{device_name}] Applying peer SSH authorized_keys sync")
-    _run_or_raise("id", f"id {shlex.quote(peer_cmd_user)}")
-    _run_or_raise("mkdir", f"mkdir -p {shlex.quote(ssh_dir)}")
-    _run_or_raise("touch", f"touch {shlex.quote(auth_path)}")
-    _run_or_raise(
-        "owner",
-        f"chown {shlex.quote(peer_cmd_user)} {shlex.quote(ssh_dir)} {shlex.quote(auth_path)}",
+    quoted_user = shlex.quote(peer_cmd_user)
+    quoted_ssh_dir = shlex.quote(ssh_dir)
+    quoted_auth_path = shlex.quote(auth_path)
+    quoted_tmp_auth_path = shlex.quote(tmp_auth_path)
+
+    key_args = " ".join(shlex.quote(line) for line in key_lines)
+    if key_args:
+        append_expr = f"printf '%s\\n' {key_args} >> {quoted_tmp_auth_path}"
+    else:
+        append_expr = f": > {quoted_tmp_auth_path}"
+
+    sync_cmd = (
+        "set -e; "
+        f"id {quoted_user}; "
+        f"mkdir -p {quoted_ssh_dir}; "
+        f"touch {quoted_auth_path}; "
+        f"chown {quoted_user} {quoted_ssh_dir} {quoted_auth_path}; "
+        f"chmod 700 {quoted_ssh_dir}; "
+        f"chmod 600 {quoted_auth_path}; "
+        f"rm -f {quoted_tmp_auth_path}; "
+        f"touch {quoted_tmp_auth_path}; "
+        f"{append_expr}; "
+        f"mv {quoted_tmp_auth_path} {quoted_auth_path}; "
+        f"chown {quoted_user} {quoted_ssh_dir} {quoted_auth_path}; "
+        f"chmod 700 {quoted_ssh_dir}; "
+        f"chmod 600 {quoted_auth_path}; "
+        f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}"
     )
-    _run_or_raise("chmod-dir", f"chmod 700 {shlex.quote(ssh_dir)}")
-    _run_or_raise("chmod-auth", f"chmod 600 {shlex.quote(auth_path)}")
+    _run_or_raise("authorized-keys-sync", sync_cmd)
+
     _run_or_raise(
         "verify",
-        f"ls -ld {shlex.quote(ssh_dir)}; ls -l {shlex.quote(auth_path)}",
-    )
-
-    # Rebuild authorized_keys from scratch so redeploy removes stale entries.
-    _run_or_raise("reset-auth", f"rm -f {shlex.quote(tmp_auth_path)} && touch {shlex.quote(tmp_auth_path)}")
-
-    for key_line in key_lines:
-        quoted_key = shlex.quote(key_line)
-        quoted_tmp_auth_path = shlex.quote(tmp_auth_path)
-        append_cmd = f"printf '%s\\n' {quoted_key} >> {quoted_tmp_auth_path}"
-        _run_or_raise("append-key", append_cmd)
-
-    _run_or_raise("install-auth", f"mv {shlex.quote(tmp_auth_path)} {shlex.quote(auth_path)}")
-
-    _run_or_raise(
-        "finalize",
-        (
-            f"chown {shlex.quote(peer_cmd_user)} {shlex.quote(ssh_dir)} {shlex.quote(auth_path)}; "
-            f"chmod 700 {shlex.quote(ssh_dir)}; "
-            f"chmod 600 {shlex.quote(auth_path)}; "
-            f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}"
-        ),
+        f"ls -ld {quoted_ssh_dir}; ls -l {quoted_auth_path}",
     )
     print(f"[{device_name}] Peer SSH authorized_keys synchronized OK")
 
