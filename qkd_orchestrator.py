@@ -606,13 +606,16 @@ def deploy_onbox(
         last_error = None
 
         credential_candidates = []
-        if resolved_script_user and resolved_script_password:
-            credential_candidates.append((resolved_script_user, resolved_script_password))
+        # Prefer bootstrap/admin transport when available to avoid noisy
+        # script_user password failures on platforms where account propagation
+        # can lag during redeploy windows.
         if (
             resolved_bootstrap_user
             and resolved_bootstrap_password
         ):
             credential_candidates.append((resolved_bootstrap_user, resolved_bootstrap_password))
+        if resolved_script_user and resolved_script_password:
+            credential_candidates.append((resolved_script_user, resolved_script_password))
 
         for candidate_user, candidate_password in credential_candidates:
             if not candidate_user or not candidate_password:

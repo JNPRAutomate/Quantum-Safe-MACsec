@@ -2608,6 +2608,10 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
     # PHASE 2: Ensure CA policy/binding is present before key updates.
     log(f"KEYCHAIN INSTALL PHASE2 ca={ca_name} action=ensure_ca_binding security_mode=static-cak cipher=gcm-aes-xpn-256", "DEBUG", iface, "MACSEC")
+    # Remove stale static pre-shared-key fields when keychain mode is active.
+    # Leaving old pre-shared-key ckn/cak in config triggers repeated Junos warnings.
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key ckn")
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
@@ -2762,6 +2766,9 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     log(f"INTERFACE BIND START current_ca={configured_ca} target_ca={ca_name} keychain={keychain_name}", "INFO", iface, "MACSEC")
 
     cli_cmds = ["configure"]
+    # Ensure CA does not retain stale static pre-shared-key fields.
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key ckn")
+    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
 
@@ -3722,13 +3729,36 @@ def process_inbound_transport_for_slave(link):
 
 
 def process_slave_inbound_transports():
-    processed = False
-    for link in managed_links():
-        if link.get("role") != "slave":
-            continue
-        if process_inbound_transport_for_slave(link):
-            processed = True
-    return processed
+    processed_any = False
+    processed_count = 0
+    max_drain = int(qkd_policy().get("peer_inbox_drain_max_per_cycle", 8))
+    if max_drain < 1:
+        max_drain = 1
+    reached_drain_limit = False
+
+    for _ in range(max_drain):
+        processed_this_pass = False
+        for link in managed_links():
+            if link.get("role") != "slave":
+                continue
+            if process_inbound_transport_for_slave(link):
+                processed_any = True
+                processed_count += 1
+                processed_this_pass = True
+
+        if not processed_this_pass:
+            break
+    else:
+        reached_drain_limit = True
+
+    if processed_any:
+        log(
+            f"INBOUND DRAIN SUMMARY processed={processed_count} max_per_cycle={max_drain} reached_limit={reached_drain_limit}",
+            "INFO",
+            mode="SLAVE",
+        )
+
+    return processed_any
 
 
 def bootstrap_keychain_link(link, force=False):
@@ -4044,7 +4074,14 @@ def run_master():
 
         peer_state = get_peer_status(link, iface)
         if peer_state is None:
-            if peer_transport_mode() == "queue" and not state.get("pending_key_id"):
+            allow_without_peer_status = bool(
+                qkd_policy().get("allow_rotation_without_peer_status", False)
+            )
+            if (
+                allow_without_peer_status
+                and peer_transport_mode() == "queue"
+                and not state.get("pending_key_id")
+            ):
                 log(
                     "PEER STATUS unavailable -> ALLOW ROTATION (queue+no-pending, ACK-gated)",
                     "WARN",
@@ -4061,7 +4098,13 @@ def run_master():
                     "installed_keys": state.get("installed_keys", []),
                 }
             else:
-                log("PEER STATUS unavailable -> SKIP ROTATION", "ERROR", iface, "MASTER")
+                log(
+                    "PEER STATUS unavailable -> SKIP ROTATION"
+                    f" allow_rotation_without_peer_status={allow_without_peer_status}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
                 if pending_stuck_exceeded:
                     state, cleared = clear_pending_head_for_recovery(
                         state,
@@ -4253,10 +4296,13 @@ def run_master():
                     if cleared:
                         save_db_state(peer, iface, state)
                 
-                # Allow rotation to proceed if local has no pending key and has an active key.
-                # This covers both single and batch mode: if local state is clean (no pending),
-                # installing a new key and sending it to peer will resync both sides.
-                if not local_pending and local_active:
+                # Conservative default: when peer state is mismatched, do not
+                # create fresh rotations automatically, otherwise both sides can
+                # keep diverging and trigger recurring UNKNOWN_CAK events.
+                allow_on_mismatch_no_pending = bool(
+                    qkd_policy().get("allow_rotation_on_peer_mismatch_no_pending", False)
+                )
+                if allow_on_mismatch_no_pending and not local_pending and local_active:
                     log(
                         f"PEER STATE MISMATCH BUT NO LOCAL PENDING -> ALLOW ROTATION "
                         f"local_active={local_active} runtime_mode={runtime_mode} peer_mismatch_allowed=true",
@@ -4266,6 +4312,14 @@ def run_master():
                     )
                     pass  # Continue to install logic below
                 else:
+                    log(
+                        f"PEER STATE MISMATCH -> HOLD ROTATION local_active={local_active} local_pending={local_pending} "
+                        f"peer_active={peer_active} peer_pending={peer_pending} "
+                        f"allow_rotation_on_peer_mismatch_no_pending={allow_on_mismatch_no_pending}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
                     continue
 
             if local_cache_empty:
