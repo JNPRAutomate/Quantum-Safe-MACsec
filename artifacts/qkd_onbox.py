@@ -1225,51 +1225,8 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
     if not pending_key_id:
         return state, False
 
-    now_epoch = int(time.time())
-    health = state.get("health", {})
-    last_key = health.get("last_pending_stuck_key_id")
-    try:
-        last_clear_at = int(health.get("last_pending_stuck_clear_at", health.get("last_pending_stuck_evict_at", 0)))
-    except Exception:
-        last_clear_at = 0
-
-    cooldown_seconds = int(
-        qkd_policy().get(
-            "pending_stuck_clear_cooldown_seconds",
-            qkd_policy().get(
-                "pending_stuck_evict_cooldown_seconds",
-                max(1800, rotation_interval_seconds() * 20),
-            ),
-        )
-    )
-
-    if pending_key_id == last_key and (now_epoch - last_clear_at) < cooldown_seconds:
-        log(
-            f"PENDING STUCK RECOVERY COOLDOWN -> HOLD CURRENT PENDING pending_key_id={pending_key_id} "
-            f"cooldown_seconds={cooldown_seconds} elapsed_seconds={now_epoch - last_clear_at}",
-            "WARN",
-            iface,
-            "MASTER",
-        )
-        return state, False
-
-    # Single conservative rule:
-    # - never clear early;
-    # - never clear when peer reports a different pending key;
-    # - clear only after a long forced threshold to avoid churn.
-    peer_pending = None
-    if isinstance(peer_state, dict):
-        peer_pending = peer_state.get("pending_key_id")
-
-    if peer_state is not None and peer_pending and peer_pending != pending_key_id:
-        log(
-            f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} peer_pending_key_id={peer_pending} "
-            f"reason={reason} policy=HOLD_ON_PEER_MISMATCH",
-            "WARN",
-            iface,
-            "MASTER",
-        )
-        return state, False
+    # Simplified recovery rule:
+    # - clear only when caller provides overdue_seconds > 0.
 
     if overdue_seconds is None:
         log(
@@ -1281,14 +1238,10 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         )
         return state, False
 
-    force_clear_seconds = max(
-        rotation_interval_seconds() * 10,
-        pending_stuck_recovery_seconds() * 2,
-    )
-    if int(overdue_seconds) < force_clear_seconds:
+    if int(overdue_seconds) <= 0:
         log(
             f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} reason={reason} "
-            f"overdue_seconds={overdue_seconds} force_clear_seconds={force_clear_seconds}",
+            f"overdue_seconds={overdue_seconds} policy=REQUIRE_POSITIVE_OVERDUE",
             "WARN",
             iface,
             "MASTER",
@@ -1296,6 +1249,8 @@ def clear_pending_head_for_recovery(state, iface, reason, peer_state=None, overd
         return state, False
 
 
+    now_epoch = int(time.time())
+    health = state.get("health", {})
     dropped = pending.pop(0)
     state["pending_keys"] = pending
     state["pending_stuck_at"] = None  # Clear stuck timer when stale pending is cleared
@@ -4414,6 +4369,24 @@ def run_master():
                     )
 
             if pending_stuck_exceeded:
+                state, cleared = clear_pending_head_for_recovery(
+                    state,
+                    iface,
+                    reason="PENDING_STUCK_AND_STRICT_SYNC_BLOCK",
+                    peer_state=peer_state,
+                    overdue_seconds=pending_stuck_overdue_seconds,
+                )
+                if cleared:
+                    save_db_state(peer, iface, state)
+                    log(
+                        f"STRICT SYNC RECOVERY APPLIED -> RETRY NEXT CYCLE pending_key_id={state.get('pending_key_id')} "
+                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
+
                 log(
                     f"PENDING STUCK DETECTED BUT STRICT SYNC ACTIVE -> HOLD pending_key_id={state.get('pending_key_id')} "
                     f"overdue_seconds={pending_stuck_overdue_seconds}",
