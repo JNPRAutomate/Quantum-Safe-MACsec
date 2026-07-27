@@ -792,14 +792,7 @@ def qkd_key_index_from_generation(generation):
     return generation % max_installed_keys()
 
 
-def active_slot_index(state):
-    try:
-        active_generation = state.get("active_generation")
-        if active_generation is not None:
-            return int(active_generation) % max_installed_keys()
-    except Exception:
-        pass
-
+def active_slot_index(state, iface=None):
     active_key_id = state.get("active_key_id")
     if active_key_id:
         for item in reversed(state.get("installed_keys", [])):
@@ -812,6 +805,27 @@ def active_slot_index(state):
                 return int(slot) % max_installed_keys()
             except Exception:
                 continue
+
+    # If active key cannot be mapped from local state, use live MKA key-number
+    # as runtime truth when available.
+    if iface:
+        try:
+            mka_block = get_mka_session_block_for_iface(iface)
+            if mka_block:
+                fields = parse_mka_session_fields(mka_block)
+                if mka_session_secured(fields):
+                    key_number = fields.get("key_number")
+                    if key_number is not None:
+                        return int(key_number) % max_installed_keys()
+        except Exception:
+            pass
+
+    try:
+        active_generation = state.get("active_generation")
+        if active_generation is not None:
+            return int(active_generation) % max_installed_keys()
+    except Exception:
+        pass
 
     return None
 
@@ -4389,7 +4403,7 @@ def run_master():
 
         batch_size = effective_batch
         ring_size = max_installed_keys()
-        active_slot = active_slot_index(state)
+        active_slot = active_slot_index(state, iface=iface)
 
         # Non-destructive ring preload strategy:
         # - Keep active slot untouched
