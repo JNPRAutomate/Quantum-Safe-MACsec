@@ -2306,6 +2306,30 @@ def key_index_for_generation_or_slot(generation=None, slot=None):
     return int(generation) % max_installed_keys()
 
 
+def mka_key_number_matches_expected_slot(observed_key_number, expected_slot):
+    if observed_key_number is None or expected_slot is None:
+        return False
+
+    ring_size = max_installed_keys()
+    if ring_size < 1:
+        ring_size = 1
+
+    try:
+        observed = int(observed_key_number)
+        expected = int(expected_slot) % ring_size
+    except Exception:
+        return False
+
+    # Accept both numbering schemes seen across platforms:
+    # - 0-based (0..N-1)
+    # - 1-based (1..N)
+    if observed == expected:
+        return True
+    if observed == (expected + 1):
+        return True
+    return False
+
+
 def mka_confirms_key(iface, key_id, generation=None):
     expected_ckn = ckn_from_key_id(key_id)
     expected_ckn_norm = normalize_hex_string(expected_ckn)
@@ -2321,7 +2345,7 @@ def mka_confirms_key(iface, key_id, generation=None):
     ckn_match = mka_ckn_matches(expected_ckn_norm, cak_name_norm)
     key_number = fields.get("key_number")
     expected_key_number = key_index_for_generation_or_slot(generation=generation, slot=None)
-    key_number_match = expected_key_number is not None and key_number is not None and int(key_number) == int(expected_key_number)
+    key_number_match = mka_key_number_matches_expected_slot(key_number, expected_key_number)
 
     if secured and (ckn_match or key_number_match):
         latest_an = fields.get("latest_sak_an")
@@ -2454,7 +2478,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             if expected_key_number is None:
                 continue
 
-            if int(expected_key_number) == int(key_number):
+            if mka_key_number_matches_expected_slot(key_number, expected_key_number):
                 confirmed_idx = idx
                 confirmed_item = item
                 confirmed_via_key_number = True
@@ -4505,26 +4529,42 @@ def run_master():
         enc_batch_start_ms = now_ms()
         try:
             generation_cursor = int(first_generation)
-            safety = 0
-            while len(batch_records) < int(install_count):
-                safety += 1
-                if safety > (ring_size * 8):
-                    log(
-                        f"BATCH BUILD SAFETY BREAK install_count={install_count} built={len(batch_records)} ring_size={ring_size}",
-                        "ERROR",
-                        iface,
-                        "MASTER",
-                    )
-                    break
 
+            target_slots = []
+            if active_slot is not None and ring_size > 1:
+                for offset in range(1, ring_size):
+                    candidate = (int(active_slot) + offset) % ring_size
+                    if int(candidate) == int(active_slot):
+                        continue
+                    target_slots.append(int(candidate))
+                    if len(target_slots) >= int(install_count):
+                        break
+
+            # Fallback to generation-based slot mapping only when active slot is unknown.
+            if len(target_slots) < int(install_count):
+                target_slots = []
+                safety = 0
+                probe = int(generation_cursor)
+                while len(target_slots) < int(install_count):
+                    safety += 1
+                    if safety > (ring_size * 8):
+                        log(
+                            f"BATCH BUILD SAFETY BREAK install_count={install_count} built_slots={len(target_slots)} ring_size={ring_size}",
+                            "ERROR",
+                            iface,
+                            "MASTER",
+                        )
+                        break
+                    candidate = int(probe) % ring_size
+                    probe += 1
+                    if active_slot is not None and int(candidate) == int(active_slot):
+                        continue
+                    if int(candidate) in target_slots:
+                        continue
+                    target_slots.append(int(candidate))
+
+            for slot in target_slots:
                 generation = int(generation_cursor)
-                slot = int(generation) % ring_size
-
-                # Preserve currently active slot to avoid rewriting key in use.
-                if active_slot is not None and int(slot) == int(active_slot):
-                    generation_cursor += 1
-                    continue
-
                 start_time = scheduled_key_start_time_with_offset(link, len(batch_records))
                 customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
                 key_id, key = do_enc(link["peer_sae"])
@@ -4537,7 +4577,7 @@ def run_master():
                 batch_records.append(
                     {
                         "generation": generation,
-                        "slot": slot,
+                        "slot": int(slot),
                         "start_time": start_time,
                         "key_id": key_id,
                         "key": key,
