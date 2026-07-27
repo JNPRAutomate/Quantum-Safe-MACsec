@@ -2586,13 +2586,13 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         )
         cli_cmds.append(f"delete security authentication-key-chains key-chain {stale_keychain}")
     
-    # PHASE 1: Disconnect old keychain from CA (keep fallback-key)
-    log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=delete_pre_shared_key_chain", "DEBUG", iface, "MACSEC")
-    cli_cmds.append(f"delete security macsec connectivity-association {ca_name} pre-shared-key-chain")
-    cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain_name}")
-    
-    # PHASE 2: Reconfigure CA with new keychain
-    log(f"KEYCHAIN INSTALL PHASE2 ca={ca_name} action=reconfigure_ca security_mode=static-cak cipher=gcm-aes-xpn-256", "DEBUG", iface, "MACSEC")
+    # PHASE 1: Non-destructive update path.
+    # Keep CA <-> keychain binding stable and update keys in place to reduce MACsec flap risk.
+    log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=in_place_update", "DEBUG", iface, "MACSEC")
+    cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name}")
+
+    # PHASE 2: Ensure CA policy/binding is present before key updates.
+    log(f"KEYCHAIN INSTALL PHASE2 ca={ca_name} action=ensure_ca_binding security_mode=static-cak cipher=gcm-aes-xpn-256", "DEBUG", iface, "MACSEC")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} security-mode static-cak")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} cipher-suite gcm-aes-xpn-256")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} pre-shared-key-chain {keychain_name}")
@@ -3748,21 +3748,15 @@ def bootstrap_keychain_link(link, force=False):
         }
     )
 
-    # BOOTSTRAP PHASE 1: Clear any existing keys from keychain (start fresh)
-    log(f"KEYCHAIN BOOTSTRAP CLEANUP PHASE ca={ca_name} keychain={keychain} action=delete_all_existing_keys", "DEBUG", iface, "BOOTSTRAP")
-    cli_cmds = ["configure"]
-    for k in range(max_installed_keys()):
-        cli_cmds.append(f"delete security authentication-key-chains key-chain {keychain} key {k}")
-    cli_cmds.append(f"commit comment \"QKD: BOOTSTRAP CLEANUP ca={ca_name} keychain={keychain} iface={iface}\"")
-    cli_cmds.append("exit")
-    cleanup_cmd = "; ".join(cli_cmds)
-    try:
-        result = subprocess.run([CLI_PATH, "-c", cleanup_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="ignore").strip()
-            log(f"KEYCHAIN BOOTSTRAP CLEANUP WARNING returncode={result.returncode} stderr_preview={stderr[:100]}", "WARNING", iface, "BOOTSTRAP")
-    except Exception as e:
-        log(f"KEYCHAIN BOOTSTRAP CLEANUP ERROR ca={ca_name} keychain={keychain} error={str(e)}", "ERROR", iface, "BOOTSTRAP")
+    # Cleanup is intentionally not committed as a standalone phase.
+    # install_keychain_batch performs delete/recreate/set in one atomic commit,
+    # avoiding transient invalid CA -> key-chain references.
+    log(
+        f"KEYCHAIN BOOTSTRAP CLEANUP PHASE ca={ca_name} keychain={keychain} action=deferred_to_atomic_install",
+        "DEBUG",
+        iface,
+        "BOOTSTRAP",
+    )
 
     # BOOTSTRAP PHASE 2: Install bootstrap key (generation 0 -> key 0)
     item = bootstrap_records[0]
