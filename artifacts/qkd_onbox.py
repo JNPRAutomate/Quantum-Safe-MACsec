@@ -4263,72 +4263,43 @@ def run_master():
 
         peer_state = get_peer_status(link, iface)
         if peer_state is None:
-            allow_without_peer_status = bool(
-                qkd_policy().get("allow_rotation_without_peer_status", False)
+            log(
+                "PEER STATUS unavailable -> MASTER AUTHORITATIVE CONTINUE",
+                "WARN",
+                iface,
+                "MASTER",
             )
-            if (
-                allow_without_peer_status
-                and peer_transport_mode() == "queue"
-                and not state.get("pending_key_id")
-            ):
-                log(
-                    "PEER STATUS unavailable -> ALLOW ROTATION (queue+no-pending, ACK-gated)",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                peer_state = {
-                    "ca_name": state.get("ca_name"),
-                    "keychain_name": state.get("keychain_name"),
-                    "active_key_id": state.get("active_key_id"),
-                    "pending_keys": [],
-                    "pending_key_id": None,
-                    "next_start_time": None,
-                    "installed_keys": state.get("installed_keys", []),
-                }
-            else:
-                log(
-                    "PEER STATUS unavailable -> SKIP ROTATION"
-                    f" allow_rotation_without_peer_status={allow_without_peer_status}",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-                if pending_stuck_exceeded:
-                    state, cleared = clear_pending_head_for_recovery(
-                        state,
-                        iface,
-                        reason="PENDING_STUCK_AND_PEER_STATUS_UNAVAILABLE",
-                        peer_state=None,
-                        overdue_seconds=pending_stuck_overdue_seconds,
-                    )
-                    if cleared:
-                        save_db_state(peer, iface, state)
-                continue
+            peer_state = {
+                "ca_name": state.get("ca_name"),
+                "keychain_name": state.get("keychain_name"),
+                "active_key_id": state.get("active_key_id"),
+                "pending_keys": state.get("pending_keys", []),
+                "pending_key_id": state.get("pending_key_id"),
+                "next_start_time": state.get("next_start_time"),
+                "installed_keys": state.get("installed_keys", []),
+            }
 
         if not keychain_state_valid(peer_state):
             log(
-                f"PEER STATE INVALID -> SKIP ROTATION local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                f"PEER STATE INVALID -> MASTER AUTHORITATIVE CONTINUE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}",
                 "WARN",
                 iface,
                 "MASTER",
             )
-            if pending_stuck_exceeded:
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
-                    iface,
-                    reason="PENDING_STUCK_AND_PEER_STATE_INVALID",
-                    peer_state=peer_state,
-                    overdue_seconds=pending_stuck_overdue_seconds,
-                )
-                if cleared:
-                    save_db_state(peer, iface, state)
-            continue
+            peer_state = {
+                "ca_name": state.get("ca_name"),
+                "keychain_name": state.get("keychain_name"),
+                "active_key_id": state.get("active_key_id"),
+                "pending_keys": state.get("pending_keys", []),
+                "pending_key_id": state.get("pending_key_id"),
+                "next_start_time": state.get("next_start_time"),
+                "installed_keys": state.get("installed_keys", []),
+            }
 
         if strict_sync_enabled() and not peer_states_aligned_strict(state, peer_state):
             log(
-                f"STRICT SYNC BLOCK ROTATION local_active={state.get('active_key_id')} peer_active={peer_state.get('active_key_id')} "
+                f"STRICT SYNC MISMATCH OBSERVE local_active={state.get('active_key_id')} peer_active={peer_state.get('active_key_id')} "
                 f"local_pending={state.get('pending_key_id')} peer_pending={peer_state.get('pending_key_id')} "
                 f"local_next_start={format_next_start_time_with_millis(state.get('next_start_time'))} "
                 f"peer_next_start={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
@@ -4336,37 +4307,6 @@ def run_master():
                 iface,
                 "MASTER",
             )
-
-            local_pending = state.get("pending_key_id")
-            peer_pending = peer_state.get("pending_key_id") if isinstance(peer_state, dict) else None
-            local_active = state.get("active_key_id")
-            peer_active = peer_state.get("active_key_id") if isinstance(peer_state, dict) else None
-
-            if (
-                not local_pending
-                and not peer_pending
-                and local_active
-                and peer_active
-                and local_active != peer_active
-            ):
-                last_rotation = int(state.get("last_rotation") or 0)
-                elapsed_since_rotation = int(time.time()) - last_rotation
-                min_bootstrap_gap = rotation_interval_seconds()
-                if elapsed_since_rotation >= min_bootstrap_gap:
-                    log(
-                        f"STRICT SYNC RECOVERY -> CONTROLLED BOOTSTRAP local_active={local_active} peer_active={peer_active}",
-                        "ERROR",
-                        iface,
-                        "MASTER",
-                    )
-                    bootstrap_keychain_link(link, force=True)
-                else:
-                    log(
-                        f"STRICT SYNC RECOVERY COOLING DOWN elapsed={elapsed_since_rotation}s min_gap={min_bootstrap_gap}s",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
 
             if pending_stuck_exceeded:
                 state, cleared = clear_pending_head_for_recovery(
@@ -4387,95 +4327,30 @@ def run_master():
                     )
                     continue
 
-                log(
-                    f"PENDING STUCK DETECTED BUT STRICT SYNC ACTIVE -> HOLD pending_key_id={state.get('pending_key_id')} "
-                    f"overdue_seconds={pending_stuck_overdue_seconds}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-            continue
-
         if not compare_peer_keychain_state(state, peer_state):
             local_active = state.get("active_key_id")
             peer_active = peer_state.get("active_key_id")
             local_pending = state.get("pending_key_id")
             peer_pending = peer_state.get("pending_key_id")
-            local_cache_empty = False
-
-            # If local cache has already been drained by stuck recovery and the
-            # link is still operational, do not let peer mismatch block a fresh
-            # rotation cycle forever. Treat local state as empty cache and move
-            # forward with a new batch.
-            if not local_active and not local_pending:
-                local_cache_empty = True
-                log(
-                    f"PEER STATE MISMATCH BUT LOCAL CACHE EMPTY -> ALLOW ROTATION peer_active_key={peer_active} "
-                    f"peer_pending_key={peer_pending} peer_next_start_time={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
-                    "WARN",
+            log(
+                f"PEER STATE MISMATCH -> MASTER AUTHORITATIVE CONTINUE local_active_key={local_active} peer_active_key={peer_active} "
+                f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
+                f"local_next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} peer_next_start_time={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
+            if pending_stuck_exceeded and state.get("pending_key_id"):
+                state, cleared = clear_pending_head_for_recovery(
+                    state,
                     iface,
-                    "MASTER",
+                    reason="PENDING_STUCK_AND_PEER_MISMATCH",
+                    peer_state=peer_state,
+                    overdue_seconds=pending_stuck_overdue_seconds,
                 )
-                if peer_active and not state.get("last_seen_key_id"):
-                    state["last_seen_key_id"] = peer_active
-                state["active_key_id"] = state.get("last_seen_key_id") or peer_active or state.get("active_key_id")
-                state["active_confirmed_at"] = int(time.time())
-                if not save_db_state(peer, iface, state):
-                    log("STATE SAVE FAIL AFTER LOCAL CACHE EMPTY MISMATCH", "ERROR", iface, "MASTER")
+                if cleared:
+                    save_db_state(peer, iface, state)
                     continue
-            else:
-                # Non-destructive default: mismatches are expected during async
-                # promotion windows. Keep link stable and let normal cycles heal.
-                log(
-                    f"PEER STATE MISMATCH -> SKIP BOOTSTRAP local_active_key={local_active} peer_active_key={peer_active} "
-                    f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
-                    f"local_next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} peer_next_start_time={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-
-                if pending_stuck_exceeded:
-                    state, cleared = clear_pending_head_for_recovery(
-                        state,
-                        iface,
-                        reason="PENDING_STUCK_AND_PEER_MISMATCH",
-                        peer_state=peer_state,
-                        overdue_seconds=pending_stuck_overdue_seconds,
-                    )
-                    if cleared:
-                        save_db_state(peer, iface, state)
-                
-                # Conservative default: when peer state is mismatched, do not
-                # create fresh rotations automatically, otherwise both sides can
-                # keep diverging and trigger recurring UNKNOWN_CAK events.
-                allow_on_mismatch_no_pending = bool(
-                    qkd_policy().get("allow_rotation_on_peer_mismatch_no_pending", False)
-                )
-                if allow_on_mismatch_no_pending and not local_pending and local_active:
-                    log(
-                        f"PEER STATE MISMATCH BUT NO LOCAL PENDING -> ALLOW ROTATION "
-                        f"local_active={local_active} runtime_mode={runtime_mode} peer_mismatch_allowed=true",
-                        "INFO",
-                        iface,
-                        "MASTER",
-                    )
-                    pass  # Continue to install logic below
-                else:
-                    log(
-                        f"PEER STATE MISMATCH -> HOLD ROTATION local_active={local_active} local_pending={local_pending} "
-                        f"peer_active={peer_active} peer_pending={peer_pending} "
-                        f"allow_rotation_on_peer_mismatch_no_pending={allow_on_mismatch_no_pending}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
-            if local_cache_empty:
-                # Local cache drained by recovery: continue into the normal
-                # rotation decision path below instead of short-circuiting.
-                pass
 
         if state.get("pending_key_id"):
             if pending_stuck_exceeded:
