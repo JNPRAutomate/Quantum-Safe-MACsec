@@ -1299,16 +1299,31 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                 macsec_health_percent = (summary['macsec_inuse'] / summary['macsec_interfaces']) * 100
             
             if summary['total_devices'] > 0:
-                if summary['cak_delta'] > 10 or summary['icv_delta'] > 0:
-                    print(f"Status: 🔴 CRITICAL - KEY AGREEMENT FAILURE - {summary['cak_delta']} new CAK mismatches this round")
-                elif summary['mka_not_found'] > 0:
+                if summary['mka_not_found'] > 0:
                     print(f"Status: 🔴 CRITICAL - {summary['mka_not_found']} MKA session(s) NOT FOUND")
+                elif summary['icv_delta'] > 0:
+                    print(f"Status: 🔴 CRITICAL - DATA INTEGRITY FAILURE - {summary['icv_delta']} new ICV mismatches this round")
                 elif macsec_health_percent < 50:
                     print(f"Status: 🔴 CRITICAL - Only {macsec_health_percent:.0f}% MACsec interfaces working ({summary['macsec_inuse']}/{summary['macsec_interfaces']})")
                 elif macsec_health_percent < 100:
                     print(f"Status: ⚠️  DEGRADED - {macsec_health_percent:.0f}% MACsec interfaces working ({summary['macsec_inuse']}/{summary['macsec_interfaces']})")
                 elif summary['stale_keys'] > 0:
                     print(f"Status: ⚠️  PENDING STALE KEYS - {summary['stale_keys']} key(s) becoming stale")
+                elif summary['cak_delta'] > 0 and (
+                    summary['mka_not_found'] > 0
+                    or summary['icv_delta'] > 0
+                    or macsec_health_percent < 100
+                ):
+                    print(
+                        "Status: 🔴 CRITICAL - KEY AGREEMENT FAILURE - "
+                        f"{summary['cak_delta']} new CAK mismatches with transport/session degradation"
+                    )
+                elif summary['cak_delta'] > 0:
+                    print(
+                        "Status: ⚠️  TRANSIENT KEY NEGOTIATION - "
+                        f"{summary['cak_delta']} new CAK mismatches this round "
+                        "(MKA secured, ICV clean)"
+                    )
                 else:
                     print("Status: ✅ ALL TUNNELS HEALTHY")
             
