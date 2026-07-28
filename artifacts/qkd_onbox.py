@@ -2858,9 +2858,35 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
     # PHASE 3: Install keys
     log(f"KEYCHAIN INSTALL PHASE3 keychain={keychain_name} num_entries={len(entries)}", "DEBUG", iface, "MACSEC")
+    
+    # PHASE 3A: Sort entries by start_time chronologically to ensure MKA can sequence SAK rekeys
+    # This prevents out-of-order slots that confuse MKA's SAK rekey logic
+    def parse_start_time_for_sort(entry):
+        st = entry.get("start_time", "")
+        try:
+            # Format: "2026-7-28.08:48:00" or "2026-1-1 00:00:00"
+            if "." in st:
+                date_part, time_part = st.split(".")
+                dt_str = f"{date_part} {time_part}"
+            else:
+                dt_str = st
+            return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return datetime.datetime.max  # Sort unparseable to end
+    
+    sorted_entries = sorted(entries, key=parse_start_time_for_sort)
+    original_entry_order = {id(e): idx for idx, e in enumerate(entries)}
+    log(
+        f"KEYCHAIN INSTALL SORT_BY_START_TIME num_entries={len(sorted_entries)} "
+        f"start_times=[{', '.join(e.get('start_time', '?') for e in sorted_entries)}]",
+        "DEBUG",
+        iface,
+        "MACSEC",
+    )
+    
     expected_key_indices = set()
     expected_key_names_by_index = {}
-    for idx, entry in enumerate(entries):
+    for idx, entry in enumerate(sorted_entries):
         key_id = entry.get("key_id")
         key_b64 = entry.get("key")
         generation = entry.get("generation")
@@ -2897,8 +2923,9 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         elif generation is None:
             key_index = qkd_key_index_from_time()
         else:
-            # Cycle through all key slots: gen 0→key 0, gen 1→key 1, etc.
-            key_index = int(generation) % max_installed_keys()
+            # NEW: Assign slot by chronological order of start_time, not generation
+            # This ensures MKA can sequence SAK rekeys: slot 0 < slot 1 < slot 2 < slot 3 by time
+            key_index = idx % max_installed_keys()
 
         # VALIDATION: Check key_index
         if not isinstance(key_index, int) or key_index < 0 or key_index > 65535:
