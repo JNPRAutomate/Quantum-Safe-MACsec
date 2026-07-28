@@ -708,17 +708,11 @@ def configure_qkd_scripts(dev, name, base):
     with Config(dev) as cu:
         if class_cfg:
             cu.load(class_cfg, format="text", merge=True)
-        # Clean bootstrap: delete old script user config first (including all old SSH keys)
-        cu.load(
-            f"delete system login user {script_user}",
-            format="set",
-            ignore_warning=["statement not found"],
-        )
-        # Then load fresh config
+        # Load fresh config (merge=True to preserve bootstrap SSH keys)
         cu.load(
             full_cfg,
             format="set",
-            merge=False,
+            merge=True,
         )
         commit_safely(
             dev,
