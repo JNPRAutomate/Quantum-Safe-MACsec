@@ -661,6 +661,11 @@ def build_set_commands(
 def build_script_user_class_commands(script_user_class: str) -> List[str]:
     if str(script_user_class).strip().lower() == "super-user":
         return []
+    
+    # qkd-script-class is created by provisioning.py with proper regex allow-commands
+    # bootstrap should not override it with simplified commands
+    if str(script_user_class).strip().lower() == "qkd-script-class":
+        return []
 
     return [
         "delete system login class %s permissions all" % script_user_class,
@@ -723,6 +728,10 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
     authorized_keys = "%s/authorized_keys" % ssh_dir
+    
+    # Quote paths to handle spaces safely in shell redirect operators
+    quoted_ssh_dir = shlex.quote(ssh_dir)
+    quoted_authorized_keys = shlex.quote(authorized_keys)
 
     append_public_key = ""
     if public_key_line:
@@ -739,11 +748,11 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
                 "grep -v -F {qc} {ak} > {ak}.tmp 2>/dev/null || true; "
                 "echo {q} >> {ak}.tmp; "
                 "mv {ak}.tmp {ak}; "
-            ).format(qc=quoted_comment, ak=authorized_keys, q=quoted)
+            ).format(qc=quoted_comment, ak=quoted_authorized_keys, q=quoted)
         else:
             append_public_key = (
                 "grep -q -F {q} {ak} || echo {q} >> {ak}; "
-            ).format(q=quoted, ak=authorized_keys)
+            ).format(q=quoted, ak=quoted_authorized_keys)
 
     return (
         "mkdir -p {ssh_dir}; "
@@ -756,9 +765,9 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         "ls -ld {ssh_dir}; "
         "ls -l {authorized_keys}"
     ).format(
-        user=script_user,
-        ssh_dir=ssh_dir,
-        authorized_keys=authorized_keys,
+        user=shlex.quote(script_user),
+        ssh_dir=quoted_ssh_dir,
+        authorized_keys=quoted_authorized_keys,
         append_public_key=append_public_key,
     )
 
@@ -820,6 +829,7 @@ def run_script_user_key_fix(
     deploy_user: str,
     key_name: Optional[str] = None,
     key_comment: Optional[str] = None,
+    force_regenerate: bool = False,
 ) -> bool:
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
     key_name = key_name or QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")
@@ -852,7 +862,7 @@ def run_script_user_key_fix(
         )
 
         key_probe = _run(f"ls -l {shlex.quote(key_path)}")
-        if "no such file or directory" in key_probe.lower() or not key_probe:
+        if force_regenerate or "no such file or directory" in key_probe.lower() or not key_probe:
             _run(
                 f"rm -f {shlex.quote(key_path)} {shlex.quote(pub_path)}; "
                 f"ssh-keygen -q -t ed25519 -N '' -C {shlex.quote(key_comment)} -f {shlex.quote(key_path)}"
@@ -1179,6 +1189,7 @@ def bootstrap_script_user_on_device(
                 deploy_user,
                 key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
                 key_comment=f"{peer_cmd_user}@{name}",
+                force_regenerate=True,
             )
 
         if not run_script_user_key_fix(
