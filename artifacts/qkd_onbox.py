@@ -684,9 +684,20 @@ def save_peer_key_rotation_state(state):
 # ---------------------------------------------------------------------------
 
 def peer_known_pubkeys_state_file():
-    """Path to local state tracking the last-installed PEER_CMD_USER public
-    key we received from each peer (so a later rotation can `delete` the
-    stale entry before `set`-ting the new one)."""
+    """Path to local state tracking the last two PEER_CMD_USER public keys we
+    received from each peer: {"current": <key>, "previous": <key-or-None>}.
+
+    We deliberately keep TWO generations of key valid on Junos at once (never
+    delete the just-superseded key in the SAME commit as adding the new one).
+    This closes a race where the peer revokes the source device's old key
+    before the source device itself has finished swapping over to the new
+    one (the source only swaps locally after ALL peers have confirmed, which
+    can take a few seconds while other unrelated SSH/SCP calls - e.g. the
+    MACsec keychain install loop - are still using the old key). Deferring
+    the delete of the truly-obsolete (two-rotations-old) key to the NEXT
+    rotation cycle guarantees at least one full rotation interval of grace,
+    which is always far longer than the source device needs to complete its
+    swap."""
     return f"{STATE_DIR}/qkd_peer_known_pubkeys.json"
 
 
@@ -865,16 +876,32 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
     key_payload = pubkey_line.replace('"', '\\"')
 
     known = load_peer_known_pubkeys()
-    old_pubkey_line = known.get(source_device)
+    entry = known.get(source_device) or {}
+    if not isinstance(entry, dict):
+        # Migrate from the old flat {source_device: pubkey_line} format.
+        entry = {"current": entry, "previous": None}
+    current_pubkey_line = entry.get("current")
+    previous_pubkey_line = entry.get("previous")
+
+    if current_pubkey_line == pubkey_line:
+        # Idempotent retry/duplicate distribution of a key we already trust -
+        # nothing to do, avoid an unnecessary commit.
+        log(f"PEER-PUBKEY INSTALL SKIP already-current source_device={source_device}", "INFO", mode="PEER-KEY-ROTATION")
+        return True
 
     cli_cmds = ["configure"]
-    if old_pubkey_line and old_pubkey_line != pubkey_line:
-        old_parts = old_pubkey_line.split()
-        if len(old_parts) >= 2:
-            old_algo = old_parts[0]
-            old_payload = old_pubkey_line.replace('"', '\\"')
+    # Only retire the key that is now TWO generations old (the "previous"
+    # slot). The "current" slot (what the source device was using up until
+    # this rotation) is deliberately left valid for one more cycle so the
+    # source device has a full rotation interval to finish swapping over
+    # before its old key is ever revoked - see peer_known_pubkeys_state_file().
+    if previous_pubkey_line and previous_pubkey_line != pubkey_line:
+        previous_parts = previous_pubkey_line.split()
+        if len(previous_parts) >= 2:
+            previous_algo = previous_parts[0]
+            previous_payload = previous_pubkey_line.replace('"', '\\"')
             cli_cmds.append(
-                f'delete system login user {PEER_CMD_USER} authentication {old_algo} "{old_payload}"'
+                f'delete system login user {PEER_CMD_USER} authentication {previous_algo} "{previous_payload}"'
             )
     cli_cmds.append(
         f'set system login user {PEER_CMD_USER} authentication {key_algo} "{key_payload}"'
@@ -907,7 +934,7 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
             pass
         return False
 
-    known[source_device] = pubkey_line
+    known[source_device] = {"current": pubkey_line, "previous": current_pubkey_line}
     save_peer_known_pubkeys(known)
 
     log(f"PEER-PUBKEY INSTALLED source_device={source_device} key={pubkey_line[:80]}...", "INFO", mode="PEER-KEY-ROTATION")

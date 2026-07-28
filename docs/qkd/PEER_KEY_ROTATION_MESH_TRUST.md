@@ -227,6 +227,48 @@ was never actually updated.
   never-actually-installed "old" key is a harmless no-op, and the `set` of
   the new key now succeeds for real.
 
+## Bug: single-generation key swap race condition (found 2026-07-28, second live test)
+
+After the key-string-format fix above, a second live test still showed
+intermittent `Permission denied` on `etsi_peer_view@<peer_ip>` (and even, once,
+on the unrelated `etsi_user` fallback), even though the rotation cycle itself
+kept logging success.
+
+**Root cause:** `run_slave_install_peer_pubkey()` deleted the peer's
+previously-known key for `source_device` in the **same commit** that added
+the brand-new key. But the source device only swaps its own local active
+`PEER_SSH_KEY` to the new key **after** every peer has confirmed installation
+(the all-or-nothing guarantee in `run_peer_key_rotation_cycle()`). Between
+"peer N confirms" and "source device finishes distributing to peers N+1..M
+and then swaps locally", the source device may still issue unrelated SSH/SCP
+calls (e.g. the independent ~60s MACsec keychain install loop) to peer N using
+the **old** key - which peer N had *just* revoked. This produced intermittent
+failures depending purely on scheduling overlap between the two independent
+loops (peer key rotation vs. MACsec keychain install), not on the exact
+interval values.
+
+**Fix - two-generation grace period:** `qkd_peer_known_pubkeys.json` now
+stores, per `source_device`, both a `"current"` and a `"previous"` key
+(instead of a single value):
+```json
+{"MX1": {"current": "ssh-ed25519 AAAA...gen2 etsi_peer_view@MX1",
+         "previous": "ssh-ed25519 AAAA...gen1 etsi_peer_view@MX1"}}
+```
+On receiving a new key from `source_device`:
+- If it matches `"current"` already, the call is idempotent - no CLI commit
+  is issued at all.
+- Otherwise only `"previous"` (the key that is now **two** rotations old) is
+  deleted; `"current"` (the key the source device may still be finishing its
+  swap away from) is deliberately left valid for one more full rotation
+  cycle. The state then shifts: `previous = current`, `current = <new key>`.
+
+This guarantees at least one full `peer_key_rotation_interval_seconds` of
+overlap where both the old and new key are valid on every peer, which is
+always far longer than the source device needs to complete distributing to
+the remaining peers and swap locally - closing the race entirely regardless
+of how the peer-key-rotation and MACsec-keychain-install intervals happen to
+line up.
+
 ## Related Docs
 
 - [SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md) — historical
