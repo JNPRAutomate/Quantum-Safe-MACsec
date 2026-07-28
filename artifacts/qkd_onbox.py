@@ -3358,7 +3358,7 @@ def validate_ssh_runtime_for_master():
     return True
 
 
-def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None, ack_id=None):
+def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None, ack_id=None, bypass_enqueue_margin=False):
     if not validate_link_runtime(link, require_peer_transport=True):
         return False
 
@@ -3411,7 +3411,7 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
         if not ack_id:
             ack_id = compute_batch_ack_id(batch_b64)
         remote_inbox = peer_inbox_file_for_ack(link.get("peer_sae"), peer_iface, ack_id)
-        if first_start_epoch is not None:
+        if first_start_epoch is not None and not bypass_enqueue_margin:
             remaining_seconds = int(first_start_epoch - time.time())
             min_margin = peer_enqueue_min_margin_seconds()
             if remaining_seconds < min_margin:
@@ -4174,7 +4174,14 @@ def bootstrap_keychain_link(link, force=False):
     payload_json = json.dumps(peer_payload, separators=(",", ":"))
     payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
     bootstrap_ack_id = compute_batch_ack_id(payload_b64)
-    if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=bootstrap_ack_id):
+    if not send_command(
+        link,
+        "install-key-batch",
+        iface,
+        batch_b64=payload_b64,
+        ack_id=bootstrap_ack_id,
+        bypass_enqueue_margin=True,
+    ):
         log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
         return False
 
