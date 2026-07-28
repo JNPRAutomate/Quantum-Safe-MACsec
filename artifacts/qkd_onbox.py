@@ -4635,6 +4635,7 @@ def run_master():
         # key[0] starts at batch_epoch (immediately active after commit),
         # key[1..N] at +interval increments so MKA sequences them autonomously.
         install_count = max_installed_keys()
+        batch_size = install_count  # always full batch; kept for compatibility with install/transport logic below
         target_slots = list(range(install_count))  # [0, 1, 2, 3]
         batch_epoch = int(time.time())
 
