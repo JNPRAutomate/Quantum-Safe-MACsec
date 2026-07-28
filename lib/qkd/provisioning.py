@@ -688,7 +688,7 @@ def configure_qkd_scripts(dev, name, base):
         # Generate class config in SET format to preserve other system login entries
         class_cfg = (
             f"set system login class {script_user_class} permissions configure\n"
-            f"set system login class {script_user_class} permissions security\n"
+            f"set system login class {script_user_class} permissions security-control\n"
             f"set system login class {script_user_class} permissions view\n"
             f"set system login class {script_user_class} permissions view-configuration\n"
             f"set system login class {script_user_class} allow-commands \"{allow_cmds_regex}\"\n"
