@@ -727,10 +727,25 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
     append_public_key = ""
     if public_key_line:
         quoted = shlex.quote(public_key_line)
-        append_public_key = (
-            "grep -q -F %s %s || echo %s >> %s; "
-            % (quoted, authorized_keys, quoted, authorized_keys)
-        )
+        # Extract comment from public key (last field)
+        key_parts = public_key_line.strip().split()
+        key_comment = key_parts[-1] if len(key_parts) >= 3 else ""
+        quoted_comment = shlex.quote(key_comment) if key_comment else ""
+        
+        # Remove old keys with same comment, then add new key
+        # This prevents duplicates when bootstrap runs multiple times
+        if key_comment:
+            append_public_key = (
+                "grep -v -F %s %s > %s.tmp 2>/dev/null || true; "
+                "echo %s >> %s.tmp; "
+                "mv %s.tmp %s; "
+                % (quoted_comment, authorized_keys, authorized_keys, quoted, authorized_keys, authorized_keys, authorized_keys)
+            )
+        else:
+            append_public_key = (
+                "grep -q -F %s %s || echo %s >> %s; "
+                % (quoted, authorized_keys, quoted, authorized_keys)
+            )
 
     return (
         "mkdir -p {ssh_dir}; "
