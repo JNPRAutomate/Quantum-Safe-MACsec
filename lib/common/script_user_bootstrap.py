@@ -736,21 +736,19 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         key_parts = public_key_line.strip().split()
         key_comment = key_parts[-1] if len(key_parts) >= 3 else ""
         quoted_comment = shlex.quote(key_comment) if key_comment else ""
-        quoted_ak = shlex.quote(authorized_keys)
         
         # Remove old keys with same comment, then add new key
         # This prevents duplicates when bootstrap runs multiple times
-        # NOTE: DO NOT QUOTE redirect target - Junos shell doesn't recognize quoted redirect targets
+        # Use sed -i for in-place editing to avoid shell redirect ambiguity in Junos
         if key_comment:
             append_public_key = (
-                "grep -v -F {qc} {ak} > {ak_unquoted}.tmp 2>/dev/null || true; "
-                "echo {q} >> {ak_unquoted}.tmp; "
-                "mv {ak_unquoted}.tmp {ak}; "
-            ).format(qc=quoted_comment, ak=quoted_ak, ak_unquoted=authorized_keys, q=quoted)
+                "sed -i.bak '/{qc}/d' {ak} 2>/dev/null || true; "
+                "echo {q} >> {ak}; "
+            ).format(qc=key_comment.replace('/', '\\/'), ak=shlex.quote(authorized_keys), q=quoted)
         else:
             append_public_key = (
                 "grep -q -F {q} {ak} || echo {q} >> {ak}; "
-            ).format(q=quoted, ak=quoted_ak)
+            ).format(q=quoted, ak=shlex.quote(authorized_keys))
 
     return (
         "mkdir -p {ssh_dir}; "
