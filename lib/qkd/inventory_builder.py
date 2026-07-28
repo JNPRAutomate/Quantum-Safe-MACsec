@@ -374,9 +374,6 @@ def validate_qkd_policy(policy: Dict[str, Any]) -> None:
         "interval_seconds",
         "key_batch_size",
         "max_installed_keys",
-        "key_ttl_seconds",
-        "purge_on_kme_loss",
-        "purge_after_seconds",
     ]
 
     for key in required_keys:
@@ -395,17 +392,6 @@ def validate_qkd_policy(policy: Dict[str, Any]) -> None:
     if int(policy["key_batch_size"]) > int(policy["max_installed_keys"]):
         raise ValueError(
             "qkd_policy.key_batch_size cannot be greater than qkd_policy.max_installed_keys"
-        )
-
-    if int(policy["key_ttl_seconds"]) < 0:
-        raise ValueError("qkd_policy.key_ttl_seconds cannot be negative")
-
-    if int(policy["purge_after_seconds"]) < 0:
-        raise ValueError("qkd_policy.purge_after_seconds cannot be negative")
-
-    if bool(policy["purge_on_kme_loss"]) and int(policy["purge_after_seconds"]) < 1:
-        raise ValueError(
-            "qkd_policy.purge_after_seconds must be >= 1 when qkd_policy.purge_on_kme_loss is true"
         )
 
     if "batch_enabled" in policy and not isinstance(policy["batch_enabled"], bool):
