@@ -728,10 +728,6 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
     authorized_keys = "%s/authorized_keys" % ssh_dir
-    
-    # Quote paths to handle spaces safely in shell redirect operators
-    quoted_ssh_dir = shlex.quote(ssh_dir)
-    quoted_authorized_keys = shlex.quote(authorized_keys)
 
     append_public_key = ""
     if public_key_line:
@@ -740,19 +736,21 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         key_parts = public_key_line.strip().split()
         key_comment = key_parts[-1] if len(key_parts) >= 3 else ""
         quoted_comment = shlex.quote(key_comment) if key_comment else ""
+        quoted_ak = shlex.quote(authorized_keys)
         
         # Remove old keys with same comment, then add new key
         # This prevents duplicates when bootstrap runs multiple times
+        # NOTE: DO NOT QUOTE redirect target - Junos shell doesn't recognize quoted redirect targets
         if key_comment:
             append_public_key = (
-                "grep -v -F {qc} {ak} > {ak}.tmp 2>/dev/null || true; "
-                "echo {q} >> {ak}.tmp; "
-                "mv {ak}.tmp {ak}; "
-            ).format(qc=quoted_comment, ak=quoted_authorized_keys, q=quoted)
+                "grep -v -F {qc} {ak} > {ak_unquoted}.tmp 2>/dev/null || true; "
+                "echo {q} >> {ak_unquoted}.tmp; "
+                "mv {ak_unquoted}.tmp {ak}; "
+            ).format(qc=quoted_comment, ak=quoted_ak, ak_unquoted=authorized_keys, q=quoted)
         else:
             append_public_key = (
                 "grep -q -F {q} {ak} || echo {q} >> {ak}; "
-            ).format(q=quoted, ak=quoted_authorized_keys)
+            ).format(q=quoted, ak=quoted_ak)
 
     return (
         "mkdir -p {ssh_dir}; "
@@ -766,8 +764,8 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         "ls -l {authorized_keys}"
     ).format(
         user=shlex.quote(script_user),
-        ssh_dir=quoted_ssh_dir,
-        authorized_keys=quoted_authorized_keys,
+        ssh_dir=shlex.quote(ssh_dir),
+        authorized_keys=shlex.quote(authorized_keys),
         append_public_key=append_public_key,
     )
 
