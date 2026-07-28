@@ -144,13 +144,19 @@ def clean_device(name, device, full_macsec=False):
         passwd = device["auth"]["password"]
 
         script_name = ONBOX_SCRIPT_NAME
-        script_user = str(device.get("script_user") or QKD.get("SCRIPT_USER") or "etsi_user")
+        secrets = device.get("secrets") or {}
+        script_user = str(device.get("script_user") or secrets.get("script_user") or QKD.get("SCRIPT_USER") or "etsi_user")
+        script_user_class = str(secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS") or "")
+        peer_cmd_user = str(device.get("peer_cmd_user") or secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER") or "etsi_peer_view")
+        peer_cmd_user_class = str(secrets.get("peer_cmd_user_class") or QKD.get("PEER_CMD_USER_CLASS") or "qkd-peer-cmd-class")
         script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
         remote_cert_dir = PKI.get("REMOTE_CERT_DIR", "/var/db/scripts/certs")
-        script_home_dir = f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{script_user}"
+        ssh_home_base = QKD.get('SSH_HOME_BASE', '/var/home')
+        script_home_dir = f"{ssh_home_base}/{script_user}"
         script_log_dir = f"{script_home_dir}/logs"
+        peer_cmd_home_dir = f"{ssh_home_base}/{peer_cmd_user}"
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -219,7 +225,14 @@ def clean_device(name, device, full_macsec=False):
             f"delete event-options event-script file {script_name}",
             f"delete system scripts op file {script_name}",
             f"delete system login user {script_user}",
+            f"delete system login user {peer_cmd_user}",
+            f"delete system login class {peer_cmd_user_class}",
+            "delete system login class qkd-script-class",
         ]
+        # Only delete script_user_class if it's a custom class (not a Junos built-in)
+        builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
+        if script_user_class and script_user_class.lower() not in builtin_classes:
+            config_cmds.append(f"delete system login class {script_user_class}")
 
         if full_macsec:
             config_cmds.append("delete security macsec")
@@ -263,6 +276,7 @@ def clean_device(name, device, full_macsec=False):
             f"rm -rf {op_script_dir}/certs",
             f"rm -rf {event_script_dir}/certs",
             f"rm -rf {script_home_dir}",
+            f"rm -rf {peer_cmd_home_dir}",
         ]
 
         for path in runtime_paths:
@@ -460,6 +474,7 @@ def clean_device(name, device, full_macsec=False):
                 f"{event_script_dir}/certs",
                 script_log_dir,
                 script_home_dir,
+                peer_cmd_home_dir,
             ]
             for path in runtime_paths:
                 if path not in peer_cleanup_paths:
@@ -709,6 +724,9 @@ def handle_clean(args):
     for _, device in devices.items():
         if not isinstance(device, dict):
             continue
+        # Inject inventory secrets so clean_device() can read script_user_class, peer_cmd_user_class etc.
+        if "secrets" not in device:
+            device["secrets"] = secrets
         auth = device.get("auth")
         if isinstance(auth, dict):
             device["_fallback_auth"] = {

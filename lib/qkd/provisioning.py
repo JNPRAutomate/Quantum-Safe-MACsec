@@ -708,6 +708,13 @@ def configure_qkd_scripts(dev, name, base):
     with Config(dev) as cu:
         if class_cfg:
             cu.load(class_cfg, format="text", merge=True)
+        # Clean bootstrap: delete old script user config first (including all old SSH keys)
+        cu.load(
+            f"delete system login user {script_user}",
+            format="set",
+            ignore_warning=["statement not found"],
+        )
+        # Then load fresh config
         cu.load(
             full_cfg,
             format="set",
@@ -765,6 +772,14 @@ def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_cl
         raise ValueError("peer_cmd_user is required")
 
     with Config(dev) as cu:
+        # Clean bootstrap: remove old user config first (deletes all old SSH keys)
+        cu.load(
+            f"delete system login user {peer_cmd_user}",
+            format="set",
+            ignore_warning=["statement not found"],
+        )
+        
+        # Then create fresh user config
         cu.load(
             f"set system login user {peer_cmd_user} class {peer_cmd_user_class}",
             format="set",
