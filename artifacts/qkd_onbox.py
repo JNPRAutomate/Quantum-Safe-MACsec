@@ -2856,37 +2856,12 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka transmit-interval {MKA_TRANSMIT_INTERVAL}")
     cli_cmds.append(f"set security macsec connectivity-association {ca_name} mka sak-rekey-interval {MKA_SAK_REKEY_INTERVAL}")
 
-    # PHASE 3: Install keys
+    # PHASE 3: Install keys in the order provided (entries are already slot-ordered by caller)
     log(f"KEYCHAIN INSTALL PHASE3 keychain={keychain_name} num_entries={len(entries)}", "DEBUG", iface, "MACSEC")
-    
-    # PHASE 3A: Sort entries by start_time chronologically to ensure MKA can sequence SAK rekeys
-    # This prevents out-of-order slots that confuse MKA's SAK rekey logic
-    def parse_start_time_for_sort(entry):
-        st = entry.get("start_time", "")
-        try:
-            # Format: "2026-7-28.08:48:00" or "2026-1-1 00:00:00"
-            if "." in st:
-                date_part, time_part = st.split(".")
-                dt_str = f"{date_part} {time_part}"
-            else:
-                dt_str = st
-            return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return datetime.datetime.max  # Sort unparseable to end
-    
-    sorted_entries = sorted(entries, key=parse_start_time_for_sort)
-    original_entry_order = {id(e): idx for idx, e in enumerate(entries)}
-    log(
-        f"KEYCHAIN INSTALL SORT_BY_START_TIME num_entries={len(sorted_entries)} "
-        f"start_times=[{', '.join(e.get('start_time', '?') for e in sorted_entries)}]",
-        "DEBUG",
-        iface,
-        "MACSEC",
-    )
-    
+
     expected_key_indices = set()
     expected_key_names_by_index = {}
-    for idx, entry in enumerate(sorted_entries):
+    for idx, entry in enumerate(entries):
         key_id = entry.get("key_id")
         key_b64 = entry.get("key")
         generation = entry.get("generation")
@@ -4656,19 +4631,12 @@ def run_master():
 
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
 
-        batch_size = effective_batch
-        ring_size = max_installed_keys()
-        active_slot = active_slot_index(state, iface=iface, keychain_name=keychain)
-        protected_pending_slot = get_configured_next_pending_slot(keychain, iface=iface)
-
-        # Non-destructive ring preload strategy:
-        # - Keep active slot untouched
-        # - Keep one pending and preload only additional future capacity
-        #   (ring 4 -> install 2, ring 5 -> install 3)
-        if ring_size > 2:
-            install_count = min(batch_size, ring_size - 2)
-        else:
-            install_count = min(batch_size, 1)
+        # Full-batch install: replace all slots at once with chronologically ordered keys.
+        # key[0] starts at batch_epoch (immediately active after commit),
+        # key[1..N] at +interval increments so MKA sequences them autonomously.
+        install_count = max_installed_keys()
+        target_slots = list(range(install_count))  # [0, 1, 2, 3]
+        batch_epoch = int(time.time())
 
         first_generation = next_generation(state)
         rotation = rotation_id_for(iface, first_generation)
@@ -4676,8 +4644,8 @@ def run_master():
 
         log(
             f"KEYCHAIN ROTATION BATCH START rotation={rotation} ca={ca_name} keychain={keychain} "
-            f"first_generation={first_generation} batch_size={batch_size} install_count={install_count} "
-            f"active_slot={active_slot} runtime_mode={runtime_mode} stagger_minutes={link_stagger_minutes(link)}",
+            f"first_generation={first_generation} install_count={install_count} "
+            f"runtime_mode={runtime_mode} stagger_minutes={link_stagger_minutes(link)}",
             "INFO",
             iface,
             "MASTER",
@@ -4688,55 +4656,9 @@ def run_master():
         try:
             generation_cursor = int(first_generation)
 
-            target_slots = []
-            if active_slot is not None and ring_size > 1:
-                for offset in range(1, ring_size):
-                    candidate = (int(active_slot) + offset) % ring_size
-                    if int(candidate) == int(active_slot):
-                        continue
-                    if protected_pending_slot is not None and int(candidate) == int(protected_pending_slot):
-                        continue
-                    target_slots.append(int(candidate))
-                    if len(target_slots) >= int(install_count):
-                        break
-
-            # Fallback to generation-based slot mapping only when active slot is unknown.
-            if len(target_slots) < int(install_count):
-                target_slots = []
-                safety = 0
-                probe = int(generation_cursor)
-                while len(target_slots) < int(install_count):
-                    safety += 1
-                    if safety > (ring_size * 8):
-                        log(
-                            f"BATCH BUILD SAFETY BREAK install_count={install_count} built_slots={len(target_slots)} ring_size={ring_size}",
-                            "ERROR",
-                            iface,
-                            "MASTER",
-                        )
-                        break
-                    candidate = int(probe) % ring_size
-                    probe += 1
-                    if active_slot is not None and int(candidate) == int(active_slot):
-                        continue
-                    if protected_pending_slot is not None and int(candidate) == int(protected_pending_slot):
-                        continue
-                    if int(candidate) in target_slots:
-                        continue
-                    target_slots.append(int(candidate))
-
-            if len(target_slots) < int(install_count):
-                log(
-                    f"BATCH TARGET SLOTS REDUCED requested={install_count} actual={len(target_slots)} "
-                    f"active_slot={active_slot} protected_pending_slot={protected_pending_slot} ring_size={ring_size}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-
             for slot in target_slots:
                 generation = int(generation_cursor)
-                start_time = scheduled_key_start_time_with_offset(link, len(batch_records))
+                start_time = junos_start_time_from_epoch(batch_epoch + len(batch_records) * rotation_interval_seconds())
                 customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
                 key_id, key = do_enc(link["peer_sae"])
                 if not key_id:
