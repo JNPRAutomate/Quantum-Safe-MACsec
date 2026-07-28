@@ -1141,6 +1141,7 @@ def push_config(device_name, device, commands, base, devices_dict=None):
                         cu.load(
                             cmd,
                             format="set",
+                            merge=True,
                             ignore_warning=["statement not found"],
                         )
 
