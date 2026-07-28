@@ -685,16 +685,13 @@ def configure_qkd_scripts(dev, name, base):
             "(op qkd_onbox.*)|(start shell.*)|"
             "exit"
         )
+        # Generate class config in SET format to preserve other system login entries
         class_cfg = (
-            "replace:\n"
-            "system {\n"
-            "  login {\n"
-            f"    class {script_user_class} {{\n"
-            "      permissions [ configure security view view-configuration ];\n"
-            f"      allow-commands \"{allow_cmds_regex}\";\n"
-            "    }\n"
-            "  }\n"
-            "}\n"
+            f"set system login class {script_user_class} permissions configure\n"
+            f"set system login class {script_user_class} permissions security\n"
+            f"set system login class {script_user_class} permissions view\n"
+            f"set system login class {script_user_class} permissions view-configuration\n"
+            f"set system login class {script_user_class} allow-commands \"{allow_cmds_regex}\"\n"
         )
     full_cfg = f"set system login user {script_user} class {script_user_class}\n" + event_cfg + "\n" + op_cfg
 
@@ -712,9 +709,9 @@ def configure_qkd_scripts(dev, name, base):
             merge=True,
             ignore_warning=["statement not found"],
         )
-        # Apply class with text format + replace: for atomic definition with single allow-commands regex
+        # Apply class with SET format + merge=True to preserve bootstrap SSH keys
         if class_cfg:
-            cu.load(class_cfg, format="text", merge=False)
+            cu.load(class_cfg, format="set", merge=True)
         # Load fresh config (merge=True to preserve bootstrap SSH keys)
         cu.load(
             full_cfg,
