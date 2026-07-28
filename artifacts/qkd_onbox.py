@@ -4769,7 +4769,7 @@ def run_master():
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
             ack_id = compute_batch_ack_id(payload_b64)
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id):
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id, bypass_enqueue_margin=True):
                 record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
                 log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                 continue
