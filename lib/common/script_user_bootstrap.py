@@ -748,7 +748,6 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
             )
 
     return (
-        "rm -rf {home}; "
         "mkdir -p {ssh_dir}; "
         "touch {authorized_keys}; "
         "{append_public_key}"
@@ -759,7 +758,6 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         "ls -ld {ssh_dir}; "
         "ls -l {authorized_keys}"
     ).format(
-        home=home,
         user=script_user,
         ssh_dir=ssh_dir,
         authorized_keys=authorized_keys,
@@ -847,11 +845,7 @@ def run_script_user_key_fix(
         return text
 
     try:
-        user_home = f"{ssh_home_base}/{script_user}"
-        ssh_dir = f"{user_home}/.ssh"
-
-        # Clean bootstrap: remove entire user home first, then recreate from scratch
-        _run(f"rm -rf {shlex.quote(user_home)}")
+        ssh_dir = f"{ssh_home_base}/{script_user}/.ssh"
 
         _run(
             f"mkdir -p {shlex.quote(ssh_dir)}; "
@@ -951,10 +945,8 @@ def sync_user_keypair_from_local(
             scp.put(str(local_priv), remote_path=remote_tmp_priv)
             scp.put(str(local_pub), remote_path=remote_tmp_pub)
 
-        user_home = f"{ssh_home_base}/{script_user}"
         result = dev.rpc.request_shell_execute(
             command=(
-                f"rm -rf {shlex.quote(user_home)}; "
                 f"mkdir -p {ssh_dir}; "
                 f"mv -f {remote_tmp_priv} {key_path}; "
                 f"mv -f {remote_tmp_pub} {pub_path}; "
