@@ -734,61 +734,9 @@ def configure_qkd_scripts(dev, name, base):
 
     print(f"[{name}] QKD scripts event and op configured OK")
     
-    # Sync script_user SSH key with device-aware comment to Junos config
-    try:
-        # Get current script_user authentication via CLI
-        from lib.qkd.identity import ssh_deploy_cmd
-        result = ssh_deploy_cmd(
-            device, 
-            f"show configuration system login user {script_user} authentication | display set", 
-            timeout=10
-        )
-        if result.returncode == 0:
-            config_lines = result.stdout.decode(errors="ignore").strip().split('\n')
-            print(f"[{name}] DEBUG script_user config: {config_lines}")
-            
-            # Look for ssh-ed25519 line with blob
-            for line in config_lines:
-                if "ssh-ed25519" in line and "AAAAC3" in line:
-                    # Extract blob from line like: set system login user etsi_user authentication ssh-ed25519 "ssh-ed25519 AAAA... comment"
-                    import re
-                    blob_match = re.search(r'(AAAAC3[A-Za-z0-9+/]+={0,2})', line)
-                    if blob_match:
-                        key_blob = blob_match.group(1)
-                        key_type = "ssh-ed25519"
-                        key_comment = f"{script_user}@{name}"
-                        key_payload = f"{key_type} {key_blob} {key_comment}"
-                        key_payload_escaped = key_payload.replace('"', '\\"')
-                        
-                        print(f"[{name}] DEBUG extracted blob: {key_blob}, new comment: {key_comment}")
-                        
-                        with Config(dev) as cu:
-                            # Delete all current SSH authentication for script_user
-                            cu.load(
-                                f"delete system login user {script_user} authentication",
-                                format="set",
-                                ignore_warning=["statement not found"],
-                            )
-                            # Add new key with device-aware comment
-                            cu.load(
-                                f"set system login user {script_user} authentication {key_type} \"{key_payload_escaped}\"",
-                                format="set",
-                                merge=True,
-                            )
-                            commit_safely(
-                                dev,
-                                cu,
-                                name,
-                                sync=True,
-                                phase="SCRIPT_USER_SSH_KEY_SYNC",
-                                detail=f"user={script_user} comment={key_comment}",
-                            )
-                        print(f"[{name}] Script user SSH key synchronized with device-aware comment: {key_comment}")
-                        break
-    except Exception as exc:
-        import traceback
-        print(f"[{name}] WARN failed to sync script_user SSH key: {exc}")
-        print(f"[{name}] DEBUG traceback: {traceback.format_exc()}")
+    # NOTE: script_user SSH keys are static and should NOT be modified here
+    # They are provisioned separately via bootstrap/manual process
+    # Attempting to sync them causes data loss of existing keys on device
 
 
 def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
