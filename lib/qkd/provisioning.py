@@ -724,6 +724,50 @@ def configure_qkd_scripts(dev, name, base):
         )
 
     print(f"[{name}] QKD scripts event and op configured OK")
+    
+    # Sync script_user SSH key with device-aware comment to Junos config
+    try:
+        ssh_home_base = str(QKD.get("SSH_HOME_BASE", "/var/home")).strip() or "/var/home"
+        pub_key_path = f"{ssh_home_base}/{script_user}/.ssh/{str(QKD.get('SSH_KEY_NAME', 'qkd_id_ed25519'))}.pub"
+        
+        from lib.qkd.identity import ssh_deploy_cmd
+        result = ssh_deploy_cmd(device, f"cat {pub_key_path}", timeout=10)
+        if result.returncode == 0:
+            pub_key_line = result.stdout.decode(errors="ignore").strip()
+            if pub_key_line:
+                parts = pub_key_line.strip().split()
+                if len(parts) >= 2:
+                    key_type = parts[0]
+                    key_blob = parts[1]
+                    # Use device-aware comment for script_user SSH key
+                    key_comment = f"{script_user}@{name}"
+                    key_payload = f"{key_type} {key_blob} {key_comment}"
+                    key_payload_escaped = key_payload.replace('"', '\\"')
+                    
+                    with Config(dev) as cu:
+                        # Remove old bootstrap keys
+                        cu.load(
+                            f"delete system login user {script_user} authentication ssh-ed25519",
+                            format="set",
+                            ignore_warning=["statement not found"],
+                        )
+                        # Add new key with device-aware comment
+                        cu.load(
+                            f"set system login user {script_user} authentication {key_type} \"{key_payload_escaped}\"",
+                            format="set",
+                            merge=True,
+                        )
+                        commit_safely(
+                            dev,
+                            cu,
+                            name,
+                            sync=True,
+                            phase="SCRIPT_USER_SSH_KEY_SYNC",
+                            detail=f"user={script_user} comment={key_comment}",
+                        )
+                    print(f"[{name}] Script user SSH key synchronized with device-aware comment")
+    except Exception as exc:
+        print(f"[{name}] WARN failed to sync script_user SSH key: {exc}")
 
 
 def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
