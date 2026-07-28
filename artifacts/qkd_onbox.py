@@ -4289,6 +4289,12 @@ def run_master():
 
         if now - last_rotation >= rotation_interval:
             try:
+                # Ensure lib modules are importable from op script directory
+                import sys
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                if script_dir not in sys.path:
+                    sys.path.insert(0, script_dir)
+                
                 from lib.qkd.peer_key_rotation import run_peer_key_rotation_cycle
 
                 # Build peer devices dict from managed links
