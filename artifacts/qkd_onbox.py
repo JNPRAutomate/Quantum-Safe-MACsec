@@ -4272,6 +4272,20 @@ def run_master():
         rotation_state = load_peer_key_rotation_state()
         now = int(time.time())
         last_rotation = rotation_state.get("last_rotation_timestamp", 0)
+        rotation_count = rotation_state.get("rotation_count", 0)
+        seconds_since_last = now - last_rotation
+        seconds_until_next = max(0, rotation_interval - seconds_since_last)
+
+        # Log current peer key rotation state
+        log(
+            f"PEER-KEY-STATE: interval_seconds={rotation_interval} "
+            f"last_rotation_ago_seconds={seconds_since_last} "
+            f"next_rotation_in_seconds={seconds_until_next} "
+            f"rotation_count={rotation_count} "
+            f"device={DEVICE} peer_user={PEER_CMD_USER}",
+            "INFO",
+            mode="PEER-KEY-ROTATION",
+        )
 
         if now - last_rotation >= rotation_interval:
             try:
@@ -4305,6 +4319,23 @@ def run_master():
                     peer_cmd_user=PEER_CMD_USER,
                     ssh_home_base=SSH_HOME_BASE,
                 )
+
+                # Log the new public key for audit trail
+                peer_key_path = f"{SSH_HOME_BASE}/{PEER_CMD_USER}/.ssh/qkd_peer_cmd_ed25519.pub"
+                try:
+                    with open(peer_key_path, "r") as f:
+                        pubkey_line = f.read().strip()
+                    log(
+                        f"PEER-KEY-ROTATED: new_pubkey_installed={pubkey_line[:80]}...",
+                        "INFO",
+                        mode="PEER-KEY-ROTATION",
+                    )
+                except Exception as e:
+                    log(
+                        f"PEER-KEY-ROTATED: could_not_read_pubkey_file={peer_key_path} error={e}",
+                        "WARN",
+                        mode="PEER-KEY-ROTATION",
+                    )
 
                 rotation_state["last_rotation_timestamp"] = now
                 rotation_state["rotation_count"] = rotation_state.get("rotation_count", 0) + 1
