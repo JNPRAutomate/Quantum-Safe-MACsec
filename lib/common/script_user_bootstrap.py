@@ -736,16 +736,14 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         # This prevents duplicates when bootstrap runs multiple times
         if key_comment:
             append_public_key = (
-                "grep -v -F %s %s > %s.tmp 2>/dev/null || true; "
-                "echo %s >> %s.tmp; "
-                "mv %s.tmp %s; "
-                % (quoted_comment, authorized_keys, authorized_keys, quoted, authorized_keys, authorized_keys, authorized_keys)
-            )
+                "grep -v -F {qc} {ak} > {ak}.tmp 2>/dev/null || true; "
+                "echo {q} >> {ak}.tmp; "
+                "mv {ak}.tmp {ak}; "
+            ).format(qc=quoted_comment, ak=authorized_keys, q=quoted)
         else:
             append_public_key = (
-                "grep -q -F %s %s || echo %s >> %s; "
-                % (quoted, authorized_keys, quoted, authorized_keys)
-            )
+                "grep -q -F {q} {ak} || echo {q} >> {ak}; "
+            ).format(q=quoted, ak=authorized_keys)
 
     return (
         "mkdir -p {ssh_dir}; "
