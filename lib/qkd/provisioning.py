@@ -675,31 +675,29 @@ def configure_qkd_scripts(dev, name, base):
     op_cfg = render_common_template("op_script.j2", context)
     class_cfg = None
     if str(script_user_class).strip().lower() != "super-user":
-        # Build class config using set format for proper merge behavior
-        class_cfg_lines = [
-            f"set system login class {script_user_class} permissions configure",
-            f"set system login class {script_user_class} permissions security",
-            f"set system login class {script_user_class} permissions view",
-            f"set system login class {script_user_class} permissions view-configuration",
-            f"set system login class {script_user_class} allow-commands \"configure\"",
-            f"set system login class {script_user_class} allow-commands \"configure private\"",
-            f"set system login class {script_user_class} allow-commands \"commit\"",
-            f"set system login class {script_user_class} allow-commands \"commit confirmed\"",
-            f"set system login class {script_user_class} allow-commands \"rollback\"",
-            f"set system login class {script_user_class} allow-commands \"rollback.*\"",
-            f"set system login class {script_user_class} allow-commands \"request system storage cleanup\"",
-            f"set system login class {script_user_class} allow-commands \"delete security authentication-key-chains .*\"",
-            f"set system login class {script_user_class} allow-commands \"set security authentication-key-chains .*\"",
-            f"set system login class {script_user_class} allow-commands \"delete security macsec .*\"",
-            f"set system login class {script_user_class} allow-commands \"set security macsec .*\"",
-            f"set system login class {script_user_class} allow-commands \"show configuration security\"",
-            f"set system login class {script_user_class} allow-commands \"show security macsec\"",
-            f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py\"",
-            f"set system login class {script_user_class} allow-commands \"op qkd_onbox.py .*\"",
-            f"set system login class {script_user_class} allow-commands \"start shell\"",
-            f"set system login class {script_user_class} allow-commands \"start shell command .*\"",
-        ]
-        class_cfg = "\n".join(class_cfg_lines)
+        # Build class config with single allow-commands regex covering all operations
+        # Junos only supports one allow-commands entry with regex patterns separated by |
+        allow_cmds_regex = (
+            "(configure.*)|(configure)|(configure private)|"
+            "(commit.*)|(commit)|(commit confirmed)|"
+            "(rollback.*)|(rollback)|"
+            "(request system storage cleanup)|"
+            "(delete security.*)|(set security.*)|"
+            "(show configuration security)|(show security.*)|"
+            "(op qkd_onbox.*)|(op qkd_onbox)|"
+            "(start shell.*)|(start shell)"
+        )
+        class_cfg = (
+            "replace:\n"
+            "system {\n"
+            "  login {\n"
+            f"    class {script_user_class} {{\n"
+            "      permissions [ configure security view view-configuration ];\n"
+            f"      allow-commands \"{allow_cmds_regex}\";\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+        )
     full_cfg = f"set system login user {script_user} class {script_user_class}\n" + event_cfg + "\n" + op_cfg
 
     print(f"[{name}] Applying QKD script config")
@@ -709,8 +707,16 @@ def configure_qkd_scripts(dev, name, base):
         sync_qkd_scripts_dual_re(dev, name, script_name)
 
     with Config(dev) as cu:
+        # Delete old class first to ensure clean state
+        cu.load(
+            f"delete system login class {script_user_class}",
+            format="set",
+            merge=True,
+            ignore_warning=["statement not found"],
+        )
+        # Apply class with text format + replace: for atomic definition with single allow-commands regex
         if class_cfg:
-            cu.load(class_cfg, format="set", merge=True)
+            cu.load(class_cfg, format="text", merge=False)
         # Load fresh config (merge=True to preserve bootstrap SSH keys)
         cu.load(
             full_cfg,
