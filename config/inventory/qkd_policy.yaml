@@ -5,9 +5,6 @@ qkd_policy:
   strict_sync_enabled: true
   pending_auto_evict_enabled: true
   peer_transport_mode: queue
-
-  bootstrap_with_fallback_key: true
-  bootstrap_fallback_keys: 1
   interval_seconds: 60
 
   # Keep batch size aligned with installed window for deterministic rotation.
@@ -22,8 +19,3 @@ qkd_policy:
   # Queue transport safety controls
   peer_enqueue_min_margin_seconds: 30
   peer_batch_ack_timeout_seconds: 60
-
-  key_ttl_seconds: 0
-
-  purge_on_kme_loss: false
-  purge_after_seconds: 0
