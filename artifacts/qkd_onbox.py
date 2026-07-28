@@ -268,9 +268,7 @@ class QKDOrchestrator:
     
     def run_master(self) -> int:
         """Master orchestrator main loop. Returns 0 on normal exit."""
-        # TODO: Implement full master orchestration logic from original script
-        self._log("MASTER MODE STUB (full logic to be migrated from qkd_onbox_ver3.3.2.py)", "INFO", mode="MASTER")
-        return 0
+        return self._run_master()
     
     def run_slave(self, action: Optional[str], iface: Optional[str], batch_b64: Optional[str] = None,
                   ack_id: Optional[str] = None) -> int:
@@ -599,15 +597,11 @@ class QKDOrchestrator:
     
     def _handle_slave_install_key_batch(self, batch_b64: str, iface: str) -> int:
         """Slave: handle install-key-batch action from master."""
-        self._log(f"SLAVE INSTALL-KEY-BATCH START iface={iface}", "INFO", iface, "SLAVE")
-        # TODO: Implement batch installation logic from qkd_onbox_ver3.3.2.py
-        return 0
+        return self._run_slave_install_key_batch(batch_b64, iface)
     
     def _handle_slave_status(self, iface: str) -> int:
         """Slave: handle status action (respond with current state)."""
-        self._log(f"SLAVE STATUS START iface={iface}", "INFO", iface, "SLAVE")
-        # TODO: Implement status response logic from qkd_onbox_ver3.3.2.py
-        return 0
+        return self._run_slave_status(iface)
     
     # ========== HELPER: Validation ==========
     
@@ -696,86 +690,6 @@ class QKDOrchestrator:
             _contract_error(
                 f"numeric field parse failed error_type={type(exc).__name__} error={str(exc)}"
             )
-
-
-    CONFIG_PATH = os.environ.get("QKD_ONBOX_CONFIG_PATH", DEFAULT_CONFIG_PATH)
-    INVENTORY_PATH = os.environ.get("QKD_ONBOX_INVENTORY_PATH", DEFAULT_INVENTORY_PATH)
-
-    STATIC_CONFIG = _load_json_or_die(CONFIG_PATH, "config")
-    INVENTORY_CONFIG = _load_json_or_die(INVENTORY_PATH, "inventory")
-
-    CONFIG = {}
-    CONFIG.update(STATIC_CONFIG)
-    CONFIG.update(INVENTORY_CONFIG)
-
-    _validate_runtime_contract_or_die(CONFIG)
-
-    if not isinstance(CONFIG.get("links"), list):
-        self._config["links"] = []
-
-    self._device = self._config["local_sae"]
-    self._kme_ip = self._config["kme_ip"]
-    self._kme_port = int(CONFIG.get("kme_port", 443))
-    self._ca_cert = self._config["ca_cert"]
-    self._links = CONFIG.get("links", [])
-
-    self._script_user = self._config["script_user"]
-    self._peer_cmd_user = str(CONFIG.get("peer_cmd_user", self._script_user) or self._script_user)
-    self._script_dir = self._config["script_dir"]
-    self._ssh_key = self._config["ssh_key"]
-    self._peer_ssh_key = str(CONFIG.get("peer_ssh_key", self._ssh_key) or self._ssh_key)
-    self._op_runtime_dir = f"{self._script_dir}/op"
-
-    self._log_file = self._config["log_file"]
-    self._log_max_bytes = int(self._config["log_max_bytes"])
-    self._log_backup_count = int(self._config["log_backup_count"])
-    self._state_dir = CONFIG.get("state_dir", f"/var/home/{self._script_user}")
-    self._log_dir = CONFIG.get("log_dir", f"/var/home/{self._script_user}/logs")
-    self._peer_status_dir = CONFIG.get("peer_status_dir", f"{self._state_dir}/peer_status")
-    self._peer_inbox_dir = CONFIG.get("peer_inbox_dir", f"{self._state_dir}/peer_inbox")
-    self._peer_ack_dir = CONFIG.get("peer_ack_dir", f"{self._state_dir}/peer_ack")
-
-    self._qkd_key_size = 256
-
-    self._dec_retry = int(CONFIG.get("dec_retry", 0))
-    self._min_rotation_interval = int(CONFIG.get("min_rotation_interval", 60))
-    self._kme_fail_threshold = int(CONFIG.get("kme_fail_threshold", 5))
-    self._kme_hold_down_seconds = int(CONFIG.get("kme_hold_down_seconds", 3600))
-    self._macsec_inuse_grace_seconds = int(CONFIG.get("macsec_inuse_grace_seconds", 60))
-
-    self._macsec_model = CONFIG.get("macsec_model", "keychain")
-
-    self._mka_transmit_interval = int(CONFIG.get("mka_transmit_interval", 2000))
-    self._mka_sak_rekey_interval = int(CONFIG.get("mka_sak_rekey_interval", 300))
-
-    self._keychain_keep_last = int(CONFIG.get("keychain_keep_last", 3))
-    self._post_key_install_settle_seconds = int(CONFIG.get("post_key_install_settle_seconds", 3))
-
-    self._keychain_start_delay_minutes = int(CONFIG.get("keychain_start_delay_minutes", 3))
-    self._rotation_stagger_minutes = int(CONFIG.get("rotation_stagger_minutes", 1))
-    self._rotation_stagger_buckets = int(CONFIG.get("rotation_stagger_buckets", 5))
-
-    self._log_level = CONFIG.get("log_level", "INFO")
-    self._cli_path = CONFIG.get("cli_path", "/usr/sbin/cli")
-
-    CERT = f"{self._script_dir}/certs/{self._device}.crt"
-    KEY = f"{self._script_dir}/certs/{self._device}.key"
-    CA = f"{self._script_dir}/certs/{self._ca_cert}"
-
-    def _ensure_runtime_dirs(self, ):
-        for path in (self._state_dir, self._log_dir, self._peer_status_dir, self._peer_inbox_dir, self._peer_ack_dir):
-            try:
-                Path(path).mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
-
-        # Queue transport uses a different SSH identity than runtime user.
-        # Keep shared exchange directories writable/readable across both users.
-        for shared_dir in (self._peer_status_dir, self._peer_inbox_dir, self._peer_ack_dir):
-            try:
-                os.chmod(shared_dir, 0o777)
-            except Exception:
-                pass
 
 
     def __set_mode_if_needed(self, path_obj, target_mode):
