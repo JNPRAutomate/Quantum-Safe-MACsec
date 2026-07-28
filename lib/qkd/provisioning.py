@@ -677,15 +677,13 @@ def configure_qkd_scripts(dev, name, base):
     if str(script_user_class).strip().lower() != "super-user":
         # Build class config with single allow-commands regex covering all operations
         # Junos only supports one allow-commands entry with regex patterns separated by |
+        # Simplified and proven working pattern
         allow_cmds_regex = (
-            "(configure.*)|(configure)|(configure private)|"
-            "(commit.*)|(commit)|(commit confirmed)|"
-            "(rollback.*)|(rollback)|"
-            "(request system storage cleanup)|"
-            "(delete security.*)|(set security.*)|"
-            "(show configuration security)|(show security.*)|"
-            "(op qkd_onbox.*)|(op qkd_onbox)|"
-            "(start shell.*)|(start shell)"
+            "(configure.*)|(commit.*)|(rollback.*)|"
+            "(set security.*)|(delete security.*)|"
+            "(show configuration.*)|(show security.*)|"
+            "(op qkd_onbox.*)|(start shell.*)|"
+            "exit"
         )
         class_cfg = (
             "replace:\n"
