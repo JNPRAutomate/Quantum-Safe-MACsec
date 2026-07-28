@@ -661,23 +661,65 @@ def save_peer_key_rotation_state(state):
 # PEER SSH KEY ROTATION (inlined - lib/ package is NOT deployed to routers,
 # only this single qkd_onbox.py file is shipped, so this logic must be
 # self-contained here rather than imported from lib.qkd.peer_key_rotation)
+#
+# Design notes (see docs/qkd/PEER_KEY_ROTATION.md for full write-up):
+#   - The PEER_CMD_USER (etsi_peer_view) keypair lives under SCRIPT_USER's
+#     home (matches PEER_SSH_KEY / onbox_builder.py "peer_ssh_key" convention)
+#     because SCRIPT_USER (etsi_user) is the OS user this script runs as and
+#     is the only one it has filesystem write permission for.
+#   - Distribution avoids the chicken-and-egg trust problem: the NEW
+#     PEER_CMD_USER public key is pushed to peers over SSH using SCRIPT_USER's
+#     own PERMANENT identity (SSH_KEY), which is the SAME keypair on every
+#     device (see script_user_bootstrap.py sync_script_user_keypair_from_local)
+#     and therefore already mutually trusted - no rotation, no bootstrap gap.
+#   - Each peer installs the received key into ITS OWN Junos config for its
+#     OWN PEER_CMD_USER account (op-script action "install-peer-pubkey"),
+#     running locally as its own SCRIPT_USER (qkd-script-class now allows
+#     "set/delete system login user {peer_cmd_user} authentication ...").
+#   - Only after every peer confirms (SSH exit code 0) does the local device
+#     atomically swap its own PEER_SSH_KEY files to the new keypair. If any
+#     peer fails, the whole rotation aborts and the OLD key stays active
+#     (rotation is retried again next cycle).
 # ---------------------------------------------------------------------------
 
-def _peer_rotate_ssh_keypair(device_name, peer_cmd_user="etsi_peer_view", ssh_home_base="/var/home"):
-    """Generate new ED25519 keypair for peer_cmd_user on current device."""
-    key_path = os.path.join(ssh_home_base, peer_cmd_user, ".ssh", "qkd_peer_cmd_ed25519")
+def peer_known_pubkeys_state_file():
+    """Path to local state tracking the last-installed PEER_CMD_USER public
+    key we received from each peer (so a later rotation can `delete` the
+    stale entry before `set`-ting the new one)."""
+    return f"{STATE_DIR}/qkd_peer_known_pubkeys.json"
+
+
+def load_peer_known_pubkeys():
+    path = Path(peer_known_pubkeys_state_file())
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def save_peer_known_pubkeys(state):
+    path = Path(peer_known_pubkeys_state_file())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2))
+
+
+def _peer_generate_new_keypair(device_name, temp_suffix="new"):
+    """Generate a new ED25519 keypair for PEER_CMD_USER to a TEMP path under
+    SCRIPT_USER's home, leaving the currently-active PEER_SSH_KEY untouched
+    until the new public key has been accepted by every peer."""
+    key_path = f"{PEER_SSH_KEY}.{temp_suffix}"
     pub_path = f"{key_path}.pub"
-    ssh_dir = os.path.dirname(key_path)
 
     try:
-        os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(key_path), mode=0o700, exist_ok=True)
 
-        if os.path.exists(key_path):
-            os.remove(key_path)
-        if os.path.exists(pub_path):
-            os.remove(pub_path)
+        for stale in (key_path, pub_path):
+            if os.path.exists(stale):
+                os.remove(stale)
 
-        comment = f"{peer_cmd_user}@{device_name}"
+        comment = f"{PEER_CMD_USER}@{device_name}"
         subprocess.run(
             ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", key_path],
             check=True,
@@ -690,111 +732,178 @@ def _peer_rotate_ssh_keypair(device_name, peer_cmd_user="etsi_peer_view", ssh_ho
         with open(pub_path) as f:
             pubkey_line = f.read().strip()
 
-        log(f"PEER-KEY generated new peer SSH keypair for {peer_cmd_user}", "INFO", mode="PEER-KEY-ROTATION")
-        return pubkey_line
+        log(f"PEER-KEY generated new peer SSH keypair path={key_path}", "INFO", mode="PEER-KEY-ROTATION")
+        return key_path, pub_path, pubkey_line
 
     except subprocess.TimeoutExpired:
         log("PEER-KEY ERROR ssh-keygen timeout generating peer key", "ERROR", mode="PEER-KEY-ROTATION")
-        return None
+        return None, None, None
     except subprocess.CalledProcessError as exc:
         log(f"PEER-KEY ERROR ssh-keygen failed: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return None
+        return None, None, None
     except Exception as exc:
         log(f"PEER-KEY ERROR generating peer SSH keypair: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return None
+        return None, None, None
 
 
-def _peer_update_local_authorized_keys(device_name, new_pubkey_line, peer_cmd_user="etsi_peer_view", ssh_home_base="/var/home"):
-    """Update local authorized_keys, removing any old keys for this device."""
-    auth_path = os.path.join(ssh_home_base, peer_cmd_user, ".ssh", "authorized_keys")
+def _peer_distribute_pubkey_to_peer(device_name, peer_name, peer_ip, new_pubkey_line, timeout=20):
+    """Push this device's new PEER_CMD_USER public key to a peer device, using
+    SCRIPT_USER's permanent/common SSH identity (SSH_KEY) - not the rotating
+    PEER_SSH_KEY - so the push always succeeds regardless of rotation state."""
+    if not peer_ip:
+        log(f"PEER-KEY ERROR no peer_ip for {peer_name}, skipping distribution", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+
+    pubkey_b64 = base64.urlsafe_b64encode(new_pubkey_line.encode()).decode()
+    remote_cmd = (
+        f"op qkd_onbox.py action install-peer-pubkey "
+        f"device {device_name} pubkey-b64 {pubkey_b64}"
+    )
+    ssh_cmd = [
+        "ssh", *ssh_transport_options(SSH_KEY),
+        f"{SCRIPT_USER}@{peer_ip}",
+        remote_cmd,
+    ]
 
     try:
-        old_lines = []
-        if os.path.exists(auth_path):
-            with open(auth_path) as f:
-                for line in f:
-                    line = line.rstrip("\n")
-                    if line and f"@{device_name}" not in line:
-                        old_lines.append(line)
+        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"PEER-KEY DISTRIBUTE TIMEOUT peer={peer_name}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+    except Exception as exc:
+        log(f"PEER-KEY DISTRIBUTE ERROR peer={peer_name} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
 
-        with open(auth_path, "w") as f:
-            for line in old_lines:
-                f.write(line + "\n")
-            f.write(new_pubkey_line + "\n")
-
-        os.chmod(auth_path, 0o600)
-        log(f"PEER-KEY updated local authorized_keys for {peer_cmd_user}", "INFO", mode="PEER-KEY-ROTATION")
+    if result.returncode == 0:
+        log(f"PEER-KEY distributed new pubkey to peer={peer_name}", "INFO", mode="PEER-KEY-ROTATION")
         return True
 
-    except Exception as exc:
-        log(f"PEER-KEY ERROR updating authorized_keys: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
+    stderr = result.stderr.decode(errors="ignore").strip()
+    stdout = result.stdout.decode(errors="ignore").strip()
+    log(
+        f"PEER-KEY ERROR distribute failed peer={peer_name} rc={result.returncode} stderr={stderr} stdout={stdout}",
+        "ERROR",
+        mode="PEER-KEY-ROTATION",
+    )
+    return False
 
 
-def _peer_distribute_pubkey_to_peer(device_name, peer_device_name, peer_pubkey_line, send_command_func, peer_cmd_user="etsi_peer_view", ssh_home_base="/var/home"):
-    """Distribute this device's new public key to a peer device via SSH."""
-    import shlex as _shlex
-    auth_path = os.path.join(ssh_home_base, peer_cmd_user, ".ssh", "authorized_keys")
+def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_func=None, peer_cmd_user=None, ssh_home_base=None):
+    """Execute one peer SSH key rotation cycle on this device.
 
-    try:
-        quoted_key = _shlex.quote(peer_pubkey_line)
-        quoted_auth = _shlex.quote(auth_path)
-
-        cmd = (
-            f"grep -q -F {quoted_key} {quoted_auth} 2>/dev/null || "
-            f"echo {quoted_key} >> {quoted_auth}; "
-            f"chmod 600 {quoted_auth}"
-        )
-
-        result = send_command_func(peer_device_name, cmd, timeout=30)
-
-        if getattr(result, "returncode", 1) == 0:
-            log(f"PEER-KEY synced peer SSH key to {peer_device_name}", "INFO", mode="PEER-KEY-ROTATION")
-            return True
-        else:
-            log(
-                f"PEER-KEY ERROR syncing peer key to {peer_device_name}: "
-                f"returncode={getattr(result, 'returncode', None)} stderr={getattr(result, 'stderr', None)}",
-                "ERROR",
-                mode="PEER-KEY-ROTATION",
-            )
-            return False
-
-    except Exception as exc:
-        log(f"PEER-KEY ERROR distributing peer key to {peer_device_name}: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-
-def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_func, peer_cmd_user="etsi_peer_view", ssh_home_base="/var/home"):
-    """Execute one peer SSH key rotation cycle on this device."""
+    send_command_func/peer_cmd_user/ssh_home_base are accepted (and ignored
+    beyond defaulting) for call-site compatibility; the module globals
+    PEER_CMD_USER/PEER_SSH_KEY/SSH_KEY are used directly.
+    """
     log(f"PEER-KEY starting peer SSH key rotation cycle for {device_name}", "INFO", mode="PEER-KEY-ROTATION")
 
-    new_pubkey = _peer_rotate_ssh_keypair(device_name, peer_cmd_user, ssh_home_base)
+    new_key_path, new_pub_path, new_pubkey = _peer_generate_new_keypair(device_name)
     if not new_pubkey:
         log("PEER-KEY ERROR failed to generate new peer SSH keypair", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    if not _peer_update_local_authorized_keys(device_name, new_pubkey, peer_cmd_user, ssh_home_base):
-        log("PEER-KEY ERROR failed to update local authorized_keys", "ERROR", mode="PEER-KEY-ROTATION")
         return False
 
     peer_names = [name for name in local_devices_dict.keys() if name != device_name]
     failed_peers = []
 
     for peer_name in peer_names:
-        if not _peer_distribute_pubkey_to_peer(device_name, peer_name, new_pubkey, send_command_func, peer_cmd_user, ssh_home_base):
+        peer_ip = (local_devices_dict.get(peer_name) or {}).get("ip")
+        if not _peer_distribute_pubkey_to_peer(device_name, peer_name, peer_ip, new_pubkey):
             failed_peers.append(peer_name)
 
     if failed_peers:
         log(
-            f"PEER-KEY WARN rotation: failed to sync to {len(failed_peers)} devices: {failed_peers}",
-            "WARN",
+            f"PEER-KEY ROTATION ABORTED not_all_peers_accepted failed={failed_peers} "
+            "-> keeping current PEER_SSH_KEY active, discarding new temp keypair "
+            "(will retry on next rotation cycle)",
+            "ERROR",
             mode="PEER-KEY-ROTATION",
         )
-    else:
-        log("PEER-KEY rotation cycle completed successfully", "INFO", mode="PEER-KEY-ROTATION")
+        for stale in (new_key_path, new_pub_path):
+            try:
+                os.remove(stale)
+            except Exception:
+                pass
+        return False
 
-    return len(failed_peers) == 0 or len(failed_peers) < len(peer_names) / 2
+    try:
+        os.replace(new_key_path, PEER_SSH_KEY)
+        os.replace(new_pub_path, f"{PEER_SSH_KEY}.pub")
+    except Exception as exc:
+        log(f"PEER-KEY ERROR activating new keypair: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+
+    log("PEER-KEY rotation cycle completed successfully - all peers accepted new key", "INFO", mode="PEER-KEY-ROTATION")
+    return True
+
+
+def run_slave_install_peer_pubkey(source_device, pubkey_b64):
+    """Install a peer device's newly-rotated PEER_CMD_USER public key into
+    THIS device's own Junos config, replacing any previously known key for
+    that specific peer. Runs entirely locally via the Junos CLI as SCRIPT_USER
+    - no cross-user filesystem access, no elevated permissions beyond what
+    qkd-script-class already grants for '{PEER_CMD_USER} authentication'."""
+    try:
+        pubkey_line = base64.urlsafe_b64decode(pubkey_b64.encode()).decode().strip()
+    except Exception as exc:
+        log(f"PEER-PUBKEY INSTALL ERROR bad base64 from={source_device} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+
+    parts = pubkey_line.split()
+    if len(parts) < 2 or not parts[0].startswith("ssh-"):
+        log(f"PEER-PUBKEY INSTALL ERROR malformed key from={source_device} value={pubkey_line[:80]}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+
+    key_algo = parts[0]
+    key_value = " ".join(parts[1:])
+
+    known = load_peer_known_pubkeys()
+    old_pubkey_line = known.get(source_device)
+
+    cli_cmds = ["configure"]
+    if old_pubkey_line and old_pubkey_line != pubkey_line:
+        old_parts = old_pubkey_line.split()
+        if len(old_parts) >= 2:
+            old_algo = old_parts[0]
+            old_value = " ".join(old_parts[1:])
+            cli_cmds.append(
+                f'delete system login user {PEER_CMD_USER} authentication {old_algo} "{old_value}"'
+            )
+    cli_cmds.append(
+        f'set system login user {PEER_CMD_USER} authentication {key_algo} "{key_value}"'
+    )
+    cli_cmds.append(f'commit comment "QKD: peer-key rotation source_device={source_device}"')
+    cli_cmds.append("exit")
+    cmd = "; ".join(cli_cmds)
+
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    except subprocess.TimeoutExpired:
+        log(f"PEER-PUBKEY INSTALL TIMEOUT source_device={source_device}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+    except Exception as exc:
+        log(f"PEER-PUBKEY INSTALL ERROR source_device={source_device} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        log(
+            f"PEER-PUBKEY INSTALL FAIL source_device={source_device} rc={result.returncode} stderr={stderr} stdout={stdout}",
+            "ERROR",
+            mode="PEER-KEY-ROTATION",
+        )
+        try:
+            subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        except Exception:
+            pass
+        return False
+
+    known[source_device] = pubkey_line
+    save_peer_known_pubkeys(known)
+
+    log(f"PEER-PUBKEY INSTALLED source_device={source_device} key={pubkey_line[:80]}...", "INFO", mode="PEER-KEY-ROTATION")
+    return True
 
 
 def peer_status_file(iface):
@@ -3767,6 +3876,8 @@ def parse_slave():
     generation = None
     start_time = None
     batch_b64 = None
+    source_device = None
+    pubkey_b64 = None
 
     for i, a in enumerate(sys.argv):
         a = a.lstrip("-")
@@ -3785,7 +3896,11 @@ def parse_slave():
             start_time = sys.argv[i + 1]
         elif a == "batch-b64" and i + 1 < len(sys.argv):
             batch_b64 = sys.argv[i + 1]
-    return action, key_id, iface, generation, start_time, batch_b64
+        elif a == "device" and i + 1 < len(sys.argv):
+            source_device = sys.argv[i + 1]
+        elif a == "pubkey-b64" and i + 1 < len(sys.argv):
+            pubkey_b64 = sys.argv[i + 1]
+    return action, key_id, iface, generation, start_time, batch_b64, source_device, pubkey_b64
 
 
 # ----------------------------
@@ -4445,48 +4560,43 @@ def run_master():
                             "peer": peer_name,
                         }
 
-                # Include this device in the dict
-                peer_devices[DEVICE] = {
-                    "name": DEVICE,
-                    "ip": "localhost",
-                    "host": "localhost",
-                    "peer": DEVICE,
-                }
+                rotated_ok = run_peer_key_rotation_cycle(DEVICE, peer_devices)
 
-                run_peer_key_rotation_cycle(
-                    DEVICE,
-                    peer_devices,
-                    send_command_func=send_command,
-                    peer_cmd_user=PEER_CMD_USER,
-                    ssh_home_base=SSH_HOME_BASE,
-                )
+                if rotated_ok:
+                    # Log the new public key for audit trail (PEER_SSH_KEY lives
+                    # under SCRIPT_USER's home - see onbox_builder.py convention)
+                    peer_key_path = f"{PEER_SSH_KEY}.pub"
+                    try:
+                        with open(peer_key_path, "r") as f:
+                            pubkey_line = f.read().strip()
+                        log(
+                            f"PEER-KEY-ROTATED: new_pubkey_installed={pubkey_line[:80]}...",
+                            "INFO",
+                            mode="PEER-KEY-ROTATION",
+                        )
+                    except Exception as e:
+                        log(
+                            f"PEER-KEY-ROTATED: could_not_read_pubkey_file={peer_key_path} error={e}",
+                            "WARN",
+                            mode="PEER-KEY-ROTATION",
+                        )
 
-                # Log the new public key for audit trail
-                peer_key_path = f"{SSH_HOME_BASE}/{PEER_CMD_USER}/.ssh/qkd_peer_cmd_ed25519.pub"
-                try:
-                    with open(peer_key_path, "r") as f:
-                        pubkey_line = f.read().strip()
+                    rotation_state["last_rotation_timestamp"] = now
+                    rotation_state["rotation_count"] = rotation_state.get("rotation_count", 0) + 1
+                    save_peer_key_rotation_state(rotation_state)
+
                     log(
-                        f"PEER-KEY-ROTATED: new_pubkey_installed={pubkey_line[:80]}...",
+                        f"PEER KEY ROTATION COMPLETED rotation_count={rotation_state['rotation_count']}",
                         "INFO",
                         mode="PEER-KEY-ROTATION",
                     )
-                except Exception as e:
+                else:
                     log(
-                        f"PEER-KEY-ROTATED: could_not_read_pubkey_file={peer_key_path} error={e}",
+                        "PEER KEY ROTATION NOT COMPLETED this cycle -> will retry next cycle "
+                        "(last_rotation_timestamp unchanged)",
                         "WARN",
                         mode="PEER-KEY-ROTATION",
                     )
-
-                rotation_state["last_rotation_timestamp"] = now
-                rotation_state["rotation_count"] = rotation_state.get("rotation_count", 0) + 1
-                save_peer_key_rotation_state(rotation_state)
-
-                log(
-                    f"PEER KEY ROTATION COMPLETED rotation_count={rotation_state['rotation_count']}",
-                    "INFO",
-                    mode="PEER-KEY-ROTATION",
-                )
             except Exception as exc:
                 log(
                     f"PEER KEY ROTATION FAILED: {exc}",
@@ -5142,7 +5252,7 @@ def main():
         print(f"ERROR UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain")
         sys.exit(1)
 
-    action, key_id, iface, generation, start_time, batch_b64 = parse_slave()
+    action, key_id, iface, generation, start_time, batch_b64, source_device, pubkey_b64 = parse_slave()
 
     if action:
         if action == "install-key":
@@ -5179,9 +5289,26 @@ def main():
                 release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
 
+        if action == "install-peer-pubkey":
+            if not source_device or not pubkey_b64:
+                log("INVALID INSTALL-PEER-PUBKEY ARGUMENTS", "ERROR", mode="SLAVE")
+                print("ERROR INVALID INSTALL-PEER-PUBKEY ARGUMENTS")
+                sys.exit(1)
+            lock_scope = "peer-pubkey"
+            if not acquire_action_lock(lock_scope, action):
+                log(f"ACTION LOCK BUSY action={action} iface={lock_scope}", "ERROR", mode="LOCK")
+                print(f"ERROR ACTION LOCK BUSY action={action}")
+                sys.exit(1)
+            try:
+                ok = run_slave_install_peer_pubkey(source_device, pubkey_b64)
+            finally:
+                release_action_lock(lock_scope, action)
+            sys.exit(0 if ok else 1)
+
         log(f"UNKNOWN ACTION action={action}", "ERROR")
         print(f"ERROR UNKNOWN ACTION action={action}")
         sys.exit(1)
+
 
     process_slave_inbound_transports()
 

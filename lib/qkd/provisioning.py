@@ -678,9 +678,15 @@ def configure_qkd_scripts(dev, name, base):
         # Build class config with single allow-commands regex covering all operations
         # Junos only supports one allow-commands entry with regex patterns separated by |
         # Simplified and proven working pattern
+        # Narrowly scoped to the peer_cmd_user account only (not all system login
+        # users) so etsi_user can rotate/commit etsi_peer_view's SSH public key
+        # (see script_user_bootstrap.py peer key rotation) without granting
+        # broader system-control permissions.
         allow_cmds_regex = (
             "(configure.*)|(commit.*)|(rollback.*)|"
             "(set security.*)|(delete security.*)|"
+            f"(set system login user {peer_cmd_user} authentication.*)|"
+            f"(delete system login user {peer_cmd_user} authentication.*)|"
             "(show configuration.*)|(show security.*)|"
             "(op qkd_onbox.*)|(start shell.*)|"
             "exit"

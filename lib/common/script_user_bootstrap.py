@@ -740,14 +740,20 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         # Remove old keys with same comment, then add new key
         # This prevents duplicates when bootstrap runs multiple times
         # Use sed -i for in-place editing to avoid shell redirect ambiguity in Junos
+        # NOTE: Junos shell is csh - does NOT support "2>" fd redirect syntax and
+        # may lack a "true" utility in PATH. Use ";" (not "||") so failures are ignored.
         if key_comment:
             append_public_key = (
-                "sed -i.bak '/{qc}/d' {ak} 2>/dev/null || true; "
+                "sed -i.bak '/{qc}/d' {ak}; "
                 "echo {q} >> {ak}; "
             ).format(qc=key_comment.replace('/', '\\/'), ak=shlex.quote(authorized_keys), q=quoted)
         else:
+            # Rare fallback path (no extractable comment) - avoid tcsh-specific
+            # conditional syntax; duplicate suppression isn't critical here since
+            # the comment-based branch above is the common code path.
             append_public_key = (
-                "grep -q -F {q} {ak} || echo {q} >> {ak}; "
+                "grep -q -F {q} {ak}; "
+                "echo {q} >> {ak}; "
             ).format(q=quoted, ak=shlex.quote(authorized_keys))
 
     return (

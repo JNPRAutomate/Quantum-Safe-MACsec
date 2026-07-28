@@ -16,13 +16,14 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 ## Deployment & Operations
 
 7. [QKD Deploy Phases](QKD_DEPLOY_PHASES.md)
-8. [SSH Key Rotation Design & Bug History](SSH_KEY_ROTATION_DESIGN.md)
+8. [SSH Key Rotation Design & Bug History (historical)](SSH_KEY_ROTATION_DESIGN.md)
+9. [Peer SSH Key Rotation — Mesh Trust Design (current)](PEER_KEY_ROTATION_MESH_TRUST.md)
 
 ## Release Information
 
-9. [Release Notes v3.3.1](RELEASE_NOTES_VER3.3.1.md)
-10. [Release Notes v3.3.2](RELEASE_NOTES_VER3.3.2.md)
+10. [Release Notes v3.3.1](RELEASE_NOTES_VER3.3.1.md)
+11. [Release Notes v3.3.2](RELEASE_NOTES_VER3.3.2.md)
 
 ## Runtime Policies
 
-11. [On-Box Runtime Ring Policy (2026-07-27)](QKD_ONBOX_RUNTIME_RING_POLICY_2026-07-27.md)
+12. [On-Box Runtime Ring Policy (2026-07-27)](QKD_ONBOX_RUNTIME_RING_POLICY_2026-07-27.md)

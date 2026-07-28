@@ -1,4 +1,11 @@
-# SSH Key Rotation Design
+# SSH Key Rotation Design (Historical)
+
+> **Superseded (2026-07-28):** This document describes an earlier
+> `macsec_user`/authorized_keys-based rotation architecture. The current
+> design uses `etsi_user` / `etsi_peer_view` with Junos-config-based key
+> installation and a mesh-trust distribution model. See
+> [PEER_KEY_ROTATION_MESH_TRUST.md](PEER_KEY_ROTATION_MESH_TRUST.md) for the
+> current implementation. This file is kept for historical bug reference only.
 
 This document describes the design and bug history for the peer SSH key rotation mechanism in the QKD MACsec runtime.
 
