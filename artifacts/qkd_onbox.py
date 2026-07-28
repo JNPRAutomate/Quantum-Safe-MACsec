@@ -1044,7 +1044,18 @@ def peer_enqueue_min_margin_seconds():
 
 
 def peer_batch_ack_timeout_seconds():
-    default_value = max(20, rotation_interval_seconds())
+    # The peer only drains its inbound-batch queue (process_inbound_transport_for_slave)
+    # once per its own periodic script invocation (Junos event-options QKD_TIMER,
+    # fired every rotation_interval_seconds - see event.j2), NOT immediately upon
+    # SCP receipt of the batch file. Worst case, a batch that lands just after the
+    # peer's tick has already started must wait almost one full extra
+    # rotation_interval_seconds before the peer's NEXT tick picks it up, installs it
+    # (subject to the junos commit lock, up to ~25s) and writes the ACK file. A
+    # timeout equal to only one interval is therefore too tight and causes
+    # intermittent PEER BATCH ACK TIMEOUT even though the peer eventually processes
+    # the batch successfully - default to one full tick plus a fixed buffer that
+    # covers install/lock/SCP/poll overhead (independent of tick length).
+    default_value = max(20, rotation_interval_seconds() + 90)
     value = int(qkd_policy().get("peer_batch_ack_timeout_seconds", default_value))
     if value < 1:
         return 1
@@ -1052,8 +1063,10 @@ def peer_batch_ack_timeout_seconds():
 
 
 def peer_batch_ack_poll_interval_seconds():
-    # Avoid per-second SSH churn on peer_cmd_user during ACK waits.
-    default_value = 3
+    # Avoid per-second SSH churn on peer_cmd_user during ACK waits. Scale the
+    # default with the timeout so a longer timeout doesn't imply hundreds of
+    # SCP polls (each poll forks a new SSH/SCP process).
+    default_value = max(3, min(15, peer_batch_ack_timeout_seconds() // 20))
     value = int(qkd_policy().get("peer_batch_ack_poll_interval_seconds", default_value))
     if value < 1:
         return 1

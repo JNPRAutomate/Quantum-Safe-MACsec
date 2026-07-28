@@ -188,3 +188,43 @@ Recommended log markers to track in tests:
 - Non-queue actions still use legacy remote op path.
 - Status path supports snapshot-first with legacy op fallback.
 - Inbox parser accepts both new envelope and legacy raw batch payload.
+
+## 11. Bug: intermittent PEER BATCH ACK TIMEOUT (found 2026-07-28, live test)
+
+`PEER BATCH ACK TIMEOUT` fired intermittently on the master, blocking that
+cycle's rotation (`KEEP CURRENT KEYCHAIN KEY`), even though the peer's
+`STRICT SYNC MISMATCH OBSERVE` snapshot later showed it HAD in fact received
+and installed the "timed out" batch. Observed peer ACK latency varied wildly
+between cycles: as low as ~14s and as high as a full timeout (>60s) with no
+change in code or load.
+
+**Root cause:** the slave only drains its inbound-batch queue
+(`process_inbound_transport_for_slave()` via `process_slave_inbound_transports()`)
+once per its own periodic script tick - Junos `event-options generate-event
+QKD_TIMER time-interval {{ rotation_interval_seconds }}` (see `event.j2`)
+invokes `qkd_onbox.py` with no arguments every `interval_seconds`, and only
+that no-argument invocation drains the inbox. There is no immediate,
+event-driven processing of an inbox file on SCP arrival. A batch that lands
+right after a tick has already started must therefore wait almost one full
+extra `interval_seconds` before the peer's *next* tick picks it up, decodes
+it, installs it, and writes the ACK file - and that wait, plus SCP/polling
+round-trip, can exceed a `peer_batch_ack_timeout_seconds` that is only equal
+to a single tick interval (the old default/config value: `60`, same as
+`interval_seconds: 60`).
+
+**Fix:** `peer_batch_ack_timeout_seconds` must comfortably span one full peer
+script tick plus a fixed overhead buffer (install/lock/SCP/poll round-trip),
+not be pinned to exactly one tick. Updated both:
+- the code default in `peer_batch_ack_timeout_seconds()`
+  (`artifacts/qkd_onbox.py`): `max(20, rotation_interval_seconds() + 90)`.
+- the explicit override in `config/inventory/qkd_policy.yaml`:
+  `peer_batch_ack_timeout_seconds: 60` -> `690` (`interval_seconds(600) + 90`,
+  after `interval_seconds` was separately retuned from `60` to `600`).
+
+Also widened `peer_batch_ack_poll_interval_seconds` (3s -> 10s) since a longer
+timeout window no longer needs per-3-second SCP polling (each poll forks a
+new SSH/SCP process).
+
+This is a timing/config fix only - no change to the ACK write/read mechanism
+itself (`write_peer_batch_ack`/`read_remote_peer_batch_ack`/
+`wait_for_peer_batch_ack`), which was already structurally correct.
