@@ -263,6 +263,7 @@ def build_onbox_config(name, device):
         "script_user": device.get("script_user") or QKD["SCRIPT_USER"],
         "peer_cmd_user": device.get("peer_cmd_user") or QKD.get("PEER_CMD_USER") or QKD["SCRIPT_USER"],
         "script_dir": script_dir,
+        "ssh_home_base": ssh_home_base,
         "ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{ssh_key_name}",
         "peer_ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{peer_ssh_key_name}",
         "state_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}",

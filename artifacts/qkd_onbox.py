@@ -149,6 +149,7 @@ LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
 PEER_STATUS_DIR = CONFIG.get("peer_status_dir", f"{STATE_DIR}/peer_status")
 PEER_INBOX_DIR = CONFIG.get("peer_inbox_dir", f"{STATE_DIR}/peer_inbox")
 PEER_ACK_DIR = CONFIG.get("peer_ack_dir", f"{STATE_DIR}/peer_ack")
+SSH_HOME_BASE = CONFIG.get("ssh_home_base", "/var/home")
 
 QKD_KEY_SIZE = 256
 
@@ -631,6 +632,29 @@ def get_configured_next_pending_slot(keychain_name, iface=None, now_epoch=None):
 
 def db_state_file(peer, iface):
     return f"{STATE_DIR}/qkd_db_{peer}_{iface.replace('/','_')}.json"
+
+
+def peer_key_rotation_state_file():
+    """Path to global peer SSH key rotation state."""
+    return f"{STATE_DIR}/qkd_peer_key_rotation.json"
+
+
+def load_peer_key_rotation_state():
+    """Load peer SSH key rotation state from disk."""
+    path = Path(peer_key_rotation_state_file())
+    if not path.exists():
+        return {"last_rotation_timestamp": 0, "rotation_count": 0}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {"last_rotation_timestamp": 0, "rotation_count": 0}
+
+
+def save_peer_key_rotation_state(state):
+    """Save peer SSH key rotation state to disk."""
+    path = Path(peer_key_rotation_state_file())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2))
 
 
 def peer_status_file(iface):
@@ -4242,6 +4266,62 @@ def bootstrap_keychain_link(link, force=False):
 
 
 def run_master():
+    # Check if peer SSH key rotation is needed
+    rotation_interval = qkd_policy().get("peer_key_rotation_interval_seconds", 0)
+    if rotation_interval > 0:
+        rotation_state = load_peer_key_rotation_state()
+        now = int(time.time())
+        last_rotation = rotation_state.get("last_rotation_timestamp", 0)
+
+        if now - last_rotation >= rotation_interval:
+            try:
+                from lib.qkd.peer_key_rotation import run_peer_key_rotation_cycle
+
+                # Build peer devices dict from managed links
+                peer_devices = {}
+                for link in managed_links():
+                    peer_name = link.get("peer")
+                    peer_ip = link.get("peer_ip")
+                    if peer_name and peer_name not in peer_devices:
+                        peer_devices[peer_name] = {
+                            "name": peer_name,
+                            "ip": peer_ip,
+                            "host": peer_ip,
+                            "peer": peer_name,
+                        }
+
+                # Include this device in the dict
+                peer_devices[DEVICE] = {
+                    "name": DEVICE,
+                    "ip": "localhost",
+                    "host": "localhost",
+                    "peer": DEVICE,
+                }
+
+                run_peer_key_rotation_cycle(
+                    DEVICE,
+                    peer_devices,
+                    send_command_func=send_command,
+                    peer_cmd_user=PEER_CMD_USER,
+                    ssh_home_base=SSH_HOME_BASE,
+                )
+
+                rotation_state["last_rotation_timestamp"] = now
+                rotation_state["rotation_count"] = rotation_state.get("rotation_count", 0) + 1
+                save_peer_key_rotation_state(rotation_state)
+
+                log(
+                    f"PEER KEY ROTATION COMPLETED rotation_count={rotation_state['rotation_count']}",
+                    "INFO",
+                    mode="PEER-KEY-ROTATION",
+                )
+            except Exception as exc:
+                log(
+                    f"PEER KEY ROTATION FAILED: {exc}",
+                    "ERROR",
+                    mode="PEER-KEY-ROTATION",
+                )
+
     master_links = [link for link in managed_links() if link.get("role") == "master"]
     if not master_links:
         return
