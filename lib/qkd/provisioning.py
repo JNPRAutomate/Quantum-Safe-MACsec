@@ -864,10 +864,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         key_blob = parts[1]
         # Enforce deterministic, device-aware comments so operators can map
         # each key line to its source device quickly.
-        if source_name == device_name:
-            key_comment = f"{peer_cmd_user}@{source_name}_bootstrap"
-        else:
-            key_comment = f"{peer_cmd_user}@{source_name}"
+        key_comment = f"{peer_cmd_user}@{source_name}"
 
         # Junos expects the SSH public key in full format inside the key payload:
         #   <key-type> <base64> <comment>
@@ -934,6 +931,22 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     else:
         append_expr = f": > {quoted_tmp_auth_path}"
 
+    # Build sed pattern to remove old keys with matching comments before adding new ones.
+    # This prevents duplicate SSH key entries when provisioning runs multiple times.
+    if source_names:
+        import re as re_module
+        pattern_parts = []
+        for name in source_names:
+            comment = f"{peer_cmd_user}@{name}"
+            # Escape special regex characters for sed
+            escaped = re_module.escape(comment)
+            pattern_parts.append(escaped)
+        filter_pattern = "|".join(pattern_parts)
+        # Remove lines ending with any of the target comments
+        filter_cmd = f"[ -f {quoted_auth_path} ] && cat {quoted_auth_path} | sed -E '/({filter_pattern})$/d' || true"
+    else:
+        filter_cmd = f"[ -f {quoted_auth_path} ] && cat {quoted_auth_path} || true"
+
     sync_payload = (
         "set -e; "
         f"id {quoted_user}; "
@@ -944,6 +957,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         f"chmod 600 {quoted_auth_path}; "
         f"rm -f {quoted_tmp_auth_path}; "
         f"touch {quoted_tmp_auth_path}; "
+        f"{filter_cmd} >> {quoted_tmp_auth_path}; "
         f"{append_expr}; "
         f"mv {quoted_tmp_auth_path} {quoted_auth_path}; "
         f"chown {quoted_user} {quoted_ssh_dir} {quoted_auth_path}; "

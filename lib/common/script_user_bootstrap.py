@@ -820,7 +820,7 @@ def run_script_user_key_fix(
         )
         return True
 
-    key_comment = key_comment or f"{script_user}@qkd-bootstrap"
+    key_comment = key_comment or f"{script_user}@{name}"
 
     def _run(command: str) -> str:
         result = dev.rpc.request_shell_execute(command=command)
@@ -1153,7 +1153,7 @@ def bootstrap_script_user_on_device(
                     script_user,
                     deploy_user,
                     key_name=str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
-                    key_comment=f"{script_user}@qkd-bootstrap",
+                    key_comment=f"{script_user}@{name}",
                 )
         if script_auth_mode == "key-only" and peer_local_private_key_path:
             if not sync_peer_transport_keypair_from_local(
@@ -1172,10 +1172,13 @@ def bootstrap_script_user_on_device(
                     script_user,
                     deploy_user,
                     key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
-                    key_comment=f"{peer_cmd_user}@qkd-peer-bootstrap",
+                    key_comment=f"{peer_cmd_user}@{name}",
                 )
 
-        if not run_script_user_key_fix(dev, name, script_user, deploy_user):
+        if not run_script_user_key_fix(
+            dev, name, script_user, deploy_user,
+            key_comment=f"{script_user}@{name}"
+        ):
             print(
                 "[%s] WARN ssh key fix did not complete; continuing because this can be platform-specific on Junos" %
                 name
