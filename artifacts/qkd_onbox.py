@@ -525,6 +525,7 @@ def junos_output_has_error(stdout="", stderr=""):
         "authentication-key-chains not defined",
         "may not be configured",
         "pre-shared key or fallback-key or pre-shared-key-chain required",
+        "key format must be",
     ]
     return any(marker in text_lower for marker in hard_error_markers)
 
@@ -854,7 +855,14 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
         return False
 
     key_algo = parts[0]
-    key_value = " ".join(parts[1:])
+    # NOTE: Junos requires the COMPLETE key line (including the "ssh-ed25519"
+    # type prefix) inside the quoted value - not just the base64+comment tail.
+    # This is the same Junos quirk documented as "Bug 1" in the historical
+    # SSH_KEY_ROTATION_DESIGN.md: stripping the prefix causes Junos to reject
+    # the key with "Key format must be 'ssh-ed25519 <base64-encoded-key> <comment>'"
+    # and the set/delete silently fails, leaving the peer's authorized key
+    # list unchanged (hence subsequent SSH as PEER_CMD_USER gets Permission denied).
+    key_payload = pubkey_line.replace('"', '\\"')
 
     known = load_peer_known_pubkeys()
     old_pubkey_line = known.get(source_device)
@@ -864,12 +872,12 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
         old_parts = old_pubkey_line.split()
         if len(old_parts) >= 2:
             old_algo = old_parts[0]
-            old_value = " ".join(old_parts[1:])
+            old_payload = old_pubkey_line.replace('"', '\\"')
             cli_cmds.append(
-                f'delete system login user {PEER_CMD_USER} authentication {old_algo} "{old_value}"'
+                f'delete system login user {PEER_CMD_USER} authentication {old_algo} "{old_payload}"'
             )
     cli_cmds.append(
-        f'set system login user {PEER_CMD_USER} authentication {key_algo} "{key_value}"'
+        f'set system login user {PEER_CMD_USER} authentication {key_algo} "{key_payload}"'
     )
     cli_cmds.append(f'commit comment "QKD: peer-key rotation source_device={source_device}"')
     cli_cmds.append("exit")

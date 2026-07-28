@@ -188,6 +188,45 @@ deployed to routers — only `artifacts/qkd_onbox.py` is shipped to
   (`configure; rollback 0; exit`) if the commit fails or Junos reports an
   error, matching the existing pattern used by the MACsec keychain installer.
 
+## Bug: Junos key-string format (found 2026-07-28, first live test)
+
+First live rotation test showed `install-peer-pubkey` reporting success on
+every peer, yet the very next MACsec peer SSH/SCP call
+(`etsi_peer_view@<peer_ip>`) failed with `Permission denied
+(publickey,password,keyboard-interactive)`.
+
+**Root cause:** `run_slave_install_peer_pubkey()` originally built the `set`
+command as:
+```
+set system login user etsi_peer_view authentication ssh-ed25519 "<base64 comment>"
+```
+i.e. it stripped the leading `ssh-ed25519` type token before quoting the
+value. Junos actually requires the **complete original key line** (type +
+base64 + comment) inside the quotes — this is the exact same Junos quirk
+already documented as "Bug 1" in the historical
+[SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md), and matches the
+proven-working pattern in
+[provisioning.py](../../lib/qkd/provisioning.py) `ensure_peer_cmd_user_login()`
+(`key_payload = public_key_line.replace('"', '\\"')` — the **full** line).
+With the stripped format, Junos rejects the statement with `Key format must
+be 'ssh-ed25519 <base64-encoded-key> <comment>'`, which was not in
+`junos_output_has_error()`'s marker list, so the CLI call still returned exit
+0 and the op-script action reported false success while the peer's trust list
+was never actually updated.
+
+**Fix:**
+- `run_slave_install_peer_pubkey()` now quotes the **full** `pubkey_line`
+  (and full `old_pubkey_line` for the `delete`), matching
+  `ensure_peer_cmd_user_login()`.
+- `junos_output_has_error()` gained `"key format must be"` as an additional
+  hard-error marker, as defense in depth against silent false-success on any
+  similar Junos validation message.
+- Self-healing: because the local per-peer state file
+  (`qkd_peer_known_pubkeys.json`) is only ever updated on the (previously
+  false) success path, the next rotation cycle's `delete` of the
+  never-actually-installed "old" key is a harmless no-op, and the `set` of
+  the new key now succeeds for real.
+
 ## Related Docs
 
 - [SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md) — historical
