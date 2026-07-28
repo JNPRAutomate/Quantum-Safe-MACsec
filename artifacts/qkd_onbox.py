@@ -910,29 +910,36 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
     cli_cmds.append("exit")
     cmd = "; ".join(cli_cmds)
 
+    if not acquire_junos_commit_lock():
+        log(f"PEER-PUBKEY INSTALL DEFERRED reason=junos_commit_lock_busy source_device={source_device}", "ERROR", mode="PEER-KEY-ROTATION")
+        return False
+
     try:
-        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-    except subprocess.TimeoutExpired:
-        log(f"PEER-PUBKEY INSTALL TIMEOUT source_device={source_device}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-    except Exception as exc:
-        log(f"PEER-PUBKEY INSTALL ERROR source_device={source_device} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    stdout = result.stdout.decode(errors="ignore").strip()
-    stderr = result.stderr.decode(errors="ignore").strip()
-
-    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-        log(
-            f"PEER-PUBKEY INSTALL FAIL source_device={source_device} rc={result.returncode} stderr={stderr} stdout={stdout}",
-            "ERROR",
-            mode="PEER-KEY-ROTATION",
-        )
         try:
-            subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-        except Exception:
-            pass
-        return False
+            result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        except subprocess.TimeoutExpired:
+            log(f"PEER-PUBKEY INSTALL TIMEOUT source_device={source_device}", "ERROR", mode="PEER-KEY-ROTATION")
+            return False
+        except Exception as exc:
+            log(f"PEER-PUBKEY INSTALL ERROR source_device={source_device} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
+            return False
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+        stderr = result.stderr.decode(errors="ignore").strip()
+
+        if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+            log(
+                f"PEER-PUBKEY INSTALL FAIL source_device={source_device} rc={result.returncode} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                mode="PEER-KEY-ROTATION",
+            )
+            try:
+                subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            except Exception:
+                pass
+            return False
+    finally:
+        release_junos_commit_lock()
 
     known[source_device] = {"current": pubkey_line, "previous": current_pubkey_line}
     save_peer_known_pubkeys(known)
@@ -2391,6 +2398,80 @@ def release_action_lock(iface, action):
         log(f"ACTION LOCK RELEASE FAILED action={action} iface={iface} pid={pid} error={str(e)}", "ERROR", iface, "LOCK")
 
 
+def junos_commit_lock_file():
+    return f"{STATE_DIR}/qkd_onbox_{DEVICE}_junos_commit.lock"
+
+
+def acquire_junos_commit_lock(wait_seconds=25, poll_interval=0.5):
+    """Global, device-wide lock serializing EVERY Junos 'configure ... commit'
+    CLI invocation, across all actions (local MACsec keychain install,
+    interface CA binding, peer-pubkey install) and across all concurrently
+    running processes on this device (each link runs its own periodic master
+    loop, plus SSH-triggered slave actions arrive from peers independently).
+    Without this, two 'cli -c "configure; ...; commit; exit"' invocations can
+    overlap: the second one enters configuration mode against an
+    already-open candidate session and then produces no further output for
+    its own set/commit/exit statements (observed as a lone "Entering
+    configuration mode" in stdout with rc=0 and no error text - a false
+    silent failure). Unlike acquire_action_lock() (fail-fast, same
+    iface+action only), this lock spans EVERY action type/iface on the
+    device and blocks (with a bounded wait) rather than rejecting
+    immediately, since Junos commits are normally quick (a few seconds)."""
+    path = Path(junos_commit_lock_file())
+    pid = str(os.getpid())
+    deadline = time.time() + wait_seconds
+    while True:
+        try:
+            path.mkdir(mode=0o700)
+            try:
+                (path / "owner").write_text(pid)
+                (path / "time").write_text(str(int(time.time())))
+            except Exception:
+                pass
+            return True
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except Exception:
+                age = 0
+            if age > 60:
+                # Stale lock from a crashed/killed process - clear and retry immediately.
+                try:
+                    if path.is_dir():
+                        for child in path.iterdir():
+                            try:
+                                child.unlink()
+                            except Exception:
+                                pass
+                        path.rmdir()
+                    else:
+                        path.unlink()
+                except Exception:
+                    pass
+                continue
+            if time.time() >= deadline:
+                return False
+            time.sleep(poll_interval)
+        except Exception:
+            return False
+
+
+def release_junos_commit_lock():
+    path = Path(junos_commit_lock_file())
+    try:
+        if path.is_dir():
+            for child in path.iterdir():
+                try:
+                    child.unlink()
+                except Exception:
+                    pass
+            path.rmdir()
+        else:
+            path.unlink()
+    except Exception:
+        pass
+
+
 # ----------------------------
 # KME degradation and health checks
 # ----------------------------
@@ -3253,40 +3334,47 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
     log(f"KEYCHAIN INSTALL CLI_CMD_COUNT total_cmds={len(cli_cmds)} commit={commit}", "DEBUG", iface, "MACSEC")
 
-    try:
-        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-    except subprocess.TimeoutExpired:
-        log(f"KEYCHAIN INSTALL TIMEOUT ca={ca_name} keychain={keychain_name} entries={len(entries)}", "ERROR", iface, "MACSEC")
-        return False
-    except Exception as e:
-        log(f"KEYCHAIN INSTALL ERROR ca={ca_name} keychain={keychain_name} entries={len(entries)} error={str(e)}", "ERROR", iface, "MACSEC")
+    if not acquire_junos_commit_lock():
+        log(f"KEYCHAIN INSTALL DEFERRED reason=junos_commit_lock_busy ca={ca_name} keychain={keychain_name}", "ERROR", iface, "MACSEC")
         return False
 
-    stdout = result.stdout.decode(errors="ignore").strip()
-    stderr = result.stderr.decode(errors="ignore").strip()
-    
-    # Log CLI output for debugging
-    if stdout:
-        log(f"KEYCHAIN INSTALL STDOUT len={len(stdout)} first_200={stdout[:200]}", "DEBUG", iface, "MACSEC")
-    if stderr:
-        log(f"KEYCHAIN INSTALL STDERR len={len(stderr)} first_200={stderr[:200]}", "DEBUG", iface, "MACSEC")
-    
-    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-        log(
-            f"KEYCHAIN INSTALL FAIL ca={ca_name} keychain={keychain_name} entries={len(entries)} "
-            f"rc={result.returncode} stderr={stderr} stdout={stdout}",
-            "ERROR",
-            iface,
-            "MACSEC",
-        )
+    try:
         try:
-            rb = subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-            rb_stdout = rb.stdout.decode(errors="ignore").strip()
-            rb_stderr = rb.stderr.decode(errors="ignore").strip()
-            log(f"KEYCHAIN INSTALL ROLLBACK DONE ca={ca_name} keychain={keychain_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
+            result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        except subprocess.TimeoutExpired:
+            log(f"KEYCHAIN INSTALL TIMEOUT ca={ca_name} keychain={keychain_name} entries={len(entries)}", "ERROR", iface, "MACSEC")
+            return False
         except Exception as e:
-            log(f"KEYCHAIN INSTALL ROLLBACK ERROR ca={ca_name} keychain={keychain_name} error={str(e)}", "ERROR", iface, "MACSEC")
-        return False
+            log(f"KEYCHAIN INSTALL ERROR ca={ca_name} keychain={keychain_name} entries={len(entries)} error={str(e)}", "ERROR", iface, "MACSEC")
+            return False
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+        stderr = result.stderr.decode(errors="ignore").strip()
+        
+        # Log CLI output for debugging
+        if stdout:
+            log(f"KEYCHAIN INSTALL STDOUT len={len(stdout)} first_200={stdout[:200]}", "DEBUG", iface, "MACSEC")
+        if stderr:
+            log(f"KEYCHAIN INSTALL STDERR len={len(stderr)} first_200={stderr[:200]}", "DEBUG", iface, "MACSEC")
+        
+        if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+            log(
+                f"KEYCHAIN INSTALL FAIL ca={ca_name} keychain={keychain_name} entries={len(entries)} "
+                f"rc={result.returncode} stderr={stderr} stdout={stdout}",
+                "ERROR",
+                iface,
+                "MACSEC",
+            )
+            try:
+                rb = subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                rb_stdout = rb.stdout.decode(errors="ignore").strip()
+                rb_stderr = rb.stderr.decode(errors="ignore").strip()
+                log(f"KEYCHAIN INSTALL ROLLBACK DONE ca={ca_name} keychain={keychain_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
+            except Exception as e:
+                log(f"KEYCHAIN INSTALL ROLLBACK ERROR ca={ca_name} keychain={keychain_name} error={str(e)}", "ERROR", iface, "MACSEC")
+            return False
+    finally:
+        release_junos_commit_lock()
 
     actual_indices, actual_key_names_by_index, running_set_output = get_configured_keychain_key_indices(keychain_name, iface=iface)
     if actual_indices is None:
@@ -3396,27 +3484,34 @@ def bind_interface_to_stable_ca(iface, ca_name, keychain_name=None):
     cli_cmds.append("exit")
     cmd = "; ".join(cli_cmds)
 
-    try:
-        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-    except subprocess.TimeoutExpired:
-        log(f"INTERFACE BIND TIMEOUT ca={ca_name}", "ERROR", iface, "MACSEC")
-        return False
-    except Exception as e:
-        log(f"INTERFACE BIND ERROR ca={ca_name} error={str(e)}", "ERROR", iface, "MACSEC")
+    if not acquire_junos_commit_lock():
+        log(f"INTERFACE BIND DEFERRED reason=junos_commit_lock_busy ca={ca_name}", "ERROR", iface, "MACSEC")
         return False
 
-    stdout = result.stdout.decode(errors="ignore").strip()
-    stderr = result.stderr.decode(errors="ignore").strip()
-    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-        log(f"INTERFACE BIND FAIL ca={ca_name} keychain={keychain_name} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, "MACSEC")
+    try:
         try:
-            rb = subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-            rb_stdout = rb.stdout.decode(errors="ignore").strip()
-            rb_stderr = rb.stderr.decode(errors="ignore").strip()
-            log(f"INTERFACE BIND ROLLBACK DONE ca={ca_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
+            result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        except subprocess.TimeoutExpired:
+            log(f"INTERFACE BIND TIMEOUT ca={ca_name}", "ERROR", iface, "MACSEC")
+            return False
         except Exception as e:
-            log(f"INTERFACE BIND ROLLBACK ERROR ca={ca_name} error={str(e)}", "ERROR", iface, "MACSEC")
-        return False
+            log(f"INTERFACE BIND ERROR ca={ca_name} error={str(e)}", "ERROR", iface, "MACSEC")
+            return False
+
+        stdout = result.stdout.decode(errors="ignore").strip()
+        stderr = result.stderr.decode(errors="ignore").strip()
+        if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+            log(f"INTERFACE BIND FAIL ca={ca_name} keychain={keychain_name} rc={result.returncode} stderr={stderr} stdout={stdout}", "ERROR", iface, "MACSEC")
+            try:
+                rb = subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                rb_stdout = rb.stdout.decode(errors="ignore").strip()
+                rb_stderr = rb.stderr.decode(errors="ignore").strip()
+                log(f"INTERFACE BIND ROLLBACK DONE ca={ca_name} stdout={rb_stdout} stderr={rb_stderr}", "ERROR", iface, "MACSEC")
+            except Exception as e:
+                log(f"INTERFACE BIND ROLLBACK ERROR ca={ca_name} error={str(e)}", "ERROR", iface, "MACSEC")
+            return False
+    finally:
+        release_junos_commit_lock()
 
     configured_after = get_configured_active_ca(iface)
     if configured_after != ca_name:

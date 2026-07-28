@@ -269,6 +269,47 @@ the remaining peers and swap locally - closing the race entirely regardless
 of how the peer-key-rotation and MACsec-keychain-install intervals happen to
 line up.
 
+## Bug: overlapping Junos configuration sessions (found 2026-07-28, third live test)
+
+After the previous two fixes, a hub device (MX1/sae-001, which manages more
+links/peers than a leaf device like MX2 or MX6) still showed **every single**
+incoming `install-peer-pubkey` request failing deterministically:
+```
+PEER-PUBKEY INSTALL FAIL source_device=sae-002 rc=0 stderr= stdout=Entering configuration mode
+```
+`rc=0`, empty `stderr`, and `stdout` containing only the very first line Junos
+prints on entering `configure` - no output at all for the subsequent
+`set`/`commit`/`exit` statements, and no text matching any
+`junos_output_has_error()` marker.
+
+**Root cause:** nothing in the script serialized Junos `configure ... commit`
+CLI invocations *across different call sites*. `run_slave_install_peer_pubkey()`,
+`install_keychain_batch()` (the periodic local MACsec keychain rotation) and
+`bind_interface_to_stable_ca()` each ran their own independent
+`cli -c "configure; ...; commit; exit"` subprocess with no cross-function
+lock. `acquire_action_lock()` only serializes calls with the *same*
+`(iface, action)` pair (or the fixed `"peer-pubkey"` scope among themselves),
+so it never prevented, say, a peer's incoming key-install request from
+landing while this device's own periodic keychain-rotation commit for a
+different interface was already mid-flight. A hub device with several links
+each running their own master loop hits this overlap far more often than a
+leaf device with only one or two peers - explaining why MX1 failed on every
+attempt while MX2/MX6 did not.
+
+**Fix - global commit lock:** added `acquire_junos_commit_lock()` /
+`release_junos_commit_lock()`, a single device-wide (not per-iface/per-action)
+lock file that every Junos-config-committing call site now acquires (with a
+bounded 25s wait, not fail-fast) before running its `cli -c "configure; ...;
+commit; exit"` and releases immediately after (success or failure, via
+`try/finally`):
+- `run_slave_install_peer_pubkey()`
+- `install_keychain_batch()`
+- `bind_interface_to_stable_ca()`
+
+This guarantees Junos never sees two overlapping configuration sessions from
+this script on the same device, regardless of which action or interface
+triggered them.
+
 ## Related Docs
 
 - [SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md) — historical
