@@ -942,6 +942,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
 
     # Build sed pattern to remove old keys with matching comments before adding new ones.
     # This prevents duplicate SSH key entries when provisioning runs multiple times.
+    # Also remove legacy bootstrap keys to clean up old naming conventions.
     if source_names:
         import re as re_module
         pattern_parts = []
@@ -950,8 +951,10 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
             # Escape special regex characters for sed
             escaped = re_module.escape(comment)
             pattern_parts.append(escaped)
+        # Also remove old bootstrap keys with @qkd-peer-bootstrap suffix
+        pattern_parts.append(r".*@qkd-peer-bootstrap")
         filter_pattern = "|".join(pattern_parts)
-        # Remove lines ending with any of the target comments
+        # Remove lines ending with any of the target comments or bootstrap pattern
         filter_cmd = f"[ -f {quoted_auth_path} ] && cat {quoted_auth_path} | sed -E '/({filter_pattern})$/d' || true"
     else:
         filter_cmd = f"[ -f {quoted_auth_path} ] && cat {quoted_auth_path} || true"
