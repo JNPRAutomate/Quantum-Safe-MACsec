@@ -8,7 +8,7 @@ qkd_policy:
 
   bootstrap_with_fallback_key: true
   bootstrap_fallback_keys: 1
-  interval_seconds: 600
+  interval_seconds: 60
 
   # Keep batch size aligned with installed window for deterministic rotation.
   # Increase to 5 only if max_installed_keys is also increased to 5.
@@ -16,8 +16,8 @@ qkd_policy:
   max_installed_keys: 4
 
   # Single pending-control window family.
-  pending_confirm_grace_seconds: 120
-  pending_stuck_recovery_seconds: 420
+  pending_confirm_grace_seconds: 60
+  pending_stuck_recovery_seconds: 180
 
   # Queue transport safety controls
   peer_enqueue_min_margin_seconds: 30
