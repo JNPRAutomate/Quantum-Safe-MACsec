@@ -1168,25 +1168,18 @@ def bootstrap_script_user_on_device(
                     key_name=str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
                     key_comment=f"{script_user}@{name}",
                 )
-        if script_auth_mode == "key-only" and peer_local_private_key_path:
-            if not sync_peer_transport_keypair_from_local(
+        # NOTE: Peer transport keys MUST be unique per device for rotation to work correctly
+        # Do NOT sync from local; instead generate unique on-box keys via run_script_user_key_fix
+        # This ensures each device has its own ed25519 keypair for etsi_peer_view
+        if script_auth_mode == "key-only":
+            run_script_user_key_fix(
                 dev,
                 name,
                 script_user,
-                peer_local_private_key_path,
-            ):
-                print(
-                    "[%s] WARN peer transport key sync did not complete; continuing with current on-box key material"
-                    % name
-                )
-                run_script_user_key_fix(
-                    dev,
-                    name,
-                    script_user,
-                    deploy_user,
-                    key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
-                    key_comment=f"{peer_cmd_user}@{name}",
-                )
+                deploy_user,
+                key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
+                key_comment=f"{peer_cmd_user}@{name}",
+            )
 
         if not run_script_user_key_fix(
             dev, name, script_user, deploy_user,
