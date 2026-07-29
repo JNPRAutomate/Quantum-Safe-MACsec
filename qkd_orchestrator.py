@@ -944,13 +944,19 @@ def handle_create(args):
     reset_local_runtime_for_create()
     script_user = QKD["SCRIPT_USER"]
 
-    secrets = base.get("secrets", {})
-    global_auth = {}
-    if secrets:
-        user = secrets.get("default_user")
-        pwd = secrets.get("default_password")
-        if user and pwd:
-            global_auth = {"username": user, "password": pwd}
+    secrets = base.get("secrets", {}) if isinstance(base.get("secrets", {}), dict) else {}
+    global_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("default_user")
+    )
+    global_pwd = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("default_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+    )
+    global_auth = {"username": global_user, "password": global_pwd} if global_user and global_pwd else {}
 
     device_auth_map = base.get("devices", {})
 
@@ -976,10 +982,14 @@ def handle_create(args):
         if not device_auth:
             device_auth = device_auth_map.get(name, {}).get("auth")
         if not device_auth:
-            device_auth = copy.deepcopy(global_auth) if global_auth else {
-                "username": "admin",
-                "password": "admin123",
-            }
+            if not global_auth:
+                raise RuntimeError(
+                    f"Inventory device '{name}' has no 'auth' and no bootstrap/default credentials "
+                    "were resolved. Set secrets.bootstrap_user/secrets.bootstrap_password (or "
+                    "secrets.default_user/secrets.default_password) in inventory_base.yaml, or export "
+                    "QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD (or QKD_DEFAULT_PASSWORD)."
+                )
+            device_auth = copy.deepcopy(global_auth)
 
         kme_ip = kme_ip_from_inventory_device(inv_dev)
         if not kme_ip:
