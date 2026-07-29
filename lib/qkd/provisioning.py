@@ -899,6 +899,23 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         print(f"[{device_name}] No valid peer SSH keys to configure")
         return
 
+    # Derive the self key line for Junos login authentication bootstrap.
+    # This must use the *local device's own* peer transport key with a comment
+    # of peer_cmd_user@device_name so operators can immediately identify it.
+    # Using key_lines[0] (first peer) would embed the wrong device name in the
+    # Junos authentication comment (e.g. etsi_peer_view@sae-003 instead of
+    # etsi_peer_view@MX3).
+    self_pub_key = pub_keys.get(device_name)
+    self_key_line = None
+    if self_pub_key:
+        self_parts = self_pub_key.strip().split()
+        if len(self_parts) >= 2:
+            self_key_line = f"{self_parts[0]} {self_parts[1]} {peer_cmd_user}@{device_name}"
+    if not self_key_line:
+        # Fallback: use first available key line (should not happen in normal deploy)
+        self_key_line = key_lines[0]
+        print(f"[{device_name}] WARN self peer key not found, falling back to first peer key for login bootstrap")
+
     peer_cmd_user_class = (
         secrets.get("peer_cmd_user_class")
         or device_dict.get("peer_cmd_user_class")
@@ -916,7 +933,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
             device_name,
             peer_cmd_user,
             peer_cmd_user_class=peer_cmd_user_class,
-            public_key_line=key_lines[0],
+            public_key_line=self_key_line,
         )
     except Exception as exc:
         raise RuntimeError(
