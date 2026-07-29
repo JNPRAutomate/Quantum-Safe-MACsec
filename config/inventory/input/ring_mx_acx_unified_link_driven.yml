@@ -72,7 +72,7 @@ devices:
   - et-0/0/6
   - et-0/0/8
 - name: ACX1
-  hostname: acx1
+  hostname: acx7348-p1
   platform: acx
   ip: 100.123.170.202
   kme:
@@ -83,7 +83,7 @@ devices:
   - et-2/0/2
   - et-2/0/4
 - name: ACX2
-  hostname: acx2
+  hostname: acx7332-p1
   platform: acx
   ip: 100.123.170.201
   kme:
@@ -93,7 +93,7 @@ devices:
   - et-2/0/0
   - et-2/0/2
 - name: ACX3
-  hostname: acx3
+  hostname: acx7348-p2
   platform: acx
   ip: 100.123.170.203
   kme:
@@ -104,7 +104,7 @@ devices:
   - et-2/0/2
   - et-2/0/4
 - name: ACX4
-  hostname: acx4
+  hostname: acx7100-p2
   platform: acx
   ip: 100.123.182.2
   kme:
@@ -114,7 +114,7 @@ devices:
   - et-0/0/0
   - et-0/0/2
 - name: ACX5
-  hostname: acx5
+  hostname: acx7100-p1
   platform: acx
   ip: 100.123.182.1
   kme:

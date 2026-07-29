@@ -1010,6 +1010,7 @@ def handle_create(args):
         }
 
         optional_keys = [
+            "hostname",
             "ssh_trust",
             "mgmt_ip",
             "qkd",
