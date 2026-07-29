@@ -254,7 +254,7 @@ def pyez_shell_cmd(device, command, timeout=60, include_failed_marker=True):
     passwd = auth.get("password")
     if not user or not passwd:
         return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
-    dev = Device(host=host, user=user, passwd=passwd, port=22, timeout=timeout)
+    dev = Device(host=host, user=user, passwd=passwd, port=830, timeout=timeout)
     try:
         dev.open()
         rsp = dev.rpc.request_shell_execute(command=command)
@@ -288,7 +288,7 @@ def pyez_cli_cmd(device, command, timeout=60, include_failed_marker=True):
     passwd = auth.get("password")
     if not user or not passwd:
         return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
-    dev = Device(host=host, user=user, passwd=passwd, port=22, timeout=timeout)
+    dev = Device(host=host, user=user, passwd=passwd, port=830, timeout=timeout)
     try:
         dev.open()
         rsp = dev.rpc.cli(command, format="text")
