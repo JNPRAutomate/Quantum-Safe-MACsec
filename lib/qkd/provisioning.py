@@ -968,10 +968,21 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         # Also remove old bootstrap keys with @qkd-peer-bootstrap suffix
         pattern_parts.append(r".*@qkd-peer-bootstrap")
         filter_pattern = "|".join(pattern_parts)
-        # Remove lines ending with any of the target comments or bootstrap pattern
-        filter_cmd = f"[ -f {quoted_auth_path} ] && cat {quoted_auth_path} | sed -E '/({filter_pattern})$/d' || true"
+        # Use an if/fi block so the entire block's stdout is redirected to the
+        # tmp file.  The previous pattern "[ -f ] && cat | sed || true >> file"
+        # only redirected "true"'s (empty) stdout to the file because ">>" binds
+        # to the last simple command in the AND-OR list, not to the sed pipeline.
+        filter_block = (
+            f"if [ -f {quoted_auth_path} ]; then "
+            f"cat {quoted_auth_path} | sed -E '/({filter_pattern})$/d'; "
+            f"fi"
+        )
     else:
-        filter_cmd = f"[ -f {quoted_auth_path} ] && cat {quoted_auth_path} || true"
+        filter_block = (
+            f"if [ -f {quoted_auth_path} ]; then "
+            f"cat {quoted_auth_path}; "
+            f"fi"
+        )
 
     sync_payload = (
         "set -e; "
@@ -983,7 +994,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
         f"chmod 600 {quoted_auth_path}; "
         f"rm -f {quoted_tmp_auth_path}; "
         f"touch {quoted_tmp_auth_path}; "
-        f"{filter_cmd} >> {quoted_tmp_auth_path}; "
+        f"{filter_block} >> {quoted_tmp_auth_path}; "
         f"{append_expr}; "
         f"mv {quoted_tmp_auth_path} {quoted_auth_path}; "
         f"chown {quoted_user} {quoted_ssh_dir} {quoted_auth_path}; "
@@ -996,9 +1007,9 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
 
     _run_or_raise(
         "verify",
-        f"ls -ld {quoted_ssh_dir}; ls -l {quoted_auth_path}",
+        f"ls -ld {quoted_ssh_dir}; ls -l {quoted_auth_path}; wc -l {quoted_auth_path}",
     )
-    print(f"[{device_name}] Peer SSH authorized_keys synchronized OK")
+    print(f"[{device_name}] Peer SSH authorized_keys synchronized OK (keys={len(key_lines)} peers={source_names})")
 
 
 # ----------------------------------------
@@ -1131,8 +1142,6 @@ def push_config(device_name, device, commands, base, devices_dict=None):
 
         push_certs(dev, device_name, device)
         configure_qkd_scripts(dev, device_name, base)
-        if devices_dict:
-            apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         max_lock_retries = 6
@@ -1183,6 +1192,12 @@ def push_config(device_name, device, commands, base, devices_dict=None):
                     time.sleep(lock_retry_delay_s)
                     continue
                 raise
+
+        # Sync authorized_keys AFTER all commits so that any Junos-platform
+        # rebuild of the user SSH files (triggered by login-user config commits)
+        # does not overwrite the multi-peer key set we write here.
+        if devices_dict:
+            apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
 
     finally:
         dev.close()
