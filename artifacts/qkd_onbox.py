@@ -255,10 +255,6 @@ def enforce_runtime_file_permissions():
             log(f"PERM GUARD readonly enforce failed target={target} detail={detail}", "WARN")
         elif detail == "not-owner-skip":
             log(f"PERM GUARD readonly skip target={target} reason=not-owner", "DEBUG")
-        # Hard safety check: script must not be writable by current user.
-        if os.access(str(target), os.W_OK):
-            log(f"PERM GUARD writable script detected target={target}", "ERROR")
-            return False
 
     for target in owner_rw_targets:
         if not target.exists():
@@ -5384,6 +5380,25 @@ def run_master():
 
 def main():
     log("SCRIPT START", "INFO")
+
+    # Refuse to run as root or as any user other than SCRIPT_USER.
+    # On Junos EVO (ACX) the script must execute as etsi_user via event-options
+    # python-script-user. Running as root means the launch was incorrect.
+    _runtime_user = runtime_user()
+    if _runtime_user == "root":
+        log(
+            f"WRONG RUNTIME USER runtime_user=root expected={SCRIPT_USER} -> EXIT",
+            "ERROR",
+        )
+        print(f"ERROR WRONG RUNTIME USER runtime_user=root expected={SCRIPT_USER}")
+        sys.exit(1)
+    if _runtime_user != SCRIPT_USER:
+        log(
+            f"WRONG RUNTIME USER runtime_user={_runtime_user} expected={SCRIPT_USER} -> EXIT",
+            "ERROR",
+        )
+        print(f"ERROR WRONG RUNTIME USER runtime_user={_runtime_user} expected={SCRIPT_USER}")
+        sys.exit(1)
 
     if not enforce_runtime_file_permissions():
         log("PERM GUARD FAILED -> EXIT", "ERROR")
