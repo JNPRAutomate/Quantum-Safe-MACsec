@@ -769,7 +769,11 @@ def check_peer_ssh_from_device(device):
         # used by runtime queue/status exchange, without requiring remote shell.
         peer_ip_safe = str(peer_ip).replace(".", "_")
         local_probe = f"/var/tmp/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
-        remote_probe = f"/var/tmp/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
+        # Use the peer_cmd_user home dir as remote destination.
+        # On Junos EVO (ACX) /var/tmp has SMACK label 'System' which blocks
+        # writes by non-root users. The peer_cmd_user home is owned by that
+        # user and always writable.
+        remote_probe = f"/var/home/{peer_cmd_user}/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
         cmd = (
             f"echo qkd-peer-probe > {shlex.quote(local_probe)}; "
             f"scp -O -i {shlex.quote(key_path)} "
