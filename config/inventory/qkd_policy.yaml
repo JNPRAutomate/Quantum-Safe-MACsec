@@ -7,8 +7,8 @@ qkd_policy:
   peer_transport_mode: queue
   # MACsec keychain key rotation cadence AND the Junos event-options QKD_TIMER
   # tick interval that invokes qkd_onbox.py (see event.j2) - both driven by
-  # this single value. 600s = key rotation every 10 minutes.
-  interval_seconds: 600
+  # this single value. 120s = key rotation every 2 minutes.
+  interval_seconds: 120
 
   # Keep batch size aligned with installed window for deterministic rotation.
   # Increase to 5 only if max_installed_keys is also increased to 5.
@@ -18,14 +18,14 @@ qkd_policy:
   # Single pending-control window family. Both default to formulas derived
   # from interval_seconds/key_batch_size (pending_confirm_grace_seconds()/
   # pending_stuck_recovery_seconds() in qkd_onbox.py); pinned explicitly here
-  # to keep them in lockstep with interval_seconds=600 above.
-  pending_confirm_grace_seconds: 600
-  pending_stuck_recovery_seconds: 3000
+  # to keep them in lockstep with interval_seconds=120 above.
+  pending_confirm_grace_seconds: 120
+  pending_stuck_recovery_seconds: 600
 
   # Queue transport safety controls
   # Minimum lead time before a batch's first key activation - scales with
   # interval_seconds (default formula: max(15, interval_seconds // 2)).
-  peer_enqueue_min_margin_seconds: 300
+  peer_enqueue_min_margin_seconds: 60
   # The peer only drains its inbound-batch queue once per its own periodic
   # script tick (interval_seconds above, driven by Junos event-options
   # QKD_TIMER), not immediately upon SCP receipt of the batch file. A batch
@@ -34,12 +34,11 @@ qkd_policy:
   # writes the ACK. Sized as one full tick plus a fixed buffer that covers
   # install/lock/SCP/poll overhead (see peer_batch_ack_timeout_seconds() in
   # qkd_onbox.py).
-  peer_batch_ack_timeout_seconds: 690
-  # Poll less aggressively now that the timeout window is longer - avoids
-  # excessive SCP/SSH process churn while waiting for the ACK.
-  peer_batch_ack_poll_interval_seconds: 10
+  peer_batch_ack_timeout_seconds: 210
+  # Poll more frequently to match the shorter timeout window.
+  peer_batch_ack_poll_interval_seconds: 5
 
   # Peer SSH key rotation (etsi_peer_view user ED25519 keypair)
   # Rotate every N seconds. Set to 0 to disable rotation.
   # Private key stays on-device, public key synced peer-to-peer.
-  peer_key_rotation_interval_seconds: 3600
+  peer_key_rotation_interval_seconds: 600
