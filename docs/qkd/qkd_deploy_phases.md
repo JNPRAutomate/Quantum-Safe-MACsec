@@ -111,6 +111,8 @@ Pushes per-device runtime config files:
 
 Commits the MACsec connectivity-association and event-options configuration to each device:
 - Connectivity-associations (CA) referencing the stable keychain
+- Deterministic fallback CKN/CAK on each CA when
+  `bootstrap_with_fallback_key: true`
 - Event-options timer binding for periodic `qkd_onbox.py` invocation
 - `etsi_user` Junos login class with `allow-commands` for security + `etsi_peer_view` authentication management
 

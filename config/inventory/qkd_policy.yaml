@@ -2,6 +2,10 @@ qkd_policy:
   # Minimal profile: deterministic master/slave synchronization.
   rekey_enabled: true
   batch_enabled: true
+  # Keep a deterministic MACsec fallback CKN/CAK on every connectivity
+  # association while QKD keychains are bootstrapped and rotated.
+  bootstrap_with_fallback_key: true
+  bootstrap_fallback_keys: 1
   strict_sync_enabled: true
   pending_auto_evict_enabled: true
   peer_transport_mode: queue
