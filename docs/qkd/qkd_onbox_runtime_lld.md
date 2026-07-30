@@ -307,6 +307,29 @@ The runtime promotes a pending key only when both of these are true:
 
 When that happens, `promote_pending_key_if_mka_confirmed()` moves the head of the pending queue into `active_key_id`.
 
+#### Reconciliation fallback for router-autonomous advancement
+
+In some scenarios, the router autonomously activates a key at its scheduled time even if MKA confirmation (CKN match) has not yet arrived. This can occur when:
+
+- MKA CKN derivation is temporarily delayed or transient mismatch occurs,
+- peer MKA state differs momentarily,
+- or network conditions introduce CKN confirmation latency.
+
+To prevent deadlock (where the script waits forever for MKA confirmation on a key the router has already activated), `promote_pending_key_if_mka_confirmed()` includes a **reconciliation fallback**:
+
+1. If standard MKA CKN confirmation fails (no match found in pending queue),
+2. the runtime checks whether the router's active CAK name matches any pending key's expected CKN,
+3. if a match is found and the key's start-time has passed (not scheduled for the future),
+4. the runtime promotes that pending key directly and logs `RECONCILIATION FALLBACK` with reason `router_autonomously_advanced`.
+
+This allows intermediate keys in a batch to advance even if MKA CKN confirmation lags. For a 4-key batch with `interval_seconds=120`:
+
+- key[0] at 11:14:02 → activates, confirmed via MKA CKN match,
+- key[1] at 11:16:02 → router activates, MKA confirmation delayed → reconciliation fallback promotes,
+- key[2] at 11:18:02 → reconciliation fallback promotes,
+- key[3] at 11:20:02 → reconciliation fallback promotes.
+- Once key[3] is active and 120s have elapsed, the next batch can be installed atomically.
+
 ### Why the key-chain does not “do everything”
 
 JunOS key-chain configuration is only the local container for staged keys.

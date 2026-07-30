@@ -219,7 +219,52 @@ Shell-based authorized_keys sync correctly filters and appends keys. (Note: on E
 
 ---
 
-## 8) Operational validation guidance
+## 8) Runtime: Reconciliation fallback for router-autonomous key advancement (2026-07-30)
+
+### What changed
+
+- `promote_pending_key_if_mka_confirmed()` now includes a **reconciliation fallback** path.
+- If standard MKA CKN confirmation fails (no exact CKN match in pending queue):
+  1. the runtime checks whether the router's active CAK name matches any pending key's expected CKN,
+  2. if a match is found and the key's start-time has passed, promote that key anyway,
+  3. log `RECONCILIATION FALLBACK` with reason `router_autonomously_advanced`.
+
+### Why
+
+In multi-key batch rotation (e.g. 4-key batch with 120-second interval), intermediate keys can be activated by the router at their scheduled start-time, but MKA CKN confirmation may arrive with delay or transient mismatch. Without reconciliation:
+
+- script waits indefinitely for MKA confirmation on key[1] while router has already activated it,
+- key[2] and key[3] remain stuck pending,
+- next batch rotation is blocked.
+
+With reconciliation:
+
+- script recognizes router's autonomous advancement and promotes pending keys,
+- entire batch progresses (key[0]→key[1]→key[2]→key[3]),
+- batch consumption completes and next rotation can proceed.
+
+### Scenario example
+
+4-key batch with `interval_seconds=120`:
+
+```
+11:14:02  key[0] start → Router activates, MKA CKN match ✓ → Promote via normal path
+11:16:02  key[1] start → Router activates, MKA CKN delayed → RECONCILIATION FALLBACK promotes key[1]
+11:18:02  key[2] start → Router activates, MKA CKN delayed → RECONCILIATION FALLBACK promotes key[2]
+11:20:02  key[3] start → Router activates, MKA CKN delayed → RECONCILIATION FALLBACK promotes key[3]
+          → pending=None, active=key[3] (last slot)
+11:20:02+ → After 120s, master can atomically install BATCH 2 without flap
+```
+
+### Result
+
+- No deadlock: batch rotation completes even if intermediate MKA CKN confirmations lag.
+- No flap: atomicity of batch installation prevents interface flaps.
+- Deterministic behavior: runtime respects router's autonomous key advancement as authoritative.
+
+---
+
+## 9) Operational validation guidance
 
 Use this order when judging runtime health:
 
