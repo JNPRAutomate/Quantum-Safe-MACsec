@@ -775,9 +775,14 @@ def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
             print(f"[{device_name}] peer_cmd_user class policy already aligned class={peer_cmd_user_class}")
 
 
-def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_class="qkd-peer-cmd-class", public_key_line=None):
+def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_class="qkd-peer-cmd-class", public_key_lines=None):
     if not peer_cmd_user:
         raise ValueError("peer_cmd_user is required")
+
+    # Normalize: accept a single string or a list of key lines.
+    if isinstance(public_key_lines, str):
+        public_key_lines = [public_key_lines] if public_key_lines else []
+    public_key_lines = [k for k in (public_key_lines or []) if k and k.strip()]
 
     with Config(dev) as cu:
         # Clean bootstrap: remove old user config first (deletes all old SSH keys)
@@ -786,7 +791,7 @@ def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_cl
             format="set",
             ignore_warning=["statement not found"],
         )
-        
+
         # Then create fresh user config
         cu.load(
             f"set system login user {peer_cmd_user} class {peer_cmd_user_class}",
@@ -794,11 +799,15 @@ def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_cl
             ignore_warning=["statement not found"],
         )
 
-        if public_key_line:
-            parts = public_key_line.strip().split()
+        # Configure ALL peer transport keys in the Junos login config so that
+        # mgd writes the complete authorized_keys on any platform (including
+        # Junos EVO / ACX where mgd periodically regenerates authorized_keys
+        # from config, overwriting any shell-level edits).
+        for key_line in public_key_lines:
+            parts = key_line.strip().split()
             if len(parts) >= 2:
                 key_type = parts[0]
-                key_payload = public_key_line.replace('"', '\\"')
+                key_payload = key_line.replace('"', '\\"')
                 cu.load(
                     f"set system login user {peer_cmd_user} authentication {key_type} \"{key_payload}\"",
                     format="set",
@@ -806,14 +815,15 @@ def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_cl
                 )
 
         if cu.diff():
-            print(f"[{device_name}] Applying peer_cmd_user login bootstrap user={peer_cmd_user} class={peer_cmd_user_class}")
+            key_count = len(public_key_lines)
+            print(f"[{device_name}] Applying peer_cmd_user login bootstrap user={peer_cmd_user} class={peer_cmd_user_class} keys={key_count}")
             commit_safely(
                 dev,
                 cu,
                 device_name,
                 sync=True,
                 phase="PEER_CMD_USER_BOOTSTRAP",
-                detail=f"user={peer_cmd_user} class={peer_cmd_user_class}",
+                detail=f"user={peer_cmd_user} class={peer_cmd_user_class} keys={key_count}",
             )
         else:
             print(f"[{device_name}] peer_cmd_user login already aligned user={peer_cmd_user}")
@@ -916,7 +926,7 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
             device_name,
             peer_cmd_user,
             peer_cmd_user_class=peer_cmd_user_class,
-            public_key_line=key_lines[0],
+            public_key_lines=key_lines,
         )
     except Exception as exc:
         raise RuntimeError(
