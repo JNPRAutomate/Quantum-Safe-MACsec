@@ -41,4 +41,4 @@ qkd_policy:
   # Peer SSH key rotation (etsi_peer_view user ED25519 keypair)
   # Rotate every N seconds. Set to 0 to disable rotation.
   # Private key stays on-device, public key synced peer-to-peer.
-  peer_key_rotation_interval_seconds: 600
+  peer_key_rotation_interval_seconds: 300
