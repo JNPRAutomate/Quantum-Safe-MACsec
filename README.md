@@ -186,10 +186,30 @@ Customer summary utility:
 
 ## 12. Detailed documentation
 
-1. `docs/README.md`
-2. `docs/qkd/ARCHITECTURE.md`
-3. `docs/kme/ARCHITECTURE.md`
-4. `docs/pqc/THEORY_AND_STANDARDS.md`
-5. `docs/qkd/CLI_REFERENCE.md`
-6. `docs/kme/CLI_REFERENCE.md`
-7. `docs/pqc/GLOSSARY.md`
+Start here:
+
+1. [docs/readme.md](docs/readme.md)
+2. [docs/toc.md](docs/toc.md)
+3. [docs/qkd/toc.md](docs/qkd/toc.md)
+4. [docs/kme/toc.md](docs/kme/toc.md)
+5. [docs/pqc/toc.md](docs/pqc/toc.md)
+
+Recommended QKD reading flow:
+
+1. [docs/qkd/architecture.md](docs/qkd/architecture.md)
+2. [docs/qkd/config_generation.md](docs/qkd/config_generation.md)
+3. [docs/qkd/qkd_onbox_runtime_lld.md](docs/qkd/qkd_onbox_runtime_lld.md)
+4. [docs/qkd/qkd_deploy_phases.md](docs/qkd/qkd_deploy_phases.md)
+5. [docs/qkd/platform_differences_mx_acx_evo.md](docs/qkd/platform_differences_mx_acx_evo.md)
+6. [docs/qkd/ssh_key_architecture.md](docs/qkd/ssh_key_architecture.md)
+7. [docs/qkd/mka_sak_rekey_flow.md](docs/qkd/mka_sak_rekey_flow.md)
+8. [docs/qkd/link_master_role_requirements.md](docs/qkd/link_master_role_requirements.md)
+9. [docs/qkd/peer_key_rotation_mesh_trust.md](docs/qkd/peer_key_rotation_mesh_trust.md)
+
+Supporting references:
+
+1. [docs/qkd/cli_reference.md](docs/qkd/cli_reference.md)
+2. [docs/kme/architecture.md](docs/kme/architecture.md)
+3. [docs/kme/cli_reference.md](docs/kme/cli_reference.md)
+4. [docs/pqc/theory_and_standards.md](docs/pqc/theory_and_standards.md)
+5. [docs/pqc/glossary.md](docs/pqc/glossary.md)
