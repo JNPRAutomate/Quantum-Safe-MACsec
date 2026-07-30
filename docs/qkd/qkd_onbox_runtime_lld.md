@@ -196,7 +196,9 @@ The script supports:
 - `runtime_user()`: local runtime username.
 - `validate_ssh_runtime_for_master()`: ensures SSH key exists/readable.
 - `send_command(link, action, iface, key_id=None, generation=None, start_time=None)`: master -> peer `op qkd_onbox.py action ...`.
-- `get_peer_status(link, iface)`: master pulls peer status JSON over SSH.
+- `get_peer_status(link, iface)`: master pulls the peer status snapshot with
+  `etsi_peer_view`. Missing, invalid, or stale snapshots require a live query
+  as `SCRIPT_USER`; if that query fails, stale data is rejected.
 
 ## 5.12 Slave action parsing/handlers
 
@@ -210,6 +212,7 @@ The script supports:
 - `run_master()`: full master decision engine:
   - promote pending if confirmed,
   - enforce hold-down and health gates,
+  - skip the link cycle when no fresh, valid peer state is available,
   - verify local and peer state parity,
   - rotate keys when due,
   - coordinate peer install and local install,

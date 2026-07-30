@@ -4134,10 +4134,7 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
-        state = _run_remote_status_command(SCRIPT_USER, "status-live-miss")
-        if state is None and PEER_CMD_USER != SCRIPT_USER:
-            state = _run_remote_status_command(PEER_CMD_USER, "status-live-miss-fallback")
-        return state
+        return _run_remote_status_command(SCRIPT_USER, "status-live-miss")
 
     state = _parse_status_payload(stdout)
     if state is None:
@@ -4145,24 +4142,36 @@ def get_peer_status(link, iface):
         return None
 
     exported_at = state.get("exported_at") if isinstance(state, dict) else None
-    if exported_at is not None:
-        try:
-            stale_threshold = max(rotation_interval_seconds() * 2, 120)
-            age = int(time.time()) - int(exported_at)
-            if age > stale_threshold:
-                log(
-                    f"PEER STATUS SNAPSHOT STALE age={age}s threshold={stale_threshold}s -> QUERY LIVE",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale")
-                if fresh_state is None and PEER_CMD_USER != SCRIPT_USER:
-                    fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale-fallback")
-                if fresh_state is not None:
-                    return fresh_state
-        except Exception:
-            pass
+    try:
+        exported_at = int(exported_at)
+    except (TypeError, ValueError):
+        log(
+            f"PEER STATUS SNAPSHOT INVALID exported_at={exported_at} -> QUERY LIVE",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return _run_remote_status_command(SCRIPT_USER, "status-live-invalid-snapshot")
+
+    stale_threshold = max(rotation_interval_seconds() * 2, 120)
+    age = int(time.time()) - exported_at
+    if age > stale_threshold:
+        log(
+            f"PEER STATUS SNAPSHOT STALE age={age}s threshold={stale_threshold}s -> QUERY LIVE",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale")
+        if fresh_state is None:
+            log(
+                f"PEER STATUS FRESH DATA UNAVAILABLE stale_age={age}s threshold={stale_threshold}s",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            return None
+        return fresh_state
 
     return state
 
@@ -5119,38 +5128,22 @@ def run_master():
         peer_state = get_peer_status(link, iface)
         if peer_state is None:
             log(
-                "PEER STATUS unavailable -> MASTER AUTHORITATIVE CONTINUE",
-                "WARN",
+                "PEER STATUS unavailable -> SKIP LINK CYCLE",
+                "ERROR",
                 iface,
                 "MASTER",
             )
-            peer_state = {
-                "ca_name": state.get("ca_name"),
-                "keychain_name": state.get("keychain_name"),
-                "active_key_id": state.get("active_key_id"),
-                "pending_keys": state.get("pending_keys", []),
-                "pending_key_id": state.get("pending_key_id"),
-                "next_start_time": state.get("next_start_time"),
-                "installed_keys": state.get("installed_keys", []),
-            }
+            continue
 
         if not keychain_state_valid(peer_state):
             log(
-                f"PEER STATE INVALID -> MASTER AUTHORITATIVE CONTINUE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
+                f"PEER STATE INVALID -> SKIP LINK CYCLE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
                 f"local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}",
-                "WARN",
+                "ERROR",
                 iface,
                 "MASTER",
             )
-            peer_state = {
-                "ca_name": state.get("ca_name"),
-                "keychain_name": state.get("keychain_name"),
-                "active_key_id": state.get("active_key_id"),
-                "pending_keys": state.get("pending_keys", []),
-                "pending_key_id": state.get("pending_key_id"),
-                "next_start_time": state.get("next_start_time"),
-                "installed_keys": state.get("installed_keys", []),
-            }
+            continue
 
         local_pending_id = state.get("pending_key_id")
         peer_pending_id = peer_state.get("pending_key_id")
