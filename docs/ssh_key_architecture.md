@@ -9,7 +9,7 @@ The QKD/MACsec infrastructure uses **two Junos user accounts** with distinct rol
 | `etsi_user` | `SCRIPT_USER` | Runs `qkd_onbox.py`; orchestrator management access; KME calls; keychain config commits |
 | `etsi_peer_view` | `PEER_CMD_USER` | Device-to-device transport-only identity; peer key installation; peer status |
 
-> **Historical note:** An earlier architecture used `macsec_user` as the script runner. That design is superseded. `macsec_user` no longer exists in ver3.3.2. See `docs/qkd/archive/` for historical docs.
+> **Historical note:** An earlier architecture used `macsec_user` as the script runner. That design is superseded. `macsec_user` no longer exists in ver3.3.2. See `archive/docs/qkd/` for historical docs.
 
 ---
 
@@ -173,5 +173,4 @@ During `qkd_orchestrator.py deploy`:
 - Platform-specific behavior (EVO vs MX): [docs/qkd/platform_differences_mx_acx_evo.md](qkd/platform_differences_mx_acx_evo.md)
 - Deploy flow: [docs/qkd/qkd_deploy_phases.md](qkd/qkd_deploy_phases.md)
 - Orchestrator architecture: [docs/qkd/architecture.md](qkd/architecture.md)
-- Historical design (superseded): [docs/qkd/archive/](qkd/archive/)
-
+- Historical design (superseded): [archive/docs/qkd/](../archive/docs/qkd/)

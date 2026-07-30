@@ -37,5 +37,5 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 ## Historical / Archive
 
 - [SSH Key Rotation Design — historical (superseded)](ssh_key_rotation_design.md)
-- [On-Box Runtime LLD for ver3.3.1 (archive)](archive/qkd_onbox_ver3_3_1_runtime_lld.md)
-- [Architecture Review — pre-implementation (archive)](archive/qkd_onbox_architecture_review.md)
+- [On-Box Runtime LLD for ver3.3.1 (archive)](../../archive/docs/qkd/qkd_onbox_ver3_3_1_runtime_lld.md)
+- [Architecture Review — pre-implementation (archive)](../../archive/docs/qkd/qkd_onbox_architecture_review.md)

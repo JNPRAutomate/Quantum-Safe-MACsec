@@ -3,7 +3,7 @@
 ## Document Set Scope
 
 This table of contents includes only active documents under docs.
-Archive material is in `docs/qkd/archive/`.
+Archive material is in `archive/docs/`.
 
 ## Top-Level
 
