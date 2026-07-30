@@ -129,6 +129,9 @@ if not isinstance(CONFIG.get("links"), list):
     CONFIG["links"] = []
 
 DEVICE = CONFIG["local_sae"]
+# Canonical device name (e.g. "MX2") as used by the orchestrator for key comments.
+# Falls back to DEVICE (local_sae) for backwards compatibility.
+DEVICE_NAME = str(CONFIG.get("device_name") or DEVICE)
 KME_IP = CONFIG["kme_ip"]
 KME_PORT = int(CONFIG.get("kme_port", 443))
 CA_CERT = CONFIG["ca_cert"]
@@ -748,7 +751,7 @@ def _peer_generate_new_keypair(device_name, temp_suffix="new"):
             if os.path.exists(stale):
                 os.remove(stale)
 
-        comment = f"{PEER_CMD_USER}@{device_name}"
+        comment = f"{PEER_CMD_USER}@{DEVICE_NAME}"
         subprocess.run(
             ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", key_path],
             check=True,
@@ -823,20 +826,25 @@ def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_fu
     send_command_func/peer_cmd_user/ssh_home_base are accepted (and ignored
     beyond defaulting) for call-site compatibility; the module globals
     PEER_CMD_USER/PEER_SSH_KEY/SSH_KEY are used directly.
-    """
-    log(f"PEER-KEY starting peer SSH key rotation cycle for {device_name}", "INFO", mode="PEER-KEY-ROTATION")
 
-    new_key_path, new_pub_path, new_pubkey = _peer_generate_new_keypair(device_name)
+    device_name is accepted for call-site compatibility but DEVICE_NAME (canonical
+    orchestrator name, e.g. "MX2") is always used for keypair comments and peer
+    distribution so that key comments remain consistent with provisioning.
+    """
+    canonical_name = DEVICE_NAME
+    log(f"PEER-KEY starting peer SSH key rotation cycle for {canonical_name}", "INFO", mode="PEER-KEY-ROTATION")
+
+    new_key_path, new_pub_path, new_pubkey = _peer_generate_new_keypair(canonical_name)
     if not new_pubkey:
         log("PEER-KEY ERROR failed to generate new peer SSH keypair", "ERROR", mode="PEER-KEY-ROTATION")
         return False
 
-    peer_names = [name for name in local_devices_dict.keys() if name != device_name]
+    peer_names = [name for name in local_devices_dict.keys() if name != device_name and name != canonical_name]
     failed_peers = []
 
     for peer_name in peer_names:
         peer_ip = (local_devices_dict.get(peer_name) or {}).get("ip")
-        if not _peer_distribute_pubkey_to_peer(device_name, peer_name, peer_ip, new_pubkey):
+        if not _peer_distribute_pubkey_to_peer(canonical_name, peer_name, peer_ip, new_pubkey):
             failed_peers.append(peer_name)
 
     if failed_peers:
@@ -863,6 +871,68 @@ def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_fu
 
     log("PEER-KEY rotation cycle completed successfully - all peers accepted new key", "INFO", mode="PEER-KEY-ROTATION")
     return True
+
+
+def _get_all_junos_auth_keys_for_user(peer_cmd_user):
+    """Return ALL authentication key lines configured for peer_cmd_user in Junos.
+    Used for blob-based matching to catch keys installed with non-canonical comments.
+    """
+    cmd = f"show configuration system login user {peer_cmd_user} | display set"
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    prefix = f"set system login user {peer_cmd_user} authentication "
+    found = []
+    for line in result.stdout.decode(errors="ignore").splitlines():
+        line = line.strip()
+        if not line.startswith(prefix):
+            continue
+        key_part = line[len(prefix):].strip()
+        m = re.match(r'^(ssh-\S+)\s+"(.+)"$', key_part)
+        if m:
+            found.append(m.group(2))
+    return found
+
+
+def _get_junos_auth_keys_for_peer_device(peer_cmd_user, source_device, extra_tags=None):
+    """Query Junos config for all authentication keys configured for peer_cmd_user
+    that have a comment matching '@<source_device>' or any of the extra_tags.
+    Returns list of full key lines.
+
+    Used to detect and clean up provisioning-installed keys that are not tracked
+    in qkd_peer_known_pubkeys.json state, preventing duplicates when runtime
+    key rotation runs for the first time after deploy.
+
+    extra_tags: additional comment substrings to match (e.g. SAE alias of the same device).
+    """
+    cmd = f"show configuration system login user {peer_cmd_user} | display set"
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    comment_tags = {f"@{source_device}"}
+    for t in (extra_tags or []):
+        if t:
+            comment_tags.add(f"@{t}")
+    prefix = f"set system login user {peer_cmd_user} authentication "
+    found = []
+    for line in result.stdout.decode(errors="ignore").splitlines():
+        line = line.strip()
+        if not line.startswith(prefix):
+            continue
+        # Extract the quoted key payload: ssh-TYPE "full-key-line"
+        key_part = line[len(prefix):].strip()
+        m = re.match(r'^(ssh-\S+)\s+"(.+)"$', key_part)
+        if m:
+            key_line = m.group(2)  # full key line: "ssh-TYPE base64 comment"
+            if any(tag in key_line for tag in comment_tags):
+                found.append(key_line)
+    return found
 
 
 def run_slave_install_peer_pubkey(source_device, pubkey_b64):
@@ -907,6 +977,42 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
         return True
 
     cli_cmds = ["configure"]
+
+    # If no state is tracked for this peer, the previous provisioning run may have
+    # installed one or more keys in Junos that are invisible to our state tracker.
+    # Query Junos directly and delete ALL stale provisioned keys for this device
+    # (identified by comment "@<source_device>") except the new key being installed.
+    # This prevents duplicates accumulating when runtime rotation first fires after deploy.
+    # Also search by the key blob itself to catch keys installed with a different comment
+    # format (e.g. "@sae-002" vs "@MX2" from pre-fix provisioning).
+    if current_pubkey_line is None:
+        new_key_blob = pubkey_line.split()[1] if len(pubkey_line.split()) >= 2 else None
+        stale_keys = _get_junos_auth_keys_for_peer_device(PEER_CMD_USER, source_device)
+        # Expand search: collect every auth key and check by blob match to catch
+        # keys installed with a different comment format (e.g. "@sae-002" vs "@MX2").
+        all_configured_keys = _get_all_junos_auth_keys_for_user(PEER_CMD_USER)
+        if new_key_blob:
+            for k in all_configured_keys:
+                k_parts = k.split()
+                if len(k_parts) >= 2 and k_parts[1] == new_key_blob and k not in stale_keys:
+                    # Same blob, different comment — also a stale version of this key
+                    stale_keys.append(k)
+        for stale_key in stale_keys:
+            if stale_key == pubkey_line:
+                continue  # Do not delete the key we're about to set
+            stale_parts = stale_key.split()
+            if len(stale_parts) >= 2:
+                stale_algo = stale_parts[0]
+                stale_payload = stale_key.replace('"', '\\"')
+                cli_cmds.append(
+                    f'delete system login user {PEER_CMD_USER} authentication {stale_algo} "{stale_payload}"'
+                )
+                log(
+                    f"PEER-PUBKEY STALE PROVISIONED KEY REMOVED source_device={source_device} key={stale_key[:80]}",
+                    "WARN",
+                    mode="PEER-KEY-ROTATION",
+                )
+
     # Only retire the key that is now TWO generations old (the "previous"
     # slot). The "current" slot (what the source device was using up until
     # this rotation) is deliberately left valid for one more cycle so the
