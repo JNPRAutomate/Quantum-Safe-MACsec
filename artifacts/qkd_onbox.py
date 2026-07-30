@@ -3975,9 +3975,9 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
-        state = _run_remote_status_command(PEER_CMD_USER, "status-live-miss")
-        if state is None and SCRIPT_USER != PEER_CMD_USER:
-            state = _run_remote_status_command(SCRIPT_USER, "status-live-miss-fallback")
+        state = _run_remote_status_command(SCRIPT_USER, "status-live-miss")
+        if state is None and PEER_CMD_USER != SCRIPT_USER:
+            state = _run_remote_status_command(PEER_CMD_USER, "status-live-miss-fallback")
         return state
 
     state = _parse_status_payload(stdout)
@@ -3997,9 +3997,9 @@ def get_peer_status(link, iface):
                     iface,
                     "MASTER",
                 )
-                fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale")
-                if fresh_state is None and SCRIPT_USER != PEER_CMD_USER:
-                    fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale-fallback")
+                fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale")
+                if fresh_state is None and PEER_CMD_USER != SCRIPT_USER:
+                    fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale-fallback")
                 if fresh_state is not None:
                     return fresh_state
         except Exception:
