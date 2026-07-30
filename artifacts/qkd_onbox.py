@@ -5133,12 +5133,23 @@ def run_master():
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
 
         # Full-batch install: replace all slots at once with chronologically ordered keys.
-        # key[0] starts at batch_epoch (immediately active after commit),
-        # key[1..N] at +interval increments so MKA sequences them autonomously.
+        # The first key must be scheduled safely in the future. Using "now" here is unsafe
+        # in queue mode because the peer only drains its inbound batch on its next timer tick;
+        # if the first key is already due (or nearly due) when the peer commits it, the
+        # transition can hit before both sides converge and flap the protected member/AE.
         install_count = max_installed_keys()
         batch_size = install_count  # always full batch; kept for compatibility with install/transport logic below
         target_slots = list(range(install_count))  # [0, 1, 2, 3]
-        batch_epoch = int(time.time())
+        first_start_time = scheduled_key_start_time(link)
+        batch_epoch = epoch_from_junos_start_time(first_start_time)
+        if batch_epoch is None:
+            log(
+                f"ROTATION SKIP reason=INVALID_SCHEDULED_START_TIME start_time={first_start_time}",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            continue
 
         first_generation = next_generation(state)
         rotation = rotation_id_for(iface, first_generation)
@@ -5270,7 +5281,7 @@ def run_master():
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
             ack_id = compute_batch_ack_id(payload_b64)
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id, bypass_enqueue_margin=True):
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id):
                 record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
                 log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                 continue
