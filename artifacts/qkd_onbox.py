@@ -590,6 +590,27 @@ def get_configured_next_pending_slot(keychain_name, iface=None, now_epoch=None):
         return None
 
     if now_epoch is None:
+        # Safety rule: if the live dataplane is still healthy, do not clear the
+        # pending head just because runtime confirmation is missing. A false clear
+        # here causes the master to schedule a brand-new batch over an existing
+        # still-inuse MACsec state, which is exactly how we can trigger a member/AE
+        # hit during the next programmed start-time.
+        mka_block = get_mka_session_block_for_iface(iface) if iface else None
+        mka_fields = parse_mka_session_fields(mka_block) if mka_block else {}
+        live_mka_secured = mka_session_secured(mka_fields) if mka_fields else False
+        expected_ca = state.get("ca_name") if isinstance(state, dict) else None
+        live_macsec_inuse = macsec_has_inuse_sa(iface, expected_ca=expected_ca) if iface else False
+        if live_mka_secured or live_macsec_inuse:
+            log(
+                f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} reason={reason} "
+                f"policy=REQUIRE_DEGRADED_LIVE_STATE live_mka_secured={live_mka_secured} "
+                f"live_macsec_inuse={live_macsec_inuse} expected_ca={expected_ca}",
+                "WARN",
+                iface,
+                "MASTER",
+            )
+            return state, False
+
         now_epoch = int(time.time())
 
     pattern = re.compile(
@@ -4799,49 +4820,28 @@ def run_master():
             log("CONTROLLED BOOTSTRAP COMPLETE AFTER LOCAL CONFIG INVALID -> EXIT THIS LINK CYCLE", "INFO", iface, "MASTER")
             continue
 
+        # Pending key is scheduled in the future but we have safety boundaries:
+        # - If pending exists and is far in future, track it for recovery timeout.
+        # - If pending start-time is "stuck" (far future + timeout exceeded), do NOT
+        #   clear it here — let the rotation decision logic handle it.
         if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
             if not state.get("pending_stuck_at"):
                 state["pending_stuck_at"] = int(time.time())
                 save_db_state(peer, iface, state)
 
-            pending_future_age_seconds = int(time.time()) - int(state.get("pending_stuck_at") or int(time.time()))
-            future_stuck_recovery_seconds = pending_stuck_recovery_seconds() + pending_confirm_grace_seconds()
-
-            if pending_future_age_seconds > future_stuck_recovery_seconds:
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
-                    iface,
-                    reason="PENDING_FUTURE_STUCK",
-                    peer_state=None,
-                    overdue_seconds=pending_future_age_seconds,
-                )
-                if cleared:
-                    save_db_state(peer, iface, state)
-                    log(
-                        f"PENDING FUTURE STUCK RECOVERY APPLIED age_seconds={pending_future_age_seconds} "
-                        f"future_stuck_recovery_seconds={future_stuck_recovery_seconds}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
             log(
                 f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} "
                 f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                f"reason=PENDING_KEY_SCHEDULED_NOT_DUE pending_age_seconds={max(0, pending_future_age_seconds)} "
-                f"future_stuck_recovery_seconds={future_stuck_recovery_seconds}",
+                f"reason=PENDING_KEY_SCHEDULED_NOT_DUE",
                 "INFO",
                 iface,
                 "MASTER",
             )
             continue
 
-        pending_stuck_exceeded = False
-        pending_stuck_overdue_seconds = None
-
-        # When pending key start-time is due, allow a short grace window for
-        # MKA confirmation to avoid premature peer-mismatch bootstrap loops.
+        # When pending key's start-time passes (grace window expired),
+        # wait for MKA confirmation. Do not force-clear the pending here — 
+        # let the rotation decision handle it when macsec is degraded or timeout reached.
         if state.get("pending_key_id") and state.get("next_start_time"):
             pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
             confirm_grace_seconds = pending_confirm_grace_seconds()
@@ -4855,63 +4855,14 @@ def run_master():
                 )
                 continue
 
-        # Simplified control rule:
-        # While a pending key exists and is not MKA-confirmed, do not enter
-        # peer mismatch / lag / bootstrap branches. Keep waiting up to a single
-        # bounded recovery window, then allow recovery.
-        if state.get("pending_key_id") and state.get("next_start_time"):
-            pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
-            confirm_grace_seconds = pending_confirm_grace_seconds()
-            stuck_recovery_seconds = pending_stuck_recovery_seconds()
-
-            now_epoch = int(time.time())
-            if pending_epoch is None:
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
-                    iface,
-                    reason="INVALID_PENDING_START_TIME",
-                    peer_state=None,
-                    overdue_seconds=None,
-                )
-                if cleared:
-                    save_db_state(peer, iface, state)
-                    continue
-
-                log(
-                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                    f"reason=PENDING_AWAITING_MKA_CONFIRMATION",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                continue
-
-            confirm_deadline = int(pending_epoch) + confirm_grace_seconds
-            overdue_seconds = now_epoch - confirm_deadline
-            if overdue_seconds <= stuck_recovery_seconds:
-                log(
-                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                    f"reason=PENDING_AWAITING_MKA_CONFIRMATION overdue_seconds={max(0, overdue_seconds)} "
-                    f"pending_stuck_recovery_seconds={stuck_recovery_seconds}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                continue
-
             log(
-                f"PENDING STUCK EXCEEDED -> ALLOW RECOVERY pending_key_id={state.get('pending_key_id')} "
-                f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} overdue_seconds={overdue_seconds} "
-                f"pending_stuck_recovery_seconds={stuck_recovery_seconds}",
-                "ERROR",
+                f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                f"reason=PENDING_AWAITING_MKA_CONFIRMATION",
+                "WARN",
                 iface,
                 "MASTER",
             )
-            pending_stuck_exceeded = True
-            pending_stuck_overdue_seconds = overdue_seconds
-            # Track when pending first became stuck for aggressive clear threshold
-            if not state.get("pending_stuck_at"):
-                state["pending_stuck_at"] = int(time.time())
+            continue
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
@@ -5087,7 +5038,42 @@ def run_master():
                     save_db_state(peer, iface, state)
                     continue
 
+        # Check if we can safely rotate despite having a pending key:
+        # Allow rotation if the active key is the last in its batch and has been
+        # active for at least one rotation interval (120s), OR if pending is stuck
+        # beyond recovery timeout AND peer/macsec are unhealthy.
+        can_rotate_with_pending = False
         if state.get("pending_key_id"):
+            active_key_id = state.get("active_key_id")
+            installed = state.get("installed_keys", [])
+            if installed and active_key_id:
+                # Find the active key in installed_keys
+                active_entry = None
+                for entry in installed:
+                    if isinstance(entry, dict) and entry.get("key_id") == active_key_id:
+                        active_entry = entry
+                        break
+                
+                if active_entry:
+                    active_key_index = active_entry.get("slot")
+                    # Check if active key is the last slot (batch size - 1)
+                    if active_key_index is not None and active_key_index == (max_installed_keys() - 1):
+                        # Check if it has been active long enough (at least one rotation interval)
+                        active_start_epoch = epoch_from_junos_start_time(active_entry.get("start_time"))
+                        if active_start_epoch is not None:
+                            active_age_seconds = int(time.time()) - int(active_start_epoch)
+                            rotation_interval = peer_key_rotation_interval_seconds() or 600
+                            if active_age_seconds >= rotation_interval:
+                                log(
+                                    f"PENDING KEY EXISTS BUT ACTIVE KEY IS LAST IN BATCH active_key_index={active_key_index} "
+                                    f"active_age_seconds={active_age_seconds} rotation_interval={rotation_interval} -> CAN ROTATE",
+                                    "INFO",
+                                    iface,
+                                    "MASTER",
+                                )
+                                can_rotate_with_pending = True
+
+        if state.get("pending_key_id") and not can_rotate_with_pending:
             if pending_stuck_exceeded:
                 if pending_head_aligned_with_peer:
                     overdue_seconds = int(pending_stuck_overdue_seconds or 0)
@@ -5101,16 +5087,28 @@ def run_master():
                             "MASTER",
                         )
                         continue
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
-                    iface,
-                    reason="PENDING_STUCK_CONFIRMED_BY_PEER_STATUS",
-                    peer_state=peer_state,
-                    overdue_seconds=pending_stuck_overdue_seconds,
-                )
-                if cleared:
-                    save_db_state(peer, iface, state)
-                    continue
+                # Only clear pending when we're about to rotate AND macsec is degraded
+                if not macsec_has_inuse_sa(iface, expected_ca=ca_name) or not mka_session_secured(
+                    parse_mka_session_fields(get_mka_session_block_for_iface(iface) or {})
+                ):
+                    state, cleared = clear_pending_head_for_recovery(
+                        state,
+                        iface,
+                        reason="PENDING_STUCK_CONFIRMED_BY_PEER_STATUS",
+                        peer_state=peer_state,
+                        overdue_seconds=pending_stuck_overdue_seconds,
+                    )
+                    if cleared:
+                        save_db_state(peer, iface, state)
+                        continue
+                else:
+                    log(
+                        f"PENDING STUCK RECOVERY DEFERRED pending_key_id={state.get('pending_key_id')} "
+                        f"reason=LIVE_MACSEC_STILL_HEALTHY live_macsec_inuse=True",
+                        "WARN",
+                        iface,
+                        "MASTER",
+                    )
 
             log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
             continue
@@ -5133,23 +5131,12 @@ def run_master():
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
 
         # Full-batch install: replace all slots at once with chronologically ordered keys.
-        # The first key must be scheduled safely in the future. Using "now" here is unsafe
-        # in queue mode because the peer only drains its inbound batch on its next timer tick;
-        # if the first key is already due (or nearly due) when the peer commits it, the
-        # transition can hit before both sides converge and flap the protected member/AE.
+        # key[0] starts at batch_epoch,
+        # key[1..N] at +interval increments so MKA sequences them autonomously.
         install_count = max_installed_keys()
         batch_size = install_count  # always full batch; kept for compatibility with install/transport logic below
         target_slots = list(range(install_count))  # [0, 1, 2, 3]
-        first_start_time = scheduled_key_start_time(link)
-        batch_epoch = epoch_from_junos_start_time(first_start_time)
-        if batch_epoch is None:
-            log(
-                f"ROTATION SKIP reason=INVALID_SCHEDULED_START_TIME start_time={first_start_time}",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            continue
+        batch_epoch = int(time.time())
 
         first_generation = next_generation(state)
         rotation = rotation_id_for(iface, first_generation)
@@ -5281,7 +5268,7 @@ def run_master():
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
             ack_id = compute_batch_ack_id(payload_b64)
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id):
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id, bypass_enqueue_margin=True):
                 record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
                 log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                 continue
