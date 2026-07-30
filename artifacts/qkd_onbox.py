@@ -4958,10 +4958,39 @@ def run_master():
             log("CONTROLLED BOOTSTRAP COMPLETE AFTER LOCAL CONFIG INVALID -> EXIT THIS LINK CYCLE", "INFO", iface, "MASTER")
             continue
 
-        # Pending key is scheduled in the future but we have safety boundaries:
-        # - If pending exists and is far in future, track it for recovery timeout.
-        # - If pending start-time is "stuck" (far future + timeout exceeded), do NOT
-        #   clear it here — let the rotation decision logic handle it.
+        pending_stuck_exceeded = False
+        pending_stuck_overdue_seconds = None
+        can_rotate_with_pending = False
+        active_last_slot_age_seconds = None
+
+        active_key_id = state.get("active_key_id")
+        if state.get("pending_key_id") and active_key_id:
+            active_entry = next(
+                (
+                    entry
+                    for entry in (state.get("installed_keys") or [])
+                    if isinstance(entry, dict) and entry.get("key_id") == active_key_id
+                ),
+                None,
+            )
+            if active_entry:
+                active_slot = active_entry.get("slot")
+                try:
+                    active_slot = int(active_slot)
+                except (TypeError, ValueError):
+                    active_slot = None
+                active_start_epoch = epoch_from_junos_start_time(active_entry.get("start_time"))
+                if (
+                    active_slot is not None
+                    and active_slot == (max_installed_keys() - 1)
+                    and active_start_epoch is not None
+                ):
+                    active_age_seconds = int(time.time()) - int(active_start_epoch)
+                    if active_age_seconds >= rotation_interval_seconds():
+                        can_rotate_with_pending = True
+                        active_last_slot_age_seconds = active_age_seconds
+
+        # A future pending key must never be replaced before its activation time.
         if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
             if not state.get("pending_stuck_at"):
                 state["pending_stuck_at"] = int(time.time())
@@ -4977,30 +5006,69 @@ def run_master():
             )
             continue
 
-        # When pending key's start-time passes (grace window expired),
-        # wait for MKA confirmation. Do not force-clear the pending here — 
-        # let the rotation decision handle it when macsec is degraded or timeout reached.
+        # Once the start-time passes, preserve the confirmation grace. After the
+        # grace, the final active slot may rotate; every other case remains
+        # blocked until the bounded pending recovery timeout expires.
         if state.get("pending_key_id") and state.get("next_start_time"):
             pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
             confirm_grace_seconds = pending_confirm_grace_seconds()
-            if pending_epoch is not None and int(time.time()) < (int(pending_epoch) + confirm_grace_seconds):
+            if pending_epoch is None:
+                log(
+                    f"PENDING START TIME INVALID pending_key_id={state.get('pending_key_id')} "
+                    f"next_start_time={state.get('next_start_time')}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                pending_stuck_exceeded = True
+            else:
+                confirm_deadline = int(pending_epoch) + confirm_grace_seconds
+                now_epoch = int(time.time())
+                if now_epoch < confirm_deadline:
+                    log(
+                        f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                        f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={confirm_grace_seconds}",
+                        "INFO",
+                        iface,
+                        "MASTER",
+                    )
+                    continue
+
+                pending_stuck_overdue_seconds = max(0, now_epoch - confirm_deadline)
+                pending_stuck_exceeded = (
+                    pending_stuck_overdue_seconds > pending_stuck_recovery_seconds()
+                )
+
+            if not can_rotate_with_pending and not pending_stuck_exceeded:
                 log(
                     f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                    f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={confirm_grace_seconds}",
-                    "INFO",
+                    f"reason=PENDING_AWAITING_MKA_CONFIRMATION overdue_seconds={pending_stuck_overdue_seconds} "
+                    f"pending_stuck_recovery_seconds={pending_stuck_recovery_seconds()}",
+                    "WARN",
                     iface,
                     "MASTER",
                 )
                 continue
 
-            log(
-                f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                f"reason=PENDING_AWAITING_MKA_CONFIRMATION",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-            continue
+            if can_rotate_with_pending:
+                log(
+                    f"PENDING KEY EXISTS BUT ACTIVE KEY IS LAST IN BATCH active_key_index={max_installed_keys() - 1} "
+                    f"active_age_seconds={active_last_slot_age_seconds} rotation_interval={rotation_interval_seconds()} -> CAN ROTATE",
+                    "INFO",
+                    iface,
+                    "MASTER",
+                )
+
+            if pending_stuck_exceeded:
+                log(
+                    f"PENDING STUCK EXCEEDED -> ALLOW RECOVERY pending_key_id={state.get('pending_key_id')} "
+                    f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
+                    f"overdue_seconds={pending_stuck_overdue_seconds} "
+                    f"pending_stuck_recovery_seconds={pending_stuck_recovery_seconds()}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
 
         if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
             if state["health"].get("declared_down", False):
@@ -5175,41 +5243,6 @@ def run_master():
                 if cleared:
                     save_db_state(peer, iface, state)
                     continue
-
-        # Check if we can safely rotate despite having a pending key:
-        # Allow rotation if the active key is the last in its batch and has been
-        # active for at least one rotation interval (120s), OR if pending is stuck
-        # beyond recovery timeout AND peer/macsec are unhealthy.
-        can_rotate_with_pending = False
-        if state.get("pending_key_id"):
-            active_key_id = state.get("active_key_id")
-            installed = state.get("installed_keys", [])
-            if installed and active_key_id:
-                # Find the active key in installed_keys
-                active_entry = None
-                for entry in installed:
-                    if isinstance(entry, dict) and entry.get("key_id") == active_key_id:
-                        active_entry = entry
-                        break
-                
-                if active_entry:
-                    active_key_index = active_entry.get("slot")
-                    # Check if active key is the last slot (batch size - 1)
-                    if active_key_index is not None and active_key_index == (max_installed_keys() - 1):
-                        # Check if it has been active long enough (at least one rotation interval)
-                        active_start_epoch = epoch_from_junos_start_time(active_entry.get("start_time"))
-                        if active_start_epoch is not None:
-                            active_age_seconds = int(time.time()) - int(active_start_epoch)
-                            rotation_interval = peer_key_rotation_interval_seconds() or 600
-                            if active_age_seconds >= rotation_interval:
-                                log(
-                                    f"PENDING KEY EXISTS BUT ACTIVE KEY IS LAST IN BATCH active_key_index={active_key_index} "
-                                    f"active_age_seconds={active_age_seconds} rotation_interval={rotation_interval} -> CAN ROTATE",
-                                    "INFO",
-                                    iface,
-                                    "MASTER",
-                                )
-                                can_rotate_with_pending = True
 
         if state.get("pending_key_id") and not can_rotate_with_pending:
             if pending_stuck_exceeded:
