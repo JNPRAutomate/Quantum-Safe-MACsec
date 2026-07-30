@@ -365,24 +365,35 @@ This is intentional: the files stay physically separate so operators can inspect
 
 ## 8. Operational files created on device
 
-Under `/var/tmp` the on-box script uses:
+The on-box script uses `STATE_DIR` (default `/var/home/etsi_user`) for all runtime state:
 
-- global lock: `qkd_onbox_<local_sae>.lock`
-- action locks: `qkd_onbox_<local_sae>_<iface>_<action>.lock`
-- state DB: `qkd_db_<peer>_<iface>.json`
+- global lock: `{STATE_DIR}/qkd_onbox_<local_sae>.lock`
+- action locks: `{STATE_DIR}/qkd_onbox_<local_sae>_<iface>_<action>.lock`
+- Junos commit lock: `{STATE_DIR}/qkd_junos_commit.lock`
+- state DB: `{STATE_DIR}/qkd_db_<peer>_<iface>.json`
+- peer key state: `{STATE_DIR}/qkd_peer_key_rotation.json`
+- peer known pubkeys: `{STATE_DIR}/qkd_peer_known_pubkeys.json`
 - logs:
-  - primary log file from `CONFIG["log_file"]`
+  - primary log file from `CONFIG["log_file"]` (e.g. `/var/home/etsi_user/logs/qkd_debug.log`)
   - per-interface debug logs (`qkd_debug_<local_sae>_<iface>.log`)
+
+Queue transport files (when `peer_transport_mode = queue`):
+- peer inbox: `{STATE_DIR}/peer_inbox/qkd_peer_inbox_<device>_<iface>.b64`
+- peer ACK: `{STATE_DIR}/peer_ack/qkd_peer_ack_<device>_<iface>.json`
+- peer status snapshots: `{STATE_DIR}/peer_status/qkd_peer_status_<device>_<iface>.json`
 
 ---
 
 ## 9. Design constraints and unsupported modes
 
 1. `MACSEC_MODEL` must be `keychain`; otherwise script exits with error.
-2. legacy double-buffer `program/activate` actions are intentionally unsupported.
-3. peer coordination depends on SSH transport and peer op-script availability.
-4. all key operations assume ETSI API + mTLS cert paths embedded in `CONFIG`.
+2. Legacy double-buffer `program/activate` actions are intentionally unsupported.
+3. Peer coordination depends on SSH transport and peer op-script availability.
+4. All key operations assume ETSI API + mTLS cert paths embedded in `CONFIG`.
 5. SAE identity naming used for cert/path material should remain LDH-safe (`sae-###` preferred, avoid `_` in hostname-like certificate identifiers).
+6. **Runtime user enforcement**: the script rejects execution as root and as any user other than `SCRIPT_USER` (`etsi_user`). This replaces the old `os.access(W_OK)` PERM GUARD which was unreliable on Linux/EVO (root bypasses DAC, returning True even for `r-xr-xr-x` files).
+7. **Global Junos commit lock**: all configuration-committing call sites (`install_keychain_batch`, `bind_interface_to_stable_ca`, `run_slave_install_peer_pubkey`) acquire a device-wide lock before running `cli -c "configure; ...; commit; exit"`. This prevents overlapping configuration sessions on hub devices with multiple managed links.
+8. **Platform differences (MX vs ACX EVO)**: SMACK MAC on EVO means `/var/tmp` is inaccessible to `etsi_peer_view`; mgd rebuilds authorized_keys from Junos config after every commit. See [PLATFORM_DIFFERENCES_MX_ACX_EVO.md](PLATFORM_DIFFERENCES_MX_ACX_EVO.md) for the full reference.
 
 Standards reference for naming constraint context:
 

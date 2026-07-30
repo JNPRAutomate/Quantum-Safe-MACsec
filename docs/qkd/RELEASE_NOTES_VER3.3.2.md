@@ -1,8 +1,8 @@
 # Release Notes v3.3.2
 
-Date: 2026-07-27
+Date: 2026-07-30
 
-This release consolidates deploy/runtime stabilization and monitor interpretation fixes completed during lab validation.
+This release consolidates deploy/runtime stabilization, monitor interpretation fixes, and ACX EVO (Junos EVO / SMACK platform) compatibility fixes completed during lab validation.
 
 ## Scope
 
@@ -130,3 +130,102 @@ If MKA is secured and ICV is clean, CAK-only increments should be treated as neg
 ### Reference
 
 - See `QKD_ONBOX_RUNTIME_RING_POLICY_2026-07-27.md` for full runtime contract.
+
+---
+
+## 7) ACX EVO (SMACK platform) compatibility fixes
+
+### 7a) PERM GUARD false positive — root execution rejected
+
+#### What changed
+
+- Removed `os.access(W_OK)` check from the runtime pre-flight guard. This check returned `True` for root on read-only (`r-xr-xr-x`) files due to Linux DAC bypass, causing a false PERM GUARD failure when the script was invoked as root on EVO.
+- Replaced with explicit **runtime user enforcement**: the script now rejects execution if `runtime_user()` returns `root` or any user other than `SCRIPT_USER` (`etsi_user`).
+
+#### Why
+
+On ACX EVO, the script file has `r-xr-xr-x` permissions (555, unchanged by `commit` unlike MX where `commit` sets 755). The old check was intended to detect execution from the wrong context, but was unreliable for root.
+
+#### Result
+
+Running `python3 qkd_onbox.py` as root now correctly reports `PERM GUARD FAILED`. Running as `etsi_user` passes. No false positives.
+
+---
+
+### 7b) SCP peer probe path — `/var/tmp` blocked on EVO (SMACK `System` label)
+
+#### What changed
+
+- `lib/qkd/identity.py`: changed `remote_probe` target path from `/var/tmp/<file>` to `/var/home/<peer_cmd_user>/<file>`.
+
+#### Why
+
+`/var/tmp` on Junos EVO has SMACK label `System` (root/mgd-only access). `etsi_peer_view` (restricted login class) cannot write there. SCP probes to `/var/tmp` failed with permission denied. Files under `/var/home/etsi_peer_view/` have SMACK label `_` (world-accessible) and are writable by `etsi_peer_view`.
+
+#### Result
+
+SCP connectivity probes succeed on ACX EVO.
+
+---
+
+### 7c) authorized_keys multi-key fix — EVO mgd rebuilds file from config
+
+#### What changed
+
+- `lib/qkd/provisioning.py` `ensure_peer_cmd_user_login()`: now iterates **all** entries in `key_lines` (not just `key_lines[0]`) and configures each in the Junos config stanza for `etsi_peer_view`.
+- `apply_peer_ssh_authorized_keys_config()`: moved to execute **after** all Junos config commits complete.
+
+#### Why
+
+On Junos EVO, mgd actively rebuilds `/var/home/<user>/.ssh/authorized_keys` from the Junos config stanza after every commit. If only one key is configured in Junos (regardless of how many shell writes were done), only one key appears in the file. A device with multiple topology peers (e.g. ACX1 which peers with MX5, ACX2, ACX5) needs all three peer keys in the Junos stanza.
+
+The timing fix (move after all commits) prevents an intermediate commit from triggering mgd to rebuild the file before all peer keys are configured.
+
+#### Result
+
+After deploy, ACX EVO devices show one `etsi_peer_view` authorized-key entry per direct topology peer in both the Junos config stanza and the `authorized_keys` file.
+
+---
+
+### 7d) Peer status query user order — etsi_user first
+
+#### What changed
+
+- `artifacts/qkd_onbox.py` `_run_remote_status_command()`: the runtime now tries `SCRIPT_USER` (`etsi_user`) first when querying peer status via `op qkd_onbox.py action status`, and falls back to `PEER_CMD_USER` (`etsi_peer_view`) only if that fails.
+
+#### Why
+
+`etsi_peer_view` login class restricts execution to transport-only operations. On both MX and ACX EVO, SSHing as `etsi_peer_view` and invoking `op qkd_onbox.py action status` fails because the login class denies the `op` command execution. Peer status queries must use `etsi_user` (qkd-script-class).
+
+#### Result
+
+Peer status JSON is consistently returned. No more silent status query failures due to wrong user.
+
+---
+
+### 7e) Shell redirect bug in authorized_keys sync
+
+#### What changed
+
+- `lib/qkd/provisioning.py` `apply_peer_ssh_authorized_keys_config()`: fixed shell redirect precedence bug. The previous chained `&&/||` form caused `>>` to bind only to the last command (`true`), not to the sed output filtering. Replaced with an `if/fi` block that correctly redirects the full conditional output.
+
+#### Why
+
+The shell chain `cmd1 && cmd2 | cmd3 || cmd4 >> file` in standard sh: `>>` binds only to `cmd4` (the `|| true`), not to the full chain. This meant the key filtering output was never appended to `authorized_keys`.
+
+#### Result
+
+Shell-based authorized_keys sync correctly filters and appends keys. (Note: on EVO this path is superseded by the Junos config approach — fix 7c above — but remains correct for MX.)
+
+---
+
+## 8) Operational validation guidance
+
+Use this order when judging runtime health:
+
+1. `MACsec Interfaces inuse` and `MKA secured/not_found`
+2. `ICV mismatch delta`
+3. `CAK mismatch delta`
+4. Runtime logs (`STATE RECONCILED FROM ROUTER`, `ROTATION_DONE`, pending schedule behavior)
+
+If MKA is secured and ICV is clean, CAK-only increments should be treated as negotiation noise unless correlated degradation appears.
