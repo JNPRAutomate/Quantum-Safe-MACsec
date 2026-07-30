@@ -1196,6 +1196,14 @@ def peer_batch_ack_poll_interval_seconds():
     return value
 
 
+def batch_activation_margin_seconds():
+    minimum = peer_batch_ack_timeout_seconds() + 30
+    value = int(qkd_policy().get("batch_activation_margin_seconds", 480))
+    if value < minimum:
+        return minimum
+    return value
+
+
 def compute_batch_ack_id(batch_b64):
     payload = str(batch_b64 or "")
     return hashlib.sha256(payload.encode()).hexdigest()[:24]
@@ -5320,12 +5328,11 @@ def run_master():
         log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
 
         # Full-batch install: replace all slots at once with chronologically ordered keys.
-        # key[0] starts at batch_epoch,
+        # key[0] starts after the peer ACK window,
         # key[1..N] at +interval increments so MKA sequences them autonomously.
         install_count = max_installed_keys()
         batch_size = install_count  # always full batch; kept for compatibility with install/transport logic below
         target_slots = list(range(install_count))  # [0, 1, 2, 3]
-        batch_epoch = int(time.time())
 
         first_generation = next_generation(state)
         rotation = rotation_id_for(iface, first_generation)
@@ -5347,7 +5354,6 @@ def run_master():
 
             for slot in target_slots:
                 generation = int(generation_cursor)
-                start_time = junos_start_time_from_epoch(batch_epoch + len(batch_records) * rotation_interval_seconds())
                 customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
                 key_id, key = do_enc(link["peer_sae"])
                 if not key_id:
@@ -5360,7 +5366,7 @@ def run_master():
                     {
                         "generation": generation,
                         "slot": int(slot),
-                        "start_time": start_time,
+                        "start_time": None,
                         "key_id": key_id,
                         "key": key,
                     }
@@ -5376,7 +5382,21 @@ def run_master():
             log(f"BATCH RECORDS EMPTY -> SKIP INSTALL batch_records={batch_records}", "ERROR", iface, "MASTER")
             continue
 
+        activation_margin = batch_activation_margin_seconds()
+        batch_epoch = int(time.time()) + activation_margin
+        for index, item in enumerate(batch_records):
+            item["start_time"] = junos_start_time_from_epoch(
+                batch_epoch + index * rotation_interval_seconds()
+            )
+
         log(f"BATCH RECORDS READY count={len(batch_records)} batch_size={batch_size}", "INFO", iface, "MASTER")
+        log(
+            f"BATCH ACTIVATION SCHEDULED first_start_time={format_next_start_time_with_millis(batch_records[0]['start_time'])} "
+            f"activation_margin_seconds={activation_margin} peer_ack_timeout_seconds={peer_batch_ack_timeout_seconds()}",
+            "INFO",
+            iface,
+            "MASTER",
+        )
 
         try:
             peer_payload = []
@@ -5457,7 +5477,7 @@ def run_master():
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
             ack_id = compute_batch_ack_id(payload_b64)
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id, bypass_enqueue_margin=True):
+            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id):
                 record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
                 log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                 continue

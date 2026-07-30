@@ -37,6 +37,9 @@ qkd_policy:
   peer_batch_ack_timeout_seconds: 210
   # Poll more frequently to match the shorter timeout window.
   peer_batch_ack_poll_interval_seconds: 5
+  # Schedule running-batch key0 after the complete peer ACK window. The script
+  # enforces a minimum of peer_batch_ack_timeout_seconds + 30 seconds.
+  batch_activation_margin_seconds: 480
 
   # Peer SSH key rotation (etsi_peer_view user ED25519 keypair)
   # Rotate every N seconds. Set to 0 to disable rotation.

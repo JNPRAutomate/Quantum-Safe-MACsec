@@ -240,6 +240,12 @@ For each master link in `run_master()`:
 10. verify post-rotation peer parity,
 11. emit `KEYCHAIN ROTATION DONE`.
 
+For a running batch, all four ENC keys are fetched before their start-times are
+assigned. Key 0 is then scheduled at `now + batch_activation_margin_seconds`
+(480 seconds by policy and never less than the peer ACK timeout plus 30
+seconds); later keys remain spaced by `interval_seconds`. The queue enqueue
+margin guard remains enabled.
+
 ---
 
 ## 6.1 Batch timing semantics and pending-state model
