@@ -12,12 +12,12 @@ Legacy markdown documents previously under `docs/` were analyzed and moved to:
 
 Use this as the starting point for GitHub readers:
 
-1. `docs/qkd/ARCHITECTURE.md`
-2. `docs/kme/ARCHITECTURE.md`
-3. `docs/pqc/THEORY_AND_STANDARDS.md`
-4. `docs/qkd/CLI_REFERENCE.md`
-5. `docs/kme/CLI_REFERENCE.md`
-6. `docs/pqc/GLOSSARY.md`
+1. `docs/qkd/architecture.md`
+2. `docs/kme/architecture.md`
+3. `docs/pqc/theory_and_standards.md`
+4. `docs/qkd/cli_reference.md`
+5. `docs/kme/cli_reference.md`
+6. `docs/pqc/glossary.md`
 7. `docs/qkd/qkd_onbox_runtime_lld.md`
-8. `docs/qkd/CERT_MANAGER.md`
+8. `docs/qkd/cert_manager.md`
 9. `docs/qkd/root_bootstrap_method_2.md`

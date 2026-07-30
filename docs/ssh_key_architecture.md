@@ -169,9 +169,9 @@ During `qkd_orchestrator.py deploy`:
 
 ## References
 
-- Current peer key rotation design: [docs/qkd/PEER_KEY_ROTATION_MESH_TRUST.md](qkd/PEER_KEY_ROTATION_MESH_TRUST.md)
-- Platform-specific behavior (EVO vs MX): [docs/qkd/PLATFORM_DIFFERENCES_MX_ACX_EVO.md](qkd/PLATFORM_DIFFERENCES_MX_ACX_EVO.md)
-- Deploy flow: [docs/qkd/QKD_DEPLOY_PHASES.md](qkd/QKD_DEPLOY_PHASES.md)
-- Orchestrator architecture: [docs/qkd/ARCHITECTURE.md](qkd/ARCHITECTURE.md)
+- Current peer key rotation design: [docs/qkd/peer_key_rotation_mesh_trust.md](qkd/peer_key_rotation_mesh_trust.md)
+- Platform-specific behavior (EVO vs MX): [docs/qkd/platform_differences_mx_acx_evo.md](qkd/platform_differences_mx_acx_evo.md)
+- Deploy flow: [docs/qkd/qkd_deploy_phases.md](qkd/qkd_deploy_phases.md)
+- Orchestrator architecture: [docs/qkd/architecture.md](qkd/architecture.md)
 - Historical design (superseded): [docs/qkd/archive/](qkd/archive/)
 

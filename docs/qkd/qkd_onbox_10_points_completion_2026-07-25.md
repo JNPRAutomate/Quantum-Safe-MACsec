@@ -196,4 +196,4 @@ Run at least 2-3 rotation cycles on MX1/MX2 and verify:
 - artifacts/qkd_onbox.py
 
 ## Documentation File
-- docs/qkd/QKD_ONBOX_10_POINTS_COMPLETION_2026-07-25.md
+- docs/qkd/qkd_onbox_10_points_completion_2026-07-25.md

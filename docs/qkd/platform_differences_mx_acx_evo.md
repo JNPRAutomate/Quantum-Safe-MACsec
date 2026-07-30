@@ -138,9 +138,9 @@ Junos returns exit code 0 even when this error is printed. `junos_output_has_err
 
 ## References
 
-- [SSH_KEY_ARCHITECTURE.md](../SSH_KEY_ARCHITECTURE.md) — SSH identity model
-- [PEER_KEY_ROTATION_MESH_TRUST.md](PEER_KEY_ROTATION_MESH_TRUST.md) — Peer key rotation mechanism
-- [QKD_DEPLOY_PHASES.md](QKD_DEPLOY_PHASES.md) — Deploy lifecycle
+- [ssh_key_architecture.md](../ssh_key_architecture.md) — SSH identity model
+- [peer_key_rotation_mesh_trust.md](peer_key_rotation_mesh_trust.md) — Peer key rotation mechanism
+- [qkd_deploy_phases.md](qkd_deploy_phases.md) — Deploy lifecycle
 - `lib/qkd/identity.py` — SCP probe path, peer SSH validation
 - `lib/qkd/provisioning.py` — `ensure_peer_cmd_user_login()`, `apply_peer_ssh_authorized_keys_config()`
 - `artifacts/qkd_onbox.py` — PERM GUARD, `acquire_junos_commit_lock()`, `run_slave_install_peer_pubkey()`

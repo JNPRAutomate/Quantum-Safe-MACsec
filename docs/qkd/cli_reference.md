@@ -115,4 +115,4 @@ python3 tools/cert_report_filter.py --input cert_report.json --allow-underscore-
 python3 tools/cert_report_filter.py --input cert_report.json --flag-unencrypted-keys --output cert_issues_with_key_warnings.txt
 ```
 
-See full reference in `docs/qkd/CERT_MANAGER.md`.
+See full reference in `docs/qkd/cert_manager.md`.

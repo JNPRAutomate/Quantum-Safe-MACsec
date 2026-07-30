@@ -218,6 +218,6 @@ max_installed_keys: 4              # Junos keychain slots 0-3
 
 ## Related Documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - Overall system design
+- [architecture.md](./architecture.md) - Overall system design
 - [lld_ver_334_latest.md](./lld_ver_334_latest.md) - Low-level design details
 - [QKD_MACsec_Link_Driven_Refactor_Update.md](./QKD_MACsec_Link_Driven_Refactor_Update.md) - Link-driven model

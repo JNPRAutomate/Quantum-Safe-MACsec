@@ -2,7 +2,7 @@
 
 This document describes the deployment lifecycle for Quantum-Safe MACsec QKD orchestration.
 
-Platform differences (MX vs ACX EVO) are noted inline. For the full platform-specific reference see [PLATFORM_DIFFERENCES_MX_ACX_EVO.md](PLATFORM_DIFFERENCES_MX_ACX_EVO.md).
+Platform differences (MX vs ACX EVO) are noted inline. For the full platform-specific reference see [platform_differences_mx_acx_evo.md](platform_differences_mx_acx_evo.md).
 
 ---
 

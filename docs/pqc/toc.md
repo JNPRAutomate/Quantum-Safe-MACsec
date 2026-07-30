@@ -6,5 +6,5 @@ Standards rationale and canonical terminology supporting architecture and LLD do
 
 ## Ordered Documents
 
-1. [Theory and Standards](THEORY_AND_STANDARDS.md)
-2. [Glossary](GLOSSARY.md)
+1. [Theory and Standards](theory_and_standards.md)
+2. [Glossary](glossary.md)

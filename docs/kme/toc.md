@@ -6,6 +6,6 @@ KME orchestration architecture, interface contract, and Vault integration design
 
 ## Ordered Documents
 
-1. [Architecture](ARCHITECTURE.md)
-2. [CLI Interface Reference](CLI_REFERENCE.md)
-3. [Vault Integration LLD](VAULT_LOCALHOST_8200_SETUP.md)
+1. [Architecture](architecture.md)
+2. [CLI Interface Reference](cli_reference.md)
+3. [Vault Integration LLD](vault_localhost_8200_setup.md)

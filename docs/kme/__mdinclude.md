@@ -1,5 +1,5 @@
 # KME Include Order
 
-!INCLUDE "ARCHITECTURE.md"
-!INCLUDE "CLI_REFERENCE.md"
-!INCLUDE "VAULT_LOCALHOST_8200_SETUP.md"
+!INCLUDE "architecture.md"
+!INCLUDE "cli_reference.md"
+!INCLUDE "vault_localhost_8200_setup.md"

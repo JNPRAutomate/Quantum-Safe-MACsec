@@ -1,7 +1,7 @@
 # Peer SSH Key Rotation — Mesh Trust Design (etsi_peer_view)
 
 **Status:** Current design (2026-07-28). Supersedes the `macsec_user`-based
-flow described in [SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md),
+flow described in [ssh_key_rotation_design.md](ssh_key_rotation_design.md),
 which documents an earlier architecture and is kept for historical bug
 reference only.
 
@@ -204,7 +204,7 @@ i.e. it stripped the leading `ssh-ed25519` type token before quoting the
 value. Junos actually requires the **complete original key line** (type +
 base64 + comment) inside the quotes — this is the exact same Junos quirk
 already documented as "Bug 1" in the historical
-[SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md), and matches the
+[ssh_key_rotation_design.md](ssh_key_rotation_design.md), and matches the
 proven-working pattern in
 [provisioning.py](../../lib/qkd/provisioning.py) `ensure_peer_cmd_user_login()`
 (`key_payload = public_key_line.replace('"', '\\"')` — the **full** line).
@@ -312,8 +312,8 @@ triggered them.
 
 ## Related Docs
 
-- [SSH_KEY_ROTATION_DESIGN.md](SSH_KEY_ROTATION_DESIGN.md) — historical
+- [ssh_key_rotation_design.md](ssh_key_rotation_design.md) — historical
   `macsec_user`/authorized_keys-based design and bug history (superseded).
-- [SCRIPT_USER_PEER_SSH_SPLIT_TWO_NODE.md](SCRIPT_USER_PEER_SSH_SPLIT_TWO_NODE.md)
+- [script_user_peer_ssh_split_two_node.md](script_user_peer_ssh_split_two_node.md)
   — background on the two-user (`etsi_user` / `etsi_peer_view`) split.
-- [ARCHITECTURE.md](ARCHITECTURE.md) — overall QKD/MACsec orchestrator architecture.
+- [architecture.md](architecture.md) — overall QKD/MACsec orchestrator architecture.

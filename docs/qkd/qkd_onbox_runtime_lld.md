@@ -393,7 +393,7 @@ Queue transport files (when `peer_transport_mode = queue`):
 5. SAE identity naming used for cert/path material should remain LDH-safe (`sae-###` preferred, avoid `_` in hostname-like certificate identifiers).
 6. **Runtime user enforcement**: the script rejects execution as root and as any user other than `SCRIPT_USER` (`etsi_user`). This replaces the old `os.access(W_OK)` PERM GUARD which was unreliable on Linux/EVO (root bypasses DAC, returning True even for `r-xr-xr-x` files).
 7. **Global Junos commit lock**: all configuration-committing call sites (`install_keychain_batch`, `bind_interface_to_stable_ca`, `run_slave_install_peer_pubkey`) acquire a device-wide lock before running `cli -c "configure; ...; commit; exit"`. This prevents overlapping configuration sessions on hub devices with multiple managed links.
-8. **Platform differences (MX vs ACX EVO)**: SMACK MAC on EVO means `/var/tmp` is inaccessible to `etsi_peer_view`; mgd rebuilds authorized_keys from Junos config after every commit. See [PLATFORM_DIFFERENCES_MX_ACX_EVO.md](PLATFORM_DIFFERENCES_MX_ACX_EVO.md) for the full reference.
+8. **Platform differences (MX vs ACX EVO)**: SMACK MAC on EVO means `/var/tmp` is inaccessible to `etsi_peer_view`; mgd rebuilds authorized_keys from Junos config after every commit. See [platform_differences_mx_acx_evo.md](platform_differences_mx_acx_evo.md) for the full reference.
 
 Standards reference for naming constraint context:
 

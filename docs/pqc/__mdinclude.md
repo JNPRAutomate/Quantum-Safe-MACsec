@@ -1,4 +1,4 @@
 # PQC Include Order
 
-!INCLUDE "THEORY_AND_STANDARDS.md"
-!INCLUDE "GLOSSARY.md"
+!INCLUDE "theory_and_standards.md"
+!INCLUDE "glossary.md"

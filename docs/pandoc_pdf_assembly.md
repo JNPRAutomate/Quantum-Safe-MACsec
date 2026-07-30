@@ -30,18 +30,18 @@ Example (generic):
 If no mdinclude preprocessor is available, use pandoc directly with the same order:
 
 pandoc \
-  docs/TOC.md \
-  docs/qkd/ARCHITECTURE.md \
-  docs/qkd/CONFIG_GENERATION.md \
+  docs/toc.md \
+  docs/qkd/architecture.md \
+  docs/qkd/config_generation.md \
   docs/qkd/qkd_onbox_runtime_lld.md \
-  docs/qkd/CLI_REFERENCE.md \
-  docs/qkd/LOGGING_AND_CUSTOMER_REPORTING.md \
-  docs/qkd/CERT_MANAGER.md \
-  docs/kme/ARCHITECTURE.md \
-  docs/kme/CLI_REFERENCE.md \
-  docs/kme/VAULT_LOCALHOST_8200_SETUP.md \
-  docs/pqc/THEORY_AND_STANDARDS.md \
-  docs/pqc/GLOSSARY.md \
+  docs/qkd/cli_reference.md \
+  docs/qkd/logging_and_customer_reporting.md \
+  docs/qkd/cert_manager.md \
+  docs/kme/architecture.md \
+  docs/kme/cli_reference.md \
+  docs/kme/vault_localhost_8200_setup.md \
+  docs/pqc/theory_and_standards.md \
+  docs/pqc/glossary.md \
   -o docs_book.pdf
 
 ## Notes

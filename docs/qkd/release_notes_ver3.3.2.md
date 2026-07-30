@@ -129,7 +129,7 @@ If MKA is secured and ICV is clean, CAK-only increments should be treated as neg
 
 ### Reference
 
-- See `QKD_ONBOX_RUNTIME_RING_POLICY_2026-07-27.md` for full runtime contract.
+- See `qkd_onbox_runtime_ring_policy_2026-07-27.md` for full runtime contract.
 
 ---
 

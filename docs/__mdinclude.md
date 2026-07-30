@@ -11,7 +11,7 @@ This file is the canonical include entrypoint for assembling a single document.
 
 ## mdinclude directives
 
-!INCLUDE "TOC.md"
+!INCLUDE "toc.md"
 
 !INCLUDE "qkd/__mdinclude.md"
 !INCLUDE "kme/__mdinclude.md"

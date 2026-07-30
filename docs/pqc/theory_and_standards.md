@@ -106,6 +106,6 @@ References:
 
 ## Reader map for deeper implementation details
 
-- QKD architecture: `docs/qkd/ARCHITECTURE.md`
-- KME architecture: `docs/kme/ARCHITECTURE.md`
+- QKD architecture: `docs/qkd/architecture.md`
+- KME architecture: `docs/kme/architecture.md`
 - Legacy deep notes and evolution artifacts: `archive/docs/`

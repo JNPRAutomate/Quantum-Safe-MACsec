@@ -226,8 +226,8 @@ python3 qkd_orchestrator.py deploy
 - `lib/qkd/identity.py` — Deploy output: one-liners by default, verbose on request
 - `lib/qkd/onbox_builder.py` — Build output: show generated files per device
 - `lib/qkd/provisioning.py` — SCP output: filenames only by default; rollback 0 silent
-- `docs/qkd/SSH_KEY_ROTATION_DESIGN.md` — Updated with validation logs
-- `docs/qkd/QKD_DEPLOY_PHASES.md` — Added audit trail, idempotency, clean sections
+- `docs/qkd/ssh_key_rotation_design.md` — Updated with validation logs
+- `docs/qkd/qkd_deploy_phases.md` — Added audit trail, idempotency, clean sections
 
 ---
 
@@ -289,4 +289,4 @@ Deploy no longer regenerates SSH keys if they already exist and are valid. Keys 
 
 ---
 
-**Contact**: Questions or issues? Review SSH_KEY_ROTATION_DESIGN.md for technical details.
+**Contact**: Questions or issues? Review ssh_key_rotation_design.md for technical details.
