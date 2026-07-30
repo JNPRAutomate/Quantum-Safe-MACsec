@@ -17,22 +17,22 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 
 7. [QKD Deploy Phases](qkd_deploy_phases.md)
 8. [Platform Differences: MX vs ACX EVO](platform_differences_mx_acx_evo.md)
-9. [SSH Key Architecture](../ssh_key_architecture.md)
-10. [Peer SSH Key Rotation — Mesh Trust Design (current)](peer_key_rotation_mesh_trust.md)
-11. [Two-Node script_user / peer_cmd_user Split](script_user_peer_ssh_split_two_node.md)
-12. [Strict Sync + Queue ACK LLD](qkd_onbox_strict_sync_ack_lld.md)
-13. [MKA/SAK Rekey Flow](../mka_sak_rekey_flow.md)
-14. [Link Master Role Requirements](../link_master_role_requirements.md)
+9. [SSH Key Architecture](ssh_key_architecture.md)
+10. [MKA/SAK Rekey Flow](mka_sak_rekey_flow.md)
+11. [Link Master Role Requirements](link_master_role_requirements.md)
+12. [Peer SSH Key Rotation — Mesh Trust Design (current)](peer_key_rotation_mesh_trust.md)
+13. [Two-Node script_user / peer_cmd_user Split](script_user_peer_ssh_split_two_node.md)
+14. [Strict Sync + Queue ACK LLD](qkd_onbox_strict_sync_ack_lld.md)
 
 ## Release Information
 
-13. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
-14. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
+15. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
+16. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
 
 ## Runtime Policies
 
-15. [On-Box Runtime Ring Policy (2026-07-27)](qkd_onbox_runtime_ring_policy_2026-07-27.md)
-16. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
+17. [On-Box Runtime Ring Policy (2026-07-27)](qkd_onbox_runtime_ring_policy_2026-07-27.md)
+18. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
 
 ## Historical / Archive
 

@@ -21,3 +21,6 @@ Use this as the starting point for GitHub readers:
 7. `docs/qkd/qkd_onbox_runtime_lld.md`
 8. `docs/qkd/cert_manager.md`
 9. `docs/qkd/root_bootstrap_method_2.md`
+10. `docs/qkd/ssh_key_architecture.md`
+11. `docs/qkd/mka_sak_rekey_flow.md`
+12. `docs/qkd/link_master_role_requirements.md`

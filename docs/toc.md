@@ -11,10 +11,6 @@ Archive material is in `archive/docs/`.
 2. [QKD Documentation](qkd/toc.md)
 3. [KME Documentation](kme/toc.md)
 4. [PQC Documentation](pqc/toc.md)
-5. [SSH Key Architecture](ssh_key_architecture.md)
-6. [MKA/SAK Rekey Flow](mka_sak_rekey_flow.md)
-7. [Link Master Role Requirements](link_master_role_requirements.md)
-8. [Pandoc PDF Assembly](pandoc_pdf_assembly.md)
 
 ## QKD Ordered Set
 
@@ -26,8 +22,11 @@ Archive material is in `archive/docs/`.
 6. [QKD Certificate Manager](qkd/cert_manager.md)
 7. [QKD Deploy Phases](qkd/qkd_deploy_phases.md)
 8. [Platform Differences: MX vs ACX EVO](qkd/platform_differences_mx_acx_evo.md)
-9. [Peer SSH Key Rotation — Mesh Trust Design](qkd/peer_key_rotation_mesh_trust.md)
-10. [Release Notes v3.3.2](qkd/release_notes_ver3.3.2.md)
+9. [SSH Key Architecture](qkd/ssh_key_architecture.md)
+10. [MKA/SAK Rekey Flow](qkd/mka_sak_rekey_flow.md)
+11. [Link Master Role Requirements](qkd/link_master_role_requirements.md)
+12. [Peer SSH Key Rotation — Mesh Trust Design](qkd/peer_key_rotation_mesh_trust.md)
+13. [Release Notes v3.3.2](qkd/release_notes_ver3.3.2.md)
 
 ## KME Ordered Set
 
