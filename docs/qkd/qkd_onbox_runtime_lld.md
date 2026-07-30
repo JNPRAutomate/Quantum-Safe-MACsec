@@ -199,6 +199,9 @@ The script supports:
 - `get_peer_status(link, iface)`: master pulls the peer status snapshot with
   `etsi_peer_view`. Missing, invalid, or stale snapshots require a live query
   as `SCRIPT_USER`; if that query fails, stale data is rejected.
+- `refresh_peer_status_snapshots()`: refreshes every managed-link snapshot on
+  each periodic script tick, after inbound batch processing and before the
+  master cycle, so an idle peer remains observable without a live SSH query.
 
 ## 5.12 Slave action parsing/handlers
 

@@ -4547,6 +4547,31 @@ def export_peer_status_snapshot(link, state=None):
         return False
 
 
+def refresh_peer_status_snapshots():
+    refreshed = 0
+    failed = 0
+    for link in managed_links():
+        if export_peer_status_snapshot(link):
+            refreshed += 1
+        else:
+            failed += 1
+
+    if failed:
+        log(
+            f"PEER STATUS PERIODIC REFRESH INCOMPLETE refreshed={refreshed} failed={failed}",
+            "ERROR",
+            mode="STATUS",
+        )
+        return False
+
+    log(
+        f"PEER STATUS PERIODIC REFRESH OK refreshed={refreshed}",
+        "DEBUG",
+        mode="STATUS",
+    )
+    return True
+
+
 def run_slave_status(iface):
     if not iface:
         payload = []
@@ -5631,6 +5656,7 @@ def main():
 
 
     process_slave_inbound_transports()
+    refresh_peer_status_snapshots()
 
     if not validate_ssh_runtime_for_master():
         sys.exit(1)
