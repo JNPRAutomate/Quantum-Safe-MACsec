@@ -2992,20 +2992,52 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
             break
 
     if confirmed_item is None:
-        log(
-            f"MKA KEY NOT CONFIRMED key_id={pending_key_id} secured={secured} ckn_match=False key_number={key_number} "
-            f"interface_state={fields.get('interface_state')} mka_suspended={fields.get('mka_suspended')}",
-            "INFO",
-            iface,
-            "MKA",
-        )
-        log(
-            f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={format_next_start_time_with_millis(pending_start_time)}",
-            "INFO",
-            iface,
-            "MKA",
-        )
-        return state, False
+        # Reconciliation fallback: if router has autonomously advanced to a key
+        # that matches one in our pending list (even if MKA CKN doesn't confirm yet),
+        # promote it to prevent deadlock.
+        router_ckn = normalize_hex_string(cak_name)
+        router_key_id = find_key_id_for_ckn(state, router_ckn)
+         
+        reconciliation_idx = None
+        if router_key_id:
+            # Find if router's active key is in our pending list
+            for idx, item in enumerate(pending_keys):
+                if isinstance(item, dict) and item.get("key_id") == router_key_id:
+                    # Only promote if scheduled time has passed (not future-pending)
+                    item_start_epoch = epoch_from_junos_start_time(item.get("start_time"))
+                    now_epoch = int(time.time())
+                    if item_start_epoch is not None and int(item_start_epoch) <= now_epoch:
+                        reconciliation_idx = idx
+                        confirmed_item = item
+                        break
+         
+        if confirmed_item is not None:
+            # Reconciliation promoted the pending key
+            confirmed_idx = reconciliation_idx
+            log(
+                f"RECONCILIATION FALLBACK promoted_key_id={confirmed_item.get('key_id')} "
+                f"from_pending_idx={reconciliation_idx} router_key_id={router_key_id} "
+                f"reason=router_autonomously_advanced",
+                "WARN",
+                iface,
+                "MKA",
+            )
+        else:
+            # No reconciliation possible; log standard MKA failure
+            log(
+                f"MKA KEY NOT CONFIRMED key_id={pending_key_id} secured={secured} ckn_match=False key_number={key_number} "
+                f"interface_state={fields.get('interface_state')} mka_suspended={fields.get('mka_suspended')}",
+                "INFO",
+                iface,
+                "MKA",
+            )
+            log(
+                f"PENDING KEY NOT YET CONFIRMED pending_key_id={pending_key_id} generation={pending_generation} start_time={format_next_start_time_with_millis(pending_start_time)}",
+                "INFO",
+                iface,
+                "MKA",
+            )
+            return state, False
 
     pending_key_id = confirmed_item.get("key_id")
     pending_generation = confirmed_item.get("generation")
