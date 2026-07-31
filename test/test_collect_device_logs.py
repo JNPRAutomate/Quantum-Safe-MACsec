@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 from tools.collect_device_logs import (
     Device,
     build_scp_command,
+    default_snapshot_name,
     discover_identity_file,
     load_devices,
     load_script_user,
@@ -79,3 +81,8 @@ def test_deploy_identity_falls_back_to_canonical_qkd_source(tmp_path):
     identity.parent.mkdir(parents=True)
     identity.write_text("private key", encoding="utf-8")
     assert discover_identity_file("etsi_user", home=tmp_path) == identity
+
+
+def test_default_snapshot_name_is_human_readable_and_explicitly_utc():
+    now = datetime(2026, 7, 31, 14, 51, 44, tzinfo=timezone.utc)
+    assert default_snapshot_name(now) == "qkd_logs_2026-07-31_14-51-44_UTC"

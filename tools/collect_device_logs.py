@@ -72,7 +72,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--snapshot-name",
-        help="Snapshot directory name; defaults to collection_YYYYmmddTHHMMSSZ",
+        help=(
+            "Snapshot directory name; defaults to "
+            "qkd_logs_YYYY-MM-DD_HH-MM-SS_UTC"
+        ),
     )
     parser.add_argument(
         "--remote-path",
@@ -202,6 +205,13 @@ def validate_remote_path(value: str) -> str:
     if not SAFE_REMOTE_PATH_RE.fullmatch(path):
         raise RuntimeError("Remote path contains unsupported characters: %r" % path)
     return path.rstrip("/") or "/"
+
+
+def default_snapshot_name(now: Optional[datetime] = None) -> str:
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(timezone.utc).strftime(
+        "qkd_logs_%Y-%m-%d_%H-%M-%S_UTC"
+    )
 
 
 def build_scp_command(
@@ -357,9 +367,7 @@ def main() -> int:
         return 2
     print("Using SSH identity: %s" % identity_file)
 
-    snapshot_name = args.snapshot_name or datetime.now(timezone.utc).strftime(
-        "collection_%Y%m%dT%H%M%SZ"
-    )
+    snapshot_name = args.snapshot_name or default_snapshot_name()
     if not SAFE_NAME_RE.fullmatch(snapshot_name):
         print("ERROR: invalid snapshot name: %r" % snapshot_name, file=sys.stderr)
         return 2
