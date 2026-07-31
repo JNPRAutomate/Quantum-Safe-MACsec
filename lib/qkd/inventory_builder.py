@@ -371,7 +371,6 @@ def build_runtime_pki_profile(profile: str, out_dir: Any) -> Dict[str, Any]:
 def validate_qkd_policy(policy: Dict[str, Any]) -> None:
     required_keys = [
         "rekey_enabled",
-        "interval_seconds",
         "key_batch_size",
         "max_installed_keys",
     ]
@@ -380,14 +379,58 @@ def validate_qkd_policy(policy: Dict[str, Any]) -> None:
         if key not in policy:
             raise ValueError(f"Missing qkd_policy.{key}")
 
-    if int(policy["interval_seconds"]) < 1:
-        raise ValueError("qkd_policy.interval_seconds must be >= 1")
+    execution_interval = policy.get("execution_interval_seconds", policy.get("interval_seconds"))
+    activation_interval = policy.get("key_activation_interval_seconds", policy.get("interval_seconds"))
+    if execution_interval is None or int(execution_interval) < 1:
+        raise ValueError("qkd_policy.execution_interval_seconds must be >= 1")
+    if activation_interval is None or int(activation_interval) < 1:
+        raise ValueError("qkd_policy.key_activation_interval_seconds must be >= 1")
+    ack_timeout = int(
+        policy.get(
+            "peer_batch_ack_timeout_seconds",
+            max(20, int(execution_interval) + 90),
+        )
+    )
+    grace_floor = int(policy.get("adaptive_grace_floor_seconds", ack_timeout))
+    safety_margin = int(policy.get("adaptive_grace_safety_margin_seconds", 30))
+    rounding = int(policy.get("adaptive_grace_rounding_seconds", 60))
+    if ack_timeout < 1:
+        raise ValueError("qkd_policy.peer_batch_ack_timeout_seconds must be >= 1")
+    if grace_floor < 0:
+        raise ValueError("qkd_policy.adaptive_grace_floor_seconds must be >= 0")
+    if safety_margin < 0:
+        raise ValueError(
+            "qkd_policy.adaptive_grace_safety_margin_seconds must be >= 0"
+        )
+    if rounding < 1:
+        raise ValueError("qkd_policy.adaptive_grace_rounding_seconds must be >= 1")
+    if int(policy.get("adaptive_grace_history_size", 32)) < 1:
+        raise ValueError("qkd_policy.adaptive_grace_history_size must be >= 1")
+    if int(policy.get("peer_batch_ack_poll_interval_seconds", 1)) < 1:
+        raise ValueError("qkd_policy.peer_batch_ack_poll_interval_seconds must be >= 1")
+    if int(policy.get("peer_enqueue_min_margin_seconds", 0)) < 0:
+        raise ValueError("qkd_policy.peer_enqueue_min_margin_seconds must be >= 0")
+    initial_grace = (
+        (max(grace_floor, ack_timeout) + safety_margin + rounding - 1)
+        // rounding
+    ) * rounding
+    maximum_safe_grace = (2 * int(activation_interval)) - int(execution_interval)
+    if grace_floor < ack_timeout:
+        raise ValueError(
+            "qkd_policy.adaptive_grace_floor_seconds must be >= peer_batch_ack_timeout_seconds"
+        )
+    if initial_grace > maximum_safe_grace:
+        raise ValueError(
+            "initial adaptive grace exceeds the active/pending protected horizon"
+        )
 
     if int(policy["key_batch_size"]) < 1:
         raise ValueError("qkd_policy.key_batch_size must be >= 1")
 
-    if int(policy["max_installed_keys"]) < 1:
-        raise ValueError("qkd_policy.max_installed_keys must be >= 1")
+    if not 4 <= int(policy["max_installed_keys"]) <= 64:
+        raise ValueError("qkd_policy.max_installed_keys must be between 4 and 64")
+    if int(policy["max_installed_keys"]) % 2:
+        raise ValueError("qkd_policy.max_installed_keys must be even")
 
     if int(policy["key_batch_size"]) > int(policy["max_installed_keys"]):
         raise ValueError(
@@ -436,7 +479,10 @@ def build_runtime_qkd_policy(
 
     for key, value in overrides.items():
         if value is not None:
-            policy[key] = value
+            if key == "interval_seconds" and "key_activation_interval_seconds" in policy:
+                policy["key_activation_interval_seconds"] = value
+            else:
+                policy[key] = value
 
     # Default to enabled to preserve the new batch-first runtime behavior.
     policy.setdefault("batch_enabled", True)

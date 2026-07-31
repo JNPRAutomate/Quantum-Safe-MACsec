@@ -656,7 +656,12 @@ def configure_qkd_scripts(dev, name, base):
     script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "super-user")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
-    rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
+    rotation_interval_seconds = int(
+        qkd_policy.get(
+            "execution_interval_seconds",
+            qkd_policy.get("interval_seconds", 60),
+        )
+    )
 
     rollback_candidate(dev, name)
 

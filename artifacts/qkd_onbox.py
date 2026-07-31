@@ -1199,16 +1199,16 @@ def peer_enqueue_min_margin_seconds():
 def peer_batch_ack_timeout_seconds():
     # The peer only drains its inbound-batch queue (process_inbound_transport_for_slave)
     # once per its own periodic script invocation (Junos event-options QKD_TIMER,
-    # fired every rotation_interval_seconds - see event.j2), NOT immediately upon
+    # fired every script_execution_interval_seconds - see event.j2), NOT immediately upon
     # SCP receipt of the batch file. Worst case, a batch that lands just after the
     # peer's tick has already started must wait almost one full extra
-    # rotation_interval_seconds before the peer's NEXT tick picks it up, installs it
+    # script_execution_interval_seconds before the peer's NEXT tick picks it up, installs it
     # (subject to the junos commit lock, up to ~25s) and writes the ACK file. A
     # timeout equal to only one interval is therefore too tight and causes
     # intermittent PEER BATCH ACK TIMEOUT even though the peer eventually processes
     # the batch successfully - default to one full tick plus a fixed buffer that
     # covers install/lock/SCP/poll overhead (independent of tick length).
-    default_value = max(20, rotation_interval_seconds() + 90)
+    default_value = max(20, script_execution_interval_seconds() + 90)
     value = int(qkd_policy().get("peer_batch_ack_timeout_seconds", default_value))
     if value < 1:
         return 1
@@ -1226,12 +1226,94 @@ def peer_batch_ack_poll_interval_seconds():
     return value
 
 
+def adaptive_grace_history_size():
+    return max(1, int(qkd_policy().get("adaptive_grace_history_size", 32)))
+
+
+def adaptive_grace_floor_seconds():
+    configured = qkd_policy().get("adaptive_grace_floor_seconds")
+    if configured is None:
+        configured = peer_batch_ack_timeout_seconds()
+    return max(0, int(configured))
+
+
+def adaptive_grace_safety_margin_seconds():
+    return max(0, int(qkd_policy().get("adaptive_grace_safety_margin_seconds", 30)))
+
+
+def adaptive_grace_rounding_seconds():
+    return max(1, int(qkd_policy().get("adaptive_grace_rounding_seconds", 60)))
+
+
 def batch_activation_margin_seconds():
+    # Compatibility for the unreachable legacy full-batch path.
     minimum = peer_batch_ack_timeout_seconds() + 30
-    value = int(qkd_policy().get("batch_activation_margin_seconds", 480))
-    if value < minimum:
-        return minimum
-    return value
+    return max(
+        minimum,
+        int(qkd_policy().get("batch_activation_margin_seconds", minimum)),
+    )
+
+
+def normalize_successful_timing_history(samples, history_size=None):
+    limit = int(history_size or adaptive_grace_history_size())
+    normalized = []
+    for sample in samples if isinstance(samples, list) else []:
+        if not isinstance(sample, dict):
+            continue
+        try:
+            delta_commit_ms = int(sample["delta_commit_ms"])
+            delta_ack_ms = int(sample["delta_ack_ms"])
+            delta_total_ms = int(sample["delta_total_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if min(delta_commit_ms, delta_ack_ms, delta_total_ms) < 0:
+            continue
+        normalized.append(
+            {
+                "completed_at_ms": int(sample.get("completed_at_ms", 0)),
+                "delta_commit_ms": delta_commit_ms,
+                "delta_ack_ms": delta_ack_ms,
+                "delta_total_ms": delta_total_ms,
+            }
+        )
+    return normalized[-max(1, limit):]
+
+
+def adaptive_activation_grace_seconds(state):
+    history = normalize_successful_timing_history(
+        state.get("successful_timing_history", []) if isinstance(state, dict) else []
+    )
+    observed_seconds = 0
+    if history:
+        observed_seconds = (max(item["delta_total_ms"] for item in history) + 999) // 1000
+    raw_seconds = (
+        max(adaptive_grace_floor_seconds(), observed_seconds)
+        + adaptive_grace_safety_margin_seconds()
+    )
+    rounding = adaptive_grace_rounding_seconds()
+    return ((raw_seconds + rounding - 1) // rounding) * rounding
+
+
+def record_successful_transaction_timing(state, transaction, t3_ack_received_ms):
+    try:
+        t0 = int(transaction["t0_commit_request_ms"])
+        t1 = int(transaction["t1_commit_finished_ms"])
+        t2 = int(transaction["t2_peer_send_ms"])
+        t3 = int(t3_ack_received_ms)
+    except (KeyError, TypeError, ValueError):
+        return state
+    if not (t0 <= t1 <= t2 <= t3):
+        return state
+    sample = {
+        "completed_at_ms": t3,
+        "delta_commit_ms": t1 - t0,
+        "delta_ack_ms": t3 - t1,
+        "delta_total_ms": t3 - t0,
+    }
+    history = list(state.get("successful_timing_history", []))
+    history.append(sample)
+    state["successful_timing_history"] = normalize_successful_timing_history(history)
+    return state
 
 
 def compute_batch_ack_id(batch_b64):
@@ -1296,10 +1378,25 @@ def key_batch_size():
 
 
 def rotation_interval_seconds():
-    value = int(qkd_policy().get("interval_seconds", MIN_ROTATION_INTERVAL))
+    value = int(
+        qkd_policy().get(
+            "key_activation_interval_seconds",
+            qkd_policy().get("interval_seconds", MIN_ROTATION_INTERVAL),
+        )
+    )
     if value < 1:
         return 1
     return value
+
+
+def script_execution_interval_seconds():
+    value = int(
+        qkd_policy().get(
+            "execution_interval_seconds",
+            qkd_policy().get("interval_seconds", MIN_ROTATION_INTERVAL),
+        )
+    )
+    return max(1, value)
 
 
 def pending_confirm_grace_seconds():
@@ -1405,6 +1502,7 @@ def default_keychain_state(link):
         "previous_active_key_id": None,
         "previous_active_slot": None,
         "inflight_install": None,
+        "successful_timing_history": [],
         "pending_keys": [],
         "pending_key_id": None,
         "next_start_time": None,
@@ -1963,6 +2061,9 @@ def load_link_state(peer, iface, link):
     if "last_seen_key_id" not in state:
         state["last_seen_key_id"] = None
     state = ensure_health_state(state)
+    state["successful_timing_history"] = normalize_successful_timing_history(
+        state.get("successful_timing_history", [])
+    )
     state = normalize_pending_keys(state)
     state = prune_stale_pending_keys(state, iface=iface)
     state = normalize_slot_ring(state)
@@ -5068,6 +5169,26 @@ def _latest_slot_start_epoch(state):
     return max(epochs) if epochs else None
 
 
+def _slots_consumed_before_active(state, target_slots, active_slot):
+    slots = state.get("slots") or []
+    try:
+        active_item = slots[int(active_slot)]
+        active_epoch = epoch_from_junos_start_time(active_item.get("start_time"))
+    except (IndexError, TypeError, ValueError, AttributeError):
+        return False
+    if active_epoch is None:
+        return False
+    for slot in target_slots:
+        try:
+            item = slots[int(slot)]
+            slot_epoch = epoch_from_junos_start_time(item.get("start_time"))
+        except (IndexError, TypeError, ValueError, AttributeError):
+            return False
+        if slot_epoch is None or int(slot_epoch) >= int(active_epoch):
+            return False
+    return True
+
+
 def select_ring_update_slots(
     configured_slots,
     ring_size,
@@ -5081,7 +5202,7 @@ def select_ring_update_slots(
     active_slot = int(active_slot) if active_slot is not None else None
     next_slot = int(next_slot) if next_slot is not None else None
 
-    if not configured_slots or not configured_slots.issubset(ring_slots):
+    if len(ring_slots) < 2 or not configured_slots or not configured_slots.issubset(ring_slots):
         return None, [], "INVALID_RING_SHAPE"
 
     if configured_slots != ring_slots:
@@ -5089,22 +5210,19 @@ def select_ring_update_slots(
             return "RING_COMPLETION", sorted(ring_slots - configured_slots), None
         return None, [], "NOT_CLEAN_SEED"
 
-    if local_previous_slot is None:
-        return None, [], "NO_BILATERALLY_RETIRED_SLOT"
-    try:
-        local_previous_slot = int(local_previous_slot)
-        peer_previous_slot = int(peer_previous_slot)
-    except (TypeError, ValueError):
-        return None, [], "INVALID_RETIRED_SLOT"
-    if local_previous_slot != peer_previous_slot:
-        return None, [], "RETIRED_SLOT_MISMATCH"
+    if active_slot not in ring_slots or next_slot not in ring_slots:
+        return None, [], "ACTIVE_PENDING_PAIR_INCOMPLETE"
+    if next_slot != ((active_slot + 1) % int(ring_size)):
+        return None, [], "ACTIVE_PENDING_PAIR_NOT_ADJACENT"
 
-    protected_slots = {active_slot}
-    if next_slot is not None:
-        protected_slots.add(next_slot)
-    if local_previous_slot in protected_slots:
-        return None, [], "RETIRED_SLOT_STILL_PROTECTED"
-    return "ROLLING_REPLACEMENT", [local_previous_slot], None
+    target_slots = []
+    slot = (next_slot + 1) % int(ring_size)
+    while slot != active_slot:
+        target_slots.append(slot)
+        slot = (slot + 1) % int(ring_size)
+    if not target_slots:
+        return None, [], "NO_REPLACEABLE_SLOTS"
+    return "ROLLING_REPLACEMENT", target_slots, None
 
 
 def _finalize_bilateral_install(state, records, operation):
@@ -5198,6 +5316,10 @@ def resume_inflight_install(link, state):
             iface,
             "MASTER",
         )
+        if not transaction.get("t2_peer_send_ms"):
+            transaction["t2_peer_send_ms"] = int(time.time() * 1000)
+            if not save_db_state(peer, iface, state):
+                return state, False
         if not send_command(
             link,
             "install-key-batch",
@@ -5209,6 +5331,15 @@ def resume_inflight_install(link, state):
         if peer_transport_mode() == "queue" and not wait_for_peer_batch_ack(link, iface, ack_id):
             return state, False
 
+    # A pre-existing ACK was received during an earlier process lifetime.
+    # Its local receipt time is unavailable, so do not mix the peer clock or
+    # recovery downtime into the adaptive timing history.
+    t3_ack_received_ms = 0 if ack_ok else int(time.time() * 1000)
+    state = record_successful_transaction_timing(
+        state,
+        transaction,
+        t3_ack_received_ms,
+    )
     state = _finalize_bilateral_install(state, records, operation)
     state = clear_kme_failure(peer, iface, state)
     if not save_db_state(peer, iface, state):
@@ -5329,7 +5460,6 @@ def run_master_rolling_link(link):
         )
         return False
 
-    ring_slots = set(range(max_installed_keys()))
     if not _slot_metadata_matches(state, peer_state, local_slots):
         log("ROTATION BLOCKED reason=SLOT_METADATA_NOT_BILATERALLY_ALIGNED", "ERROR", iface, "MASTER")
         return False
@@ -5355,30 +5485,51 @@ def run_master_rolling_link(link):
         peer_state.get("previous_active_slot"),
     )
     if operation is None:
-        level = "INFO" if block_reason == "NO_BILATERALLY_RETIRED_SLOT" else "ERROR"
+        level = "INFO" if block_reason == "ACTIVE_PENDING_PAIR_INCOMPLETE" else "ERROR"
         log(
             f"ROTATION {'SKIP' if level == 'INFO' else 'BLOCKED'} reason={block_reason} "
             f"configured_slots={sorted(local_slots)} active_slot={local_active_slot} "
-            f"next_slot={local_next_slot} local_retired_slot={state.get('previous_active_slot')} "
-            f"peer_retired_slot={peer_state.get('previous_active_slot')}",
+            f"next_slot={local_next_slot}",
             level,
             iface,
             "MASTER",
         )
         return False
 
-    if operation == "RING_COMPLETION":
-        first_start_epoch = int(time.time()) + batch_activation_margin_seconds()
-    else:
+    activation_grace = adaptive_activation_grace_seconds(state)
+    if operation == "ROLLING_REPLACEMENT":
+        if not _slots_consumed_before_active(state, target_slots, local_active_slot):
+            log(
+                f"ROTATION SKIP reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED "
+                f"target_slots={target_slots} active_slot={local_active_slot}",
+                "INFO",
+                iface,
+                "MASTER",
+            )
+            return False
+        protected_horizon = 2 * rotation_interval_seconds()
+        maximum_safe_grace = protected_horizon - script_execution_interval_seconds()
+        if activation_grace > maximum_safe_grace:
+            log(
+                f"ROTATION BLOCKED reason=ADAPTIVE_GRACE_EXCEEDS_PROTECTED_HORIZON "
+                f"grace_seconds={activation_grace} maximum_safe_grace_seconds={maximum_safe_grace} "
+                f"activation_interval_seconds={rotation_interval_seconds()} "
+                f"execution_interval_seconds={script_execution_interval_seconds()}",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            return False
         latest_epoch = _latest_slot_start_epoch(state)
         if latest_epoch is None:
             log("ROTATION BLOCKED reason=LATEST_START_TIME_UNKNOWN", "ERROR", iface, "MASTER")
             return False
-        minimum_delivery_epoch = int(time.time()) + peer_batch_ack_timeout_seconds() + 30
         first_start_epoch = max(
             int(latest_epoch) + rotation_interval_seconds(),
-            minimum_delivery_epoch,
+            int(time.time()) + activation_grace,
         )
+    else:
+        first_start_epoch = int(time.time()) + activation_grace
 
     if rotation_too_soon(state, MIN_ROTATION_INTERVAL):
         log(
@@ -5437,6 +5588,7 @@ def run_master_rolling_link(link):
         "payload_b64": payload_b64,
         "ack_id": ack_id,
         "created_at": int(time.time()),
+        "t0_commit_request_ms": int(time.time() * 1000),
     }
     if not save_db_state(peer, iface, state):
         log(
@@ -5476,6 +5628,19 @@ def run_master_rolling_link(link):
             )
         return False
 
+    state["inflight_install"]["t1_commit_finished_ms"] = int(time.time() * 1000)
+    if not save_db_state(peer, iface, state):
+        log(
+            f"{operation} ABORTED reason=POST_COMMIT_TIMING_STATE_SAVE_FAILED "
+            f"ack_id={ack_id} action=KEEP_INFLIGHT",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+    state["inflight_install"]["t2_peer_send_ms"] = int(time.time() * 1000)
+    if not save_db_state(peer, iface, state):
+        return False
     if not send_command(
         link,
         "install-key-batch",
@@ -5501,6 +5666,11 @@ def run_master_rolling_link(link):
         )
         return False
 
+    state = record_successful_transaction_timing(
+        state,
+        state["inflight_install"],
+        int(time.time() * 1000),
+    )
     state = _finalize_bilateral_install(state, peer_payload, operation)
     state = clear_kme_failure(peer, iface, state)
     if not save_db_state(peer, iface, state):

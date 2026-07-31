@@ -1,376 +1,260 @@
-# MACsec Hitless Rolling Keyring a Quattro Slot
+# MACsec Hitless Rolling Keyring N-2
 
 Versione: `ver3.3.2.1`
 
-## 1. Obiettivo
+## 1. Modello
 
-Il keychain Junos usa quattro slot fisici:
+Il keyring contiene un numero pari `N` di slot, con `4 <= N <= 64`. Quattro è
+il minimo perché una coppia active/pending lascia almeno due slot sostituibili.
 
-```text
-0, 1, 2, 3
-```
+- bootstrap: l'orchestrator configura soltanto lo slot 0;
+- completion: `qkd_onbox.py` aggiunge gli altri `N-1` slot;
+- steady state: active e pending sono protetti come coppia operativa;
+- ogni batch successivo sostituisce gli altri `N-2` slot.
 
-Il runtime deve mantenere sempre:
+La coppia `[active, pending]` non è una transazione distribuita atomica: i due
+router eseguono commit indipendenti. La sicurezza deriva da snapshot bilaterale,
+start-time futuri, ACK e recovery persistente.
 
-- una chiave attiva;
-- una chiave successiva con `start-time` futuro;
-- ulteriore capacità futura;
-- lo stesso contenuto e gli stessi start-time sui due peer.
+## 2. Timer distinti
 
-Dopo il bootstrap, `qkd_orchestrator.py` non partecipa più al ciclo delle
-chiavi. Tutte le chiamate ENC/DEC al KME, l'installazione e il rolling sono
-eseguiti esclusivamente da `qkd_onbox.py`.
-
-## 2. Responsabilità
-
-### qkd_orchestrator
-
-Durante il provisioning:
-
-1. crea il keychain;
-2. configura soltanto lo slot 0;
-3. usa un CKN e un CAK bootstrap deterministici;
-4. imposta lo start-time nel passato;
-5. abilita MACsec e quindi la raggiungibilità verso il KME;
-6. installa `qkd_onbox.py`.
-
-Non esegue chiamate ENC al KME durante il bootstrap.
-
-### qkd_onbox
-
-Quando viene eseguito sul router:
-
-1. adotta lo slot 0 già configurato;
-2. verifica che MKA lo stia usando;
-3. verifica che entrambi i peer abbiano lo stesso active;
-4. esegue ENC sul KME per completare gli slot 1, 2 e 3;
-5. gestisce successivamente il ring uno slot alla volta.
-
-## 3. Stati del ring
-
-| Stato | Significato |
-|---|---|
-| `uninitialized` | Lo stato runtime non ha ancora adottato il keychain |
-| `seeded` | Lo slot 0 bootstrap è stato adottato e confermato da MKA |
-| `ready` | Tutti gli slot 0, 1, 2 e 3 sono presenti |
-
-La transizione normale è:
-
-```text
-uninitialized -> seeded -> ready -> rolling continuo
-```
-
-## 4. Regole di sicurezza
-
-Uno slot può essere riscritto soltanto quando:
-
-1. non è la chiave attiva locale;
-2. non è la chiave attiva sul peer;
-3. entrambi i peer confermano la stessa chiave attiva;
-4. non è la prossima chiave determinata dallo start-time;
-5. entrambi i peer confermano lo stesso next slot;
-6. è lo slot precedentemente attivo e ora ritirato su entrambi;
-7. il nuovo start-time lascia il margine necessario a commit, trasporto e ACK.
-
-In caso di stato ambiguo il comportamento è fail-closed:
-
-```text
-nessuna nuova ENC
-nessun nuovo slot
-nessun avanzamento software
-rotazione bloccata
-```
-
-`pending_auto_evict_enabled` è disabilitato. Una pending non confermata non
-viene eliminata automaticamente dallo stato software.
-
-## 5. Esempio 1: bootstrap con solo slot 0
-
-Il provisioning produce:
-
-| Slot | Origine | Start-time | Stato |
-|---|---|---|---|
-| 0 | Orchestrator | passato | active |
-| 1 | vuoto | - | - |
-| 2 | vuoto | - | - |
-| 3 | vuoto | - | - |
-
-Esempio:
-
-```text
-ora              = 10:00
-slot 0 start-time = 2026-01-01 00:01
-```
-
-Junos può usare immediatamente lo slot 0. MACsec diventa operativo e il router
-ottiene raggiungibilità verso il KME.
-
-`qkd_onbox.py` non esegue ENC per ricreare lo slot 0. Ricostruisce invece
-l'identità bootstrap deterministica, verifica il CKN configurato e conferma
-tramite MKA che lo slot 0 sia realmente in uso.
-
-## 6. Esempio 2: completamento iniziale degli slot 1, 2 e 3
-
-Con la policy corrente:
-
-```text
-interval_seconds                  = 120
-batch_activation_margin_seconds  = 480
-peer_batch_ack_timeout_seconds    = 210
-```
-
-Alle 10:00 `qkd_onbox.py` genera tre chiavi KME:
-
-| Slot | Start-time | Ruolo iniziale |
-|---|---|---|
-| 0 | passato | active bootstrap |
-| 1 | 10:08 | next |
-| 2 | 10:10 | future |
-| 3 | 10:12 | future |
-
-Flusso:
-
-1. il master esegue tre ENC;
-2. salva una transazione `inflight_install`;
-3. esegue il commit locale degli slot 1, 2 e 3;
-4. invia al peer gli stessi key-id, slot e start-time;
-5. il peer esegue DEC e commit;
-6. il peer scrive l'ACK;
-7. solo dopo `ACK=ok` il master finalizza lo stato `ready`.
-
-Durante tutto il completamento lo slot 0 resta configurato e attivo.
-
-## 7. Esempio 3: primo rolling, da slot 0 a slot 1
-
-Alle 10:08 Junos seleziona lo slot 1 in base allo start-time.
-
-Prima del riuso:
-
-```text
-slot 0 = precedente active, ora ritirato
-slot 1 = active
-slot 2 = next
-slot 3 = future
-```
-
-Il runtime non riscrive immediatamente lo slot 0. Prima richiede:
-
-```text
-local active = slot 1
-peer active  = slot 1
-local next   = slot 2
-peer next    = slot 2
-local retired slot = 0
-peer retired slot  = 0
-```
-
-Solo dopo queste conferme lo slot 0 può ricevere una nuova chiave:
-
-| Slot | Start-time | Stato |
-|---|---|---|
-| 1 | 10:08 | active |
-| 2 | 10:10 | next |
-| 3 | 10:12 | future |
-| 0 | 10:14 | nuova future |
-
-Il ring temporale è quindi:
-
-```text
-1 -> 2 -> 3 -> 0
-```
-
-L'ordine temporale è preservato dagli start-time. Il numero di slot è un
-identificatore fisico riutilizzato circolarmente.
-
-## 8. Esempio 4: rotazioni successive
-
-### Quando lo slot 2 diventa active
-
-```text
-slot 1 = retired
-slot 2 = active
-slot 3 = next
-slot 0 = future
-```
-
-Il runtime sostituisce solo lo slot 1:
-
-```text
-slot 1 start-time = 10:16
-```
-
-### Quando lo slot 3 diventa active
-
-```text
-slot 2 = retired
-slot 3 = active
-slot 0 = next
-slot 1 = future
-```
-
-Il runtime sostituisce solo lo slot 2:
-
-```text
-slot 2 start-time = 10:18
-```
-
-### Quando il nuovo slot 0 diventa active
-
-```text
-slot 3 = retired
-slot 0 = active
-slot 1 = next
-slot 2 = future
-```
-
-Il runtime sostituisce solo lo slot 3:
-
-```text
-slot 3 start-time = 10:20
-```
-
-La sequenza continua:
-
-```text
-active: 0 -> 1 -> 2 -> 3 -> 0 -> 1 -> 2 -> 3
-time:   crescente senza interruzioni
-```
-
-## 9. Esempio 5: errore ENC verso il KME
-
-Se ENC fallisce prima del commit:
-
-```text
-nessun nuovo key-id disponibile
-nessuna modifica Junos
-nessun invio al peer
-nessun avanzamento dello stato
-```
-
-La chiave active e le future già installate continuano a essere usate.
-
-## 10. Esempio 6: errore SSH o ACK dopo il commit locale
-
-I commit su due router non sono atomici. Per questo il master salva prima una
-transazione persistente:
-
-```json
-{
-  "operation": "ROLLING_REPLACEMENT",
-  "records": [],
-  "payload_b64": "...",
-  "ack_id": "...",
-  "created_at": 1785470000
-}
-```
-
-Se SCP o ACK falliscono:
-
-1. `inflight_install` non viene cancellata;
-2. non viene generata una nuova chiave;
-3. non viene scelto un altro slot;
-4. al ciclo successivo viene ritentato lo stesso payload con lo stesso ACK ID;
-5. il recovery viene tentato anche se MACsec non risulta più `inuse`;
-6. lo stato viene finalizzato soltanto dopo ACK positivo.
-
-Nel rolling normale lo slot modificato è già ritirato. Active e next non
-vengono toccati dalla transazione.
-
-La garanzia hitless richiede comunque che la connettività di controllo venga
-ripristinata prima dello start-time della nuova chiave. Nessun algoritmo con
-due commit indipendenti può garantire atomicità durante una partizione SSH
-prolungata oltre il margine di attivazione.
-
-## 11. Esempio 7: pending non confermata
-
-Situazione:
-
-```text
-slot 1 dovrebbe essere active
-MKA locale o peer non lo conferma
-```
-
-Il runtime:
-
-- non elimina la pending;
-- non considera automaticamente completato il rollover;
-- non riscrive lo slot 0;
-- non avanza verso una nuova generazione;
-- attende riconciliazione MKA e peer.
-
-Questo impedisce che lo stato software diverga dalla configurazione Junos.
-
-## 12. Rotazione SSH indipendente
-
-La chiave ED25519 di `etsi_peer_view` è indipendente dalle CAK MACsec.
-
-Per evitare che la credenziale cambi durante SCP, status o ACK del keyring,
-`qkd_onbox.py` esegue:
-
-```text
-1. ciclo MACsec/keyring
-2. eventuale rotazione SSH etsi_peer_view
-```
-
-La rotazione SSH resta abilitata secondo:
+La policy corrente usa:
 
 ```yaml
+execution_interval_seconds: 60
+key_activation_interval_seconds: 120
+peer_batch_ack_timeout_seconds: 150
+peer_batch_ack_poll_interval_seconds: 5
+peer_enqueue_min_margin_seconds: 60
+adaptive_grace_history_size: 32
+adaptive_grace_floor_seconds: 150
+adaptive_grace_safety_margin_seconds: 30
+adaptive_grace_rounding_seconds: 60
 peer_key_rotation_interval_seconds: 300
 ```
 
-Non determina slot, start-time, active o next del keychain MACsec.
+I timer hanno funzioni indipendenti:
 
-## 13. Condizioni che bloccano il rolling
-
-| Condizione | Risultato |
+| Timer | Funzione |
 |---|---|
-| Active locale diverso dal peer | Blocco |
-| Active slot non determinabile | Blocco |
-| Next locale diverso dal peer | Blocco |
-| Metadata slot differenti | Blocco |
-| Retired slot differente | Blocco |
-| Retired slot uguale ad active | Blocco |
-| Retired slot uguale a next | Blocco |
-| Stato parziale diverso dal solo seed `{0}` | Blocco |
-| Transazione inflight non conclusa | Retry della stessa transazione |
+| Execution interval | Frequenza con cui Junos esegue `qkd_onbox.py` |
+| Activation interval | Distanza tra gli start-time di due chiavi consecutive |
+| ACK timeout | Limite massimo di attesa dell'ACK peer |
+| ACK poll | Frequenza di lettura dell'ACK |
+| Enqueue margin | Ultimo controllo prima di accodare il payload |
+| Adaptive grace | Lead time calcolato dai tempi reali delle transazioni |
+| SSH rotation | Rotazione ED25519 indipendente di `etsi_peer_view` |
 
-## 14. Log operativi principali
+La copertura nominale del keyring è:
 
-Bootstrap e completion:
+```text
+coverage = N * key_activation_interval
+```
+
+Con quattro slot:
+
+```text
+coverage = 4 * 120 = 480 secondi
+```
+
+Un batch steady-state contiene invece:
+
+```text
+replacement_count = N - 2
+```
+
+Con quattro slot vengono quindi sostituite due chiavi per transazione.
+
+## 3. Grace adattivo
+
+Per ogni transazione conclusa con ACK positivo vengono misurati:
+
+```text
+t0 = richiesta commit locale
+t1 = commit locale terminato
+t2 = invio payload al peer
+t3 = ACK positivo ricevuto
+
+delta_commit = t1 - t0
+delta_ack    = t3 - t1
+delta_total  = t3 - t0
+```
+
+Lo stato conserva le ultime 32 transazioni riuscite:
+
+```text
+grace = ceil(
+    max(configured_floor, max(last_32_successful_delta_total))
+    + safety_margin,
+    rounding
+)
+```
+
+Con storico vuoto e policy corrente:
+
+```text
+grace = ceil(max(150, 0) + 30, 60) = 180 secondi
+```
+
+Timeout, errori KME, errori SSH e ACK negativi non entrano nello storico e non
+possono ridurre il grace. Se il grace osservato supera la finestra protetta, il
+runtime blocca il replacement invece di schedulare chiavi senza margine.
+
+Per il modello N-2 la verifica conservativa è:
+
+```text
+maximum_safe_grace =
+    2 * key_activation_interval - execution_interval
+```
+
+Con i valori correnti:
+
+```text
+maximum_safe_grace = 2 * 120 - 60 = 180 secondi
+```
+
+Il grace iniziale di 180 secondi è ammesso e sostituisce il precedente margine
+fisso di 480 secondi. Oltre 180 secondi il batch viene bloccato e richiede un
+intervallo di attivazione più ampio o un'esecuzione più frequente.
+
+## 4. Bootstrap e completion
+
+L'orchestrator configura:
+
+| Slot | Origine | Start-time |
+|---|---|---|
+| 0 | Bootstrap deterministico | Passato |
+| 1..N-1 | Vuoto | - |
+
+`qkd_onbox.py` adotta lo slot 0 senza eseguire ENC, verifica MKA e completa gli
+slot mancanti. Con N=4 e invocazione alle 10:00:
+
+| Slot | Start-time | Ruolo |
+|---|---|---|
+| 0 | passato | active bootstrap |
+| 1 | 10:03 | pending |
+| 2 | 10:05 | future |
+| 3 | 10:07 | future |
+
+Il primo start-time deriva dal grace iniziale di 180 secondi; i successivi sono
+separati dall'activation interval di 120 secondi.
+
+## 5. Replacement N-2 con quattro slot
+
+Quando lo snapshot bilaterale mostra:
+
+```text
+slot 2 = active
+slot 3 = pending
+slot 0 = consumed
+slot 1 = consumed
+```
+
+la coppia `{2,3}` è protetta e il singolo commit sostituisce `{0,1}`:
+
+```text
+slot 0 = nuova future key
+slot 1 = nuova future key
+```
+
+L'ordine temporale dei target parte dallo slot successivo alla pending. Alcuni
+esempi:
+
+| Active | Pending | Target ordinati |
+|---:|---:|---|
+| 0 | 1 | 2, 3 |
+| 1 | 2 | 3, 0 |
+| 2 | 3 | 0, 1 |
+| 3 | 0 | 1, 2 |
+
+Per N=60, con active 57 e pending 58:
+
+```text
+protected = {57, 58}
+targets   = 59, 0, 1, ..., 56
+count     = 58
+```
+
+## 6. Guardie bilaterali
+
+Prima di generare nuove chiavi il runtime richiede:
+
+1. MACsec `inuse`;
+2. active key e active slot uguali sui due peer;
+3. pending slot uguale sui due peer;
+4. active e pending adiacenti nel ring;
+5. stesso insieme di slot configurati;
+6. stessi key-id e start-time per ogni slot;
+7. tutti gli N-2 target hanno start-time precedente a quello dell'active;
+8. nessuna transazione inflight precedente;
+9. grace compatibile con la finestra protetta.
+
+In caso di ambiguità:
+
+```text
+nessuna nuova ENC
+nessun nuovo commit
+nessun avanzamento software
+```
+
+## 7. Errori e recovery inflight
+
+Prima del commit il master salva una transazione persistente contenente payload,
+ACK ID, record e `t0`. Dopo il commit salva `t1`; prima dell'invio salva `t2`.
+
+Se trasporto o ACK falliscono:
+
+1. la transazione non viene cancellata;
+2. non vengono generate altre chiavi;
+3. viene ritentato lo stesso payload con lo stesso ACK ID;
+4. il recovery precede il controllo MACsec `inuse`;
+5. lo stato viene finalizzato soltanto dopo ACK positivo.
+
+Solo allora viene registrato `t3` e il campione entra nello storico adattivo.
+
+## 8. Pending legacy
+
+`pending_confirm_grace_seconds` e `pending_stuck_recovery_seconds` appartengono
+al precedente full-batch, conservato nel file soltanto come codice storico
+irraggiungibile. Il percorso attivo `run_master_rolling_link()` non usa tali
+timer. La protezione corrente è fornita da:
+
+- snapshot active/pending locale e peer;
+- metadata bilaterali;
+- inflight persistente;
+- ACK;
+- grace adattivo.
+
+`pending_auto_evict_enabled` resta disabilitato: il runtime non elimina stato
+pending per forzare artificialmente un avanzamento.
+
+## 9. Rotazione SSH indipendente
+
+La chiave ED25519 di `etsi_peer_view` ruota ogni 300 secondi ed è indipendente
+dalle CAK MACsec. `qkd_onbox.py` completa prima tutto il lavoro MACsec e soltanto
+dopo tenta la rotazione SSH, evitando cambi credenziali durante una transazione.
+
+## 10. Log e verifica
+
+Log principali:
 
 ```text
 ORCHESTRATOR SEED ADOPTED
 RING_COMPLETION START
 RING_COMPLETION DONE
-```
-
-Rolling:
-
-```text
 ROLLING_REPLACEMENT START
 ROLLING_REPLACEMENT DONE
-```
-
-Recovery:
-
-```text
 INFLIGHT RETRY
 INFLIGHT FINALIZED
-ROTATION BLOCKED reason=INFLIGHT_INSTALL_NOT_CONFIRMED
-```
-
-Guard:
-
-```text
 ROTATION BLOCKED reason=ACTIVE_NOT_BILATERALLY_CONFIRMED
 ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED
-ROTATION BLOCKED reason=RETIRED_SLOT_MISMATCH
-ROTATION BLOCKED reason=RETIRED_SLOT_STILL_PROTECTED
+ROTATION BLOCKED reason=ACTIVE_PENDING_PAIR_INCOMPLETE
+ROTATION BLOCKED reason=ACTIVE_PENDING_PAIR_NOT_ADJACENT
+ROTATION BLOCKED reason=ADAPTIVE_GRACE_EXCEEDS_PROTECTED_HORIZON
+ROTATION SKIP reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED
 ```
 
-## 15. Verifica sui router
-
-Su entrambi i peer:
+Comandi Junos:
 
 ```text
 show configuration security authentication-key-chains key-chain <name> | display set
@@ -378,27 +262,27 @@ show security mka sessions detail
 show security macsec connections
 ```
 
-Verificare che:
+Verificare che active/pending coincidano, che ogni batch modifichi esattamente
+N-2 slot, che gli slot protetti non cambino e che MACsec resti `inuse`.
 
-1. gli stessi slot abbiano gli stessi CKN e start-time;
-2. MKA sia secured su entrambi;
-3. active e next coincidano;
-4. ogni ciclo rolling modifichi un solo slot;
-5. lo slot modificato sia quello precedentemente active;
-6. non compaiano eventi `UNKNOWN_CAK`;
-7. MACsec resti `inuse`;
-8. ping, LACP e adiacenze di routing non subiscano interruzioni.
+## 11. Confronto con adammmmm/hitless-key-rollover
 
-## 16. Limite della validazione
+Il progetto esterno adotta lo stesso principio generale: usa gli start-time
+Junos per preparare in anticipo nuove CKN/CAK e verifica che tutti i router
+condividano la stessa chiave attiva prima dei commit.
 
-I test automatici verificano il planner, i guard e l'ordine delle operazioni.
-La proprietà hitless end-to-end deve essere confermata sui due ACX con traffico
-continuo durante almeno un intero ciclo:
+L'algoritmo è però diverso:
 
-```text
-0 -> 1 -> 2 -> 3 -> 0
-```
+| Progetto esterno | Questo runtime |
+|---|---|
+| Controller Python esterno con PyEZ | Runtime autonomo on-box |
+| 32 slot, protegge il solo active e sostituisce gli altri 31 | N slot, protegge active e pending e sostituisce N-2 |
+| Parte soltanto quando Junos non riporta una next key | Richiede sempre una pending bilaterale |
+| Genera CAK/CKN casuali centralmente | Ottiene chiavi dal KME tramite ENC/DEC |
+| Commit sequenziali e rollback compensativo | Commit locale, coda peer, ACK e inflight persistente |
+| `ROLLINTERVAL` fisso in ore | Activation interval distinto dal tick di esecuzione |
+| Nessuna misura adattiva | Grace derivato dalle ultime 32 transazioni riuscite |
 
-Solo il test hardware dimostra il comportamento specifico della release Junos
-EVO in uso.
-
+Le idee riutilizzabili sono la verifica preventiva della sincronizzazione
+temporale e il controllo dei configuration lock. Non viene importato codice dal
+progetto esterno; il modello N-2 resta specifico per il keyring QKD distribuito.

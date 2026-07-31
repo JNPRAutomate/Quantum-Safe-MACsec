@@ -33,7 +33,12 @@ def build_device_config(device_name, device, platform, base, topology):
 
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
-    rotation_interval_seconds = int(qkd_policy.get("interval_seconds", 60))
+    rotation_interval_seconds = int(
+        qkd_policy.get(
+            "execution_interval_seconds",
+            qkd_policy.get("interval_seconds", 60),
+        )
+    )
     fallback_bootstrap = bool(qkd_policy.get("bootstrap_with_fallback_key", False))
 
     context = {
