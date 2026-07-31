@@ -323,6 +323,15 @@ def build_peer_key_report(
 
     device_counts = Counter(device["status"] for device in devices)
     link_counts = Counter(link["status"] for link in links)
+    missing_peer_renewals_by_device = [
+        {
+            "device": device["device"],
+            "missing_peer_renewals": list(device["missing_peers"]),
+            "missing_count": len(device["missing_peers"]),
+        }
+        for device in devices
+        if device["missing_peers"]
+    ]
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "snapshot": str(snapshot.resolve()),
@@ -335,6 +344,7 @@ def build_peer_key_report(
         "all_links_successful": all(link["status"] == "SUCCESS" for link in links),
         "device_status_counts": dict(sorted(device_counts.items())),
         "link_status_counts": dict(sorted(link_counts.items())),
+        "missing_peer_renewals_by_device": missing_peer_renewals_by_device,
         "devices": devices,
         "links": links,
     }
@@ -424,6 +434,15 @@ def build_peer_key_observation(
 
     device_counts = Counter(item["status"] for item in devices)
     link_counts = Counter(item["status"] for item in links)
+    missing_peer_renewals_by_device = [
+        {
+            "device": device["device"],
+            "missing_peer_renewals": list(device["missing_peers"]),
+            "missing_count": len(device["missing_peers"]),
+        }
+        for device in devices
+        if device["missing_peers"]
+    ]
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "peer_user": final["peer_user"],
@@ -438,6 +457,7 @@ def build_peer_key_observation(
         ),
         "device_status_counts": dict(sorted(device_counts.items())),
         "link_status_counts": dict(sorted(link_counts.items())),
+        "missing_peer_renewals_by_device": missing_peer_renewals_by_device,
         "devices": devices,
         "links": links,
     }

@@ -410,6 +410,7 @@ by each device. It reports:
 - explicit per-peer renewal entries for that cycle (`latest_cycle_peer_renewals`)
   so if device X has three MACsec peers you can verify three renewals;
 - missing or unexpected peers;
+- `missing_peer_renewals_by_device` as a compact fleet-level focus list;
 - bilateral success for every inventory link.
 
 The observation-level `qkd_peer_key_rotation_observation.json` compares T1 with

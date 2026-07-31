@@ -54,6 +54,7 @@ def test_peer_key_report_proves_bilateral_link_coverage(tmp_path):
     assert report["all_links_successful"] is True
     assert report["device_status_counts"] == {"SUCCESS": 2}
     assert report["link_status_counts"] == {"SUCCESS": 1}
+    assert report["missing_peer_renewals_by_device"] == []
     assert report["devices"][0]["rotation_count"] == 4
     assert report["devices"][0]["latest_successful_key_material_marker"].startswith(
         "ssh-ed25519"
@@ -85,5 +86,34 @@ def test_peer_key_observation_counts_only_new_rotations(tmp_path):
     assert observation["total_successful_rotations_during_observation"] == 2
     assert observation["all_devices_rotated_successfully"] is True
     assert observation["all_links_rotated_successfully"] is True
+    assert observation["missing_peer_renewals_by_device"] == []
     assert observation["links"][0]["status"] == "SUCCESS"
     assert observation["devices"][0]["latest_cycle_peer_renewals"][0]["renewed"] is True
+
+
+def test_peer_key_report_exposes_missing_peer_renewals_by_device(tmp_path):
+    write_log(tmp_path, "ACX2", rotation_lines("ACX2", "ACX3", 4))
+    write_log(
+        tmp_path,
+        "ACX3",
+        [
+            "2026-07-31 17:28:00 [INFO] [PEER-KEY-ROTATION] "
+            "PEER-KEY-STATE: interval_seconds=300 last_rotation_ago_seconds=301 "
+            "next_rotation_in_seconds=0 rotation_count=6 device=ACX3 "
+            "peer_user=etsi_peer_view",
+            "2026-07-31 17:28:01 [INFO] [PEER-KEY-ROTATION] "
+            "PEER-KEY starting peer SSH key rotation cycle for ACX3",
+            "2026-07-31 17:28:03 [WARN] [PEER-KEY-ROTATION] "
+            "PEER KEY ROTATION NOT COMPLETED this cycle -> will retry next cycle",
+        ],
+    )
+
+    report = build_peer_key_report(tmp_path, inventory(), "etsi_peer_view")
+
+    assert report["missing_peer_renewals_by_device"] == [
+        {
+            "device": "ACX3",
+            "missing_peer_renewals": ["ACX2"],
+            "missing_count": 1,
+        }
+    ]
