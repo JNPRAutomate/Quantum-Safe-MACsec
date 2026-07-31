@@ -134,6 +134,10 @@ QKD = {
     "ENFORCE_RUNTIME_USER": True,
     "CLEAN_RUNTIME_ON_DEPLOY": True,
     "CLEAN_RUNTIME_ON_CLEAN": True,
+    # Post-deploy peer SSH guard:
+    # 0 => validate all link peers for each device (default, fail-fast).
+    # >0 => sample only first N peers.
+    "POSTDEPLOY_PEER_SSH_MAX_PEERS": 0,
 
     # If True, qkd_onbox.py must refuse runtime actions when executed
     # as root or as a user different from SCRIPT_USER.

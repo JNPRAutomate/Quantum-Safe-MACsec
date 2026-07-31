@@ -742,7 +742,8 @@ def check_peer_ssh_from_device(device):
     connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 2))
     alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 2))
     alive_max = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX", 1))
-    max_peers = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_PEERS", 1))
+    # Full-link scan by default to avoid missing broken peer trust on non-sampled links.
+    max_peers = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_PEERS", 0))
     links = []
     for link in device.get("links", []):
         peer_ip = link.get("peer_ip")
