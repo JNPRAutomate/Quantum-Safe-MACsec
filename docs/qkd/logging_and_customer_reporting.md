@@ -309,17 +309,36 @@ provides:
 - missing device or endpoint-log evidence.
 
 The JSON report contains the same data for automation and external dashboards.
+The top-level `health_category_counts` gives immediate green/orange/red totals.
+Its top-level `attention_required` object is the troubleshooting entry point:
+
+- `count` gives the number of links whose status is not `HEALTHY`;
+- `status_counts` groups those links by health classification;
+- `links` is ordered by troubleshooting priority, then link ID;
+- each entry includes health category, display color and hex code, detailed
+  status, severity, reason, endpoints, alignment, transaction and activation
+  state, missing evidence, and unresolved critical log lines.
+
+Priority 1 is `PROBLEMATIC`, priority 2 is `NO_DATA`, priority 3 is
+`INSUFFICIENT_DATA`, priority 4 is `TRANSITIONAL`, and priority 5 is
+`ALIGNED_NO_OP_EVIDENCE`. This ordering places confirmed operational problems
+and completely missing visibility before temporary or incomplete evidence.
+The full `links` array remains available for detailed bilateral analysis.
 
 ## 8. Health classifications
 
-| Status | Meaning |
-|---|---|
-| `HEALTHY` | Bilateral active/pending keys align, both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence is present |
-| `TRANSITIONAL` | The snapshot crossed a scheduled active-key transition |
-| `ALIGNED_NO_OP_EVIDENCE` | Key state aligns, but the log window has no explicit MACsec `inuse` line |
-| `DEGRADED` | Bilateral mismatch or unresolved critical errors |
-| `INSUFFICIENT_DATA` | Persisted endpoint state is incomplete |
-| `NO_DATA` | One or both endpoint log sets are missing |
+| Color/category | Detailed status | Meaning |
+|---|---|---|
+| Green `HEALTHY` | `HEALTHY` | Bilateral active/pending keys align, both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence is present |
+| Orange `DEGRADED` | `TRANSITIONAL` | The snapshot crossed a scheduled active-key transition |
+| Orange `DEGRADED` | `ALIGNED_NO_OP_EVIDENCE` | Key state aligns, but MKA or MACsec operational evidence is incomplete |
+| Orange `DEGRADED` | `INSUFFICIENT_DATA` | Persisted endpoint state is incomplete |
+| Orange `DEGRADED` | `NO_DATA` | One or both endpoint log sets are missing |
+| Red `PROBLEMATIC` | `PROBLEMATIC` | Bilateral mismatch, unresolved critical errors, or latest unsecured MKA evidence |
+
+Markdown uses colored-circle badges so the state remains visible in common
+renderers. JSON provides `health_category` and a `display` object containing
+`color`, `color_hex`, and `badge` on every full link and attention item.
 
 `MASTER LOCK BUSY` and `LOCK EXISTS -> exit` are classified as expected
 concurrency protection, not as rotation failures.
@@ -351,7 +370,7 @@ future key against the currently active MKA CKN; before the pending start-time,
 `ckn_match=False` is expected while `secured=True` and
 `interface_state=Secured - Primary` confirm that the current CAK is healthy.
 
-A real degraded MKA/CAK condition requires evidence such as:
+A real red `PROBLEMATIC` MKA/CAK condition requires evidence such as:
 
 - bilateral active/pending key mismatch outside the recognized transition;
 - latest MKA evidence with `secured=False` or a non-`Secured` interface state;

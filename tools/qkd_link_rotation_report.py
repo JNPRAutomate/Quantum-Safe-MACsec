@@ -42,6 +42,34 @@ SLOTS_RE = re.compile(r"slots=(?P<slots>\[[^\]]*\])")
 STATUS_RE = re.compile(r"status=(?P<status>\S+)")
 KEYCHAIN_STAGE_KEY_RE = re.compile(r"\bkey_id=(?P<key_id>\S+)")
 
+ATTENTION_PRIORITY = {
+    "PROBLEMATIC": (1, "critical"),
+    "NO_DATA": (2, "warning"),
+    "INSUFFICIENT_DATA": (3, "warning"),
+    "TRANSITIONAL": (4, "warning"),
+    "ALIGNED_NO_OP_EVIDENCE": (5, "warning"),
+}
+HEALTH_DISPLAY = {
+    "HEALTHY": {
+        "category": "HEALTHY",
+        "color": "green",
+        "color_hex": "#2DA44E",
+        "badge": "\U0001f7e2 HEALTHY",
+    },
+    "PROBLEMATIC": {
+        "category": "PROBLEMATIC",
+        "color": "red",
+        "color_hex": "#CF222E",
+        "badge": "\U0001f534 PROBLEMATIC",
+    },
+}
+DEGRADED_DISPLAY = {
+    "category": "DEGRADED",
+    "color": "orange",
+    "color_hex": "#FB8C00",
+    "badge": "\U0001f7e0 DEGRADED",
+}
+
 EXPECTED_ERROR_MARKERS = (
     "LOCK EXISTS -> exit",
     "MASTER LOCK BUSY -> EXIT",
@@ -448,7 +476,7 @@ def classify_link(
         return "INSUFFICIENT_DATA", reasons
     if alignment == "MISMATCH":
         reasons.append("Bilateral active/pending key metadata differs.")
-        return "DEGRADED", reasons
+        return "PROBLEMATIC", reasons
 
     unresolved = (
         endpoint_a["unresolved_critical_errors"]
@@ -456,7 +484,7 @@ def classify_link(
     )
     if unresolved:
         reasons.append("Critical errors remain after the latest successful evidence.")
-        return "DEGRADED", reasons
+        return "PROBLEMATIC", reasons
 
     if alignment == "TRANSITIONAL":
         reasons.append("Snapshot crossed an active-key transition.")
@@ -469,13 +497,13 @@ def classify_link(
         or not str(mka_a.get("interface_state") or "").startswith("Secured")
     ):
         reasons.append("Endpoint A latest MKA evidence is not secured.")
-        return "DEGRADED", reasons
+        return "PROBLEMATIC", reasons
     if mka_b and (
         not mka_b.get("secured")
         or not str(mka_b.get("interface_state") or "").startswith("Secured")
     ):
         reasons.append("Endpoint B latest MKA evidence is not secured.")
-        return "DEGRADED", reasons
+        return "PROBLEMATIC", reasons
     if not mka_a or not mka_b:
         reasons.append("Keys align but bilateral MKA secured evidence is incomplete.")
         return "ALIGNED_NO_OP_EVIDENCE", reasons
@@ -490,6 +518,10 @@ def classify_link(
         "in-use evidence is present."
     )
     return "HEALTHY", reasons
+
+
+def health_display(status: str) -> Dict[str, str]:
+    return dict(HEALTH_DISPLAY.get(status, DEGRADED_DISPLAY))
 
 
 def analyze_link(
@@ -511,6 +543,7 @@ def analyze_link(
     )
     alignment, alignment_detail = states_alignment(endpoint_a, endpoint_b)
     status, reasons = classify_link(endpoint_a, endpoint_b, alignment)
+    display = health_display(status)
 
     starts = (
         endpoint_a["counts"].get("rotation_started", 0)
@@ -581,6 +614,8 @@ def analyze_link(
         "ca_name": str(link.get("ca_name") or ""),
         "keychain_name": str(link.get("keychain_name") or ""),
         "status": status,
+        "health_category": display["category"],
+        "display": display,
         "status_reasons": reasons,
         "alignment": alignment,
         "alignment_detail": alignment_detail,
@@ -599,6 +634,57 @@ def analyze_link(
     }
 
 
+def build_attention_item(link: Dict[str, Any]) -> Dict[str, Any]:
+    priority, severity = ATTENTION_PRIORITY.get(link["status"], (99, "warning"))
+    evidence_gaps: List[str] = []
+    unresolved_errors: List[Dict[str, str]] = []
+    endpoints = []
+    for endpoint_name in ("endpoint_a", "endpoint_b"):
+        endpoint = link[endpoint_name]
+        label = endpoint_label(endpoint)
+        endpoints.append(
+            {
+                "device": endpoint["device"],
+                "interface": endpoint["interface"],
+            }
+        )
+        if not endpoint["files"]:
+            evidence_gaps.append("%s: endpoint logs missing" % label)
+        elif not endpoint.get("state"):
+            evidence_gaps.append("%s: persisted state missing" % label)
+        if not endpoint.get("mka"):
+            evidence_gaps.append("%s: MKA evidence missing" % label)
+        if not endpoint.get("macsec"):
+            evidence_gaps.append("%s: MACsec in-use evidence missing" % label)
+        for error in endpoint["unresolved_critical_errors"]:
+            unresolved_errors.append(
+                {
+                    "device": endpoint["device"],
+                    "interface": endpoint["interface"],
+                    "timestamp": error["timestamp"],
+                    "line": error["line"],
+                }
+            )
+
+    rotation = link["rotation_summary"]
+    return {
+        "priority": priority,
+        "severity": severity,
+        "link_id": link["id"],
+        "status": link["status"],
+        "health_category": link["health_category"],
+        "display": link["display"],
+        "reasons": link["status_reasons"],
+        "alignment": link["alignment"],
+        "alignment_detail": link["alignment_detail"],
+        "transaction_status": rotation["transaction_status"],
+        "activation_status": rotation["activation_status"],
+        "endpoints": endpoints,
+        "evidence_gaps": evidence_gaps,
+        "unresolved_critical_errors": unresolved_errors,
+    }
+
+
 def build_report(snapshot: Path, inventory: Dict[str, Any], error_samples: int) -> Dict[str, Any]:
     links = [
         analyze_link(snapshot, link, error_samples)
@@ -606,6 +692,7 @@ def build_report(snapshot: Path, inventory: Dict[str, Any], error_samples: int) 
         if isinstance(link, dict)
     ]
     status_counts = Counter(link["status"] for link in links)
+    health_category_counts = Counter(link["health_category"] for link in links)
     expected_devices = {
         str(device.get("name"))
         for device in inventory.get("devices", [])
@@ -616,6 +703,15 @@ def build_report(snapshot: Path, inventory: Dict[str, Any], error_samples: int) 
         for path in snapshot.iterdir()
         if path.is_dir() and path.name in expected_devices
     }
+    attention_links = sorted(
+        (
+            build_attention_item(link)
+            for link in links
+            if link["health_category"] != "HEALTHY"
+        ),
+        key=lambda item: (item["priority"], item["link_id"]),
+    )
+    attention_status_counts = Counter(item["status"] for item in attention_links)
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "snapshot": str(snapshot.resolve()),
@@ -624,6 +720,12 @@ def build_report(snapshot: Path, inventory: Dict[str, Any], error_samples: int) 
         "missing_devices": sorted(expected_devices - present_devices),
         "link_count": len(links),
         "status_counts": dict(sorted(status_counts.items())),
+        "health_category_counts": dict(sorted(health_category_counts.items())),
+        "attention_required": {
+            "count": len(attention_links),
+            "status_counts": dict(sorted(attention_status_counts.items())),
+            "links": attention_links,
+        },
         "links": links,
     }
 
@@ -654,6 +756,11 @@ def render_markdown(report: Dict[str, Any]) -> str:
             "%s=%s" % (status, count)
             for status, count in report["status_counts"].items()
         ),
+        "- Health color counts: `%s`"
+        % ", ".join(
+            "%s=%s" % (category, count)
+            for category, count in report["health_category_counts"].items()
+        ),
         "",
     ]
     if report["missing_devices"]:
@@ -664,6 +771,32 @@ def render_markdown(report: Dict[str, Any]) -> str:
                 "",
             ]
         )
+
+    attention = report["attention_required"]
+    lines.extend(["## Links Requiring Attention", ""])
+    if not attention["links"]:
+        lines.extend(["\U0001f7e2 No links require attention.", ""])
+    else:
+        lines.extend(
+            [
+                "| Priority | Link | Health | Detail | Reason | Transaction | Activation |",
+                "|---:|---|---|---|---|---|---|",
+            ]
+        )
+        for item in attention["links"]:
+            lines.append(
+                "| %d | %s | **%s** | `%s` | %s | %s | %s |"
+                % (
+                    item["priority"],
+                    item["link_id"],
+                    item["display"]["badge"],
+                    item["status"],
+                    " ".join(item["reasons"]),
+                    item["transaction_status"],
+                    item["activation_status"],
+                )
+            )
+        lines.append("")
 
     lines.extend(
         [
@@ -683,7 +816,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
                 link["id"],
                 endpoint_label(endpoint_a),
                 endpoint_label(endpoint_b),
-                link["status"],
+                link["display"]["badge"],
                 link["rotation_summary"]["transaction_status"],
                 link["rotation_summary"]["activation_status"],
                 link["alignment"],
@@ -698,7 +831,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
     for link in report["links"]:
         lines.extend(
             [
-                "### %s - %s" % (link["id"], link["status"]),
+                "### %s - %s" % (link["id"], link["display"]["badge"]),
                 "",
                 "- Type: `%s`; CA: `%s`; keychain: `%s`"
                 % (link["type"], link["ca_name"], link["keychain_name"]),
@@ -776,11 +909,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
         [
             "## Interpretation",
             "",
-            "- **HEALTHY**: bilateral active/pending keys align, both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence exists.",
-            "- **TRANSITIONAL**: collection crossed a scheduled active-key transition.",
-            "- **ALIGNED_NO_OP_EVIDENCE**: key metadata aligns, but this log window lacks an explicit MACsec `inuse` line.",
-            "- **DEGRADED**: bilateral mismatch or unresolved critical errors.",
-            "- **INSUFFICIENT_DATA/NO_DATA**: required endpoint logs or persisted state are absent.",
+            "- \U0001f7e2 **HEALTHY (green)**: bilateral active/pending keys align, both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence exists.",
+            "- \U0001f7e0 **DEGRADED (orange)**: evidence is incomplete, unavailable, or captured during a recognized transition; inspect the detailed status and evidence gaps.",
+            "- \U0001f534 **PROBLEMATIC (red)**: confirmed bilateral mismatch, unresolved critical error, or unsecured MKA evidence.",
             "- Health and rotation completion are independent: a link can be HEALTHY while waiting for the newly installed future keys to activate.",
             "- `MKA KEY NOT CONFIRMED ... ckn_match=False` for a pending future key is expected before its start-time and is not a degradation signal.",
             "",
