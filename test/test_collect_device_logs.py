@@ -42,7 +42,7 @@ def test_scp_command_is_noninteractive_and_copies_log_contents(tmp_path):
         15,
         Path("/tmp/qkd_id_ed25519"),
     )
-    assert command[:3] == ["scp", "-r", "-p"]
+    assert command[:4] == ["scp", "-O", "-r", "-p"]
     assert "BatchMode=yes" in command
     assert "StrictHostKeyChecking=accept-new" in command
     assert "IdentitiesOnly=yes" in command

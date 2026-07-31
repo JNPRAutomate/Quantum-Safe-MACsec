@@ -214,6 +214,7 @@ def build_scp_command(
 ) -> List[str]:
     command = [
         "scp",
+        "-O",
         "-r",
         "-p",
         "-o",
