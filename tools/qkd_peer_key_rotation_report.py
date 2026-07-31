@@ -61,6 +61,11 @@ def load_peer_user(path: Path) -> str:
 
 
 def expected_peers(inventory: Dict[str, Any]) -> Dict[str, Set[str]]:
+    """Return per-device peer_cmd_user renewal targets.
+
+    Scope is master-side only: each device renews peer SSH keys for links where
+    it is node_a, mirroring on-box managed_links behavior.
+    """
     peers: Dict[str, Set[str]] = {
         str(device["name"]): set()
         for device in inventory["devices"]
@@ -73,7 +78,6 @@ def expected_peers(inventory: Dict[str, Any]) -> Dict[str, Set[str]]:
         node_b = str(link.get("node_b") or "")
         if node_a in peers and node_b in peers:
             peers[node_a].add(node_b)
-            peers[node_b].add(node_a)
     return peers
 
 
@@ -225,7 +229,7 @@ def analyze_device(
     latest_cycle = cycles[-1] if cycles else None
     if latest_cycle and latest_cycle["status"] == "FAILED":
         status = "FAILED"
-    elif latest_success and not missing_peers and not unexpected_peers:
+    elif latest_success and not missing_peers:
         status = "SUCCESS"
     elif latest_success:
         status = "PARTIAL_COVERAGE"
@@ -286,22 +290,18 @@ def build_peer_key_report(
         link_id = str(link["id"])
         node_a = str(link["node_a"])
         node_b = str(link["node_b"])
-        endpoint_a = by_device[node_a]
-        endpoint_b = by_device[node_b]
-        a_success = (
-            endpoint_a["status"] == "SUCCESS"
-            and node_b in endpoint_a["renewed_peers"]
-        )
-        b_success = (
-            endpoint_b["status"] == "SUCCESS"
-            and node_a in endpoint_b["renewed_peers"]
-        )
-        if a_success and b_success:
+        endpoint_master = by_device[node_a]
+        endpoint_peer = by_device[node_b]
+        master_expected = node_b in endpoint_master.get("expected_peers", [])
+        master_renewed = node_b in endpoint_master["renewed_peers"]
+        if master_expected and endpoint_master["status"] == "SUCCESS" and master_renewed:
             status = "SUCCESS"
-        elif a_success or b_success:
+        elif master_expected and master_renewed:
             status = "PARTIAL"
-        elif endpoint_a["status"] == "FAILED" or endpoint_b["status"] == "FAILED":
+        elif endpoint_master["status"] == "FAILED":
             status = "FAILED"
+        elif not master_expected:
+            status = "NO_EXPECTATION"
         else:
             status = "NO_SUCCESS_EVIDENCE"
         links.append(
@@ -310,12 +310,12 @@ def build_peer_key_report(
                 "node_a": node_a,
                 "node_b": node_b,
                 "status": status,
-                "node_a_distributed_to_node_b": a_success,
-                "node_b_distributed_to_node_a": b_success,
-                "node_a_key_material_marker": endpoint_a.get(
+                "master_expected_peer_renewal": master_expected,
+                "master_renewed_peer": master_renewed,
+                "master_key_material_marker": endpoint_master.get(
                     "latest_successful_key_material_marker"
                 ),
-                "node_b_key_material_marker": endpoint_b.get(
+                "peer_key_material_marker": endpoint_peer.get(
                     "latest_successful_key_material_marker"
                 ),
             }
@@ -381,13 +381,16 @@ def build_peer_key_observation(
         if before is None or after is None:
             raise RuntimeError("Device missing from peer-key observation: %s" % device)
         delta = int(after["rotation_count"]) - int(before["rotation_count"])
-        status = (
-            "SUCCESS"
-            if delta > 0 and after["status"] == "SUCCESS"
-            else "FAILED"
-            if after["status"] == "FAILED"
-            else "NO_ROTATION_OBSERVED"
-        )
+        if delta > 0 and after["status"] == "SUCCESS":
+            status = "ROTATION_OBSERVED_FULL_COVERAGE"
+        elif delta > 0 and after["status"] == "PARTIAL_COVERAGE":
+            status = "ROTATION_OBSERVED_PARTIAL_COVERAGE"
+        elif after["status"] == "FAILED":
+            status = "FAILED"
+        elif delta > 0:
+            status = "ROTATION_OBSERVED_UNCLASSIFIED"
+        else:
+            status = "NO_ROTATION_OBSERVED"
         devices.append(
             {
                 "device": device,
@@ -413,16 +416,26 @@ def build_peer_key_observation(
     for final_link in final["links"]:
         node_a = final_link["node_a"]
         node_b = final_link["node_b"]
-        status = (
-            "SUCCESS"
-            if device_by_name[node_a]["status"] == "SUCCESS"
-            and device_by_name[node_b]["status"] == "SUCCESS"
-            and final_link["status"] == "SUCCESS"
-            else "FAILED"
-            if "FAILED"
-            in (device_by_name[node_a]["status"], device_by_name[node_b]["status"])
-            else "NO_ROTATION_OBSERVED"
-        )
+        master_status = device_by_name[node_a]["status"]
+        peer_status = device_by_name[node_b]["status"]
+        if final_link["status"] == "NO_EXPECTATION":
+            status = "NO_EXPECTATION"
+        elif final_link["status"] == "FAILED":
+            status = "FAILED"
+        elif master_status == "FAILED" or peer_status == "FAILED":
+            status = "FAILED"
+        elif master_status in (
+            "ROTATION_OBSERVED_FULL_COVERAGE",
+            "ROTATION_OBSERVED_PARTIAL_COVERAGE",
+        ) and final_link["status"] == "SUCCESS":
+            status = "SUCCESS"
+        elif master_status in (
+            "ROTATION_OBSERVED_FULL_COVERAGE",
+            "ROTATION_OBSERVED_PARTIAL_COVERAGE",
+        ) and final_link["status"] in ("PARTIAL", "NO_SUCCESS_EVIDENCE"):
+            status = "PARTIAL_COVERAGE"
+        else:
+            status = "NO_ROTATION_OBSERVED"
         links.append(
             {
                 "link_id": final_link["link_id"],
@@ -447,7 +460,7 @@ def build_peer_key_observation(
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "peer_user": final["peer_user"],
         "all_devices_rotated_successfully": all(
-            item["status"] == "SUCCESS" for item in devices
+            item["status"] == "ROTATION_OBSERVED_FULL_COVERAGE" for item in devices
         ),
         "all_links_rotated_successfully": all(
             item["status"] == "SUCCESS" for item in links

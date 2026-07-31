@@ -411,14 +411,19 @@ by each device. It reports:
   so if device X has three MACsec peers you can verify three renewals;
 - missing or unexpected peers;
 - `missing_peer_renewals_by_device` as a compact fleet-level focus list;
-- bilateral success for every inventory link.
+- master-scope success for every inventory link (`node_a -> node_b`, aligned with
+  managed-links ownership).
 
 The observation-level `qkd_peer_key_rotation_observation.json` compares T1 with
-FINAL. A device is successful only when its persistent rotation count increased
-and the final cycle covered every expected peer. A link is successful only when
-both endpoint devices completed a new successful rotation and the final
-distribution evidence covers the opposite endpoint. Historical cycles present
-before T1 are not counted as rotations during the observation.
+FINAL. Device status distinguishes:
+
+- `ROTATION_OBSERVED_FULL_COVERAGE`: rotation count increased and FINAL reports
+  full expected-peer coverage;
+- `ROTATION_OBSERVED_PARTIAL_COVERAGE`: rotation count increased but FINAL peer
+  coverage is incomplete.
+
+Historical cycles present before T1 are not counted as rotations during the
+observation.
 
 ## 8. Health classifications
 

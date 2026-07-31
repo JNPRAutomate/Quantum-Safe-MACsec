@@ -98,13 +98,17 @@ FINAL is healthy.
 - latest successful key marker
   (`latest_successful_key_material_marker`);
 - explicit per-peer renew map in `latest_cycle_peer_renewals`;
-- bilateral link status for peer-key distribution;
+- master-scope link status for peer-key distribution (`node_a -> node_b`,
+  aligned with managed-links ownership on-box);
 - compact focus list:
   `missing_peer_renewals_by_device`.
 
 `qkd_peer_key_rotation_observation.json` (T1 vs FINAL) includes:
 
 - rotations during observation per device;
+- device statuses that distinguish full vs partial observed rotation coverage
+  (`ROTATION_OBSERVED_FULL_COVERAGE`,
+  `ROTATION_OBSERVED_PARTIAL_COVERAGE`);
 - all-device/all-link success booleans;
 - `missing_peer_renewals_by_device` for fast troubleshooting.
 
