@@ -181,14 +181,77 @@ def wait_until(
     label: str,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    is_tty: Optional[bool] = None,
+    stream: Optional[Any] = None,
 ) -> None:
+    stream = stream or sys.stdout
+    if is_tty is None:
+        detector = getattr(stream, "isatty", None)
+        is_tty = bool(detector()) if callable(detector) else False
+
+    start = monotonic()
+    total = max(0.0, target_monotonic - start)
+    if total <= 0:
+        return
+
+    def emit_line(message: str, inline: bool) -> None:
+        if inline:
+            stream.write("\r" + message)
+        else:
+            stream.write(message + "\n")
+        flush = getattr(stream, "flush", None)
+        if callable(flush):
+            flush()
+
+    previous_printed_second: Optional[int] = None
     while True:
         remaining = target_monotonic - monotonic()
         if remaining <= 0:
-            return
-        delay = min(60.0, remaining)
-        print("%s in %ds" % (label, max(1, int(round(remaining)))))
+            break
+
+        if is_tty:
+            emit_line(
+                countdown_line(label, remaining=remaining, total=total),
+                inline=True,
+            )
+            delay = min(1.0, remaining)
+        else:
+            remaining_seconds = max(1, int(round(remaining)))
+            if (
+                previous_printed_second is None
+                or remaining_seconds <= 5
+                or remaining_seconds % 30 == 0
+            ):
+                emit_line("%s in %ds" % (label, remaining_seconds), inline=False)
+                previous_printed_second = remaining_seconds
+            delay = min(5.0, remaining)
         sleep(delay)
+
+    if is_tty:
+        emit_line(
+            countdown_line(label, remaining=0.0, total=total) + " DONE",
+            inline=False,
+        )
+
+
+def countdown_line(
+    label: str,
+    remaining: float,
+    total: float,
+    width: int = 24,
+) -> str:
+    total = max(0.0, total)
+    remaining = max(0.0, remaining)
+    elapsed = max(0.0, total - remaining)
+    progress = 1.0 if total == 0 else min(1.0, max(0.0, elapsed / total))
+    filled = int(round(progress * width))
+    if filled > width:
+        filled = width
+    bar = "#" * filled + "-" * (width - filled)
+    return (
+        "%s [%s] %5.1f%% (%4ds remaining)"
+        % (label, bar, progress * 100.0, int(round(remaining)))
+    )
 
 
 def collector_command(

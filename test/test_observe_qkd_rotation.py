@@ -1,10 +1,13 @@
+import io
 from datetime import datetime, timezone
 from pathlib import Path
 
 from tools.observe_qkd_rotation import (
     build_comparison_report,
     calculate_schedule,
+    countdown_line,
     default_observation_name,
+    wait_until,
 )
 
 
@@ -149,3 +152,34 @@ def test_observation_name_is_human_readable_utc():
         default_observation_name(now)
         == "qkd_observation_2026-07-31_15-30-00_UTC"
     )
+
+
+def test_countdown_line_renders_progress_bar():
+    line = countdown_line("T2 snapshot", remaining=120, total=240, width=10)
+    assert "T2 snapshot" in line
+    assert "[#####-----]" in line
+    assert "50.0%" in line
+
+
+def test_wait_until_tty_shows_live_countdown():
+    current = [0.0]
+
+    def monotonic():
+        return current[0]
+
+    def sleeper(delay):
+        current[0] += delay
+
+    stream = io.StringIO()
+    wait_until(
+        3.2,
+        "T2 snapshot",
+        monotonic=monotonic,
+        sleep=sleeper,
+        is_tty=True,
+        stream=stream,
+    )
+    output = stream.getvalue()
+    assert "T2 snapshot" in output
+    assert "remaining" in output
+    assert "DONE" in output
