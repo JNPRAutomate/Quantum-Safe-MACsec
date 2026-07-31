@@ -235,7 +235,7 @@ def build_scp_command(
         )
     command.extend(
         [
-            "%s@%s:%s/." % (user, device.address, remote_path),
+            "%s@%s:%s" % (user, device.address, remote_path),
             str(destination),
         ]
     )
@@ -252,7 +252,10 @@ def collect_device(
     dry_run: bool,
 ) -> CollectionResult:
     destination = snapshot_dir / device.name
-    destination.mkdir(parents=True, exist_ok=False)
+    if dry_run:
+        destination.mkdir(parents=True, exist_ok=False)
+    elif destination.exists():
+        raise RuntimeError("Device destination already exists: %s" % destination)
     command = build_scp_command(
         device,
         user,

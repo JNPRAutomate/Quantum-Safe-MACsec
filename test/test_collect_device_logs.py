@@ -48,7 +48,7 @@ def test_scp_command_is_noninteractive_and_copies_log_contents(tmp_path):
     assert "IdentitiesOnly=yes" in command
     assert "/tmp/qkd_id_ed25519" in command
     assert command[-2] == (
-        "etsi_user@100.123.113.151:/var/home/etsi_user/logs/."
+        "etsi_user@100.123.113.151:/var/home/etsi_user/logs"
     )
 
 
