@@ -40,6 +40,7 @@ class TestRollingKeyringPlan:
             "rotation_interval_seconds",
             "script_execution_interval_seconds",
             "active_slot_index",
+            "configured_bootstrap_seed_only",
         )
         cls.functions["KEYCHAIN_KEEP_LAST"] = 3
         cls.functions["MIN_ROTATION_INTERVAL"] = 60
@@ -203,6 +204,31 @@ class TestRollingKeyringPlan:
             == 1
         )
 
+    def test_live_seed_only_shape_detects_orchestrator_reset(self):
+        self.functions["stable_keychain_name"] = lambda link: "QKD_CA_MX1_MX2"
+        self.functions["get_configured_keychain_entries"] = lambda *args, **kwargs: {
+            0: {"key_name": "BOOTSTRAP_CKN"},
+        }
+        self.functions["bootstrap_seed_key_id"] = (
+            lambda keychain_name, slot=0: f"{keychain_name}:bootstrap:key-name:{slot}"
+        )
+        self.functions["ckn_from_key_id"] = lambda key_id: "BOOTSTRAP_CKN"
+        self.functions["normalize_hex_string"] = lambda value: str(value or "").upper()
+        assert self.functions["configured_bootstrap_seed_only"](
+            {},
+            "et-0/0/0",
+        )
+
+    def test_full_ring_is_not_mistaken_for_orchestrator_reset(self):
+        self.functions["stable_keychain_name"] = lambda link: "QKD_CA_MX1_MX2"
+        self.functions["get_configured_keychain_entries"] = lambda *args, **kwargs: {
+            slot: {"key_name": f"CKN_{slot}"} for slot in range(4)
+        }
+        assert not self.functions["configured_bootstrap_seed_only"](
+            {},
+            "et-0/0/0",
+        )
+
     def test_ssh_rotation_runs_after_macsec_keyring_cycle(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
         run_master = next(
@@ -227,6 +253,20 @@ class TestRollingKeyringPlan:
         assert source.index('state.get("inflight_install")') < source.index(
             "macsec_has_inuse_sa(iface, expected_ca=ca_name)"
         )
+
+    def test_slave_batch_reconciles_seed_reset_before_install(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        slave_batch = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "run_slave_install_key_batch"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), slave_batch)
+        assert source.index("configured_bootstrap_seed_only(link, iface)") < source.index(
+            "INSTALL-KEY-BATCH REQUEST"
+        )
+        assert "SEED_STATE_SAVE_FAILED" in source
 
 
 def test_qkd_policy_accepts_safe_independent_timers():

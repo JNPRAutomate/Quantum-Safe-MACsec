@@ -3556,6 +3556,18 @@ def bootstrap_seed_key_id(keychain_name, slot=0):
     return f"{keychain_name}:bootstrap:key-name:{int(slot)}"
 
 
+def configured_bootstrap_seed_only(link, iface):
+    keychain_name = stable_keychain_name(link)
+    entries = get_configured_keychain_entries(keychain_name, iface=iface)
+    if not isinstance(entries, dict) or set(entries.keys()) != {0}:
+        return False
+    seed = entries.get(0) or {}
+    seed_key_id = bootstrap_seed_key_id(keychain_name, 0)
+    expected_ckn = normalize_hex_string(ckn_from_key_id(seed_key_id))
+    configured_ckn = normalize_hex_string(seed.get("key_name") or "")
+    return bool(expected_ckn and expected_ckn == configured_ckn)
+
+
 def adopt_bootstrap_seed(link, iface, state):
     keychain_name = stable_keychain_name(link)
     entries = get_configured_keychain_entries(keychain_name, iface=iface)
@@ -4586,7 +4598,8 @@ def run_slave_install_key_batch(batch_b64, iface):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     state = load_link_state(peer, iface, link)
-    if not keychain_state_valid(state):
+    seed_reset = configured_bootstrap_seed_only(link, iface)
+    if not keychain_state_valid(state) or seed_reset:
         state, adopted = adopt_bootstrap_seed(link, iface, state)
         if not adopted:
             log(
@@ -4596,6 +4609,15 @@ def run_slave_install_key_batch(batch_b64, iface):
                 "SLAVE",
             )
             print("ERROR SEED NOT ADOPTED")
+            return False
+        if not save_db_state(peer, iface, state):
+            log(
+                "INSTALL-KEY-BATCH ABORTED reason=SEED_STATE_SAVE_FAILED",
+                "ERROR",
+                iface,
+                "SLAVE",
+            )
+            print("ERROR SEED STATE SAVE FAIL")
             return False
 
     try:
@@ -4760,10 +4782,28 @@ def _status_payload_for_link(link):
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
-    if not keychain_state_valid(state):
+    seed_reset = configured_bootstrap_seed_only(link, iface)
+    if not keychain_state_valid(state) or seed_reset:
+        previous_active = state.get("active_key_id")
         state, adopted = adopt_bootstrap_seed(link, iface, state)
-        if adopted:
-            save_db_state(peer, iface, state)
+        if not adopted:
+            return None
+        if seed_reset and previous_active != state.get("active_key_id"):
+            log(
+                f"ORCHESTRATOR SEED RESET RECONCILED old_active_key_id={previous_active} "
+                f"new_active_key_id={state.get('active_key_id')}",
+                "INFO",
+                iface,
+                "BOOTSTRAP",
+            )
+        if not save_db_state(peer, iface, state):
+            log(
+                "STATUS SUPPRESSED reason=SEED_STATE_SAVE_FAILED",
+                "ERROR",
+                iface,
+                "STATUS",
+            )
+            return None
     state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
@@ -5375,7 +5415,9 @@ def run_master_rolling_link(link):
 
     state = load_link_state(peer, iface, link)
     state = ensure_health_state(state)
-    if not keychain_state_valid(state):
+    seed_reset = configured_bootstrap_seed_only(link, iface)
+    if not keychain_state_valid(state) or seed_reset:
+        previous_active = state.get("active_key_id")
         state, adopted = adopt_bootstrap_seed(link, iface, state)
         if not adopted:
             log(
@@ -5384,6 +5426,17 @@ def run_master_rolling_link(link):
                 iface,
                 "MASTER",
             )
+            return False
+        if seed_reset and previous_active != state.get("active_key_id"):
+            log(
+                f"ORCHESTRATOR SEED RESET RECONCILED old_active_key_id={previous_active} "
+                f"new_active_key_id={state.get('active_key_id')}",
+                "INFO",
+                iface,
+                "BOOTSTRAP",
+            )
+        if not save_db_state(peer, iface, state):
+            log("STATE SAVE FAIL AFTER SEED ADOPTION", "ERROR", iface, "MASTER")
             return False
 
     before_reconcile = json.dumps(state, sort_keys=True)
