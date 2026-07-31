@@ -1704,11 +1704,29 @@ def normalize_slot_ring(state):
 
 def record_installed_key(state, generation, key_id, start_time, slot, status):
     state.setdefault("installed_keys", [])
+    try:
+        normalized_slot = int(slot) if slot is not None else None
+    except Exception:
+        normalized_slot = None
+    if normalized_slot is not None:
+        def _different_slot(item):
+            if not isinstance(item, dict) or item.get("slot") is None:
+                return True
+            try:
+                return int(item.get("slot")) != normalized_slot
+            except Exception:
+                return True
+
+        state["installed_keys"] = [
+            item
+            for item in state["installed_keys"]
+            if _different_slot(item)
+        ]
     state["installed_keys"].append(
         {
             "generation": generation,
             "key_id": key_id,
-            "slot": slot,
+            "slot": normalized_slot,
             "installed_at": int(time.time()),
             "start_time": start_time,
             "status": status,
@@ -1716,6 +1734,41 @@ def record_installed_key(state, generation, key_id, start_time, slot, status):
     )
     state = trim_installed_keys_preserve_active(state)
     state = normalize_slot_ring(state)
+    return state
+
+
+def reconcile_installed_keys_from_pending(state):
+    installed_by_slot = {}
+    for item in state.get("installed_keys", []):
+        if not isinstance(item, dict) or item.get("slot") is None:
+            continue
+        try:
+            installed_by_slot[int(item.get("slot"))] = item
+        except Exception:
+            continue
+
+    for pending in state.get("pending_keys", []):
+        if not isinstance(pending, dict) or pending.get("slot") is None:
+            continue
+        try:
+            slot = int(pending.get("slot"))
+        except Exception:
+            continue
+        current = installed_by_slot.get(slot)
+        if isinstance(current, dict) and current.get("key_id") == pending.get("key_id"):
+            continue
+        state = record_installed_key(
+            state,
+            pending.get("generation"),
+            pending.get("key_id"),
+            pending.get("start_time"),
+            slot,
+            "pending",
+        )
+        installed_by_slot[slot] = {
+            "slot": slot,
+            "key_id": pending.get("key_id"),
+        }
     return state
 
 
@@ -2142,6 +2195,7 @@ def find_key_id_for_ckn(state, ckn_value):
 def reconcile_state_with_router(link, iface, state):
     state = ensure_health_state(state)
     state = normalize_pending_keys(state)
+    state = reconcile_installed_keys_from_pending(state)
     state = normalize_slot_ring(state)
 
     mka_block = get_mka_session_block_for_iface(iface)
@@ -4804,8 +4858,18 @@ def _status_payload_for_link(link):
                 "STATUS",
             )
             return None
+    before_reconcile = json.dumps(state, sort_keys=True)
     state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    if promoted or before_reconcile != json.dumps(state, sort_keys=True):
+        if not save_db_state(peer, iface, state):
+            log(
+                "STATUS SUPPRESSED reason=RECONCILED_STATE_SAVE_FAILED",
+                "ERROR",
+                iface,
+                "STATUS",
+            )
+            return None
 
     configured_entries = get_configured_keychain_entries(
         stable_keychain_name(link),
@@ -5399,6 +5463,8 @@ def resume_inflight_install(link, state):
     )
     state = _finalize_bilateral_install(state, records, operation)
     state = clear_kme_failure(peer, iface, state)
+    state = reconcile_state_with_router(link, iface, state)
+    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if not save_db_state(peer, iface, state):
         log(f"{operation} INFLIGHT FINALIZE STATE SAVE FAILED", "ERROR", iface, "MASTER")
         return state, False
@@ -5743,6 +5809,8 @@ def run_master_rolling_link(link):
     )
     state = _finalize_bilateral_install(state, peer_payload, operation)
     state = clear_kme_failure(peer, iface, state)
+    state = reconcile_state_with_router(link, iface, state)
+    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if not save_db_state(peer, iface, state):
         log(
             f"{operation} STATE SAVE FAILED after_bilateral_commit=1",

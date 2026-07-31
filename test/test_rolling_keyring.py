@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,9 @@ class TestRollingKeyringPlan:
             "select_ring_update_slots",
             "_slots_consumed_before_active",
             "trim_installed_keys_preserve_active",
+            "normalize_slot_ring",
+            "record_installed_key",
+            "reconcile_installed_keys_from_pending",
             "normalize_successful_timing_history",
             "adaptive_grace_history_size",
             "adaptive_grace_floor_seconds",
@@ -45,6 +49,7 @@ class TestRollingKeyringPlan:
         cls.functions["KEYCHAIN_KEEP_LAST"] = 3
         cls.functions["MIN_ROTATION_INTERVAL"] = 60
         cls.functions["max_installed_keys"] = lambda: 4
+        cls.functions["time"] = SimpleNamespace(time=lambda: 123)
         cls.functions["qkd_policy"] = lambda: {
             "execution_interval_seconds": 60,
             "key_activation_interval_seconds": 120,
@@ -121,6 +126,61 @@ class TestRollingKeyringPlan:
         }
         result = self.functions["trim_installed_keys_preserve_active"](state)
         assert {item["slot"] for item in result["installed_keys"]} == {0, 1, 2, 3}
+
+    def test_slot_replacement_does_not_discard_new_entry_for_stale_active(self):
+        state = {
+            "active_key_id": "bootstrap",
+            "installed_keys": [
+                {"key_id": "bootstrap", "slot": 0},
+                {"key_id": "old-1", "slot": 1},
+                {"key_id": "key-2", "slot": 2},
+                {"key_id": "key-3", "slot": 3},
+            ],
+        }
+        state = self.functions["record_installed_key"](
+            state, 4, "new-0", "2026-07-31.15:48:10", 0, "pending"
+        )
+        state = self.functions["record_installed_key"](
+            state, 5, "new-1", "2026-07-31.15:50:10", 1, "pending"
+        )
+        assert [item["key_id"] for item in state["slots"]] == [
+            "new-0",
+            "new-1",
+            "key-2",
+            "key-3",
+        ]
+
+    def test_pending_metadata_repairs_existing_stale_slot_state(self):
+        state = {
+            "active_key_id": "key-3",
+            "installed_keys": [
+                {"key_id": "bootstrap", "slot": 0},
+                {"key_id": "old-1", "slot": 1},
+                {"key_id": "key-2", "slot": 2},
+                {"key_id": "key-3", "slot": 3},
+            ],
+            "pending_keys": [
+                {
+                    "generation": 4,
+                    "key_id": "new-0",
+                    "start_time": "2026-07-31.15:48:10",
+                    "slot": 0,
+                },
+                {
+                    "generation": 5,
+                    "key_id": "new-1",
+                    "start_time": "2026-07-31.15:50:10",
+                    "slot": 1,
+                },
+            ],
+        }
+        state = self.functions["reconcile_installed_keys_from_pending"](state)
+        assert [item["key_id"] for item in state["slots"]] == [
+            "new-0",
+            "new-1",
+            "key-2",
+            "key-3",
+        ]
 
     def test_sixty_slot_ring_replaces_fifty_eight_slots(self):
         operation, slots, reason = self.functions["select_ring_update_slots"](
@@ -267,6 +327,25 @@ class TestRollingKeyringPlan:
             "INSTALL-KEY-BATCH REQUEST"
         )
         assert "SEED_STATE_SAVE_FAILED" in source
+
+    def test_post_ack_finalize_reconciles_before_state_save(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        rolling_link = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "run_master_rolling_link"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), rolling_link)
+        finalize_index = source.index(
+            "state = _finalize_bilateral_install(state, peer_payload, operation)"
+        )
+        reconcile_index = source.index(
+            "state = reconcile_state_with_router(link, iface, state)",
+            finalize_index,
+        )
+        save_index = source.index("if not save_db_state(peer, iface, state):", reconcile_index)
+        assert finalize_index < reconcile_index < save_index
 
 
 def test_qkd_policy_accepts_safe_independent_timers():
