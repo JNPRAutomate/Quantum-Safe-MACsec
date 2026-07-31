@@ -6,3 +6,4 @@ pyopenssl
 cryptography
 requests
 pyyaml
+pytest==8.4.2

@@ -202,7 +202,7 @@ Recommended QKD reading flow:
 4. [docs/qkd/qkd_deploy_phases.md](docs/qkd/qkd_deploy_phases.md)
 5. [docs/qkd/platform_differences_mx_acx_evo.md](docs/qkd/platform_differences_mx_acx_evo.md)
 6. [docs/qkd/ssh_key_architecture.md](docs/qkd/ssh_key_architecture.md)
-7. [docs/qkd/mka_sak_rekey_flow.md](docs/qkd/mka_sak_rekey_flow.md)
+7. [docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md](docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md)
 8. [docs/qkd/link_master_role_requirements.md](docs/qkd/link_master_role_requirements.md)
 9. [docs/qkd/peer_key_rotation_mesh_trust.md](docs/qkd/peer_key_rotation_mesh_trust.md)
 

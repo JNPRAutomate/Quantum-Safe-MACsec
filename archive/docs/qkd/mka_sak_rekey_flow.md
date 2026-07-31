@@ -1,5 +1,8 @@
 # MKA SAK Rekey Flow & Keychain Slot Ordering
 
+> Archived historical analysis. Its numeric slot-order requirement is not part
+> of the active `ver3.3.2.1` rolling-ring design.
+
 ## Overview
 
 **MKA (Media Access Control (MAC) Security Entity)** runs a **Secure Association Key (SAK) Rekey** election every 2 seconds on each interface. This process selects which CAK (Connectivity Association Key) from the keychain is currently "active" for encrypting traffic, based on `start_time` scheduling.

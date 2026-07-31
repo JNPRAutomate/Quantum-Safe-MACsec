@@ -23,7 +23,7 @@ Archive material is in `archive/docs/`.
 7. [QKD Deploy Phases](qkd/qkd_deploy_phases.md)
 8. [Platform Differences: MX vs ACX EVO](qkd/platform_differences_mx_acx_evo.md)
 9. [SSH Key Architecture](qkd/ssh_key_architecture.md)
-10. [MKA/SAK Rekey Flow](qkd/mka_sak_rekey_flow.md)
+10. [MACsec Hitless Rolling Keyring — Four Slots](qkd/hitless_rolling_keyring_ver3.3.2.1.md)
 11. [Link Master Role Requirements](qkd/link_master_role_requirements.md)
 12. [Peer SSH Key Rotation — Mesh Trust Design](qkd/peer_key_rotation_mesh_trust.md)
 13. [Release Notes v3.3.2](qkd/release_notes_ver3.3.2.md)

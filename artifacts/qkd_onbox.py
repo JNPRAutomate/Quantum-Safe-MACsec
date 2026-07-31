@@ -593,27 +593,6 @@ def get_configured_next_pending_slot(keychain_name, iface=None, now_epoch=None):
         return None
 
     if now_epoch is None:
-        # Safety rule: if the live dataplane is still healthy, do not clear the
-        # pending head just because runtime confirmation is missing. A false clear
-        # here causes the master to schedule a brand-new batch over an existing
-        # still-inuse MACsec state, which is exactly how we can trigger a member/AE
-        # hit during the next programmed start-time.
-        mka_block = get_mka_session_block_for_iface(iface) if iface else None
-        mka_fields = parse_mka_session_fields(mka_block) if mka_block else {}
-        live_mka_secured = mka_session_secured(mka_fields) if mka_fields else False
-        expected_ca = state.get("ca_name") if isinstance(state, dict) else None
-        live_macsec_inuse = macsec_has_inuse_sa(iface, expected_ca=expected_ca) if iface else False
-        if live_mka_secured or live_macsec_inuse:
-            log(
-                f"PENDING STUCK RECOVERY DEFERRED pending_key_id={pending_key_id} reason={reason} "
-                f"policy=REQUIRE_DEGRADED_LIVE_STATE live_mka_secured={live_mka_secured} "
-                f"live_macsec_inuse={live_macsec_inuse} expected_ca={expected_ca}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-            return state, False
-
         now_epoch = int(time.time())
 
     pattern = re.compile(
@@ -649,6 +628,57 @@ def get_configured_next_pending_slot(keychain_name, iface=None, now_epoch=None):
 
     candidates.sort(key=lambda item: item[0])
     return int(candidates[0][1])
+
+
+def get_configured_keychain_entries(keychain_name, iface=None):
+    cmd = f"show configuration security authentication-key-chains key-chain {keychain_name} | display set"
+    try:
+        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    except subprocess.TimeoutExpired:
+        log(f"KEYCHAIN ENTRY QUERY TIMEOUT keychain={keychain_name}", "ERROR", iface, "MACSEC")
+        return None
+    except Exception as e:
+        log(f"KEYCHAIN ENTRY QUERY ERROR keychain={keychain_name} error={str(e)}", "ERROR", iface, "MACSEC")
+        return None
+
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        log(
+            f"KEYCHAIN ENTRY QUERY FAIL keychain={keychain_name} rc={result.returncode} stderr={stderr}",
+            "ERROR",
+            iface,
+            "MACSEC",
+        )
+        return None
+
+    prefix = (
+        rf"set\s+security\s+authentication-key-chains\s+key-chain\s+"
+        rf"{re.escape(keychain_name)}\s+key\s+(\d+)\s+"
+    )
+    key_name_pattern = re.compile(prefix + r"key-name\s+(\S+)")
+    start_time_pattern = re.compile(prefix + r"start-time\s+(.+)$")
+    entries = {}
+
+    for line in stdout.splitlines():
+        key_name_match = key_name_pattern.search(line)
+        if key_name_match:
+            slot = int(key_name_match.group(1))
+            entry = entries.setdefault(slot, {"slot": slot})
+            entry["key_name"] = str(key_name_match.group(2) or "").strip().rstrip(";")
+            continue
+
+        start_time_match = start_time_pattern.search(line)
+        if not start_time_match:
+            continue
+        slot = int(start_time_match.group(1))
+        raw = str(start_time_match.group(2) or "").strip().rstrip(";")
+        if raw.startswith('"') and raw.endswith('"'):
+            raw = raw[1:-1]
+        entry = entries.setdefault(slot, {"slot": slot})
+        entry["start_time"] = raw.split()[0] if raw else None
+
+    return entries
 
 
 def db_state_file(peer, iface):
@@ -1366,11 +1396,15 @@ def default_keychain_state(link):
     return {
         "generation": 0,
         "active_generation": None,
+        "ring_phase": "uninitialized",
         "slot_cursor": 0,
         "ca_name": stable_ca_name(link),
         "keychain_name": stable_keychain_name(link),
         "active_key_id": None,
         "active_confirmed_at": 0,
+        "previous_active_key_id": None,
+        "previous_active_slot": None,
+        "inflight_install": None,
         "pending_keys": [],
         "pending_key_id": None,
         "next_start_time": None,
@@ -1703,7 +1737,7 @@ def trim_installed_keys_preserve_active(state):
         state["installed_keys"] = []
         return state
 
-    keep = min(KEYCHAIN_KEEP_LAST, max_installed_keys())
+    keep = max(KEYCHAIN_KEEP_LAST, max_installed_keys())
     if keep < 1:
         keep = 1
 
@@ -2015,13 +2049,20 @@ def reconcile_state_with_router(link, iface, state):
             )
         return state
 
-    if state.get("active_key_id") != router_key_id:
+    previous_active_key_id = state.get("active_key_id")
+    if previous_active_key_id != router_key_id:
         log(
-            f"STATE RECONCILED FROM ROUTER old_active_key_id={state.get('active_key_id')} new_active_key_id={router_key_id}",
+            f"STATE RECONCILED FROM ROUTER old_active_key_id={previous_active_key_id} new_active_key_id={router_key_id}",
             "INFO",
             iface,
             "STATE",
         )
+        if previous_active_key_id:
+            state["previous_active_key_id"] = previous_active_key_id
+            state["previous_active_slot"] = find_slot_for_key_id_in_installed(
+                state,
+                previous_active_key_id,
+            )
 
     state["active_key_id"] = router_key_id
     state["last_seen_key_id"] = router_key_id
@@ -3188,6 +3229,13 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         promotion_delay_ms = max(0, int((promotion_time - activation_epoch) * 1000))
         pending_late_by_ms = int((promotion_time - activation_epoch) * 1000)
 
+    previous_active_key_id = state.get("active_key_id")
+    if previous_active_key_id and previous_active_key_id != pending_key_id:
+        state["previous_active_key_id"] = previous_active_key_id
+        state["previous_active_slot"] = find_slot_for_key_id_in_installed(
+            state,
+            previous_active_key_id,
+        )
     state["active_key_id"] = pending_key_id
     if pending_generation is not None:
         state["generation"] = int(pending_generation)
@@ -3384,6 +3432,76 @@ def purge_stale_qkd_keychains(target_keychain_name=None):
 
 def ckn_from_key_id(key_id):
     return hashlib.sha256(key_id.encode()).hexdigest()
+
+
+def bootstrap_seed_key_id(keychain_name, slot=0):
+    return f"{keychain_name}:bootstrap:key-name:{int(slot)}"
+
+
+def adopt_bootstrap_seed(link, iface, state):
+    keychain_name = stable_keychain_name(link)
+    entries = get_configured_keychain_entries(keychain_name, iface=iface)
+    if entries is None:
+        return state, False
+
+    if set(entries.keys()) != {0}:
+        log(
+            f"SEED ADOPTION BLOCKED keychain={keychain_name} configured_slots={sorted(entries.keys())} "
+            "reason=EXPECTED_ORCHESTRATOR_SEED_ONLY",
+            "ERROR",
+            iface,
+            "BOOTSTRAP",
+        )
+        return state, False
+
+    seed = entries.get(0) or {}
+    seed_key_id = bootstrap_seed_key_id(keychain_name, 0)
+    expected_ckn = normalize_hex_string(ckn_from_key_id(seed_key_id))
+    configured_ckn = normalize_hex_string(seed.get("key_name") or "")
+    if expected_ckn != configured_ckn:
+        log(
+            f"SEED ADOPTION BLOCKED keychain={keychain_name} slot=0 reason=CKN_MISMATCH",
+            "ERROR",
+            iface,
+            "BOOTSTRAP",
+        )
+        return state, False
+
+    mka_block = get_mka_session_block_for_iface(iface)
+    fields = parse_mka_session_fields(mka_block) if mka_block else {}
+    if not mka_session_secured(fields) or not mka_ckn_matches(expected_ckn, fields.get("cak_name") or ""):
+        log(
+            f"SEED ADOPTION WAIT keychain={keychain_name} slot=0 reason=MKA_SEED_NOT_CONFIRMED",
+            "WARN",
+            iface,
+            "BOOTSTRAP",
+        )
+        return state, False
+
+    adopted = default_keychain_state(link)
+    adopted["generation"] = 0
+    adopted["active_generation"] = 0
+    adopted["ring_phase"] = "seeded"
+    adopted["active_key_id"] = seed_key_id
+    adopted["last_seen_key_id"] = seed_key_id
+    adopted["active_confirmed_at"] = int(time.time())
+    adopted["slot_cursor"] = 1 % max_installed_keys()
+    adopted = record_installed_key(
+        adopted,
+        0,
+        seed_key_id,
+        seed.get("start_time"),
+        0,
+        "active",
+    )
+    log(
+        f"ORCHESTRATOR SEED ADOPTED keychain={keychain_name} slot=0 "
+        f"start_time={format_next_start_time_with_millis(seed.get('start_time'))}",
+        "INFO",
+        iface,
+        "BOOTSTRAP",
+    )
+    return adopted, True
 
 
 def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, commit=True):
@@ -4350,6 +4468,17 @@ def run_slave_install_key_batch(batch_b64, iface):
     ca_name = stable_ca_name(link)
     keychain = stable_keychain_name(link)
     state = load_link_state(peer, iface, link)
+    if not keychain_state_valid(state):
+        state, adopted = adopt_bootstrap_seed(link, iface, state)
+        if not adopted:
+            log(
+                "INSTALL-KEY-BATCH ABORTED reason=ORCHESTRATOR_SEED_NOT_ADOPTED",
+                "ERROR",
+                iface,
+                "SLAVE",
+            )
+            print("ERROR SEED NOT ADOPTED")
+            return False
 
     try:
         decoded = base64.urlsafe_b64decode(batch_b64.encode()).decode()
@@ -4465,6 +4594,22 @@ def run_slave_install_key_batch(batch_b64, iface):
             "pending",
         )
 
+    configured_slots = {
+        int(item.get("slot"))
+        for item in state.get("installed_keys", [])
+        if isinstance(item, dict) and item.get("slot") is not None
+    }
+    if configured_slots == set(range(max_installed_keys())):
+        state["ring_phase"] = "ready"
+    replaced_slots = {
+        int(entry.get("slot"))
+        for entry in install_entries
+        if entry.get("slot") is not None
+    }
+    if state.get("previous_active_slot") in replaced_slots:
+        state["previous_active_key_id"] = None
+        state["previous_active_slot"] = None
+
     state["ca_name"] = ca_name
     state["keychain_name"] = keychain
     state["last_rotation"] = int(time.time())
@@ -4497,13 +4642,34 @@ def _status_payload_for_link(link):
     runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
+    if not keychain_state_valid(state):
+        state, adopted = adopt_bootstrap_seed(link, iface, state)
+        if adopted:
+            save_db_state(peer, iface, state)
     state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+
+    configured_entries = get_configured_keychain_entries(
+        stable_keychain_name(link),
+        iface=iface,
+    )
+    if configured_entries is None:
+        configured_entries = {}
 
     state["iface"] = iface
     state["runtime_mode"] = runtime_mode
     state["batch_enabled"] = batch_mode_enabled()
     state["effective_batch_size"] = effective_batch
+    state["configured_slots"] = sorted(configured_entries.keys())
+    state["configured_next_slot"] = get_configured_next_pending_slot(
+        stable_keychain_name(link),
+        iface=iface,
+    )
+    state["configured_active_slot"] = active_slot_index(
+        state,
+        iface=iface,
+        keychain_name=stable_keychain_name(link),
+    )
     return state
 
 
@@ -4521,6 +4687,20 @@ def export_peer_status_snapshot(link, state=None):
         payload["runtime_mode"] = active_rotation_mode()
         payload["batch_enabled"] = batch_mode_enabled()
         payload["effective_batch_size"] = key_batch_size() if batch_mode_enabled() else 1
+        keychain_name = stable_keychain_name(link)
+        configured_entries = get_configured_keychain_entries(keychain_name, iface=iface)
+        if configured_entries is None:
+            configured_entries = {}
+        payload["configured_slots"] = sorted(configured_entries.keys())
+        payload["configured_next_slot"] = get_configured_next_pending_slot(
+            keychain_name,
+            iface=iface,
+        )
+        payload["configured_active_slot"] = active_slot_index(
+            payload,
+            iface=iface,
+            keychain_name=keychain_name,
+        )
 
     if payload is None:
         return False
@@ -4860,7 +5040,507 @@ def bootstrap_keychain_link(link, force=False):
     return True
 
 
+def _slot_metadata_matches(local_state, peer_state, configured_slots):
+    local_slots = local_state.get("slots") or []
+    peer_slots = peer_state.get("slots") or []
+    for slot in configured_slots:
+        local_item = local_slots[slot] if slot < len(local_slots) else None
+        peer_item = peer_slots[slot] if slot < len(peer_slots) else None
+        if not isinstance(local_item, dict) or not isinstance(peer_item, dict):
+            return False
+        if str(local_item.get("key_id") or "") != str(peer_item.get("key_id") or ""):
+            return False
+        local_epoch = epoch_from_junos_start_time(local_item.get("start_time"))
+        peer_epoch = epoch_from_junos_start_time(peer_item.get("start_time"))
+        if local_epoch is None or peer_epoch is None or int(local_epoch) != int(peer_epoch):
+            return False
+    return True
+
+
+def _latest_slot_start_epoch(state):
+    epochs = []
+    for item in state.get("slots") or []:
+        if not isinstance(item, dict):
+            continue
+        epoch = epoch_from_junos_start_time(item.get("start_time"))
+        if epoch is not None:
+            epochs.append(int(epoch))
+    return max(epochs) if epochs else None
+
+
+def select_ring_update_slots(
+    configured_slots,
+    ring_size,
+    active_slot,
+    next_slot,
+    local_previous_slot=None,
+    peer_previous_slot=None,
+):
+    ring_slots = set(range(int(ring_size)))
+    configured_slots = {int(slot) for slot in configured_slots}
+    active_slot = int(active_slot) if active_slot is not None else None
+    next_slot = int(next_slot) if next_slot is not None else None
+
+    if not configured_slots or not configured_slots.issubset(ring_slots):
+        return None, [], "INVALID_RING_SHAPE"
+
+    if configured_slots != ring_slots:
+        if configured_slots == {0} and active_slot == 0 and next_slot is None:
+            return "RING_COMPLETION", sorted(ring_slots - configured_slots), None
+        return None, [], "NOT_CLEAN_SEED"
+
+    if local_previous_slot is None:
+        return None, [], "NO_BILATERALLY_RETIRED_SLOT"
+    try:
+        local_previous_slot = int(local_previous_slot)
+        peer_previous_slot = int(peer_previous_slot)
+    except (TypeError, ValueError):
+        return None, [], "INVALID_RETIRED_SLOT"
+    if local_previous_slot != peer_previous_slot:
+        return None, [], "RETIRED_SLOT_MISMATCH"
+
+    protected_slots = {active_slot}
+    if next_slot is not None:
+        protected_slots.add(next_slot)
+    if local_previous_slot in protected_slots:
+        return None, [], "RETIRED_SLOT_STILL_PROTECTED"
+    return "ROLLING_REPLACEMENT", [local_previous_slot], None
+
+
+def _finalize_bilateral_install(state, records, operation):
+    for item in records:
+        state = append_pending_key(
+            state,
+            item["generation"],
+            item["key_id"],
+            item["start_time"],
+            slot=item["slot"],
+        )
+        state = record_installed_key(
+            state,
+            item["generation"],
+            item["key_id"],
+            item["start_time"],
+            item["slot"],
+            "pending",
+        )
+    state["generation"] = records[-1]["generation"]
+    state["last_rotation"] = int(time.time())
+    configured_slots = {
+        int(item.get("slot"))
+        for item in state.get("installed_keys", [])
+        if isinstance(item, dict) and item.get("slot") is not None
+    }
+    state["ring_phase"] = (
+        "ready"
+        if configured_slots == set(range(max_installed_keys()))
+        else "seeded"
+    )
+    if operation == "ROLLING_REPLACEMENT":
+        state["previous_active_key_id"] = None
+        state["previous_active_slot"] = None
+    state["inflight_install"] = None
+    return state
+
+
+def _configured_records_match(keychain_name, iface, records):
+    configured = get_configured_keychain_entries(keychain_name, iface=iface)
+    if configured is None:
+        return False
+    for item in records:
+        slot = int(item["slot"])
+        actual = configured.get(slot) or {}
+        expected_ckn = normalize_hex_string(ckn_from_key_id(str(item["key_id"])))
+        actual_ckn = normalize_hex_string(actual.get("key_name") or "")
+        expected_epoch = epoch_from_junos_start_time(item.get("start_time"))
+        actual_epoch = epoch_from_junos_start_time(actual.get("start_time"))
+        if expected_ckn != actual_ckn:
+            return False
+        if expected_epoch is None or actual_epoch is None or int(expected_epoch) != int(actual_epoch):
+            return False
+    return True
+
+
+def resume_inflight_install(link, state):
+    transaction = state.get("inflight_install")
+    if not isinstance(transaction, dict):
+        return state, False
+
+    peer = link["peer"]
+    iface = link["interface"]
+    keychain = stable_keychain_name(link)
+    operation = str(transaction.get("operation") or "KEYRING_TRANSACTION")
+    records = transaction.get("records") or []
+    payload_b64 = transaction.get("payload_b64")
+    ack_id = transaction.get("ack_id")
+    if not records or not payload_b64 or not ack_id:
+        log(f"{operation} INFLIGHT INVALID -> BLOCK", "ERROR", iface, "MASTER")
+        return state, False
+    if not _configured_records_match(keychain, iface, records):
+        log(
+            f"{operation} INFLIGHT LOCAL CONFIG MISMATCH -> BLOCK ack_id={ack_id}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return state, False
+
+    ack = read_remote_peer_batch_ack(link, iface)
+    ack_ok = (
+        isinstance(ack, dict)
+        and str(ack.get("ack_id")) == str(ack_id)
+        and str(ack.get("status") or "").lower() == "ok"
+    )
+    if not ack_ok:
+        log(
+            f"{operation} INFLIGHT RETRY ack_id={ack_id} created_at={transaction.get('created_at')}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
+        if not send_command(
+            link,
+            "install-key-batch",
+            iface,
+            batch_b64=payload_b64,
+            ack_id=ack_id,
+        ):
+            return state, False
+        if peer_transport_mode() == "queue" and not wait_for_peer_batch_ack(link, iface, ack_id):
+            return state, False
+
+    state = _finalize_bilateral_install(state, records, operation)
+    state = clear_kme_failure(peer, iface, state)
+    if not save_db_state(peer, iface, state):
+        log(f"{operation} INFLIGHT FINALIZE STATE SAVE FAILED", "ERROR", iface, "MASTER")
+        return state, False
+    log(f"{operation} INFLIGHT FINALIZED ack_id={ack_id}", "INFO", iface, "MASTER")
+    return state, True
+
+
+def run_master_rolling_link(link):
+    peer = link["peer"]
+    iface = link["interface"]
+    ca_name = stable_ca_name(link)
+    keychain = stable_keychain_name(link)
+    runtime_mode, effective_batch = log_runtime_mode(iface, "MASTER")
+
+    state = load_link_state(peer, iface, link)
+    state = ensure_health_state(state)
+    if not keychain_state_valid(state):
+        state, adopted = adopt_bootstrap_seed(link, iface, state)
+        if not adopted:
+            log(
+                "ROTATION BLOCKED reason=ORCHESTRATOR_SEED_NOT_READY",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            return False
+
+    before_reconcile = json.dumps(state, sort_keys=True)
+    state = reconcile_state_with_router(link, iface, state)
+    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
+    if promoted or before_reconcile != json.dumps(state, sort_keys=True):
+        if not save_db_state(peer, iface, state):
+            log("STATE SAVE FAIL AFTER RECONCILIATION", "ERROR", iface, "MASTER")
+            return False
+
+    if not verify_local_config_state(link, state):
+        log(
+            "ROTATION BLOCKED reason=LOCAL_CONFIG_INVALID no_automatic_bootstrap=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    if state.get("inflight_install"):
+        state, finalized = resume_inflight_install(link, state)
+        if not finalized:
+            log(
+                "ROTATION BLOCKED reason=INFLIGHT_INSTALL_NOT_CONFIRMED",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+        return finalized
+
+    if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
+        log(
+            "ROTATION BLOCKED reason=MACSEC_NOT_INUSE no_automatic_bootstrap=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    peer_state = get_peer_status(link, iface)
+    if not keychain_state_valid(peer_state):
+        log("ROTATION BLOCKED reason=PEER_STATE_UNAVAILABLE_OR_INVALID", "ERROR", iface, "MASTER")
+        return False
+
+    local_active = state.get("active_key_id")
+    peer_active = peer_state.get("active_key_id")
+    local_active_slot = active_slot_index(state, iface=iface, keychain_name=keychain)
+    peer_active_slot = peer_state.get("configured_active_slot")
+    try:
+        local_active_slot = int(local_active_slot)
+        peer_active_slot = int(peer_active_slot)
+    except (TypeError, ValueError):
+        log(
+            f"ROTATION BLOCKED reason=ACTIVE_SLOT_INVALID "
+            f"local_active_slot={local_active_slot} peer_active_slot={peer_active_slot}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+    if (
+        not local_active
+        or local_active != peer_active
+        or local_active_slot != peer_active_slot
+    ):
+        log(
+            f"ROTATION BLOCKED reason=ACTIVE_NOT_BILATERALLY_CONFIRMED "
+            f"local_active={local_active} peer_active={peer_active} "
+            f"local_active_slot={local_active_slot} peer_active_slot={peer_active_slot}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    local_entries = get_configured_keychain_entries(keychain, iface=iface)
+    if local_entries is None:
+        return False
+    local_slots = set(local_entries.keys())
+    try:
+        peer_slots = {int(slot) for slot in peer_state.get("configured_slots", [])}
+    except Exception:
+        peer_slots = set()
+    if local_slots != peer_slots:
+        log(
+            f"ROTATION BLOCKED reason=CONFIGURED_SLOT_SET_MISMATCH "
+            f"local_slots={sorted(local_slots)} peer_slots={sorted(peer_slots)}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    ring_slots = set(range(max_installed_keys()))
+    if not _slot_metadata_matches(state, peer_state, local_slots):
+        log("ROTATION BLOCKED reason=SLOT_METADATA_NOT_BILATERALLY_ALIGNED", "ERROR", iface, "MASTER")
+        return False
+
+    local_next_slot = get_configured_next_pending_slot(keychain, iface=iface)
+    peer_next_slot = peer_state.get("configured_next_slot")
+    if local_next_slot != peer_next_slot:
+        log(
+            f"ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED "
+            f"local_next_slot={local_next_slot} peer_next_slot={peer_next_slot}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    operation, target_slots, block_reason = select_ring_update_slots(
+        local_slots,
+        max_installed_keys(),
+        local_active_slot,
+        local_next_slot,
+        state.get("previous_active_slot"),
+        peer_state.get("previous_active_slot"),
+    )
+    if operation is None:
+        level = "INFO" if block_reason == "NO_BILATERALLY_RETIRED_SLOT" else "ERROR"
+        log(
+            f"ROTATION {'SKIP' if level == 'INFO' else 'BLOCKED'} reason={block_reason} "
+            f"configured_slots={sorted(local_slots)} active_slot={local_active_slot} "
+            f"next_slot={local_next_slot} local_retired_slot={state.get('previous_active_slot')} "
+            f"peer_retired_slot={peer_state.get('previous_active_slot')}",
+            level,
+            iface,
+            "MASTER",
+        )
+        return False
+
+    if operation == "RING_COMPLETION":
+        first_start_epoch = int(time.time()) + batch_activation_margin_seconds()
+    else:
+        latest_epoch = _latest_slot_start_epoch(state)
+        if latest_epoch is None:
+            log("ROTATION BLOCKED reason=LATEST_START_TIME_UNKNOWN", "ERROR", iface, "MASTER")
+            return False
+        minimum_delivery_epoch = int(time.time()) + peer_batch_ack_timeout_seconds() + 30
+        first_start_epoch = max(
+            int(latest_epoch) + rotation_interval_seconds(),
+            minimum_delivery_epoch,
+        )
+
+    if rotation_too_soon(state, MIN_ROTATION_INTERVAL):
+        log(
+            f"ROTATION SKIP reason=ROTATION_TOO_SOON operation={operation} "
+            f"last_rotation={state.get('last_rotation')}",
+            "INFO",
+            iface,
+            "MASTER",
+        )
+        return False
+    if not rekey_enabled():
+        log("ROTATION SKIP reason=REKEY_DISABLED", "INFO", iface, "MASTER")
+        return False
+
+    first_generation = next_generation(state)
+    records = []
+    for offset, slot in enumerate(target_slots):
+        generation = int(first_generation) + offset
+        key_id, key = do_enc(link["peer_sae"])
+        if not key_id:
+            record_kme_failure(peer, iface, state, "ENC_FAILED")
+            log(
+                f"{operation} ABORTED reason=ENC_FAILED slot={slot} active_and_next_unchanged=1",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            return False
+        records.append(
+            {
+                "generation": generation,
+                "slot": int(slot),
+                "start_time": junos_start_time_from_epoch(
+                    first_start_epoch + offset * rotation_interval_seconds()
+                ),
+                "key_id": key_id,
+                "key": key,
+            }
+        )
+
+    peer_payload = [
+        {
+            "generation": item["generation"],
+            "slot": item["slot"],
+            "start_time": item["start_time"],
+            "key_id": item["key_id"],
+        }
+        for item in records
+    ]
+    payload_json = json.dumps(peer_payload, separators=(",", ":"))
+    payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
+    ack_id = compute_batch_ack_id(payload_b64)
+    state["inflight_install"] = {
+        "operation": operation,
+        "records": peer_payload,
+        "payload_b64": payload_b64,
+        "ack_id": ack_id,
+        "created_at": int(time.time()),
+    }
+    if not save_db_state(peer, iface, state):
+        log(
+            f"{operation} ABORTED reason=INFLIGHT_STATE_SAVE_FAILED no_config_change=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    log(
+        f"{operation} START slots={target_slots} active_slot={local_active_slot} "
+        f"next_slot={local_next_slot} ack_id={ack_id} "
+        f"first_start_time={format_next_start_time_with_millis(records[0]['start_time'])}",
+        "INFO",
+        iface,
+        "MASTER",
+    )
+    if not install_keychain_batch(iface, records, ca_name, keychain, state=state, commit=True):
+        record_kme_failure(peer, iface, state, "LOCAL_INSTALL_FAILED")
+        if _configured_records_match(keychain, iface, peer_payload):
+            log(
+                f"{operation} LOCAL VERIFY FAILED BUT CONFIG PRESENT "
+                f"ack_id={ack_id} action=KEEP_INFLIGHT_FOR_PEER_DELIVERY",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+        else:
+            state["inflight_install"] = None
+            save_db_state(peer, iface, state)
+            log(
+                f"{operation} ABORTED reason=LOCAL_COMMIT_NOT_PRESENT state_not_advanced=1",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+        return False
+
+    if not send_command(
+        link,
+        "install-key-batch",
+        iface,
+        batch_b64=payload_b64,
+        ack_id=ack_id,
+    ):
+        log(
+            f"{operation} ABORTED reason=PEER_TRANSPORT_FAILED state_not_advanced=1 "
+            "active_and_next_unchanged=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+    if peer_transport_mode() == "queue" and not wait_for_peer_batch_ack(link, iface, ack_id):
+        log(
+            f"{operation} ABORTED reason=PEER_ACK_FAILED state_not_advanced=1 "
+            "active_and_next_unchanged=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    state = _finalize_bilateral_install(state, peer_payload, operation)
+    state = clear_kme_failure(peer, iface, state)
+    if not save_db_state(peer, iface, state):
+        log(
+            f"{operation} STATE SAVE FAILED after_bilateral_commit=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    peer_state = get_peer_status(link, iface)
+    if not keychain_state_valid(peer_state) or not compare_peer_keychain_state(state, peer_state):
+        log(
+            f"{operation} POST-COMMIT VERIFY FAILED rotations_blocked_until_reconciled=1",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    log(
+        f"{operation} DONE slots={target_slots} key_count={len(records)} "
+        f"pending_key_id={state.get('pending_key_id')} ring_phase={state.get('ring_phase')}",
+        "INFO",
+        iface,
+        "MASTER",
+    )
+    return True
+
+
 def run_master():
+    # Complete all MACsec work before rotating the independent SSH transport
+    # key, so credentials cannot change in the middle of a keyring transaction.
+    master_links = [link for link in managed_links() if link.get("role") == "master"]
+    if master_links:
+        log("MASTER START", "INFO", mode="MASTER")
+        for link in master_links:
+            run_master_rolling_link(link)
+
     # Check if peer SSH key rotation is needed
     rotation_interval = qkd_policy().get("peer_key_rotation_interval_seconds", 0)
     if rotation_interval > 0:
@@ -4944,12 +5624,10 @@ def run_master():
                     mode="PEER-KEY-ROTATION",
                 )
 
-    master_links = [link for link in managed_links() if link.get("role") == "master"]
-    if not master_links:
-        return
+    return
 
-    log("MASTER START", "INFO", mode="MASTER")
-
+    # Legacy full-batch implementation retained below only as historical code
+    # during the ver3.3.2.1 migration. It is unreachable by design.
     for link in master_links:
         peer = link["peer"]
         iface = link["interface"]

@@ -111,25 +111,13 @@ If MKA is secured and ICV is clean, CAK-only increments should be treated as neg
 
 ## 6) Runtime ring policy updates (2026-07-27)
 
-### What changed
+The July 27 policy is archived because its preload and pending-recovery model
+is superseded in `ver3.3.2.1`.
 
-- Reconcile no longer rolls active key back from `last_seen_key_id` when router mapping is not deterministic.
-- `pending_stuck_recovery_seconds` now honors explicit policy values (no hidden runtime floor override).
-- Active slot derivation now prefers `active_key_id` mapping and live MKA `key_number` before `active_generation` fallback.
-- Bootstrap t0 behavior is pinned to slot/key `0` with fixed start-time baseline `2026-1-1.00:00:00`.
-- Ring preload capacity now follows active/pending preservation:
-  - ring 4 -> install 2 keys
-  - ring 5 -> install 3 keys
-
-### Why
-
-- Prevent active rollback loops and stale pending deadlocks.
-- Keep runtime behavior deterministic and policy-driven.
-- Reduce over-preload that can produce unused pending/future entries.
-
-### Reference
-
-- See `qkd_onbox_runtime_ring_policy_2026-07-27.md` for full runtime contract.
+- Current contract:
+  [MACsec Hitless Rolling Keyring a Quattro Slot](hitless_rolling_keyring_ver3.3.2.1.md)
+- Historical record:
+  [On-Box Runtime Ring Policy (2026-07-27)](../../archive/docs/qkd/qkd_onbox_runtime_ring_policy_2026-07-27.md)
 
 ---
 

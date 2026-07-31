@@ -1,5 +1,8 @@
 # QKD On-Box Runtime Ring Policy (2026-07-27)
 
+> Archived historical policy. Superseded by
+> `docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md`.
+
 Date: 2026-07-27
 Branch: ver3.3.2
 

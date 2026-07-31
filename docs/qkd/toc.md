@@ -18,7 +18,7 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 7. [QKD Deploy Phases](qkd_deploy_phases.md)
 8. [Platform Differences: MX vs ACX EVO](platform_differences_mx_acx_evo.md)
 9. [SSH Key Architecture](ssh_key_architecture.md)
-10. [MKA/SAK Rekey Flow](mka_sak_rekey_flow.md)
+10. [MACsec Hitless Rolling Keyring — Four Slots (ver3.3.2.1)](hitless_rolling_keyring_ver3.3.2.1.md)
 11. [Link Master Role Requirements](link_master_role_requirements.md)
 12. [Peer SSH Key Rotation — Mesh Trust Design (current)](peer_key_rotation_mesh_trust.md)
 13. [Two-Node script_user / peer_cmd_user Split](script_user_peer_ssh_split_two_node.md)
@@ -31,11 +31,12 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 
 ## Runtime Policies
 
-17. [On-Box Runtime Ring Policy (2026-07-27)](qkd_onbox_runtime_ring_policy_2026-07-27.md)
-18. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
+17. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
 
 ## Historical / Archive
 
 - [SSH Key Rotation Design — historical (superseded)](ssh_key_rotation_design.md)
+- [MKA/SAK Rekey Flow — historical numeric-order model](../../archive/docs/qkd/mka_sak_rekey_flow.md)
+- [On-Box Runtime Ring Policy (2026-07-27) — superseded](../../archive/docs/qkd/qkd_onbox_runtime_ring_policy_2026-07-27.md)
 - [On-Box Runtime LLD for ver3.3.1 (archive)](../../archive/docs/qkd/qkd_onbox_ver3_3_1_runtime_lld.md)
 - [Architecture Review — pre-implementation (archive)](../../archive/docs/qkd/qkd_onbox_architecture_review.md)
