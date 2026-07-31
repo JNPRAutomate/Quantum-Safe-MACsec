@@ -3,6 +3,7 @@ from pathlib import Path
 from tools.collect_device_logs import (
     Device,
     build_scp_command,
+    discover_identity_file,
     load_devices,
     load_script_user,
     validate_remote_path,
@@ -44,6 +45,7 @@ def test_scp_command_is_noninteractive_and_copies_log_contents(tmp_path):
     assert command[:3] == ["scp", "-r", "-p"]
     assert "BatchMode=yes" in command
     assert "StrictHostKeyChecking=accept-new" in command
+    assert "IdentitiesOnly=yes" in command
     assert "/tmp/qkd_id_ed25519" in command
     assert command[-2] == (
         "etsi_user@100.123.113.151:/var/home/etsi_user/logs/."
@@ -57,3 +59,23 @@ def test_remote_path_rejects_scp_remote_shell_metacharacters():
         pass
     else:
         raise AssertionError("unsafe remote path was accepted")
+
+
+def test_deploy_identity_is_discovered_from_local_ssh_mirror(tmp_path):
+    identity = tmp_path / ".ssh" / "qkd_etsi_user_qkd_id_ed25519"
+    identity.parent.mkdir()
+    identity.write_text("private key", encoding="utf-8")
+    assert discover_identity_file("etsi_user", home=tmp_path) == identity
+
+
+def test_deploy_identity_falls_back_to_canonical_qkd_source(tmp_path):
+    identity = (
+        tmp_path
+        / ".qkd"
+        / "script_user_keys"
+        / "etsi_user"
+        / "qkd_id_ed25519"
+    )
+    identity.parent.mkdir(parents=True)
+    identity.write_text("private key", encoding="utf-8")
+    assert discover_identity_file("etsi_user", home=tmp_path) == identity
