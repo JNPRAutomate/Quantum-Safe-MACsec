@@ -39,6 +39,7 @@ class TestRollingKeyringPlan:
             "record_successful_transaction_timing",
             "rotation_interval_seconds",
             "script_execution_interval_seconds",
+            "active_slot_index",
         )
         cls.functions["KEYCHAIN_KEEP_LAST"] = 3
         cls.functions["MIN_ROTATION_INTERVAL"] = 60
@@ -177,6 +178,30 @@ class TestRollingKeyringPlan:
     def test_script_execution_and_key_activation_intervals_are_independent(self):
         assert self.functions["script_execution_interval_seconds"]() == 60
         assert self.functions["rotation_interval_seconds"]() == 120
+
+    def test_live_config_wins_over_stale_active_slot_metadata(self):
+        self.functions["get_configured_keychain_entries"] = lambda *args, **kwargs: {
+            0: {"key_name": "OLD_CKN"},
+            1: {"key_name": "LIVE_CKN"},
+            2: {"key_name": "FUTURE_2"},
+            3: {"key_name": "FUTURE_3"},
+        }
+        self.functions["ckn_from_key_id"] = lambda key_id: "LIVE_CKN"
+        self.functions["normalize_hex_string"] = lambda value: str(value or "").upper()
+        state = {
+            "active_key_id": "active-key-id",
+            "installed_keys": [
+                {"key_id": "active-key-id", "slot": 0},
+            ],
+        }
+        assert (
+            self.functions["active_slot_index"](
+                state,
+                iface="et-0/0/0",
+                keychain_name="QKD_CA_MX1_MX2",
+            )
+            == 1
+        )
 
     def test_ssh_rotation_runs_after_macsec_keyring_cycle(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))

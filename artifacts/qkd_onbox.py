@@ -1430,16 +1430,33 @@ def qkd_key_index_from_generation(generation):
 
 def active_slot_index(state, iface=None, keychain_name=None):
     configured_indices = None
+    configured_entries = None
     if keychain_name and iface:
         try:
-            idx_set, _, _ = get_configured_keychain_key_indices(keychain_name, iface=iface)
-            if isinstance(idx_set, set):
-                configured_indices = set(int(x) for x in idx_set)
+            configured_entries = get_configured_keychain_entries(
+                keychain_name,
+                iface=iface,
+            )
+            if isinstance(configured_entries, dict):
+                configured_indices = {
+                    int(slot) for slot in configured_entries.keys()
+                }
         except Exception:
             configured_indices = None
+            configured_entries = None
 
     active_key_id = state.get("active_key_id")
     if active_key_id:
+        expected_ckn = normalize_hex_string(ckn_from_key_id(str(active_key_id)))
+        for slot, entry in (configured_entries or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            actual_ckn = normalize_hex_string(entry.get("key_name"))
+            if actual_ckn and actual_ckn == expected_ckn:
+                return int(slot) % max_installed_keys()
+
+        # Historical state is only a fallback. A slot can be reused, so an old
+        # key-id-to-slot record must not override the live Junos configuration.
         for item in reversed(state.get("installed_keys", [])):
             if not isinstance(item, dict):
                 continue
