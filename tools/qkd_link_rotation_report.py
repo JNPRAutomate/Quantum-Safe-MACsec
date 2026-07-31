@@ -40,6 +40,7 @@ MKA_RE = re.compile(
 ACK_RE = re.compile(r"ack_id=(?P<ack_id>[A-Za-z0-9]+)")
 SLOTS_RE = re.compile(r"slots=(?P<slots>\[[^\]]*\])")
 STATUS_RE = re.compile(r"status=(?P<status>\S+)")
+KEYCHAIN_STAGE_KEY_RE = re.compile(r"\bkey_id=(?P<key_id>\S+)")
 
 EXPECTED_ERROR_MARKERS = (
     "LOCK EXISTS -> exit",
@@ -225,6 +226,7 @@ def analyze_endpoint(
 
     critical_events: List[Dict[str, str]] = []
     successful_evidence_times: List[datetime] = []
+    current_rotation: Optional[Dict[str, Any]] = None
 
     for timestamp, line, file_path in events:
         if "[ERROR]" in line:
@@ -308,12 +310,26 @@ def analyze_endpoint(
                 "operation": operation,
                 "ack_id": ack_match.group("ack_id") if ack_match else None,
                 "slots": slots_match.group("slots") if slots_match else None,
+                "active_key_id_at_start": (
+                    result["state"].get("active_key_id")
+                    if result.get("state")
+                    else None
+                ),
+                "installed_key_ids": [],
             }
+            current_rotation = record
             result["last_rotation_start"] = latest_record(
                 result["last_rotation_start"],
                 record,
             )
             counters["rotation_started"] += 1
+
+        if "KEYCHAIN INSTALL STAGE" in line and current_rotation is not None:
+            key_match = KEYCHAIN_STAGE_KEY_RE.search(line)
+            if key_match:
+                key_id = key_match.group("key_id")
+                if key_id not in current_rotation["installed_key_ids"]:
+                    current_rotation["installed_key_ids"].append(key_id)
 
         if "ROLLING_REPLACEMENT DONE" in line or "RING_COMPLETION DONE" in line:
             operation = (
@@ -326,6 +342,16 @@ def analyze_endpoint(
                 "timestamp": timestamp.isoformat(sep=" "),
                 "operation": operation,
                 "slots": slots_match.group("slots") if slots_match else None,
+                "active_key_id_at_start": (
+                    current_rotation.get("active_key_id_at_start")
+                    if current_rotation
+                    else None
+                ),
+                "installed_key_ids": list(
+                    current_rotation.get("installed_key_ids", [])
+                    if current_rotation
+                    else []
+                ),
             }
             result["last_rotation_done"] = latest_record(
                 result["last_rotation_done"],
@@ -333,6 +359,7 @@ def analyze_endpoint(
             )
             counters["rotation_completed"] += 1
             successful_evidence_times.append(timestamp)
+            current_rotation = None
 
         if "PEER BATCH ACK OK" in line:
             ack_match = ACK_RE.search(line)
@@ -435,12 +462,33 @@ def classify_link(
         reasons.append("Snapshot crossed an active-key transition.")
         return "TRANSITIONAL", reasons
 
+    mka_a = endpoint_a.get("mka")
+    mka_b = endpoint_b.get("mka")
+    if mka_a and (
+        not mka_a.get("secured")
+        or not str(mka_a.get("interface_state") or "").startswith("Secured")
+    ):
+        reasons.append("Endpoint A latest MKA evidence is not secured.")
+        return "DEGRADED", reasons
+    if mka_b and (
+        not mka_b.get("secured")
+        or not str(mka_b.get("interface_state") or "").startswith("Secured")
+    ):
+        reasons.append("Endpoint B latest MKA evidence is not secured.")
+        return "DEGRADED", reasons
+    if not mka_a or not mka_b:
+        reasons.append("Keys align but bilateral MKA secured evidence is incomplete.")
+        return "ALIGNED_NO_OP_EVIDENCE", reasons
+
     macsec_evidence = endpoint_a.get("macsec") or endpoint_b.get("macsec")
     if not macsec_evidence:
         reasons.append("Keys are aligned but no MACsec in-use evidence is in the log window.")
         return "ALIGNED_NO_OP_EVIDENCE", reasons
 
-    reasons.append("Bilateral keys align and MACsec in-use evidence is present.")
+    reasons.append(
+        "Bilateral keys align, both endpoints report secured MKA, and MACsec "
+        "in-use evidence is present."
+    )
     return "HEALTHY", reasons
 
 
@@ -513,6 +561,20 @@ def analyze_link(
         transaction_status = "COMPLETED"
     else:
         transaction_status = "NO_EVIDENCE"
+
+    completed_installed_keys = set(
+        latest_done.get("installed_key_ids", []) if latest_done else []
+    )
+    active_a = (endpoint_a.get("state") or {}).get("active_key_id")
+    active_b = (endpoint_b.get("state") or {}).get("active_key_id")
+    if not latest_done:
+        activation_status = "NO_COMPLETED_TRANSACTION"
+    elif not completed_installed_keys:
+        activation_status = "UNKNOWN_NO_INSTALLED_KEY_EVIDENCE"
+    elif active_a == active_b and active_a in completed_installed_keys:
+        activation_status = "ACTIVATED_BILATERALLY"
+    else:
+        activation_status = "INSTALLED_WAITING_ACTIVATION"
     return {
         "id": str(link["id"]),
         "type": str(link.get("type") or "ring"),
@@ -524,6 +586,7 @@ def analyze_link(
         "alignment_detail": alignment_detail,
         "rotation_summary": {
             "transaction_status": transaction_status,
+            "activation_status": activation_status,
             "starts": starts,
             "completions": completions,
             "positive_ack_events": acks,
@@ -606,8 +669,8 @@ def render_markdown(report: Dict[str, Any]) -> str:
         [
             "## Link Summary",
             "",
-            "| Link | Endpoints | Health | Rotation | Alignment | Active key | Pending key | Done | ACK evidence |",
-            "|---|---|---|---|---|---|---|---:|---:|",
+            "| Link | Endpoints | Health | Transaction | Activation | Alignment | Active key | Pending key | Done | ACK evidence |",
+            "|---|---|---|---|---|---|---|---|---:|---:|",
         ]
     )
     for link in report["links"]:
@@ -615,13 +678,14 @@ def render_markdown(report: Dict[str, Any]) -> str:
         endpoint_b = link["endpoint_b"]
         state = endpoint_a.get("state") or endpoint_b.get("state") or {}
         lines.append(
-            "| %s | %s <-> %s | **%s** | %s | %s | `%s` | `%s` | %d | %d |"
+            "| %s | %s <-> %s | **%s** | %s | %s | %s | `%s` | `%s` | %d | %d |"
             % (
                 link["id"],
                 endpoint_label(endpoint_a),
                 endpoint_label(endpoint_b),
                 link["status"],
                 link["rotation_summary"]["transaction_status"],
+                link["rotation_summary"]["activation_status"],
                 link["alignment"],
                 short_key(state.get("active_key_id")),
                 short_key(state.get("pending_key_id")),
@@ -647,9 +711,10 @@ def render_markdown(report: Dict[str, Any]) -> str:
                     link["rotation_summary"]["completions"],
                     link["rotation_summary"]["positive_ack_events"],
                 ),
-                "- Latest rotation: status=`%s`, start=`%s`, done=`%s`, master ACK=`%s`"
+                "- Latest rotation: transaction=`%s`, activation=`%s`, start=`%s`, done=`%s`, master ACK=`%s`"
                 % (
                     link["rotation_summary"]["transaction_status"],
+                    link["rotation_summary"]["activation_status"],
                     (
                         link["rotation_summary"]["latest_start"] or {}
                     ).get("timestamp", "-"),
@@ -711,11 +776,13 @@ def render_markdown(report: Dict[str, Any]) -> str:
         [
             "## Interpretation",
             "",
-            "- **HEALTHY**: bilateral active/pending keys align, no unresolved critical error, and MACsec `inuse` evidence exists.",
+            "- **HEALTHY**: bilateral active/pending keys align, both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence exists.",
             "- **TRANSITIONAL**: collection crossed a scheduled active-key transition.",
             "- **ALIGNED_NO_OP_EVIDENCE**: key metadata aligns, but this log window lacks an explicit MACsec `inuse` line.",
             "- **DEGRADED**: bilateral mismatch or unresolved critical errors.",
             "- **INSUFFICIENT_DATA/NO_DATA**: required endpoint logs or persisted state are absent.",
+            "- Health and rotation completion are independent: a link can be HEALTHY while waiting for the newly installed future keys to activate.",
+            "- `MKA KEY NOT CONFIRMED ... ckn_match=False` for a pending future key is expected before its start-time and is not a degradation signal.",
             "",
         ]
     )

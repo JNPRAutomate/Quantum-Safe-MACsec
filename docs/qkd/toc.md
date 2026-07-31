@@ -10,7 +10,7 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 2. [Config Generation and Runtime Contract](config_generation.md)
 3. [On-Box Runtime LLD](qkd_onbox_runtime_lld.md)
 4. [CLI Interface Reference](cli_reference.md)
-5. [Logging and Customer Reporting Architecture](logging_and_customer_reporting.md)
+5. [Log Collection and Link Health Reporting](logging_and_customer_reporting.md)
 6. [Certificate Manager Interface Specification](cert_manager.md)
 
 ## Deployment & Operations

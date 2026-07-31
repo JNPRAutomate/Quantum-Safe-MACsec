@@ -24,3 +24,4 @@ Use this as the starting point for GitHub readers:
 10. `docs/qkd/ssh_key_architecture.md`
 11. `docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md`
 12. `docs/qkd/link_master_role_requirements.md`
+13. `docs/qkd/logging_and_customer_reporting.md`
