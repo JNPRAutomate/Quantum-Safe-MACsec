@@ -325,6 +325,100 @@ Priority 1 is `PROBLEMATIC`, priority 2 is `NO_DATA`, priority 3 is
 and completely missing visibility before temporary or incomplete evidence.
 The full `links` array remains available for detailed bilateral analysis.
 
+### Timed three-snapshot rotation observation
+
+Use the observation orchestrator when a single non-atomic fleet snapshot could
+land inside a valid CAK transition:
+
+```bash
+tools/observe_qkd_rotation.py --plan
+tools/observe_qkd_rotation.py
+```
+
+The script calls `collect_device_logs.py` three times and generates the normal
+link report for every snapshot:
+
+1. `T1` captures the baseline immediately;
+2. `T2` captures post-transaction evidence;
+3. `FINAL` captures the fleet after all N-2 replacement activations and one
+   additional reconciliation tick.
+
+No observation timer is hard-coded. The script reads:
+
+- `execution_interval_seconds`;
+- `key_activation_interval_seconds`;
+- `max_installed_keys`;
+- `peer_batch_ack_timeout_seconds`;
+- `adaptive_grace_floor_seconds`;
+- `adaptive_grace_safety_margin_seconds`;
+- `adaptive_grace_rounding_seconds`;
+- `peer_key_rotation_interval_seconds`;
+
+from `config/inventory/qkd_policy.yaml`. It validates the policy using the same
+validator as deployment. The observation grace is conservative: it uses the
+larger of the initial rounded grace and the maximum safe grace allowed by the
+active/pending protected horizon. The FINAL offset is also never shorter than
+one complete `etsi_peer_view` rotation interval plus one execution tick.
+
+For the current four-slot policy the plan is:
+
+```text
+T1     +0 seconds
+T2     +240 seconds
+FINAL  +420 seconds
+```
+
+The final output is:
+
+```text
+logs/qkd_observation_<UTC>/
+├── t1_baseline/
+├── t2_post_transaction/
+├── final_post_activation/
+├── observation_manifest.json
+├── qkd_fleet_comparison_report.json
+├── qkd_fleet_comparison_report.md
+└── qkd_peer_key_rotation_observation.json
+```
+
+The comparison is semantic rather than a raw folder diff. A link that is
+temporarily non-healthy at T1 or T2 but finishes healthy with a bilateral active
+key change becomes `RECOVERED_ROTATED_HEALTHY` and is green. Only final
+degradation, regressions, persistent problems, inconclusive evidence, or a
+missing observed rotation remain in `attention_required`.
+
+If collection fails, the process stops rather than producing a success-shaped
+report. `observation_manifest.json` records the failed stage and all snapshots
+that completed before the failure.
+
+Every T1, T2, and FINAL snapshot also contains:
+
+```text
+qkd_peer_key_rotation_report.json
+```
+
+This separate report parses `PEER-KEY-STATE`, cycle start, per-peer
+distribution, successful completion, abort, and failure evidence for
+`etsi_peer_view`. Expected peers are derived from the inventory links managed
+by each device. It reports:
+
+- persistent `rotation_count` per device;
+- successful and failed cycles visible in the logs;
+- peers reached by the latest successful cycle;
+- the key material marker installed by the latest successful cycle
+  (`PEER-KEY-ROTATED: new_pubkey_installed=...`);
+- explicit per-peer renewal entries for that cycle (`latest_cycle_peer_renewals`)
+  so if device X has three MACsec peers you can verify three renewals;
+- missing or unexpected peers;
+- bilateral success for every inventory link.
+
+The observation-level `qkd_peer_key_rotation_observation.json` compares T1 with
+FINAL. A device is successful only when its persistent rotation count increased
+and the final cycle covered every expected peer. A link is successful only when
+both endpoint devices completed a new successful rotation and the final
+distribution evidence covers the opposite endpoint. Historical cycles present
+before T1 are not counted as rotations during the observation.
+
 ## 8. Health classifications
 
 | Color/category | Detailed status | Meaning |
