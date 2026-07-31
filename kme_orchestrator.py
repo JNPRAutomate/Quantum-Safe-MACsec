@@ -49,6 +49,7 @@ from typing import Any, Callable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "kme" / "lab.yaml"
+SCRIPT_VERSION = "ver3.3.2.1"
 
 StepFunc = Callable[..., Any]
 
@@ -336,6 +337,11 @@ def add_db_args(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QKD/KME lab orchestrator")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {SCRIPT_VERSION}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_create = subparsers.add_parser("create", help="Create complete KME lab")

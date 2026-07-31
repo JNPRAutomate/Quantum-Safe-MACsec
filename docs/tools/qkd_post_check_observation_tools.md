@@ -1,5 +1,7 @@
 # QKD Post-Check Observation Tools
 
+Version baseline: `ver3.3.2.1`
+
 ## Purpose
 
 This guide documents the post-check tooling used after deployment/runtime
@@ -70,7 +72,8 @@ qkd_observation_<UTC>/
 ├── observation_manifest.json
 ├── qkd_fleet_comparison_report.json
 ├── qkd_fleet_comparison_report.md
-└── qkd_peer_key_rotation_observation.json
+├── qkd_peer_key_rotation_observation.json
+└── qkd_device_commit_observation.json
 ```
 
 Each stage snapshot also contains:
@@ -147,3 +150,19 @@ Use this order:
 - [QKD Logging and Customer Reporting](../qkd/logging_and_customer_reporting.md)
 - [Peer SSH Key Rotation Mesh Trust Design](../qkd/peer_key_rotation_mesh_trust.md)
 - [On-Box Runtime LLD](../qkd/qkd_onbox_runtime_lld.md)
+
+## Script versioning checks (`ver3.3.2.1`)
+
+Main scripts expose an explicit version marker:
+
+- `qkd_orchestrator.py` -> `--version`
+- `kme_orchestrator.py` -> `--version`
+- `artifacts/qkd_onbox.py` -> `--version`
+
+Examples:
+
+```bash
+python3 qkd_orchestrator.py --version
+python3 kme_orchestrator.py --version
+python3 artifacts/qkd_onbox.py --version
+```

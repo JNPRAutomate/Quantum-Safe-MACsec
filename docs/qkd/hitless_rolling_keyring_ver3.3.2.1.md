@@ -2,6 +2,19 @@
 
 Versione: `ver3.3.2.1`
 
+## 0. Versioning script principali
+
+Per la release `ver3.3.2.1` i tre entrypoint principali espongono versioning
+esplicito:
+
+- `qkd_orchestrator.py --version`
+- `kme_orchestrator.py --version`
+- `artifacts/qkd_onbox.py --version`
+
+Nel runtime `qkd_onbox.py`, lo stato esportato include anche
+`script_version=ver3.3.2.1` per correlare snapshot/peer status con la versione
+on-box effettiva.
+
 ## 1. Modello
 
 Il keyring contiene un numero pari `N` di slot, con `4 <= N <= 64`. Quattro è

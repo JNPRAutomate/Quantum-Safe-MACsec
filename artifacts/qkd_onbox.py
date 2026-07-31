@@ -28,6 +28,21 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 """
 
 import sys
+EARLY_SCRIPT_VERSION = "ver3.3.2.1"
+_EARLY_ARGS = set(sys.argv[1:])
+if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
+    print(f"qkd_onbox.py {EARLY_SCRIPT_VERSION}")
+    raise SystemExit(0)
+if "--help" in _EARLY_ARGS or "-h" in _EARLY_ARGS:
+    print("qkd_onbox.py %s" % EARLY_SCRIPT_VERSION)
+    print("Usage:")
+    print("  op qkd_onbox.py")
+    print("  op qkd_onbox.py action status iface <iface>")
+    print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
+    print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
+    print("  op qkd_onbox.py action install-peer-pubkey device <device> pubkey-b64 <payload>")
+    print("  op qkd_onbox.py --version")
+    raise SystemExit(0)
 import time
 import datetime
 import requests
@@ -44,8 +59,30 @@ import stat
 
 
 urllib3.disable_warnings()
+SCRIPT_VERSION = "ver3.3.2.1"
 DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
 DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
+
+
+def _print_cli_usage():
+    print("qkd_onbox.py %s" % SCRIPT_VERSION)
+    print("Usage:")
+    print("  op qkd_onbox.py")
+    print("  op qkd_onbox.py action status iface <iface>")
+    print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
+    print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
+    print("  op qkd_onbox.py action install-peer-pubkey device <device> pubkey-b64 <payload>")
+    print("  op qkd_onbox.py --version")
+
+
+def _early_info_exit():
+    args = set(sys.argv[1:])
+    if "--version" in args or "-V" in args:
+        print(f"qkd_onbox.py {SCRIPT_VERSION}")
+        raise SystemExit(0)
+    if "--help" in args or "-h" in args:
+        _print_cli_usage()
+        raise SystemExit(0)
 
 
 def _load_json_or_die(path, label):
@@ -115,6 +152,8 @@ def _validate_runtime_contract_or_die(config):
 
 CONFIG_PATH = os.environ.get("QKD_ONBOX_CONFIG_PATH", DEFAULT_CONFIG_PATH)
 INVENTORY_PATH = os.environ.get("QKD_ONBOX_INVENTORY_PATH", DEFAULT_INVENTORY_PATH)
+
+_early_info_exit()
 
 STATIC_CONFIG = _load_json_or_die(CONFIG_PATH, "config")
 INVENTORY_CONFIG = _load_json_or_die(INVENTORY_PATH, "inventory")
@@ -4892,6 +4931,7 @@ def _status_payload_for_link(link):
         iface=iface,
         keychain_name=stable_keychain_name(link),
     )
+    state["script_version"] = SCRIPT_VERSION
     return state
 
 
@@ -6572,7 +6612,7 @@ def run_master():
 # ----------------------------
 
 def main():
-    log("SCRIPT START", "INFO")
+    log(f"SCRIPT START version={SCRIPT_VERSION}", "INFO")
 
     # Refuse to run as root or as any user other than SCRIPT_USER.
     # On Junos EVO (ACX) the script must execute as etsi_user via event-options

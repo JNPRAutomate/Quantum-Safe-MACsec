@@ -1,5 +1,7 @@
 # QKD On-Box Deployment and Runtime LLD (`artifacts/qkd_onbox.py`)
 
+Version baseline: `ver3.3.2.1`
+
 ## 1. Document purpose
 
 This low-level design explains:
@@ -102,6 +104,11 @@ The script supports:
 2. parses action args via `parse_slave()`,
 3. dispatches to slave handlers if action is present,
 4. otherwise runs master flow with global lock.
+
+`main()` also supports informational flags before runtime checks:
+
+- `--version` / `-V` prints `qkd_onbox.py ver3.3.2.1`;
+- `--help` / `-h` prints action usage.
 
 ---
 ## 5. Function-level reference
@@ -206,8 +213,12 @@ The script supports:
 ## 5.12 Slave action parsing/handlers
 
 - `parse_slave()`: parses CLI args (`action`, `iface`, `key-id`, `generation`, `start-time`).
+- `_handle_info_flags()`: handles `--version` and `--help` output.
 - `run_slave_install_key(key_id, iface, generation=None, start_time=None)`: slave full install path.
 - `run_slave_status(iface)`: outputs current state JSON (with opportunistic promotion).
+
+The status payload now includes `script_version` for runtime traceability
+across peers and snapshots.
 
 ## 5.13 Bootstrap and master cycle
 

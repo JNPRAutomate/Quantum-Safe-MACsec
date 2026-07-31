@@ -61,6 +61,7 @@ from lib.kme.instructions import print_manual_kme_copy_instructions
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
+SCRIPT_VERSION = "ver3.3.2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +248,11 @@ def parse_args():
             "  python3 qkd_orchestrator.py clean --pki\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {SCRIPT_VERSION}",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
