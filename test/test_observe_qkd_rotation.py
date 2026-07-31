@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tools.observe_qkd_rotation import (
+    build_device_commit_observation,
     build_comparison_report,
     calculate_schedule,
     countdown_line,
@@ -183,3 +184,46 @@ def test_wait_until_tty_shows_live_countdown():
     assert "T2 snapshot" in output
     assert "remaining" in output
     assert "DONE" in output
+
+
+def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_path):
+    snapshot = tmp_path / "final_post_activation"
+    mx4_log = snapshot / "MX4" / "qkd_debug_sae-004_et-0_0_8.log"
+    mx4_log.parent.mkdir(parents=True, exist_ok=True)
+    mx4_log.write_text(
+        "\n".join(
+            [
+                "2026-07-31 19:00:00 [INFO] [MACSEC][sae-004][et-0/0/8] KEYCHAIN INSTALL OK ca=CA_MX4_ACX3 keychain=QKD_CA_MX4_ACX3 entries=2 installed_indices=[1,2]",
+                "2026-07-31 19:04:00 [INFO] [MACSEC][sae-004][et-0/0/8] KEYCHAIN INSTALL OK ca=CA_MX4_ACX3 keychain=QKD_CA_MX4_ACX3 entries=2 installed_indices=[1,2]",
+                "2026-07-31 19:05:00 [INFO] [MACSEC][sae-004][et-0/0/8] INTERFACE BIND OK ca=CA_MX4_ACX3",
+                "2026-07-31 19:08:00 [INFO] [PEER-KEY-ROTATION][sae-004] PEER-PUBKEY INSTALLED source_device=MX2 key=ssh-ed25519 AAAA...",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    mx5_log = snapshot / "MX5" / "qkd_debug_sae-005_et-0_0_4.log"
+    mx5_log.parent.mkdir(parents=True, exist_ok=True)
+    mx5_log.write_text(
+        "\n".join(
+            [
+                "2026-07-31 19:00:00 [ERROR] [MACSEC][sae-005][et-0/0/4] KEYCHAIN INSTALL FAIL ca=CA_MX5_MX6 keychain=QKD_CA_MX5_MX6 entries=3 rc=1",
+                "2026-07-31 19:01:00 [INFO] [MACSEC][sae-005][et-0/0/4] KEYCHAIN INSTALL OK ca=CA_MX5_MX6 keychain=QKD_CA_MX5_MX6 entries=3 installed_indices=[1,2,3]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    observation = build_device_commit_observation(snapshot, calculate_schedule(policy()))
+
+    assert observation["device_count"] == 2
+    assert observation["total_commit_events"] == 6
+    assert observation["total_commit_failures"] == 1
+    mx4 = next(item for item in observation["device_reports"] if item["device"] == "MX4")
+    assert mx4["commit_events_by_purpose"]["KEY_ROTATION_KEYCHAIN_COMMIT"] == 2
+    assert mx4["timer_compatibility"]["status"] == "COMPATIBLE"
+    assert mx4["bulk_load_compatibility"]["observed_entry_counts"] == {2: 2}
+    mx5 = next(item for item in observation["device_reports"] if item["device"] == "MX5")
+    assert mx5["commit_failure_count"] == 1
+    assert mx5["bulk_load_compatibility"]["status"] == "INCOMPATIBLE"

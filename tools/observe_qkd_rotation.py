@@ -8,9 +8,11 @@ import json
 import subprocess
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
+from statistics import median
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import yaml
@@ -51,6 +53,41 @@ OUTCOME_DISPLAY = {
     "REGRESSION": ("\U0001f534", "red"),
     "PERSISTENT_PROBLEM": ("\U0001f534", "red"),
 }
+
+COMMIT_EVENT_PATTERNS = (
+    {
+        "purpose": "KEY_ROTATION_KEYCHAIN_COMMIT",
+        "marker": "KEYCHAIN INSTALL OK",
+        "comment_template": (
+            "QKD: KEY ROTATION generations=[...] ca=<ca> "
+            "keychain=<keychain> iface=<iface>"
+        ),
+        "description": (
+            "Applies keychain slot updates for MACsec/QKD key rotation "
+            "(single-key or N-2 batch install)."
+        ),
+    },
+    {
+        "purpose": "INTERFACE_BIND_COMMIT",
+        "marker": "INTERFACE BIND OK",
+        "comment_template": "QKD: INTERFACE BIND iface=<iface> ca=<ca>",
+        "description": "Binds (or re-binds) the interface to the target MACsec CA.",
+    },
+    {
+        "purpose": "PEER_SSH_KEY_ROTATION_COMMIT",
+        "marker": "PEER-PUBKEY INSTALLED",
+        "comment_template": "QKD: peer-key rotation source_device=<device>",
+        "description": (
+            "Rotates the dedicated peer SSH transport key used by etsi_peer_view."
+        ),
+    },
+)
+COMMIT_FAILURE_MARKERS = (
+    "KEYCHAIN INSTALL FAIL",
+    "INTERFACE BIND FAIL",
+    "PEER-PUBKEY INSTALL FAIL",
+)
+KEYCHAIN_ENTRIES_RE = re.compile(r"\bentries=(?P<entries>\d+)\b")
 
 
 def parse_args() -> argparse.Namespace:
@@ -459,6 +496,268 @@ def build_comparison_report(
     }
 
 
+def parse_log_timestamp(line: str) -> Optional[datetime]:
+    if len(line) < 19:
+        return None
+    candidate = line[:19]
+    try:
+        return datetime.strptime(candidate, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def detect_commit_event(line: str) -> Optional[Dict[str, Any]]:
+    for pattern in COMMIT_EVENT_PATTERNS:
+        if pattern["marker"] in line:
+            event = {
+                "purpose": pattern["purpose"],
+                "comment_template": pattern["comment_template"],
+                "description": pattern["description"],
+                "status": "success",
+                "batch_entries": None,
+            }
+            if pattern["purpose"] == "KEY_ROTATION_KEYCHAIN_COMMIT":
+                match = KEYCHAIN_ENTRIES_RE.search(line)
+                if match:
+                    event["batch_entries"] = int(match.group("entries"))
+                elif "key_index=" in line:
+                    event["batch_entries"] = 1
+            return event
+    if any(marker in line for marker in COMMIT_FAILURE_MARKERS):
+        return {
+            "purpose": "UNKNOWN_COMMIT_FAILURE",
+            "comment_template": None,
+            "description": "Commit/apply attempt failed and rollback may have occurred.",
+            "status": "failed",
+            "batch_entries": None,
+        }
+    return None
+
+
+def _interval_stats(timestamps: Sequence[datetime]) -> Optional[Dict[str, Any]]:
+    if len(timestamps) < 2:
+        return None
+    ordered = sorted(timestamps)
+    intervals = [
+        (ordered[idx] - ordered[idx - 1]).total_seconds()
+        for idx in range(1, len(ordered))
+    ]
+    return {
+        "count": len(intervals),
+        "min_seconds": int(min(intervals)),
+        "max_seconds": int(max(intervals)),
+        "median_seconds": float(median(intervals)),
+    }
+
+
+def evaluate_timer_compatibility(
+    schedule: Dict[str, Any],
+    key_rotation_commit_times: Sequence[datetime],
+) -> Dict[str, Any]:
+    execution = int(schedule["execution_interval_seconds"])
+    activation = int(schedule["key_activation_interval_seconds"])
+    stats = _interval_stats(key_rotation_commit_times)
+    if not stats:
+        return {
+            "status": "NO_DATA",
+            "reason": (
+                "Not enough key-rotation commits in the observation window "
+                "to measure cadence."
+            ),
+            "expected_min_interval_seconds": execution,
+            "recommended_interval_seconds": activation,
+            "measured_intervals": None,
+        }
+
+    status = "COMPATIBLE"
+    reason = "Observed key-rotation commit cadence is compatible with configured timers."
+    if stats["min_seconds"] < execution:
+        status = "INCOMPATIBLE"
+        reason = (
+            "Observed key-rotation commits are closer than execution_interval_seconds."
+        )
+    elif stats["median_seconds"] < activation:
+        status = "WARNING"
+        reason = (
+            "Observed median key-rotation commit cadence is below key_activation_interval_seconds."
+        )
+
+    return {
+        "status": status,
+        "reason": reason,
+        "expected_min_interval_seconds": execution,
+        "recommended_interval_seconds": activation,
+        "measured_intervals": stats,
+    }
+
+
+def evaluate_bulk_compatibility(
+    schedule: Dict[str, Any],
+    keychain_batch_entries: Sequence[int],
+) -> Dict[str, Any]:
+    expected = int(schedule["replacement_count"])
+    if not keychain_batch_entries:
+        return {
+            "status": "NO_DATA",
+            "reason": "No KEYCHAIN INSTALL OK commit evidence found in the observation window.",
+            "expected_bulk_entries": expected,
+            "observed_entries": [],
+            "observed_entry_counts": {},
+        }
+
+    counts = Counter(int(value) for value in keychain_batch_entries)
+    invalid_values = sorted(
+        value for value in counts if value not in {1, expected}
+    )
+    if invalid_values:
+        status = "INCOMPATIBLE"
+        reason = (
+            "Observed keychain install batch sizes include values outside "
+            "{1, replacement_count}."
+        )
+    elif counts.get(expected, 0) == 0 and expected > 1:
+        status = "WARNING"
+        reason = (
+            "Only single-entry keychain installs were observed; no N-2 bulk commit "
+            "was observed in this window."
+        )
+    else:
+        status = "COMPATIBLE"
+        reason = "Observed keychain install batch sizes are compatible with configured N-2 bulk behavior."
+
+    return {
+        "status": status,
+        "reason": reason,
+        "expected_bulk_entries": expected,
+        "observed_entries": list(keychain_batch_entries),
+        "observed_entry_counts": dict(sorted(counts.items())),
+    }
+
+
+def build_device_commit_observation(
+    snapshot: Path,
+    schedule: Dict[str, Any],
+) -> Dict[str, Any]:
+    snapshot = snapshot.expanduser().resolve()
+    device_reports: List[Dict[str, Any]] = []
+    all_devices = sorted(path.name for path in snapshot.iterdir() if path.is_dir())
+
+    for device in all_devices:
+        device_dir = snapshot / device
+        log_files = sorted(
+            path
+            for path in device_dir.rglob("*")
+            if path.is_file()
+            and (path.suffix.lower() == ".log" or path.name.startswith("qkd_debug"))
+        )
+
+        events: List[Dict[str, Any]] = []
+        for file_path in log_files:
+            with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    timestamp = parse_log_timestamp(line)
+                    if not timestamp:
+                        continue
+                    detected = detect_commit_event(line)
+                    if not detected:
+                        continue
+                    events.append(
+                        {
+                            "timestamp": timestamp,
+                            "timestamp_iso": timestamp.isoformat(sep=" "),
+                            "purpose": detected["purpose"],
+                            "status": detected["status"],
+                            "batch_entries": detected["batch_entries"],
+                            "comment_template": detected["comment_template"],
+                            "description": detected["description"],
+                            "line": line,
+                            "file": str(file_path.relative_to(snapshot)),
+                        }
+                    )
+
+        events.sort(key=lambda item: item["timestamp"])
+        by_purpose: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        key_rotation_times: List[datetime] = []
+        keychain_batch_entries: List[int] = []
+        for event in events:
+            by_purpose[event["purpose"]].append(event)
+            if event["purpose"] == "KEY_ROTATION_KEYCHAIN_COMMIT" and event["status"] == "success":
+                key_rotation_times.append(event["timestamp"])
+                if event["batch_entries"] is not None:
+                    keychain_batch_entries.append(int(event["batch_entries"]))
+
+        purpose_summary = []
+        for purpose, grouped in sorted(by_purpose.items()):
+            purpose_summary.append(
+                {
+                    "purpose": purpose,
+                    "count": len(grouped),
+                    "status_counts": dict(
+                        sorted(Counter(item["status"] for item in grouped).items())
+                    ),
+                    "first_seen": grouped[0]["timestamp_iso"],
+                    "last_seen": grouped[-1]["timestamp_iso"],
+                    "example_line": grouped[-1]["line"],
+                }
+            )
+
+        timer_compatibility = evaluate_timer_compatibility(schedule, key_rotation_times)
+        bulk_compatibility = evaluate_bulk_compatibility(schedule, keychain_batch_entries)
+
+        device_reports.append(
+            {
+                "device": device,
+                "log_file_count": len(log_files),
+                "commit_events_total": len(events),
+                "commit_success_count": sum(1 for item in events if item["status"] == "success"),
+                "commit_failure_count": sum(1 for item in events if item["status"] == "failed"),
+                "commit_events_by_purpose": {
+                    purpose: len(grouped) for purpose, grouped in sorted(by_purpose.items())
+                },
+                "commit_purpose_summary": purpose_summary,
+                "timer_compatibility": timer_compatibility,
+                "bulk_load_compatibility": bulk_compatibility,
+                "recent_commit_events": [
+                    {
+                        "timestamp": item["timestamp_iso"],
+                        "purpose": item["purpose"],
+                        "status": item["status"],
+                        "batch_entries": item["batch_entries"],
+                        "file": item["file"],
+                    }
+                    for item in events[-10:]
+                ],
+            }
+        )
+
+    devices_with_activity = [
+        item for item in device_reports if item["commit_events_total"] > 0
+    ]
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "snapshot": str(snapshot),
+        "policy_timers": {
+            "execution_interval_seconds": int(schedule["execution_interval_seconds"]),
+            "key_activation_interval_seconds": int(schedule["key_activation_interval_seconds"]),
+            "replacement_count_n_minus_two": int(schedule["replacement_count"]),
+        },
+        "commit_purpose_reference": [
+            {
+                "purpose": item["purpose"],
+                "commit_comment_template": item["comment_template"],
+                "description": item["description"],
+            }
+            for item in COMMIT_EVENT_PATTERNS
+        ],
+        "device_count": len(device_reports),
+        "devices_with_commit_activity": len(devices_with_activity),
+        "total_commit_events": sum(item["commit_events_total"] for item in device_reports),
+        "total_commit_failures": sum(item["commit_failure_count"] for item in device_reports),
+        "device_reports": device_reports,
+    }
+
+
 def render_comparison_markdown(report: Dict[str, Any]) -> str:
     schedule = report["schedule"]
     lines = [
@@ -614,6 +913,15 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
         peer_key_path = observation_dir / "qkd_peer_key_rotation_observation.json"
         peer_key_path.write_text(
             json.dumps(peer_key_observation, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        device_commit_observation = build_device_commit_observation(
+            snapshots["final"],
+            schedule,
+        )
+        device_commit_path = observation_dir / "qkd_device_commit_observation.json"
+        device_commit_path.write_text(
+            json.dumps(device_commit_observation, indent=2) + "\n",
             encoding="utf-8",
         )
         write_observation_manifest(manifest_path, "complete", schedule, snapshots)

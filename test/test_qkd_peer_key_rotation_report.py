@@ -143,3 +143,56 @@ def test_peer_key_observation_marks_partial_when_rotation_count_increases(tmp_pa
     acx2 = next(item for item in observation["devices"] if item["device"] == "ACX2")
     assert acx2["rotations_during_observation"] == 1
     assert acx2["status"] == "ROTATION_OBSERVED_PARTIAL_COVERAGE"
+
+
+def test_peer_key_report_exposes_authorized_keys_and_scp_health(tmp_path):
+    write_log(
+        tmp_path,
+        "ACX2",
+        rotation_lines("ACX2", "ACX3", 4)
+        + [
+            "2026-07-31 17:28:05 [INFO] [MASTER][sae-001][et-2/0/2] SCP PUT etsi_peer_view@10.0.0.2 action=enqueue-batch local_iface=et-2/0/2 peer_iface=et-2/0/4",
+            "2026-07-31 17:28:06 [INFO] [MASTER][sae-001][et-2/0/2] PEER BATCH ACK OK ack_id=abc123",
+            "2026-07-31 17:28:07 [INFO] [PEER-KEY-ROTATION] PEER-PUBKEY INSTALLED source_device=ACX3 key=ssh-ed25519 AAAA...",
+        ],
+    )
+    write_log(
+        tmp_path,
+        "ACX3",
+        [
+            "2026-07-31 17:28:05 [ERROR] [PEER-KEY-ROTATION] PEER-PUBKEY INSTALL FAIL source_device=ACX2 rc=1 stderr=Permission denied",
+            "2026-07-31 17:28:06 [ERROR] [MASTER][sae-002][et-2/0/4] SCP UPLOAD FAIL user=etsi_peer_view peer=10.0.0.1 path=/var/home/etsi_user/peer_inbox stderr=Permission denied stdout=",
+            "2026-07-31 17:28:07 [ERROR] [MASTER][sae-002][et-2/0/4] PEER BATCH ACK TIMEOUT ack_id=abc123 timeout_seconds=120 poll_interval_seconds=2",
+        ],
+    )
+
+    report = build_peer_key_report(tmp_path, inventory(), "etsi_peer_view")
+
+    acx2 = next(item for item in report["devices"] if item["device"] == "ACX2")
+    acx3 = next(item for item in report["devices"] if item["device"] == "ACX3")
+    assert acx2["authorized_keys_health"]["status"] == "HEALTHY"
+    assert acx2["scp_transport_health"]["status"] == "HEALTHY"
+    assert acx3["authorized_keys_health"]["status"] == "ISSUES_DETECTED"
+    assert acx3["scp_transport_health"]["status"] == "ISSUES_DETECTED"
+    assert report["authorized_keys_issues_by_device"][0]["device"] == "ACX3"
+    assert report["scp_transport_issues_by_device"][0]["device"] == "ACX3"
+
+
+def test_peer_key_observation_carries_actionable_health_signals(tmp_path):
+    write_log(tmp_path, "ACX2", rotation_lines("ACX2", "ACX3", 4))
+    write_log(
+        tmp_path,
+        "ACX3",
+        [
+            "2026-07-31 17:28:00 [INFO] [PEER-KEY-ROTATION] PEER-KEY-STATE: interval_seconds=300 last_rotation_ago_seconds=301 next_rotation_in_seconds=0 rotation_count=7 device=ACX3 peer_user=etsi_peer_view",
+            "2026-07-31 17:28:01 [ERROR] [PEER-KEY-ROTATION] PEER-PUBKEY INSTALL FAIL source_device=ACX2 rc=1 stderr=Permission denied",
+        ],
+    )
+    t1 = build_peer_key_report(tmp_path, inventory(), "etsi_peer_view")
+    final = build_peer_key_report(tmp_path, inventory(), "etsi_peer_view")
+
+    observation = build_peer_key_observation(t1, final)
+
+    assert "interpretation_note" in observation
+    assert observation["all_devices_rotated_successfully"] is False
+    assert observation["authorized_keys_issues_by_device"][0]["device"] == "ACX3"

@@ -111,6 +111,21 @@ FINAL is healthy.
   `ROTATION_OBSERVED_PARTIAL_COVERAGE`);
 - all-device/all-link success booleans;
 - `missing_peer_renewals_by_device` for fast troubleshooting.
+- per-device `authorized_keys_health` with explicit install/distribution
+  success/failure signals (`PEER-PUBKEY INSTALLED` vs install errors).
+- per-device `scp_transport_health` with SCP enqueue and peer ACK outcomes
+  (`SCP UPLOAD FAIL/TIMEOUT/ERROR`, `PEER BATCH ACK OK/FAIL/TIMEOUT`).
+- top-level `authorized_keys_issues_by_device` and
+  `scp_transport_issues_by_device` lists for direct operational focus.
+
+Important:
+
+- `all_devices_rotated_successfully` and `all_links_rotated_successfully` are
+  strict coverage booleans. They can be `false` if the observation window does
+  not include a full peer-key rotation interval, even when transport/auth is
+  healthy.
+- For troubleshooting, prioritize `authorized_keys_health` and
+  `scp_transport_health` over those two booleans.
 
 If one device has 3 MACsec peers, `latest_cycle_peer_renewals` must show 3 peer
 entries (renewed true/false) for that cycle.
@@ -121,8 +136,10 @@ Use this order:
 
 1. `observation_manifest.json` for stage success/failure;
 2. `qkd_fleet_comparison_report.json.attention_required`;
-3. `qkd_peer_key_rotation_observation.json.missing_peer_renewals_by_device`;
-4. stage-local per-snapshot reports under `t1_baseline/`, `t2_post_transaction/`,
+3. `qkd_peer_key_rotation_observation.json.authorized_keys_issues_by_device`;
+4. `qkd_peer_key_rotation_observation.json.scp_transport_issues_by_device`;
+5. `qkd_peer_key_rotation_observation.json.missing_peer_renewals_by_device`;
+6. stage-local per-snapshot reports under `t1_baseline/`, `t2_post_transaction/`,
    and `final_post_activation/`.
 
 ## Related Design/Operations Docs

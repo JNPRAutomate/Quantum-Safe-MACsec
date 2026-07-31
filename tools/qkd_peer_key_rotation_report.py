@@ -33,6 +33,8 @@ STATE_RE = re.compile(
 PEER_RE = re.compile(r"\bpeer=(?P<peer>[A-Za-z0-9_.-]+)")
 COMPLETED_RE = re.compile(r"rotation_count=(?P<count>\d+)")
 KEY_MARKER_RE = re.compile(r"new_pubkey_installed=(?P<value>.+)$")
+SOURCE_DEVICE_RE = re.compile(r"source_device=(?P<source>[A-Za-z0-9_.-]+)")
+PEER_NAME_RE = re.compile(r"peer=(?P<peer>[A-Za-z0-9_.-]+)")
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,7 +92,12 @@ def device_events(snapshot: Path, device: str) -> List[Tuple[datetime, str, str]
     for path in sorted(device_dir.rglob("*.log")):
         with path.open("r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
-                if "PEER-KEY" not in line and "PEER KEY ROTATION" not in line:
+                if (
+                    "PEER-KEY" not in line
+                    and "PEER KEY ROTATION" not in line
+                    and "SCP " not in line
+                    and "PEER BATCH ACK" not in line
+                ):
                     continue
                 timestamp = parse_timestamp(line)
                 if timestamp is None:
@@ -105,6 +112,123 @@ def device_events(snapshot: Path, device: str) -> List[Tuple[datetime, str, str]
     return events
 
 
+def evaluate_authorized_keys_health(events: Sequence[Tuple[datetime, str, str]]) -> Dict[str, Any]:
+    installed_sources: Set[str] = set()
+    distributed_peers: Set[str] = set()
+    install_success_count = 0
+    install_failure_count = 0
+    distribution_failure_count = 0
+    latest_success: Optional[str] = None
+    latest_failure: Optional[str] = None
+
+    for timestamp, line, _ in events:
+        ts = timestamp.isoformat(sep=" ")
+        if "PEER-PUBKEY INSTALLED" in line:
+            install_success_count += 1
+            latest_success = ts
+            source_match = SOURCE_DEVICE_RE.search(line)
+            if source_match:
+                installed_sources.add(source_match.group("source"))
+        if "PEER-KEY distributed new pubkey to peer=" in line:
+            peer_match = PEER_NAME_RE.search(line)
+            if peer_match:
+                distributed_peers.add(peer_match.group("peer"))
+
+        if (
+            "PEER-PUBKEY INSTALL FAIL" in line
+            or "PEER-PUBKEY INSTALL TIMEOUT" in line
+            or "PEER-PUBKEY INSTALL ERROR" in line
+            or "PEER-PUBKEY INSTALL DEFERRED" in line
+        ):
+            install_failure_count += 1
+            latest_failure = ts
+        if "PEER-KEY ERROR distribute failed peer=" in line:
+            distribution_failure_count += 1
+            latest_failure = ts
+
+    if install_failure_count or distribution_failure_count:
+        status = "ISSUES_DETECTED"
+        reason = (
+            "Peer authorized_keys installation/distribution reported failures. "
+            "Inspect PEER-PUBKEY and PEER-KEY error lines."
+        )
+    elif install_success_count > 0:
+        status = "HEALTHY"
+        reason = "Peer authorized_keys updates were installed successfully."
+    else:
+        status = "NO_EVIDENCE"
+        reason = "No peer authorized_keys install evidence in this log window."
+
+    return {
+        "status": status,
+        "reason": reason,
+        "install_success_count": install_success_count,
+        "install_failure_count": install_failure_count,
+        "distribution_failure_count": distribution_failure_count,
+        "installed_source_devices": sorted(installed_sources),
+        "distributed_to_peers": sorted(distributed_peers),
+        "latest_success_timestamp": latest_success,
+        "latest_failure_timestamp": latest_failure,
+    }
+
+
+def evaluate_scp_health(events: Sequence[Tuple[datetime, str, str]]) -> Dict[str, Any]:
+    enqueue_attempt_count = 0
+    upload_failure_count = 0
+    upload_timeout_count = 0
+    upload_error_count = 0
+    ack_ok_count = 0
+    ack_fail_count = 0
+    ack_timeout_count = 0
+
+    for _, line, _ in events:
+        if "SCP PUT " in line:
+            enqueue_attempt_count += 1
+        if "SCP UPLOAD FAIL" in line:
+            upload_failure_count += 1
+        if "SCP UPLOAD TIMEOUT" in line:
+            upload_timeout_count += 1
+        if "SCP UPLOAD ERROR" in line:
+            upload_error_count += 1
+        if "PEER BATCH ACK OK" in line:
+            ack_ok_count += 1
+        if "PEER BATCH ACK FAIL" in line:
+            ack_fail_count += 1
+        if "PEER BATCH ACK TIMEOUT" in line:
+            ack_timeout_count += 1
+
+    upload_issue_count = upload_failure_count + upload_timeout_count + upload_error_count
+    ack_issue_count = ack_fail_count + ack_timeout_count
+    if upload_issue_count > 0 or ack_issue_count > 0:
+        status = "ISSUES_DETECTED"
+        reason = (
+            "SCP enqueue or peer ACK errors/timeouts were detected for batch delivery."
+        )
+    elif enqueue_attempt_count > 0 and ack_ok_count > 0:
+        status = "HEALTHY"
+        reason = "SCP enqueue and peer batch ACK succeeded in this window."
+    elif enqueue_attempt_count > 0:
+        status = "INCONCLUSIVE_NO_ACK_EVIDENCE"
+        reason = "SCP enqueue attempts found but no explicit peer ACK OK in this window."
+    else:
+        status = "NO_EVIDENCE"
+        reason = "No SCP queue transport activity detected in this log window."
+
+    return {
+        "status": status,
+        "reason": reason,
+        "enqueue_attempt_count": enqueue_attempt_count,
+        "upload_issue_count": upload_issue_count,
+        "upload_failure_count": upload_failure_count,
+        "upload_timeout_count": upload_timeout_count,
+        "upload_error_count": upload_error_count,
+        "ack_ok_count": ack_ok_count,
+        "ack_issue_count": ack_issue_count,
+        "ack_fail_count": ack_fail_count,
+        "ack_timeout_count": ack_timeout_count,
+    }
+
+
 def analyze_device(
     snapshot: Path,
     device: str,
@@ -112,6 +236,8 @@ def analyze_device(
     expected_user: str,
 ) -> Dict[str, Any]:
     events = device_events(snapshot, device)
+    authorized_keys_health = evaluate_authorized_keys_health(events)
+    scp_transport_health = evaluate_scp_health(events)
     current: Optional[Dict[str, Any]] = None
     cycles: List[Dict[str, Any]] = []
     latest_state = None
@@ -247,6 +373,21 @@ def analyze_device(
             }
         )
     cycle_with_coverage.sort(key=lambda item: str(item.get("peer")))
+    coverage_detail = {
+        "expected_peer_count": len(expected),
+        "renewed_peer_count": len(renewed_peers),
+        "missing_peer_count": len(missing_peers),
+        "missing_peers": list(missing_peers),
+        "explanation": (
+            "Latest successful cycle renewed only a subset of expected peers."
+            if status == "PARTIAL_COVERAGE"
+            else (
+                "No successful peer-key rotation cycle was observed in this window."
+                if status == "NO_SUCCESS_EVIDENCE"
+                else "Latest successful cycle covered all expected peers."
+            )
+        ),
+    }
 
     return {
         "device": device,
@@ -267,8 +408,11 @@ def analyze_device(
         "renewed_peers": renewed_peers,
         "missing_peers": missing_peers,
         "unexpected_peers": unexpected_peers,
+        "coverage_detail": coverage_detail,
         "latest_cycle_peer_renewals": cycle_with_coverage,
         "event_count": len(events),
+        "authorized_keys_health": authorized_keys_health,
+        "scp_transport_health": scp_transport_health,
     }
 
 
@@ -323,6 +467,12 @@ def build_peer_key_report(
 
     device_counts = Counter(device["status"] for device in devices)
     link_counts = Counter(link["status"] for link in links)
+    authorized_keys_status_counts = Counter(
+        device["authorized_keys_health"]["status"] for device in devices
+    )
+    scp_transport_status_counts = Counter(
+        device["scp_transport_health"]["status"] for device in devices
+    )
     missing_peer_renewals_by_device = [
         {
             "device": device["device"],
@@ -344,7 +494,31 @@ def build_peer_key_report(
         "all_links_successful": all(link["status"] == "SUCCESS" for link in links),
         "device_status_counts": dict(sorted(device_counts.items())),
         "link_status_counts": dict(sorted(link_counts.items())),
+        "authorized_keys_status_counts": dict(
+            sorted(authorized_keys_status_counts.items())
+        ),
+        "scp_transport_status_counts": dict(
+            sorted(scp_transport_status_counts.items())
+        ),
         "missing_peer_renewals_by_device": missing_peer_renewals_by_device,
+        "authorized_keys_issues_by_device": [
+            {
+                "device": device["device"],
+                "status": device["authorized_keys_health"]["status"],
+                "reason": device["authorized_keys_health"]["reason"],
+            }
+            for device in devices
+            if device["authorized_keys_health"]["status"] == "ISSUES_DETECTED"
+        ],
+        "scp_transport_issues_by_device": [
+            {
+                "device": device["device"],
+                "status": device["scp_transport_health"]["status"],
+                "reason": device["scp_transport_health"]["reason"],
+            }
+            for device in devices
+            if device["scp_transport_health"]["status"] == "ISSUES_DETECTED"
+        ],
         "devices": devices,
         "links": links,
     }
@@ -395,6 +569,19 @@ def build_peer_key_observation(
             {
                 "device": device,
                 "status": status,
+                "status_reason": (
+                    "Rotation counter increased and latest successful cycle covered all expected peers."
+                    if status == "ROTATION_OBSERVED_FULL_COVERAGE"
+                    else (
+                        "Rotation counter increased but latest successful cycle covered only part of expected peers."
+                        if status == "ROTATION_OBSERVED_PARTIAL_COVERAGE"
+                        else (
+                            "Latest observed cycle failed."
+                            if status == "FAILED"
+                            else "No successful rotation observed during the observation window."
+                        )
+                    )
+                ),
                 "rotation_count_t1": before["rotation_count"],
                 "rotation_count_final": after["rotation_count"],
                 "rotations_during_observation": delta,
@@ -402,12 +589,15 @@ def build_peer_key_observation(
                 "distributed_peers": after["distributed_peers"],
                 "renewed_peers": after.get("renewed_peers", []),
                 "missing_peers": after["missing_peers"],
+                "coverage_detail": after.get("coverage_detail", {}),
                 "latest_cycle_peer_renewals": after.get(
                     "latest_cycle_peer_renewals", []
                 ),
                 "latest_successful_key_material_marker": after.get(
                     "latest_successful_key_material_marker"
                 ),
+                "authorized_keys_health": after.get("authorized_keys_health"),
+                "scp_transport_health": after.get("scp_transport_health"),
             }
         )
 
@@ -459,6 +649,12 @@ def build_peer_key_observation(
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "peer_user": final["peer_user"],
+        "interpretation_note": (
+            "Use authorized_keys_health and scp_transport_health as primary operational "
+            "signals. all_devices_rotated_successfully/all_links_rotated_successfully are "
+            "strict coverage flags and can be false when the observation window is shorter "
+            "than one full peer-key rotation interval."
+        ),
         "all_devices_rotated_successfully": all(
             item["status"] == "ROTATION_OBSERVED_FULL_COVERAGE" for item in devices
         ),
@@ -471,6 +667,26 @@ def build_peer_key_observation(
         "device_status_counts": dict(sorted(device_counts.items())),
         "link_status_counts": dict(sorted(link_counts.items())),
         "missing_peer_renewals_by_device": missing_peer_renewals_by_device,
+        "authorized_keys_issues_by_device": [
+            {
+                "device": item["device"],
+                "status": item.get("authorized_keys_health", {}).get("status"),
+                "reason": item.get("authorized_keys_health", {}).get("reason"),
+            }
+            for item in devices
+            if item.get("authorized_keys_health", {}).get("status")
+            == "ISSUES_DETECTED"
+        ],
+        "scp_transport_issues_by_device": [
+            {
+                "device": item["device"],
+                "status": item.get("scp_transport_health", {}).get("status"),
+                "reason": item.get("scp_transport_health", {}).get("reason"),
+            }
+            for item in devices
+            if item.get("scp_transport_health", {}).get("status")
+            == "ISSUES_DETECTED"
+        ],
         "devices": devices,
         "links": links,
     }
