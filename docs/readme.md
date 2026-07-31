@@ -5,6 +5,7 @@ This documentation is organized by responsibility domain:
 - `docs/qkd/` - QKD/MACsec orchestrator architecture and runtime behavior
 - `docs/kme/` - KME orchestrator architecture and infrastructure lifecycle
 - `docs/pqc/` - theory, standards context, and control-plane rationale
+- `docs/tools/` - post-check and operational tooling workflows
 
 Legacy markdown documents previously under `docs/` were analyzed and moved to:
 
@@ -25,3 +26,4 @@ Use this as the starting point for GitHub readers:
 11. `docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md`
 12. `docs/qkd/link_master_role_requirements.md`
 13. `docs/qkd/logging_and_customer_reporting.md`
+14. `docs/tools/qkd_post_check_observation_tools.md`

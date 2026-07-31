@@ -11,6 +11,7 @@ Archive material is in `archive/docs/`.
 2. [QKD Documentation](qkd/toc.md)
 3. [KME Documentation](kme/toc.md)
 4. [PQC Documentation](pqc/toc.md)
+5. [Tools Documentation](tools/toc.md)
 
 ## QKD Ordered Set
 

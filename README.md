@@ -193,6 +193,7 @@ Start here:
 3. [docs/qkd/toc.md](docs/qkd/toc.md)
 4. [docs/kme/toc.md](docs/kme/toc.md)
 5. [docs/pqc/toc.md](docs/pqc/toc.md)
+6. [docs/tools/toc.md](docs/tools/toc.md)
 
 Recommended QKD reading flow:
 
@@ -214,3 +215,4 @@ Supporting references:
 3. [docs/kme/cli_reference.md](docs/kme/cli_reference.md)
 4. [docs/pqc/theory_and_standards.md](docs/pqc/theory_and_standards.md)
 5. [docs/pqc/glossary.md](docs/pqc/glossary.md)
+6. [docs/tools/qkd_post_check_observation_tools.md](docs/tools/qkd_post_check_observation_tools.md)
