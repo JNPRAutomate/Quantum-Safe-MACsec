@@ -1,0 +1,21 @@
+[project]
+name = "quantum-safe-macsec"
+version = "0.0.0"
+description = "QKD-assisted MACsec orchestration and tooling for Juniper devices."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "junos-eznc",
+  "paramiko",
+  "scp",
+  "lxml",
+  "pyopenssl",
+  "cryptography",
+  "requests",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==8.4.2",
+]
