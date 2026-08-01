@@ -67,7 +67,7 @@ coverage = N * key_activation_interval
 Con quattro slot:
 
 ```text
-coverage = 4 * 120 = 480 secondi
+coverage = 4 * 300 = 1200 secondi
 ```
 
 Un batch steady-state contiene invece:
@@ -123,11 +123,11 @@ maximum_safe_grace =
 Con i valori correnti:
 
 ```text
-maximum_safe_grace = 2 * 120 - 60 = 180 secondi
+maximum_safe_grace = 2 * 300 - 60 = 540 secondi
 ```
 
 Il grace iniziale di 180 secondi è ammesso e sostituisce il precedente margine
-fisso di 480 secondi. Oltre 180 secondi il batch viene bloccato e richiede un
+fisso di 480 secondi. Oltre 540 secondi il batch viene bloccato e richiede un
 intervallo di attivazione più ampio o un'esecuzione più frequente.
 
 ## 4. Bootstrap e completion
@@ -146,11 +146,11 @@ slot mancanti. Con N=4 e invocazione alle 10:00:
 |---|---|---|
 | 0 | passato | active bootstrap |
 | 1 | 10:03 | pending |
-| 2 | 10:05 | future |
-| 3 | 10:07 | future |
+| 2 | 10:08 | future |
+| 3 | 10:13 | future |
 
 Il primo start-time deriva dal grace iniziale di 180 secondi; i successivi sono
-separati dall'activation interval di 120 secondi.
+separati dall'activation interval di 300 secondi.
 
 ## 5. Replacement N-2 con quattro slot
 
@@ -241,9 +241,45 @@ timer. La protezione corrente è fornita da:
 `pending_auto_evict_enabled` resta disabilitato: il runtime non elimina stato
 pending per forzare artificialmente un avanzamento.
 
+## 8bis. Self-healing del ring esaurito (RING_REARM)
+
+Prima di questa modifica, se **nessuno** slot configurato aveva più un
+`start-time` futuro (ring esaurito), `select_ring_update_slots()` restituiva
+`ACTIVE_PENDING_PAIR_INCOMPLETE` e `run_master_rolling_link()` si fermava con
+`ROTATION BLOCKED`. Non esisteva alcun altro percorso capace di scrivere un
+nuovo `start-time` futuro in quello stato: il blocco era quindi permanente e
+assorbente. Bastava un singolo fallimento transitorio (KME irraggiungibile,
+SSH verso il peer, `commit lock` occupato, timeout ACK, un tick di cron
+saltato) perché tutti gli slot scadessero prima che una sostituzione andasse
+a buon fine, lasciando il link bloccato per sempre e richiedendo un intervento
+manuale.
+
+Dalla versione corrente, quando l'`active_slot` è valido (e già confermato
+bilateralmente dai controlli precedenti) ma nessuno slot ha un `start-time`
+futuro, `select_ring_update_slots()` restituisce invece un'operazione
+`RING_REARM` con target lo slot immediatamente successivo all'active
+(`(active_slot + 1) % N`). `run_master_rolling_link()` la gestisce riusando
+**la stessa pipeline bilaterale** di una rotazione normale: ENC dal KME,
+commit locale, invio SSH `install-key-batch` al peer, attesa ACK,
+finalizzazione bilaterale. Non viene introdotto nessun nuovo canale di
+comunicazione né alcuna possibilità di disallineamento tra i due router: è
+esattamente la stessa transazione atomica already-existing, applicata a un
+solo slot invece che a `N-2`.
+
+Il precondition check `ACTIVE_NOT_BILATERALLY_CONFIRMED` (active key e slot
+identici su entrambi i lati) resta invariato e viene eseguito **prima** di
+questo branch: `RING_REARM` scatta solo se l'active slot è già confermato
+bilateralmente, mai in presenza di ambiguità sullo stato attivo.
+
+`ACTIVE_PENDING_PAIR_INCOMPLETE` come `block_reason` non viene più prodotto:
+i restanti motivi di blocco (`INVALID_RING_SHAPE`, `NOT_CLEAN_SEED`,
+`ACTIVE_SLOT_INVALID`, `ACTIVE_PENDING_PAIR_NOT_ADJACENT`,
+`NO_REPLACEABLE_SLOTS`) restano condizioni reali che richiedono
+investigazione manuale e continuano a produrre `ROTATION BLOCKED`.
+
 ## 9. Rotazione SSH indipendente
 
-La chiave ED25519 di `etsi_peer_view` ruota ogni 300 secondi ed è indipendente
+La chiave ED25519 di `etsi_peer_view` ruota ogni 600 secondi ed è indipendente
 dalle CAK MACsec. `qkd_onbox.py` completa prima tutto il lavoro MACsec e soltanto
 dopo tenta la rotazione SSH, evitando cambi credenziali durante una transazione.
 
@@ -257,11 +293,13 @@ RING_COMPLETION START
 RING_COMPLETION DONE
 ROLLING_REPLACEMENT START
 ROLLING_REPLACEMENT DONE
+RING_REARM START
+RING_REARM DONE
+ROTATION SELF_HEAL reason=NO_FUTURE_SLOT_SCHEDULED
 INFLIGHT RETRY
 INFLIGHT FINALIZED
 ROTATION BLOCKED reason=ACTIVE_NOT_BILATERALLY_CONFIRMED
 ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED
-ROTATION BLOCKED reason=ACTIVE_PENDING_PAIR_INCOMPLETE
 ROTATION BLOCKED reason=ACTIVE_PENDING_PAIR_NOT_ADJACENT
 ROTATION BLOCKED reason=ADAPTIVE_GRACE_EXCEEDS_PROTECTED_HORIZON
 ROTATION SKIP reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED
