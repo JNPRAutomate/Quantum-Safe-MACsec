@@ -5371,8 +5371,21 @@ def select_ring_update_slots(
             return "RING_COMPLETION", sorted(ring_slots - configured_slots), None
         return None, [], "NOT_CLEAN_SEED"
 
-    if active_slot not in ring_slots or next_slot not in ring_slots:
-        return None, [], "ACTIVE_PENDING_PAIR_INCOMPLETE"
+    if active_slot not in ring_slots:
+        return None, [], "ACTIVE_SLOT_INVALID"
+    if next_slot not in ring_slots:
+        # The ring is fully populated (all slots configured) but no slot
+        # carries a future start-time. This happens when a transient failure
+        # (KME/SSH/commit-lock/ACK timeout, missed cron tick, etc.) prevented
+        # a rolling replacement from completing before the previous "next"
+        # slot's start-time elapsed, leaving every configured slot in the
+        # past. Left unhandled this is a permanent, absorbing stall: nothing
+        # else ever re-arms a future slot. Self-heal by scheduling a freshly
+        # issued key for the slot immediately after active, using the same
+        # bilateral install pipeline as a normal rotation, instead of
+        # blocking forever.
+        rearm_slot = (active_slot + 1) % int(ring_size)
+        return "RING_REARM", [rearm_slot], None
     if next_slot != ((active_slot + 1) % int(ring_size)):
         return None, [], "ACTIVE_PENDING_PAIR_NOT_ADJACENT"
 
@@ -5661,16 +5674,29 @@ def run_master_rolling_link(link):
         peer_state.get("previous_active_slot"),
     )
     if operation is None:
-        level = "INFO" if block_reason == "ACTIVE_PENDING_PAIR_INCOMPLETE" else "ERROR"
+        # Every remaining block_reason here (INVALID_RING_SHAPE, NOT_CLEAN_SEED,
+        # ACTIVE_SLOT_INVALID, ACTIVE_PENDING_PAIR_NOT_ADJACENT,
+        # NO_REPLACEABLE_SLOTS) reflects a real inconsistency requiring
+        # investigation. The "no future slot configured" case is no longer
+        # blocked here -- it self-heals via the RING_REARM operation below.
         log(
-            f"ROTATION {'SKIP' if level == 'INFO' else 'BLOCKED'} reason={block_reason} "
+            f"ROTATION BLOCKED reason={block_reason} "
             f"configured_slots={sorted(local_slots)} active_slot={local_active_slot} "
             f"next_slot={local_next_slot}",
-            level,
+            "ERROR",
             iface,
             "MASTER",
         )
         return False
+
+    if operation == "RING_REARM":
+        log(
+            f"ROTATION SELF_HEAL reason=NO_FUTURE_SLOT_SCHEDULED rearm_slot={target_slots[0]} "
+            f"active_slot={local_active_slot} configured_slots={sorted(local_slots)}",
+            "WARN",
+            iface,
+            "MASTER",
+        )
 
     activation_grace = adaptive_activation_grace_seconds(state)
     if operation == "ROLLING_REPLACEMENT":

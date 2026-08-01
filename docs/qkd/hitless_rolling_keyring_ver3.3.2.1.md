@@ -35,7 +35,7 @@ La policy corrente usa:
 
 ```yaml
 execution_interval_seconds: 60
-key_activation_interval_seconds: 120
+key_activation_interval_seconds: 300
 peer_batch_ack_timeout_seconds: 150
 peer_batch_ack_poll_interval_seconds: 5
 peer_enqueue_min_margin_seconds: 60
@@ -43,7 +43,7 @@ adaptive_grace_history_size: 32
 adaptive_grace_floor_seconds: 150
 adaptive_grace_safety_margin_seconds: 30
 adaptive_grace_rounding_seconds: 60
-peer_key_rotation_interval_seconds: 300
+peer_key_rotation_interval_seconds: 600
 ```
 
 I timer hanno funzioni indipendenti:

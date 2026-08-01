@@ -15,8 +15,20 @@ qkd_policy:
   # active/pending horizon so a delayed invocation cannot exhaust the ring.
   execution_interval_seconds: 60
   # Distance between consecutive Junos key start-times. This is independent
-  # from the script execution cadence.
-  key_activation_interval_seconds: 120
+  # from the script execution cadence, but it is also the entire budget
+  # available to complete one bilateral rolling-replacement transaction
+  # (KME fetch + local commit + SSH push + peer commit + ACK wait) before the
+  # ring's "next" slot elapses. It must comfortably exceed
+  # peer_batch_ack_timeout_seconds (150s) and leave room for multiple
+  # execution_interval_seconds (60s) retries; 120s left ~0-1 retry budget,
+  # so a single transient failure (KME/SSH/commit-lock/ACK timeout, or one
+  # missed cron tick) could exhaust every configured slot before a
+  # replacement completed. 300s leaves a 150s margin over the ACK timeout
+  # and up to ~5 retries per window. (A RING_REARM self-heal in
+  # select_ring_update_slots() now also recovers automatically if the ring
+  # is ever exhausted despite this margin -- see hitless_rolling_keyring
+  # docs -- but this value should still be sized to make that rare.)
+  key_activation_interval_seconds: 300
 
   # The on-box runtime uses this as the initial ring window: slot 0 is the
   # orchestrator seed, slots 1..3 are fetched from the KME after MACsec is up.
@@ -41,4 +53,4 @@ qkd_policy:
 
   # Independent etsi_peer_view ED25519 transport-key rotation. qkd_onbox runs
   # this only after MACsec keyring work, never during a keyring transaction.
-  peer_key_rotation_interval_seconds: 300
+  peer_key_rotation_interval_seconds: 600

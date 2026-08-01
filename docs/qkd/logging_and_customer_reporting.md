@@ -38,7 +38,7 @@ The deployed branch uses the following policy:
 | `pending_auto_evict_enabled` | `false` | Never force progress by deleting pending state |
 | `peer_transport_mode` | `queue` | Use inbox/ACK file transport |
 | `execution_interval_seconds` | `60` | Junos event-options script cadence |
-| `key_activation_interval_seconds` | `120` | Distance between key start-times |
+| `key_activation_interval_seconds` | `300` | Distance between key start-times |
 | `key_batch_size` | `4` | Configured ring/batch size |
 | `max_installed_keys` | `4` | Physical keychain slots |
 | `peer_enqueue_min_margin_seconds` | `60` | Minimum remaining lead time before enqueue |
@@ -48,7 +48,7 @@ The deployed branch uses the following policy:
 | `adaptive_grace_floor_seconds` | `150` | Minimum observed-time baseline |
 | `adaptive_grace_safety_margin_seconds` | `30` | Safety added to the baseline |
 | `adaptive_grace_rounding_seconds` | `60` | Grace rounding quantum |
-| `peer_key_rotation_interval_seconds` | `300` | Independent `etsi_peer_view` key rotation |
+| `peer_key_rotation_interval_seconds` | `600` | Independent `etsi_peer_view` key rotation |
 
 ### 2.1 Derived values
 
@@ -103,7 +103,7 @@ The active ring has four slots:
 | Steady state | active + adjacent pending | the other N-2 slots |
 
 With `N=4`, every steady-state transaction replaces two consumed slots.
-Start-times are 120 seconds apart. The script runs every 60 seconds and may
+Start-times are 300 seconds apart. The script runs every 60 seconds and may
 legitimately skip a cycle while target slots are not yet consumed.
 
 ### 2.3 Auxiliary runtime timers and limits
@@ -122,8 +122,8 @@ These values are runtime defaults unless overridden in rendered device config:
 | MKA SAK rekey interval | 300 s | Junos MKA/SAK setting |
 | Metadata retained | 4 slots effective | `max(KEYCHAIN_KEEP_LAST=3, ring=4)` |
 
-`pending_confirm_grace_seconds` (default 120 seconds) and
-`pending_stuck_recovery_seconds` (derived as 600 seconds) belong to the legacy
+`pending_confirm_grace_seconds` (default 300 seconds) and
+`pending_stuck_recovery_seconds` (derived as 1500 seconds) belong to the legacy
 full-batch path. The active `run_master_rolling_link()` N-2 path uses bilateral
 active/pending snapshots, persistent inflight state, ACK, and adaptive grace
 instead. Automatic pending eviction remains disabled.

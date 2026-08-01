@@ -86,11 +86,21 @@ class TestRollingKeyringPlan:
         assert set(slots) == {0, 3}
         assert {1, 2}.isdisjoint(slots)
 
-    def test_full_ring_without_pending_is_not_modified(self):
+    def test_full_ring_without_pending_self_heals_by_rearming_next_slot(self):
+        # Every slot is configured but none carries a future start-time (the
+        # ring was exhausted, e.g. by a transient rotation failure). Rather
+        # than stalling forever, re-arm the slot right after active.
         assert self.plan({0, 1, 2, 3}, 1, None) == (
+            "RING_REARM",
+            [2],
+            None,
+        )
+
+    def test_invalid_active_slot_is_not_modified(self):
+        assert self.plan({0, 1, 2, 3}, None, None) == (
             None,
             [],
-            "ACTIVE_PENDING_PAIR_INCOMPLETE",
+            "ACTIVE_SLOT_INVALID",
         )
 
     def test_non_adjacent_active_pending_pair_is_not_modified(self):
