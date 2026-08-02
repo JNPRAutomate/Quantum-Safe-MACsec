@@ -143,6 +143,9 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
         for item in (peer.get("devices") or [])
     ]
 
+    # Only flag devices with real commit failures or WARNING-level compatibility
+    # issues. INCOMPATIBLE is a structural constant (feature absent on this
+    # Junos version) and is not an operational problem.
     commit_devices_with_issues = [
         {
             "device": item.get("device"),
@@ -152,8 +155,8 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
         }
         for item in (commit.get("device_reports") or [])
         if int(item.get("commit_failure_count", 0)) > 0
-        or ((item.get("timer_compatibility") or {}).get("status") in {"WARNING", "INCOMPATIBLE"})
-        or ((item.get("bulk_load_compatibility") or {}).get("status") in {"WARNING", "INCOMPATIBLE"})
+        or ((item.get("timer_compatibility") or {}).get("status") == "WARNING")
+        or ((item.get("bulk_load_compatibility") or {}).get("status") == "WARNING")
     ]
 
     manifest_status = str(manifest.get("status") or "unknown")
@@ -163,8 +166,9 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
             int(((fleet.get("attention_required") or {}).get("count")) or 0) > 0,
             bool(peer.get("authorized_keys_issues_by_device")),
             bool(peer.get("scp_transport_issues_by_device")),
-            bool(peer.get("missing_peer_renewals_by_device")),
-            int(commit.get("total_commit_failures", 0)) > 0,
+            # missing_peer_renewals is a point-in-time signal: within the short
+            # observation window not all peers complete a full renewal cycle.
+            # It is informational only and does not drive ATTENTION_REQUIRED.
             bool(commit_devices_with_issues),
         )
     )
@@ -251,17 +255,23 @@ def render_text(summary: Dict[str, Any]) -> str:
         ]
     )
     if fleet["attention_links"]:
+        _delivery_lag_outcomes = {"REGRESSION", "FINAL_DEGRADED"}
         for item in fleet["attention_links"]:
+            outcome = item.get("outcome") or "unknown"
+            hint = ""
+            if outcome in _delivery_lag_outcomes and item.get("final_health") in {"PROBLEMATIC", "DEGRADED"}:
+                hint = " [check: SCP delivery lag may cause transient divergence]"
             lines.append(
-                "- %s %s | outcome=%s | rotated=%s | t1=%s t2=%s final=%s"
+                "- %s %s | outcome=%s | rotated=%s | t1=%s t2=%s final=%s%s"
                 % (
                     item.get("badge") or "[ATTENTION]",
                     item.get("link_id") or "unknown-link",
-                    item.get("outcome") or "unknown",
+                    outcome,
                     str(item.get("rotation_observed")),
                     item.get("t1_health") or "N/A",
                     item.get("t2_health") or "N/A",
                     item.get("final_health") or "N/A",
+                    hint,
                 )
             )
 
@@ -275,7 +285,7 @@ def render_text(summary: Dict[str, Any]) -> str:
             "authorized_keys issues: %s"
             % len(peer["authorized_keys_issues_by_device"]),
             "SCP transport issues: %s" % len(peer["scp_transport_issues_by_device"]),
-            "Missing peer renewals: %s"
+            "Missing peer renewals: %s (informational — point-in-time snapshot)"
             % len(peer["missing_peer_renewals_by_device"]),
         ]
     )
@@ -286,7 +296,7 @@ def render_text(summary: Dict[str, Any]) -> str:
         )
     for item in peer["scp_transport_issues_by_device"]:
         lines.append(
-            "- scp_transport %s: %s"
+            "- scp_transport %s: %s (errors may be transient within the delivery window)"
             % (item.get("device") or "unknown-device", item.get("reason") or "issue")
         )
     for item in peer["missing_peer_renewals_by_device"]:
@@ -307,16 +317,15 @@ def render_text(summary: Dict[str, Any]) -> str:
             % (commit["devices_with_commit_activity"], commit["device_count"]),
             "Total commit events: %s" % commit["total_commit_events"],
             "Total commit failures: %s" % commit["total_commit_failures"],
+            "  (timer/bulk INCOMPATIBLE = feature absent on this Junos version, not an error)",
         ]
     )
     for item in commit["devices_with_issues"]:
         lines.append(
-            "- %s: commit_failures=%s timer=%s bulk=%s"
+            "- %s: commit_failures=%s"
             % (
                 item.get("device") or "unknown-device",
                 item["commit_failure_count"],
-                item.get("timer_status") or "N/A",
-                item.get("bulk_status") or "N/A",
             )
         )
 

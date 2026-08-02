@@ -147,7 +147,99 @@ def test_build_summary_surfaces_actionable_observation_issues(tmp_path):
     rendered = render_text(summary)
     assert "Overall status: ATTENTION_REQUIRED" in rendered
     assert "authorized_keys ACX3" in rendered
-    assert "MX5: commit_failures=1 timer=WARNING bulk=COMPATIBLE" in rendered
+    # commit per-device shows failures only (no timer/bulk columns)
+    assert "MX5: commit_failures=1" in rendered
+    # REGRESSION links get the delivery-lag hint
+    assert "check: SCP delivery lag" in rendered
+
+
+def test_incompatible_timer_bulk_does_not_drive_attention(tmp_path):
+    """Devices with INCOMPATIBLE timer/bulk but zero commit failures are not listed."""
+    observation = tmp_path / "qkd_observation_2026-08-02_09-00-00_UTC"
+    # Build a clean observation but inject INCOMPATIBLE-only devices
+    make_observation(observation, fleet_attention=0)
+    # Overwrite commit file with INCOMPATIBLE-only devices and no failures
+    write_json(
+        observation / "qkd_device_commit_observation.json",
+        {
+            "device_count": 2,
+            "devices_with_commit_activity": 2,
+            "total_commit_events": 100,
+            "total_commit_failures": 0,
+            "device_reports": [
+                {
+                    "device": "MX1",
+                    "commit_failure_count": 0,
+                    "timer_compatibility": {"status": "INCOMPATIBLE"},
+                    "bulk_load_compatibility": {"status": "INCOMPATIBLE"},
+                },
+                {
+                    "device": "MX2",
+                    "commit_failure_count": 0,
+                    "timer_compatibility": {"status": "INCOMPATIBLE"},
+                    "bulk_load_compatibility": {"status": "INCOMPATIBLE"},
+                },
+            ],
+        },
+    )
+    # Also clear peer issues to isolate commit noise
+    write_json(
+        observation / "qkd_peer_key_rotation_observation.json",
+        {
+            "all_devices_rotated_successfully": True,
+            "all_links_rotated_successfully": True,
+            "device_status_counts": {},
+            "link_status_counts": {},
+            "authorized_keys_issues_by_device": [],
+            "scp_transport_issues_by_device": [],
+            "missing_peer_renewals_by_device": [],
+            "devices": [],
+        },
+    )
+
+    summary = build_summary(observation)
+
+    assert summary["commit_health"]["devices_with_issues"] == []
+    assert summary["overall_status"] == "OK"
+
+
+def test_missing_peer_renewals_does_not_drive_attention_alone(tmp_path):
+    """missing_peer_renewals is informational; it must not trigger ATTENTION_REQUIRED."""
+    observation = tmp_path / "qkd_observation_2026-08-02_10-00-00_UTC"
+    make_observation(observation, fleet_attention=0)
+    # Overwrite with clean commit but non-empty missing_peer_renewals
+    write_json(
+        observation / "qkd_device_commit_observation.json",
+        {
+            "device_count": 2,
+            "devices_with_commit_activity": 2,
+            "total_commit_events": 100,
+            "total_commit_failures": 0,
+            "device_reports": [],
+        },
+    )
+    # Peer has missing renewals but no auth/scp issues
+    write_json(
+        observation / "qkd_peer_key_rotation_observation.json",
+        {
+            "all_devices_rotated_successfully": False,
+            "all_links_rotated_successfully": False,
+            "device_status_counts": {},
+            "link_status_counts": {},
+            "authorized_keys_issues_by_device": [],
+            "scp_transport_issues_by_device": [],
+            "missing_peer_renewals_by_device": [
+                {"device": "MX1", "missing_peer_renewals": ["MX2"], "missing_count": 1}
+            ],
+            "devices": [],
+        },
+    )
+
+    summary = build_summary(observation)
+
+    assert summary["overall_status"] == "OK"
+    rendered = render_text(summary)
+    assert "informational" in rendered
 
 
 def test_incomplete_manifest_overrides_other_results(tmp_path):
