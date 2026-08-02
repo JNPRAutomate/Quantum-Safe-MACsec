@@ -35,6 +35,12 @@ Preview timing from policy:
 tools/observe_qkd_rotation.py --plan
 ```
 
+If the script is not executable on your host, run:
+
+```bash
+python3 tools/observe_qkd_rotation.py --plan
+```
+
 Run the full post-check:
 
 ```bash
@@ -45,6 +51,12 @@ Summarize the latest observation without opening the raw JSON files:
 
 ```bash
 tools/qkd_observation_summary.py
+```
+
+If execution permissions are missing:
+
+```bash
+python3 tools/qkd_observation_summary.py
 ```
 
 Summarize a specific observation folder:
@@ -80,6 +92,25 @@ It derives:
 
 No fixed timer is hard-coded. The derived schedule automatically adapts to
 different future policy values.
+
+The plan now prints the derived formula explicitly so operators can validate
+the timing logic during execution. Example (ring=4):
+
+```text
+t2_offset  = execution + grace
+final_base = t2_offset + (N-2-1)*activation + execution
+peer_key   = peer_key_interval + execution
+final      = max(final_base, peer_key)
+```
+
+With `execution=60`, `grace=540`, `activation=300`, `N-2=2`:
+
+```text
+t2_offset  = 60 + 540 = 600s
+final_base = 600 + (2-1)*300 + 60 = 960s
+peer_key   = 600 + 60 = 660s
+final      = max(960, 660) = 960s
+```
 
 ## Observation Outputs
 
@@ -195,6 +226,24 @@ Current behavior:
 This prevents large false-problem bursts at FINAL snapshots in hitless runs
 where active traffic is already converged and only future-key pipeline metadata
 is offset by one cycle between peers.
+
+### Delivery-lag-aware interpretation (`N_MINUS_TWO_TARGETS_NOT_CONSUMED`)
+
+For asynchronous peer-batch delivery, pending/next divergence can persist while
+the data plane is still healthy. The parser now marks this state explicitly:
+
+- on-box runtime exports `rotation_skip_reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED`
+  when rotation is intentionally skipped while waiting for peer batch
+  consumption;
+- `qkd_link_rotation_report.py` captures the skip reason from log evidence;
+- if `active_key_id` matches bilaterally and MKA is secured, the link remains
+  `HEALTHY` with an explicit delivery-in-progress reason.
+
+This avoids raising red alarms for links that are converged on active traffic
+and are only waiting for queued future-slot delivery.
+
+Note: this specific signal appears only after deploying an on-box script that
+includes `rotation_skip_reason` state export.
 
 ### Live monitor severity alignment
 
