@@ -1195,9 +1195,9 @@ def format_tunnel_status(health_data):
     if cak_mismatch_total > 0:
         if prev_cak is not None and cak_mismatch_total > prev_cak:
             delta = cak_mismatch_total - prev_cak
-            status += f" | 🔴 CAK+{delta}"
+            status += f" | 🟠 CAK+{delta}"
         elif prev_cak is None:
-            status += f" | 🔴 CAK:{cak_mismatch_total}(total)"
+            status += f" | 🟠 CAK:{cak_mismatch_total}(total)"
     
     if icv_mismatch_total > 0:
         if prev_icv is not None and icv_mismatch_total > prev_icv:
@@ -1607,7 +1607,7 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
                     if change['prev_not_found'] != change['curr_not_found']:
                         print(f"  🔴 Not found: {change['prev_not_found']} → {change['curr_not_found']}")
                     if change['prev_cak'] != change['curr_cak']:
-                        print(f"  🔴 CAK mismatch: {change['prev_cak']} → {change['curr_cak']}")
+                        print(f"  🟠 CAK mismatch: {change['prev_cak']} → {change['curr_cak']}")
                     if change['prev_icv'] != change['curr_icv']:
                         print(f"  🔴 ICV mismatch: {change['prev_icv']} → {change['curr_icv']}")
             

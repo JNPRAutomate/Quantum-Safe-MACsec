@@ -196,6 +196,20 @@ This prevents large false-problem bursts at FINAL snapshots in hitless runs
 where active traffic is already converged and only future-key pipeline metadata
 is offset by one cycle between peers.
 
+### Live monitor severity alignment
+
+In the live link-correlation monitor
+([macsec_tunnel_health_monitor_link_correlation.py](../../tools/macsec_tunnel_health_monitor_link_correlation.py)),
+CAK mismatch counters are now displayed as **amber** (`🟠`) instead of red by
+default.
+
+Rationale:
+
+- CAK mismatch counters can increase transiently during asynchronous key
+  negotiation windows even when MACsec remains `inuse` and MKA is secured.
+- Red severity should remain focused on hard-fault indicators (for example MKA
+  not found, ICV mismatch growth, or clear data-plane degradation).
+
 ## Operational Runbook After One Observation
 
 Use this runbook immediately after:
