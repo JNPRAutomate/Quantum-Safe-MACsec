@@ -193,6 +193,17 @@ def default_observation_name(now: Optional[datetime] = None) -> str:
 
 
 def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
+    ex = int(schedule["execution_interval_seconds"])
+    act = int(schedule["key_activation_interval_seconds"])
+    grace = int(schedule["adaptive_grace_seconds"])
+    ring = int(schedule["ring_size"])
+    repl = int(schedule["replacement_count"])
+    peer_key = int(schedule["peer_key_rotation_interval_seconds"])
+    t2 = int(schedule["t2_offset_seconds"])
+    final_base = t2 + max(0, repl - 1) * act + ex
+    peer_key_ver = int(schedule["peer_key_verification_offset_seconds"])
+    final = int(schedule["final_offset_seconds"])
+
     print("QKD fleet observation plan")
     print(
         "  policy: execution=%(execution_interval_seconds)ss "
@@ -217,8 +228,28 @@ def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
             % (stage, offset, target.astimezone(timezone.utc).isoformat())
         )
     print(
-        "  rationale: T2 waits execution+grace for transaction/ACK settlement; "
-        "FINAL waits activation horizon (N-2) and peer-key verification window."
+        "  rationale:\n"
+        "    T1 (+0s)     baseline snapshot — ring state before any rotation.\n"
+        "    T2 (+%(t2)ds)   execution(%(ex)ds) + grace(%(grace)ds)"
+        " = %(t2)ds — waits for SAE transaction commit + peer ACK settlement.\n"
+        "    FINAL (+%(final)ds) = T2(%(t2)ds) + (ring-N+2-1)(%(rminus)d) * activation(%(act)ds)"
+        " + execution(%(ex)ds) = %(final_base)ds"
+        "%(peer_note)s"
+        " — covers full N-2 activation horizon for all replacement slots."
+        % dict(
+            t2=t2,
+            ex=ex,
+            grace=grace,
+            final=final,
+            rminus=max(0, repl - 1),
+            act=act,
+            final_base=final_base,
+            peer_note=(
+                "; raised to peer-key verification(%ds)" % peer_key_ver
+                if peer_key > 0 and peer_key_ver > final_base
+                else ""
+            ),
+        )
     )
 
 

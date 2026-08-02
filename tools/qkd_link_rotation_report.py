@@ -41,6 +41,7 @@ ACK_RE = re.compile(r"ack_id=(?P<ack_id>[A-Za-z0-9]+)")
 SLOTS_RE = re.compile(r"slots=(?P<slots>\[[^\]]*\])")
 STATUS_RE = re.compile(r"status=(?P<status>\S+)")
 KEYCHAIN_STAGE_KEY_RE = re.compile(r"\bkey_id=(?P<key_id>\S+)")
+ROTATION_SKIP_REASON_RE = re.compile(r"ROTATION SKIP reason=(?P<reason>\S+)")
 
 ATTENTION_PRIORITY = {
     "PROBLEMATIC": (1, "critical"),
@@ -239,6 +240,7 @@ def analyze_endpoint(
         "last_event": events[-1][0].isoformat(sep=" ") if events else None,
         "runtime": None,
         "state": None,
+        "rotation_skip_reason": None,
         "mka": None,
         "macsec": None,
         "config": None,
@@ -414,6 +416,12 @@ def analyze_endpoint(
             counters["dec_ok"] += 1
         if "ROTATION SKIP" in line:
             counters["rotation_skipped"] += 1
+            skip_match = ROTATION_SKIP_REASON_RE.search(line)
+            if skip_match:
+                result["rotation_skip_reason"] = skip_match.group("reason")
+        if "ROLLING_REPLACEMENT DONE" in line or "RING_COMPLETION DONE" in line:
+            # A successful rotation clears any pending skip reason.
+            result["rotation_skip_reason"] = None
         if "ROTATION BLOCKED" in line:
             counters["rotation_blocked"] += 1
 
@@ -519,10 +527,23 @@ def classify_link(
         return "ALIGNED_NO_OP_EVIDENCE", reasons
 
     if alignment == "ACTIVE_MATCH_PENDING_DIVERGENT":
-        reasons.append(
-            "Bilateral active key matches and both endpoints are secured; "
-            "pending/next divergence is treated as asynchronous pipeline state."
-        )
+        skip_a = endpoint_a.get("rotation_skip_reason")
+        skip_b = endpoint_b.get("rotation_skip_reason")
+        if (
+            skip_a == "N_MINUS_TWO_TARGETS_NOT_CONSUMED"
+            or skip_b == "N_MINUS_TWO_TARGETS_NOT_CONSUMED"
+        ):
+            reasons.append(
+                "Bilateral active key matches and both endpoints are secured; "
+                "pending/next divergence is due to N-2 batch delivery in progress "
+                "(N_MINUS_TWO_TARGETS_NOT_CONSUMED). The link will self-align once "
+                "the peer processes the queued batch."
+            )
+        else:
+            reasons.append(
+                "Bilateral active key matches and both endpoints are secured; "
+                "pending/next divergence is treated as asynchronous pipeline state."
+            )
         return "HEALTHY", reasons
 
     reasons.append(

@@ -257,6 +257,67 @@ links:
     ]
 
 
+def test_n_minus_two_skip_with_active_match_and_secured_mka_is_healthy(tmp_path):
+    """When N_MINUS_TWO_TARGETS_NOT_CONSUMED skip is present, the link is HEALTHY."""
+    snapshot = tmp_path / "snapshot"
+    inventory = tmp_path / "inventory.yml"
+    inventory.write_text(
+        """
+devices:
+- name: MX5
+- name: ACX1
+links:
+- id: MX5-ACX1
+  node_a: MX5
+  interface_a: et-0/0/8
+  node_b: ACX1
+  interface_b: et-2/0/0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    write_log(
+        snapshot / "MX5" / "qkd_debug_sae-005_et-0_0_8.log",
+        [
+            "2026-08-02 11:29:46 [INFO] [STATE][sae-005][et-0/0/8] "
+            "STATE SAVED file=/tmp/db generation=189 ca=CA_MX5_ACX1 keychain=QKD_CA_MX5_ACX1 "
+            "active_key_id=active-key pending_key_id=pending-new "
+            "next_start_time=2026-08-02 11:32:34",
+            "2026-08-02 11:29:47 [INFO] [MACSEC][sae-005][et-0/0/8] "
+            "MACSEC OPERATIONAL STATE OK ca=CA_MX5_ACX1 status=inuse",
+            "2026-08-02 11:29:47 [INFO] [MKA][sae-005][et-0/0/8] "
+            "MKA KEY NOT CONFIRMED key_id=pending-new secured=True ckn_match=False "
+            "key_number=0 interface_state=Secured - Primary mka_suspended=0(s)",
+            "2026-08-02 11:29:48 [INFO] [MASTER][sae-005][et-0/0/8] "
+            "ROTATION SKIP reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED "
+            "target_slots=[0, 1] active_slot=2",
+        ],
+    )
+    write_log(
+        snapshot / "ACX1" / "qkd_debug_sae-007_et-2_0_0.log",
+        [
+            "2026-08-02 11:29:46 [INFO] [STATE][sae-007][et-2/0/0] "
+            "STATE SAVED file=/tmp/db generation=189 ca=CA_MX5_ACX1 keychain=QKD_CA_MX5_ACX1 "
+            "active_key_id=active-key pending_key_id=pending-old "
+            "next_start_time=2026-08-02 11:17:34",
+            "2026-08-02 11:29:47 [INFO] [MACSEC][sae-007][et-2/0/0] "
+            "MACSEC OPERATIONAL STATE OK ca=CA_MX5_ACX1 status=inuse",
+            "2026-08-02 11:29:47 [INFO] [MKA][sae-007][et-2/0/0] "
+            "MKA KEY NOT CONFIRMED key_id=pending-old secured=True ckn_match=False "
+            "key_number=0 interface_state=Secured - Primary mka_suspended=0(s)",
+        ],
+    )
+
+    _, _, report = generate_reports(snapshot, inventory)
+
+    link = report["links"][0]
+    assert link["alignment"] == "ACTIVE_MATCH_PENDING_DIVERGENT"
+    assert link["status"] == "HEALTHY"
+    assert link["health_category"] == "HEALTHY"
+    assert report["attention_required"]["count"] == 0
+    assert "N_MINUS_TWO_TARGETS_NOT_CONSUMED" in link["status_reasons"][0]
+
+
 def test_reports_unsecured_mka_as_problematic(tmp_path):
     snapshot = tmp_path / "snapshot"
     inventory = tmp_path / "inventory.yml"

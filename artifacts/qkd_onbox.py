@@ -5708,6 +5708,8 @@ def run_master_rolling_link(link):
                 iface,
                 "MASTER",
             )
+            state["rotation_skip_reason"] = "N_MINUS_TWO_TARGETS_NOT_CONSUMED"
+            save_db_state(peer, iface, state)
             return False
         protected_horizon = 2 * rotation_interval_seconds()
         maximum_safe_grace = protected_horizon - script_execution_interval_seconds()
@@ -5875,6 +5877,7 @@ def run_master_rolling_link(link):
     )
     state = _finalize_bilateral_install(state, peer_payload, operation)
     state = clear_kme_failure(peer, iface, state)
+    state.pop("rotation_skip_reason", None)
     state = reconcile_state_with_router(link, iface, state)
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
     if not save_db_state(peer, iface, state):
