@@ -24,6 +24,8 @@ raw text diffs of append-only log files.
 - [tools/observe_qkd_rotation.py](../../tools/observe_qkd_rotation.py)
   - orchestration tool that runs T1/T2/FINAL collections and produces
     comparison reports.
+- [tools/qkd_observation_summary.py](../../tools/qkd_observation_summary.py)
+  - operator-friendly CLI summary for one `qkd_observation_*` folder.
 
 ## Quick Start
 
@@ -37,6 +39,25 @@ Run the full post-check:
 
 ```bash
 tools/observe_qkd_rotation.py
+```
+
+Summarize the latest observation without opening the raw JSON files:
+
+```bash
+tools/qkd_observation_summary.py
+```
+
+Summarize a specific observation folder:
+
+```bash
+tools/qkd_observation_summary.py logs/qkd_observation_<UTC>/
+```
+
+Emit the condensed result as JSON or fail CI/scripting when attention is required:
+
+```bash
+tools/qkd_observation_summary.py --json
+tools/qkd_observation_summary.py --strict
 ```
 
 The observation directory is created under `logs/` as:
@@ -144,6 +165,15 @@ Use this order:
 5. `qkd_peer_key_rotation_observation.json.missing_peer_renewals_by_device`;
 6. stage-local per-snapshot reports under `t1_baseline/`, `t2_post_transaction/`,
    and `final_post_activation/`.
+
+`qkd_observation_summary.py` follows the same order and condenses those fields
+into a single text report with:
+
+- overall observation status (`OK`, `ATTENTION_REQUIRED`, `INCOMPLETE`);
+- fleet-level link counts and the specific links that need attention;
+- peer SSH key / SCP transport issues by device;
+- commit/cadence warnings and failures by device;
+- stage-by-stage `t1` / `t2` / `final` rollups.
 
 ## Related Design/Operations Docs
 
