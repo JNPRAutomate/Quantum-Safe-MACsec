@@ -27,6 +27,8 @@ Use this as the starting point for GitHub readers:
 12. `docs/qkd/troubleshooting/key0_bootstrap_realignment.md`
 13. `docs/qkd/troubleshooting/ssh_identity_realignment.md`
 14. `docs/qkd/troubleshooting/state_db_json_inspection.md`
-15. `docs/qkd/link_master_role_requirements.md`
-16. `docs/qkd/logging_and_customer_reporting.md`
-17. `docs/tools/qkd_post_check_observation_tools.md`
+15. `docs/qkd/troubleshooting/lock_directories.md`
+16. `docs/qkd/troubleshooting/peer_transport_directories.md`
+17. `docs/qkd/link_master_role_requirements.md`
+18. `docs/qkd/logging_and_customer_reporting.md`
+19. `docs/tools/qkd_post_check_observation_tools.md`
