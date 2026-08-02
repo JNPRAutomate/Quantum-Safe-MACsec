@@ -198,6 +198,65 @@ links:
     ]
 
 
+def test_pending_divergence_with_bilateral_active_and_secured_mka_is_healthy(tmp_path):
+    snapshot = tmp_path / "snapshot"
+    inventory = tmp_path / "inventory.yml"
+    inventory.write_text(
+        """
+devices:
+- name: MX1
+- name: MX2
+links:
+- id: MX1-MX2
+  node_a: MX1
+  interface_a: et-0/0/0
+  node_b: MX2
+  interface_b: et-0/0/0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    write_log(
+        snapshot / "MX1" / "qkd_debug_sae-001_et-0_0_0.log",
+        [
+            "2026-07-31 16:18:25 [INFO] [STATE][sae-001][et-0/0/0] "
+            "STATE SAVED file=/tmp/db generation=11 ca=CA1 keychain=KC1 "
+            "active_key_id=active-key pending_key_id=pending-a "
+            "next_start_time=2026-07-31 16:20:11",
+            "2026-07-31 16:18:26 [INFO] [MACSEC][sae-001][et-0/0/0] "
+            "MACSEC OPERATIONAL STATE OK ca=CA1 status=inuse",
+            "2026-07-31 16:18:27 [INFO] [MKA][sae-001][et-0/0/0] "
+            "MKA KEY NOT CONFIRMED key_id=pending-a secured=True ckn_match=False "
+            "key_number=1 interface_state=Secured - Primary mka_suspended=0(s)",
+        ],
+    )
+    write_log(
+        snapshot / "MX2" / "qkd_debug_sae-002_et-0_0_0.log",
+        [
+            "2026-07-31 16:18:25 [INFO] [STATE][sae-002][et-0/0/0] "
+            "STATE SAVED file=/tmp/db generation=11 ca=CA1 keychain=KC1 "
+            "active_key_id=active-key pending_key_id=pending-b "
+            "next_start_time=2026-07-31 16:22:11",
+            "2026-07-31 16:18:26 [INFO] [MACSEC][sae-002][et-0/0/0] "
+            "MACSEC OPERATIONAL STATE OK ca=CA1 status=inuse",
+            "2026-07-31 16:18:27 [INFO] [MKA][sae-002][et-0/0/0] "
+            "MKA KEY NOT CONFIRMED key_id=pending-b secured=True ckn_match=False "
+            "key_number=1 interface_state=Secured - Primary mka_suspended=0(s)",
+        ],
+    )
+
+    _, _, report = generate_reports(snapshot, inventory)
+
+    link = report["links"][0]
+    assert link["alignment"] == "ACTIVE_MATCH_PENDING_DIVERGENT"
+    assert link["status"] == "HEALTHY"
+    assert link["health_category"] == "HEALTHY"
+    assert report["attention_required"]["count"] == 0
+    assert link["status_reasons"] == [
+        "Bilateral active key matches and both endpoints are secured; pending/next divergence is treated as asynchronous pipeline state."
+    ]
+
+
 def test_reports_unsecured_mka_as_problematic(tmp_path):
     snapshot = tmp_path / "snapshot"
     inventory = tmp_path / "inventory.yml"

@@ -175,6 +175,197 @@ into a single text report with:
 - commit/cadence warnings and failures by device;
 - stage-by-stage `t1` / `t2` / `final` rollups.
 
+## Classification Update (False-Positive Reduction)
+
+The link-health parser has been tightened to avoid false red outcomes when data
+plane state is healthy but pending metadata is temporarily asynchronous.
+
+Current behavior:
+
+- `PROBLEMATIC` is reserved for real fault signals:
+  - bilateral active-key mismatch outside expected transition patterns;
+  - unresolved critical errors after latest successful evidence;
+  - unsecured/fallback MKA evidence.
+- `HEALTHY` now includes the common case where:
+  - bilateral `active_key_id` matches;
+  - both endpoints are `Secured - Primary` (or secured state);
+  - MACsec in-use evidence exists;
+  - `pending_key_id` / `next_start_time` differ transiently between peers.
+
+This prevents large false-problem bursts at FINAL snapshots in hitless runs
+where active traffic is already converged and only future-key pipeline metadata
+is offset by one cycle between peers.
+
+## Operational Runbook After One Observation
+
+Use this runbook immediately after:
+
+```bash
+tools/observe_qkd_rotation.py
+tools/qkd_observation_summary.py
+```
+
+### Step 1 - Decide whether the run is usable
+
+Read the first three lines of the summary:
+
+- `Overall status: OK`
+- `Overall status: ATTENTION_REQUIRED`
+- `Overall status: INCOMPLETE`
+
+Decision:
+
+1. `OK`
+   - Post-check passed.
+   - Archive the observation folder and stop here.
+2. `INCOMPLETE`
+   - Do not troubleshoot link health yet.
+   - Check `observation_manifest.json.error` first.
+   - Re-run the observation if one or more stages were not collected.
+3. `ATTENTION_REQUIRED`
+   - The observation is complete and contains actionable problems.
+   - Continue with the triage order below.
+
+### Step 2 - Triage in the correct order
+
+Always use this order:
+
+1. peer SSH install/distribution issues (`authorized_keys_issues_by_device`);
+2. batch transport / peer ACK issues (`scp_transport_issues_by_device`);
+3. missing master-side peer renewals (`missing_peer_renewals_by_device`);
+4. red/orange link outcomes in `qkd_fleet_comparison_report.json`;
+5. commit/cadence warnings only after the items above have been checked.
+
+Important:
+
+- `authorized_keys` and SCP/ACK problems can make several link outcomes look
+  unhealthy at the same time.
+- Commit/cadence output is secondary triage. On a large historical log window it
+  can be noisy and should not be treated as the first root-cause signal.
+
+### Step 3 - Fix peer SSH install/distribution first
+
+If the summary shows devices under `authorized_keys issues`, start there before
+opening per-link reports.
+
+Operator actions:
+
+1. Identify the listed device.
+2. Inspect the latest `PEER-PUBKEY` and `PEER-KEY` error lines in the stage
+   snapshot logs for that device.
+3. Verify that the Junos login configuration still matches the intended peer SSH
+   public keys.
+4. Reconcile the SSH identity using
+   [ssh_identity_realignment.md](../qkd/troubleshooting/ssh_identity_realignment.md).
+
+Expected effect:
+
+- once peer key installation/distribution succeeds again, downstream
+  `missing_peer_renewals` and unhealthy links often reduce automatically on the
+  next observation.
+
+### Step 4 - Fix SCP / peer ACK transport next
+
+If the summary shows devices under `SCP transport issues`, troubleshoot those
+devices before reasoning about link-local QKD state.
+
+Operator actions:
+
+1. Inspect the latest `SCP UPLOAD FAIL/TIMEOUT/ERROR` lines.
+2. Inspect the latest `PEER BATCH ACK FAIL/TIMEOUT` lines.
+3. Check the peer transport directories using
+   [peer_transport_directories.md](../qkd/troubleshooting/peer_transport_directories.md).
+4. If authentication is involved, re-check
+   [ssh_identity_realignment.md](../qkd/troubleshooting/ssh_identity_realignment.md).
+
+Expected effect:
+
+- if batch delivery resumes, peer snapshots and ACK-driven state transitions can
+  converge again on the next cycle.
+
+### Step 5 - Use missing peer renewals as a master-side map
+
+Read `missing_peer_renewals_by_device` as:
+
+- `device A: peer B`
+- meaning the master-side device did not complete the expected peer-key renewal
+  toward that peer during the observed cycle.
+
+Use that list to decide where to inspect first:
+
+1. open the master device logs;
+2. inspect the peer transport/SSH errors for that pair;
+3. only then open the per-link health report for the corresponding link.
+
+Do not treat missing peer renewals as a standalone root cause. They are routing
+signals that point you toward the failing master-side workflow.
+
+### Step 6 - Only now open the unhealthy links
+
+After SSH install and transport have been checked, look at the red/orange links.
+
+Interpretation:
+
+- `PERSISTENT_PROBLEM`
+  - unhealthy from baseline through final stage;
+  - usually a real standing issue, not transient observation noise.
+- `REGRESSION`
+  - earlier stage looked better, final stage became problematic;
+  - often means rotation happened but final convergence did not complete cleanly.
+- `FINAL_DEGRADED`
+  - not fully healthy at final stage;
+  - often requires checking peer status freshness, incomplete pending state, or
+    partial transport recovery.
+
+Recommended order:
+
+1. links that involve devices already listed under `authorized_keys issues`;
+2. links that involve devices already listed under `SCP transport issues`;
+3. links named in `missing_peer_renewals_by_device`;
+4. remaining red links;
+5. orange links.
+
+For link-level follow-up, use:
+
+- [key0_bootstrap_realignment.md](../qkd/troubleshooting/key0_bootstrap_realignment.md)
+- [state_db_json_inspection.md](../qkd/troubleshooting/state_db_json_inspection.md)
+- [lock_directories.md](../qkd/troubleshooting/lock_directories.md)
+- [peer_transport_directories.md](../qkd/troubleshooting/peer_transport_directories.md)
+
+### Step 7 - Re-run the observation after each recovery batch
+
+After correcting one or more SSH/transport/link issues, do not trust a single
+manual spot-check alone. Re-run:
+
+```bash
+tools/observe_qkd_rotation.py
+tools/qkd_observation_summary.py
+```
+
+Success criteria:
+
+- `Overall status: OK`; or
+- a strictly smaller set of:
+  - `authorized_keys issues`,
+  - `SCP transport issues`,
+  - `missing_peer_renewals`,
+  - red/orange links.
+
+### Fast interpretation example
+
+If one summary shows:
+
+- one `authorized_keys` issue on a device;
+- several `scp_transport` issues on a small subset of devices;
+- several `missing_peer_renewals` attached to those same devices;
+- many red links that overlap with those devices;
+
+then the correct operator move is:
+
+1. repair the listed SSH/transport devices first;
+2. re-run the observation;
+3. only then spend time on any remaining red links.
+
 ## Related Design/Operations Docs
 
 - [QKD Logging and Customer Reporting](../qkd/logging_and_customer_reporting.md)

@@ -449,6 +449,11 @@ def states_alignment(
 
     if active_a == active_b and pending_a == pending_b and next_a == next_b:
         return "ALIGNED", "Active and pending key state matches bilaterally."
+    if active_a and active_b and active_a == active_b:
+        return (
+            "ACTIVE_MATCH_PENDING_DIVERGENT",
+            "Active key matches bilaterally; pending/next metadata differs between peers.",
+        )
     if (
         active_a
         and active_b
@@ -512,6 +517,13 @@ def classify_link(
     if not macsec_evidence:
         reasons.append("Keys are aligned but no MACsec in-use evidence is in the log window.")
         return "ALIGNED_NO_OP_EVIDENCE", reasons
+
+    if alignment == "ACTIVE_MATCH_PENDING_DIVERGENT":
+        reasons.append(
+            "Bilateral active key matches and both endpoints are secured; "
+            "pending/next divergence is treated as asynchronous pipeline state."
+        )
+        return "HEALTHY", reasons
 
     reasons.append(
         "Bilateral keys align, both endpoints report secured MKA, and MACsec "
@@ -909,9 +921,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
         [
             "## Interpretation",
             "",
-            "- \U0001f7e2 **HEALTHY (green)**: bilateral active/pending keys align, both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence exists.",
+            "- \U0001f7e2 **HEALTHY (green)**: bilateral active key matches (pending/next may differ transiently), both endpoints have secured MKA evidence, no unresolved critical error exists, and MACsec `inuse` evidence exists.",
             "- \U0001f7e0 **DEGRADED (orange)**: evidence is incomplete, unavailable, or captured during a recognized transition; inspect the detailed status and evidence gaps.",
-            "- \U0001f534 **PROBLEMATIC (red)**: confirmed bilateral mismatch, unresolved critical error, or unsecured MKA evidence.",
+            "- \U0001f534 **PROBLEMATIC (red)**: confirmed bilateral active-key mismatch outside expected transition patterns, unresolved critical error, or unsecured MKA evidence.",
             "- Health and rotation completion are independent: a link can be HEALTHY while waiting for the newly installed future keys to activate.",
             "- `MKA KEY NOT CONFIRMED ... ckn_match=False` for a pending future key is expected before its start-time and is not a degradation signal.",
             "",
