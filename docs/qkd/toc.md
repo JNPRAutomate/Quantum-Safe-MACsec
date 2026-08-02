@@ -24,14 +24,20 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 13. [Two-Node script_user / peer_cmd_user Split](script_user_peer_ssh_split_two_node.md)
 14. [Strict Sync + Queue ACK LLD](qkd_onbox_strict_sync_ack_lld.md)
 
+## Troubleshooting
+
+15. [key 0 bootstrap realignment without MACsec flap](troubleshooting/key0_bootstrap_realignment.md)
+16. [SSH identity realignment for etsi_user and etsi_peer_view](troubleshooting/ssh_identity_realignment.md)
+17. [On-box JSON state DB inspection and safe reset](troubleshooting/state_db_json_inspection.md)
+
 ## Release Information
 
-15. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
-16. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
+18. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
+19. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
 
 ## Runtime Policies
 
-17. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
+20. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
 
 ## Historical / Archive
 

@@ -24,6 +24,9 @@ Use this as the starting point for GitHub readers:
 9. `docs/qkd/root_bootstrap_method_2.md`
 10. `docs/qkd/ssh_key_architecture.md`
 11. `docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md`
-12. `docs/qkd/link_master_role_requirements.md`
-13. `docs/qkd/logging_and_customer_reporting.md`
-14. `docs/tools/qkd_post_check_observation_tools.md`
+12. `docs/qkd/troubleshooting/key0_bootstrap_realignment.md`
+13. `docs/qkd/troubleshooting/ssh_identity_realignment.md`
+14. `docs/qkd/troubleshooting/state_db_json_inspection.md`
+15. `docs/qkd/link_master_role_requirements.md`
+16. `docs/qkd/logging_and_customer_reporting.md`
+17. `docs/tools/qkd_post_check_observation_tools.md`

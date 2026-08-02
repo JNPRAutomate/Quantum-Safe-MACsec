@@ -316,6 +316,77 @@ show security macsec connections
 Verificare che active/pending coincidano, che ogni batch modifichi esattamente
 N-2 slot, che gli slot protetti non cambino e che MACsec resti `inuse`.
 
+## 10bis. Troubleshooting safe: riallineamento di `key 0` senza far cadere MACsec
+
+Durante il troubleshooting di recovery/redeploy su device che avevano gia' un
+ring QKD preesistente, e' emerso un failure mode specifico: il bootstrap non
+trova piu' uno `slot 0` realmente seed, ma uno `slot 0` contaminato da stato
+runtime precedente. In pratica, uno dei due lati puo' presentare ancora in
+`key 0` il vecchio active key del ring (o comunque una chiave runtime storica),
+mentre il peer e' tornato al bootstrap seed canonico.
+
+I sintomi tipici sono:
+
+- `SEED ADOPTION BLOCKED ... reason=CKN_MISMATCH`
+- `SEED ADOPTION WAIT ... reason=MKA_SEED_NOT_CONFIRMED`
+- `ROTATION BLOCKED reason=ORCHESTRATOR_SEED_NOT_READY`
+- MKA che resta in `Secured - Fallback` o `Secured - Preceding`
+- `ACTIVE_NOT_BILATERALLY_CONFIRMED` subito dopo una recovery parziale
+
+La regola pratica e' semplice: **prima di recovery invasive, controllare sempre
+`key 0` su entrambi i lati del link**. Per il bootstrap pulito devono essere
+identici:
+
+- `key-name`
+- `secret`
+- `start-time`
+
+Se `key 0` differisce tra i due lati, il bootstrap non puo' convergere.
+
+### Runbook operativo
+
+1. Identificare il peer "sano" del link (source of truth).
+2. Confrontare su entrambi i lati:
+
+   ```text
+   show configuration security authentication-key-chains key-chain <KEYCHAIN>
+   show security mka sessions interface <IFACE>
+   ```
+
+3. Se `key 0` non coincide, riallineare **solo `key 0`** sul lato corrotto
+   copiando dal peer sano:
+   - stesso `key-name`
+   - stesso `secret`
+   - stesso `start-time`
+
+4. Se si sta facendo una vera bootstrap recovery, collassare temporaneamente la
+   keychain a seed-only (`key 0` soltanto), rimuovendo eventuali `key 1/2/3`
+   residue del vecchio ring.
+
+5. Lasciare che il ciclo successivo dello script riparta da li'. Se il fallback
+   MACsec resta configurato, il link puo' normalmente restare `inuse` durante
+   la correzione senza richiedere un hard flap.
+
+### Importante: cosa NON significa
+
+Questo problema **non** indica che il bootstrap generi seed casuali diversi su
+router diversi. Il seed corretto di bootstrap e' deterministico:
+
+```text
+key-name = sha256("<keychain_name>:bootstrap:key-name:0")
+secret   = sha256("<keychain_name>:bootstrap:secret:0")
+```
+
+Se si osserva in `key 0` un `key-name` diverso dal seed atteso, il caso piu'
+probabile e' che il redeploy/recovery non abbia riallineato atomicamente:
+
+1. keychain Junos live;
+2. stato JSON on-box;
+3. sessione MKA realmente in uso.
+
+In quel caso `key 0` puo' ri-materializzarsi come vecchio active runtime del
+ring, e il recovery minimo corretto e' appunto il riallineamento di `key 0`.
+
 ## 11. Confronto con adammmmm/hitless-key-rollover
 
 Il progetto esterno adotta lo stesso principio generale: usa gli start-time
