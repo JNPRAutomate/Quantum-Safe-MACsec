@@ -8,6 +8,7 @@ from tools.observe_qkd_rotation import (
     calculate_schedule,
     countdown_line,
     default_observation_name,
+    stage_wait_reason,
     wait_until,
 )
 
@@ -184,6 +185,14 @@ def test_wait_until_tty_shows_live_countdown():
     assert "T2 snapshot" in output
     assert "remaining" in output
     assert "DONE" in output
+    assert output.endswith("\n\n")
+
+
+def test_stage_wait_reason_describes_policy_windows():
+    schedule = calculate_schedule(policy())
+    assert "baseline" in stage_wait_reason("t1", schedule)
+    assert "execution_interval" in stage_wait_reason("t2", schedule)
+    assert "peer-key" in stage_wait_reason("final", schedule)
 
 
 def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_path):

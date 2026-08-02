@@ -43,6 +43,11 @@ STAGE_DEFINITIONS = (
     ("t2", "t2_post_transaction"),
     ("final", "final_post_activation"),
 )
+STAGE_LABELS = {
+    "t1": "T1 baseline",
+    "t2": "T2 post-transaction",
+    "final": "FINAL post-activation",
+}
 OUTCOME_DISPLAY = {
     "ROTATED_HEALTHY": ("\U0001f7e2", "green"),
     "RECOVERED_ROTATED_HEALTHY": ("\U0001f7e2", "green"),
@@ -201,9 +206,9 @@ def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
         % schedule
     )
     for stage, _, offset_key in (
-        ("T1 baseline", "t1", "t1_offset_seconds"),
-        ("T2 post-transaction", "t2", "t2_offset_seconds"),
-        ("FINAL post-activation", "final", "final_offset_seconds"),
+        (STAGE_LABELS["t1"], "t1", "t1_offset_seconds"),
+        (STAGE_LABELS["t2"], "t2", "t2_offset_seconds"),
+        (STAGE_LABELS["final"], "final", "final_offset_seconds"),
     ):
         offset = int(schedule[offset_key])
         target = start + timedelta(seconds=offset)
@@ -211,6 +216,24 @@ def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
             "  %s: +%ds at %s"
             % (stage, offset, target.astimezone(timezone.utc).isoformat())
         )
+    print(
+        "  rationale: T2 waits execution+grace for transaction/ACK settlement; "
+        "FINAL waits activation horizon (N-2) and peer-key verification window."
+    )
+
+
+def stage_wait_reason(stage: str, schedule: Dict[str, Any]) -> str:
+    if stage == "t1":
+        return "baseline capture at observation start."
+    if stage == "t2":
+        return (
+            "waiting execution_interval + adaptive_grace "
+            "(transaction + ACK settlement window)."
+        )
+    return (
+        "waiting post-activation horizon for N-2 replacement plus peer-key "
+        "verification interval."
+    )
 
 
 def wait_until(
@@ -269,6 +292,7 @@ def wait_until(
             countdown_line(label, remaining=0.0, total=total) + " DONE",
             inline=False,
         )
+        emit_line("", inline=False)
 
 
 def countdown_line(
@@ -882,10 +906,16 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
 
     try:
         for stage, snapshot_name in STAGE_DEFINITIONS:
+            stage_offset = int(offsets[stage])
+            print(
+                "[%s] %s (+%ds)"
+                % (stage.upper(), stage_wait_reason(stage, schedule), stage_offset)
+            )
             wait_until(
-                start_monotonic + int(offsets[stage]),
+                start_monotonic + stage_offset,
                 "%s snapshot" % stage.upper(),
             )
+            print()
             print("[%s] collecting snapshot" % stage.upper())
             snapshot = run_collection(args, observation_dir, snapshot_name)
             snapshots[stage] = snapshot
@@ -897,6 +927,7 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
             )
             write_observation_manifest(manifest_path, "running", schedule, snapshots)
             print("[%s] snapshot and link report complete: %s" % (stage.upper(), snapshot))
+            print()
 
         comparison = build_comparison_report(reports, schedule, snapshots)
         json_path = observation_dir / "qkd_fleet_comparison_report.json"
