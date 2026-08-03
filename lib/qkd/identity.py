@@ -811,6 +811,25 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
+        localhost_auth_failed = (
+            "permission denied" in combined_low
+            and f"{script_user}@127.0.0.1".lower() in combined_low
+        )
+        if localhost_auth_failed:
+            # Fallback: run probe directly via transport user (typically root)
+            # when localhost hop as script_user is not available.
+            fallback = ssh_deploy_cmd(
+                device,
+                cmd,
+                timeout=peer_timeout,
+                include_failed_marker=False,
+            )
+            stdout = fallback.stdout or ""
+            stderr = fallback.stderr or ""
+            combined = f"{stdout}\n{stderr}"
+            combined_low = combined.lower()
+            result = fallback
+
         if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
             return {"peer_ip": peer_ip, "ok": True}
 
