@@ -196,6 +196,7 @@ SSH_HOME_BASE = CONFIG.get("ssh_home_base", "/var/home")
 QKD_KEY_SIZE = 256
 
 DEC_RETRY = int(CONFIG.get("dec_retry", 0))
+INFLIGHT_STUCK_SECONDS = int(CONFIG.get("inflight_stuck_seconds", 600))
 MIN_ROTATION_INTERVAL = int(CONFIG.get("min_rotation_interval", 60))
 KME_FAIL_THRESHOLD = int(CONFIG.get("kme_fail_threshold", 5))
 KME_HOLD_DOWN_SECONDS = int(CONFIG.get("kme_hold_down_seconds", 3600))
@@ -5540,12 +5541,25 @@ def resume_inflight_install(link, state):
         and str(ack.get("status") or "").lower() == "ok"
     )
     if not ack_ok:
+        created_at = transaction.get("created_at") or 0
+        age_seconds = int(time.time()) - created_at
         log(
-            f"{operation} INFLIGHT RETRY ack_id={ack_id} created_at={transaction.get('created_at')}",
+            f"{operation} INFLIGHT RETRY ack_id={ack_id} created_at={created_at} age={age_seconds}s",
             "WARN",
             iface,
             "MASTER",
         )
+        if age_seconds > INFLIGHT_STUCK_SECONDS:
+            pending_start = transaction.get("records", [{}])[0].get("start_time", "unknown")
+            log(
+                f"{operation} INFLIGHT STUCK ack_id={ack_id} age={age_seconds}s "
+                f"stuck_threshold={INFLIGHT_STUCK_SECONDS}s created_at={created_at} "
+                f"pending_start_time={pending_start} "
+                f"action=MANUAL_INTERVENTION_OR_RING_RESET_REQUIRED",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
         if not transaction.get("t2_peer_send_ms"):
             transaction["t2_peer_send_ms"] = int(time.time() * 1000)
             if not save_db_state(peer, iface, state):
