@@ -1156,10 +1156,8 @@ def check_qkd_status_as_script_user(device):
             # Fallback for intermittent localhost-hop auth mismatch:
             # run status via transport auth but impersonate script_user, because
             # qkd_onbox.py status enforces runtime_user == script_user.
-            fallback_cmd = (
-                f"su -m {shlex.quote(script_user)} -c "
-                f"{shlex.quote('cli -c \"' + cmd + '\"')}"
-            )
+            cli_cmd = f'cli -c "{cmd}"'
+            fallback_cmd = f"su -m {shlex.quote(script_user)} -c {shlex.quote(cli_cmd)}"
             result = ssh_deploy_cmd(
                 device,
                 fallback_cmd,
