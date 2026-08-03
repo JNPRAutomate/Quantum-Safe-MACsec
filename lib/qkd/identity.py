@@ -1148,6 +1148,22 @@ def check_qkd_status_as_script_user(device):
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         combined = f"{stdout}\n{stderr}".lower()
+        localhost_auth_failed = (
+            "permission denied" in combined
+            and f"{script_user}@127.0.0.1".lower() in combined
+        )
+        if localhost_auth_failed:
+            # Fallback for intermittent localhost-hop auth mismatch:
+            # run status directly via transport auth.
+            result = ssh_deploy_cmd(
+                device,
+                cmd,
+                timeout=status_timeout,
+                include_failed_marker=False,
+            )
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            combined = f"{stdout}\n{stderr}".lower()
         is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
         if result.returncode == 0:
             break
