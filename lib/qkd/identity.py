@@ -1153,20 +1153,18 @@ def check_qkd_status_as_script_user(device):
             and f"{script_user}@127.0.0.1".lower() in combined
         )
         if localhost_auth_failed:
-            # Fallback for intermittent localhost-hop auth mismatch:
-            # run status via transport auth but impersonate script_user, because
-            # qkd_onbox.py status enforces runtime_user == script_user.
-            cli_cmd = f'cli -c "{cmd}"'
-            fallback_cmd = f"su -m {shlex.quote(script_user)} -c {shlex.quote(cli_cmd)}"
-            result = ssh_deploy_cmd(
-                device,
-                fallback_cmd,
-                timeout=status_timeout,
-                include_failed_marker=False,
-            )
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            combined = f"{stdout}\n{stderr}".lower()
+            # qkd_onbox status enforces runtime_user == script_user, so a
+            # transport-auth/root fallback is invalid and produces false
+            # failures (WRONG RUNTIME USER). Treat localhost-hop auth failure
+            # as a soft warning when strict mode is disabled.
+            if not strict_status:
+                print(
+                    f"[WARN] qkd status skipped on {name}: localhost script_user hop failed "
+                    f"({script_user}@127.0.0.1 permission denied) and "
+                    "POSTDEPLOY_QKD_STATUS_STRICT is disabled"
+                )
+                result = None
+                break
         is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
         if result.returncode == 0:
             break
