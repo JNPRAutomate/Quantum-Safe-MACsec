@@ -1471,6 +1471,23 @@ def handle_validate(args):
     if not isinstance(secrets, dict):
         secrets = {}
 
+    bootstrap_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or secrets.get("default_user")
+        or None
+    )
+    bootstrap_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+        or None
+    )
+
     QKD["SCRIPT_USER"] = (
         os.getenv("QKD_SCRIPT_USER")
         or secrets.get("script_user")
@@ -1486,11 +1503,16 @@ def handle_validate(args):
         or secrets.get("default_password")
     )
 
-    if not resolved_script_password:
+    validate_auth_user = bootstrap_user or QKD["SCRIPT_USER"]
+    validate_auth_password = bootstrap_password or resolved_script_password
+
+    if not validate_auth_password:
         raise RuntimeError(
-            "Missing script-user credentials for validate. Set one of "
-            "QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
-            "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
+            "Missing transport credentials for validate. Set one of "
+            "QKD_BOOTSTRAP_PASSWORD/inventory_base secrets.bootstrap_password/deploy_password/root_password "
+            "or script-user password values "
+            "(QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
+            "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password)."
         )
 
     for _, device in devices.items():
@@ -1500,13 +1522,14 @@ def handle_validate(args):
         if not isinstance(auth, dict):
             auth = {}
             device["auth"] = auth
-        auth["username"] = QKD["SCRIPT_USER"]
-        auth["password"] = resolved_script_password
+        auth["username"] = validate_auth_user
+        auth["password"] = validate_auth_password
 
     QKD["VALIDATE_VERBOSE"] = bool(args.verbose)
 
     print("=== QKD validation ===")
     print(f"phase = {args.phase}")
+    print(f"auth_user = {validate_auth_user}")
     print("")
 
     try:

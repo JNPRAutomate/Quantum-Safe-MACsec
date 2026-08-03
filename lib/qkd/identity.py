@@ -252,8 +252,20 @@ def pyez_shell_cmd(device, command, timeout=60, include_failed_marker=True):
     auth = device.get("auth") or {}
     user = auth.get("username")
     passwd = auth.get("password")
-    if not user or not passwd:
-        return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
+    if not user:
+        return CommandResult(1, "", f"missing auth.username for device {name}")
+    if not passwd:
+        # Key-only fallback for environments where transport auth is SSH key
+        # based and no NETCONF password is available.
+        try:
+            proc = ssh_cmd(device, command, user=user, timeout=timeout)
+        except Exception as e:
+            return CommandResult(1, "", str(e))
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        combined = "\n".join([x for x in (stdout, stderr) if x]).strip()
+        has_error = shell_output_has_error(combined, include_failed_marker=include_failed_marker)
+        return CommandResult(1 if proc.returncode != 0 or has_error else 0, stdout, stderr)
     dev = Device(host=host, user=user, passwd=passwd, port=830, timeout=timeout)
     try:
         dev.open()
