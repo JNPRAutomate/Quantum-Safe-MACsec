@@ -502,6 +502,9 @@ def check_runtime_cleanup_simple(device):
         "rm -f /var/tmp/qkd_db_*.json.*.tmp; "
         "rm -f /var/tmp/qkd_debug*.log; "
         "rm -rf /var/tmp/qkd_onbox_*; "
+        "rm -f /var/tmp/qkd_peer_inbox/* 2>/dev/null || true; "
+        "rm -f /var/tmp/qkd_peer_status/* 2>/dev/null || true; "
+        "rm -f /var/tmp/qkd_peer_ack/* 2>/dev/null || true; "
         "echo ### qkd-runtime-cleanup-done"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=60)
