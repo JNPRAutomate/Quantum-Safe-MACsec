@@ -1154,10 +1154,15 @@ def check_qkd_status_as_script_user(device):
         )
         if localhost_auth_failed:
             # Fallback for intermittent localhost-hop auth mismatch:
-            # run status directly via transport auth using Junos CLI RPC.
-            result = pyez_cli_cmd(
+            # run status via transport auth but impersonate script_user, because
+            # qkd_onbox.py status enforces runtime_user == script_user.
+            fallback_cmd = (
+                f"su -m {shlex.quote(script_user)} -c "
+                f"{shlex.quote('cli -c \"' + cmd + '\"')}"
+            )
+            result = ssh_deploy_cmd(
                 device,
-                cmd,
+                fallback_cmd,
                 timeout=status_timeout,
                 include_failed_marker=False,
             )
