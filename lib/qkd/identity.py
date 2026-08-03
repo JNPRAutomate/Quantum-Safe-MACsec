@@ -477,6 +477,7 @@ def check_script_user_exists(device):
 def check_script_user_home_simple(device):
     device = normalize_device(device)
     name = device_name(device)
+    script_user = qkd_script_user()
     ssh_home = qkd_ssh_home()
     ssh_dir = qkd_ssh_dir()
     cmd = (
