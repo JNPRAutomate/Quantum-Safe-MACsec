@@ -459,6 +459,7 @@ def check_script_user_home_simple(device):
         f"echo ### ssh-dir; "
         f"mkdir -p {ssh_dir}; "
         f"chmod 700 {ssh_dir}; "
+        f"if [ \"$(id -un)\" = \"root\" ]; then chown {script_user} {ssh_dir}; fi; "
         f"ls -ld {ssh_dir}"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=30)
@@ -568,6 +569,7 @@ def check_script_user_ssh_identity(device):
         f"test -f {key_path} || {keygen_cmd}; "
         f"ssh-keygen -y -f {key_path} > {pub_tmp}; "
         f"mv -f {pub_tmp} {pub_path}; "
+        f"if [ \"$(id -un)\" = \"root\" ]; then chown {script_user} {ssh_dir} {key_path} {pub_path}; fi; "
         f"chmod 600 {key_path}; "
         f"chmod 644 {pub_path}; "
         f"ls -l {key_path}; "
@@ -611,6 +613,7 @@ def check_script_user_authorized_keys(device):
         f"test -s {pub_path}; "
         f"touch {auth_path}; "
         f"grep -q -F -x -f {pub_path} {auth_path} || cat {pub_path} >> {auth_path}; "
+        f"if [ \"$(id -un)\" = \"root\" ]; then chown {script_user} {ssh_dir} {auth_path}; fi; "
         f"chmod 600 {auth_path}; "
         f"ls -l {auth_path}; "
         f"wc -l {auth_path}"
