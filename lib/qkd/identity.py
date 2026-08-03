@@ -356,6 +356,32 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
     )
 
 
+def repair_script_user_ssh_state(device):
+    device = normalize_device(device)
+    script_user = qkd_script_user()
+    ssh_dir = qkd_ssh_dir()
+    key_path = qkd_ssh_private_key()
+    pub_path = qkd_ssh_public_key()
+    auth_path = qkd_authorized_keys()
+    cmd = (
+        f"mkdir -p {ssh_dir}; "
+        f"touch {auth_path}; "
+        f"if [ -f {key_path} ]; then chmod 600 {key_path}; fi; "
+        f"if [ -f {pub_path} ]; then chmod 644 {pub_path}; fi; "
+        f"chmod 700 {ssh_dir}; "
+        f"chmod 600 {auth_path}; "
+        f"if [ \"$(id -un)\" = \"root\" ]; then "
+        f"chown {script_user} {ssh_dir} {auth_path}; "
+        f"if [ -f {key_path} ]; then chown {script_user} {key_path}; fi; "
+        f"if [ -f {pub_path} ]; then chown {script_user} {pub_path}; fi; "
+        f"fi; "
+        f"ls -ld {ssh_dir}; "
+        f"ls -l {auth_path}; "
+        f"ls -l {key_path} {pub_path} 2>/dev/null || true"
+    )
+    return ssh_deploy_cmd(device, cmd, timeout=30, include_failed_marker=False)
+
+
 def postdeploy_worker_limit(task_count):
     configured = int(QKD.get("POSTDEPLOY_CONCURRENCY", 8))
     if configured < 1:
@@ -1156,18 +1182,35 @@ def check_qkd_status_as_script_user(device):
             and f"{script_user}@127.0.0.1".lower() in combined
         )
         if localhost_auth_failed:
-            # qkd_onbox status enforces runtime_user == script_user, so a
-            # transport-auth/root fallback is invalid and produces false
-            # failures (WRONG RUNTIME USER). Treat localhost-hop auth failure
-            # as a soft warning when strict mode is disabled.
-            if not strict_status:
-                print(
-                    f"[WARN] qkd status skipped on {name}: localhost script_user hop failed "
-                    f"({script_user}@127.0.0.1 permission denied) and "
-                    "POSTDEPLOY_QKD_STATUS_STRICT is disabled"
+            repair_script_user_ssh_state(device)
+            result = ssh_script_user_onbox_cmd(
+                device,
+                cmd,
+                timeout=status_timeout,
+                include_failed_marker=False,
+            )
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            combined = f"{stdout}\n{stderr}".lower()
+            localhost_auth_failed = (
+                "permission denied" in combined
+                and f"{script_user}@127.0.0.1".lower() in combined
+            )
+            if localhost_auth_failed:
+                direct_status_cmd = f"python3 {qkd_remote_op_script()} action status"
+                fallback_cmd = (
+                    f"su -m {shlex.quote(script_user)} -c "
+                    f"{shlex.quote(direct_status_cmd)}"
                 )
-                result = None
-                break
+                result = ssh_deploy_cmd(
+                    device,
+                    fallback_cmd,
+                    timeout=status_timeout,
+                    include_failed_marker=False,
+                )
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                combined = f"{stdout}\n{stderr}".lower()
         is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
         if result.returncode == 0:
             break
