@@ -1405,30 +1405,39 @@ def handle_deploy(args):
     )
     print_step_banner("4/6", "ONBOX FILE DEPLOY", "END")
 
-    print_step_banner(
-        "5/6",
-        "QKD PROVISIONING",
-        "START",
-        "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
-    )
-    run_provisioning(
-        log=log,
-        dry_run=False,
-        preview=False,
-        ssh_key=args.ssh_key,
-        debug=args.debug,
-        verbose=args.verbose,
-        devices=devices,
-    )
-    print_step_banner("5/6", "QKD PROVISIONING", "END")
-
-    if args.skip_post_validation:
+    if args.shipment_preload:
         print_step_banner(
-            "6/6",
-            "POST-DEPLOY VALIDATION",
+            "5/6",
+            "QKD PROVISIONING",
             "SKIP",
-            "Skipped by CLI option --skip-post-validation.",
+            "Skipped: --shipment-preload stages files only, no router config is applied.",
         )
+    else:
+        print_step_banner(
+            "5/6",
+            "QKD PROVISIONING",
+            "START",
+            "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
+        )
+        run_provisioning(
+            log=log,
+            dry_run=False,
+            preview=False,
+            ssh_key=args.ssh_key,
+            debug=args.debug,
+            verbose=args.verbose,
+            devices=devices,
+        )
+        print_step_banner("5/6", "QKD PROVISIONING", "END")
+
+    if args.skip_post_validation or args.shipment_preload:
+        reason = (
+            "Skipped: --shipment-preload stages empty JSON placeholders only; "
+            "runtime identity validation is not applicable until day-2 full deploy."
+            if args.shipment_preload
+            else "Skipped by CLI option --skip-post-validation."
+        )
+        print_step_banner("6/6", "POST-DEPLOY VALIDATION", "SKIP", reason)
     else:
         print_step_banner(
             "6/6",
