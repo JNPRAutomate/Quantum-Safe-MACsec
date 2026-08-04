@@ -729,19 +729,70 @@ def peer_key_rotation_state_file():
     return f"{STATE_DIR}/qkd_peer_key_rotation.json"
 
 
+def format_epoch_human(epoch_seconds):
+    try:
+        value = int(epoch_seconds)
+    except Exception:
+        return "None"
+    if value <= 0:
+        return "None"
+    return time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(value))
+
+
 def load_peer_key_rotation_state():
     """Load peer SSH key rotation state from disk."""
+    defaults = {
+        "last_rotation_timestamp": 0,
+        "last_rotation_time": "None",
+        "rotation_count": 0,
+    }
     path = Path(peer_key_rotation_state_file())
     if not path.exists():
-        return {"last_rotation_timestamp": 0, "rotation_count": 0}
+        return defaults
     try:
-        return json.loads(path.read_text())
+        raw = json.loads(path.read_text())
     except Exception:
-        return {"last_rotation_timestamp": 0, "rotation_count": 0}
+        return defaults
+
+    if not isinstance(raw, dict):
+        return defaults
+
+    try:
+        last_rotation = int(raw.get("last_rotation_timestamp", 0))
+    except Exception:
+        last_rotation = 0
+    try:
+        rotation_count = int(raw.get("rotation_count", 0))
+    except Exception:
+        rotation_count = 0
+    if rotation_count < 0:
+        rotation_count = 0
+
+    return {
+        "last_rotation_timestamp": last_rotation,
+        "last_rotation_time": format_epoch_human(last_rotation),
+        "rotation_count": rotation_count,
+    }
 
 
 def save_peer_key_rotation_state(state):
     """Save peer SSH key rotation state to disk."""
+    state = dict(state or {})
+    try:
+        last_rotation = int(state.get("last_rotation_timestamp", 0))
+    except Exception:
+        last_rotation = 0
+    try:
+        rotation_count = int(state.get("rotation_count", 0))
+    except Exception:
+        rotation_count = 0
+    if rotation_count < 0:
+        rotation_count = 0
+
+    state["last_rotation_timestamp"] = last_rotation
+    state["last_rotation_time"] = format_epoch_human(last_rotation)
+    state["rotation_count"] = rotation_count
+
     path = Path(peer_key_rotation_state_file())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2))
@@ -5384,8 +5435,13 @@ def select_ring_update_slots(
         # issued key for the slot immediately after active, using the same
         # bilateral install pipeline as a normal rotation, instead of
         # blocking forever.
-        rearm_slot = (active_slot + 1) % int(ring_size)
-        return "RING_REARM", [rearm_slot], None
+        rearm_slots = []
+        slot = (active_slot + 1) % int(ring_size)
+        replacement_count = max(1, int(ring_size) - 2)
+        while len(rearm_slots) < replacement_count and slot != active_slot:
+            rearm_slots.append(slot)
+            slot = (slot + 1) % int(ring_size)
+        return "RING_REARM", rearm_slots, None
     if next_slot != ((active_slot + 1) % int(ring_size)):
         return None, [], "ACTIVE_PENDING_PAIR_NOT_ADJACENT"
 
@@ -5691,13 +5747,12 @@ def run_master_rolling_link(link):
 
     if operation == "RING_REARM":
         log(
-            f"ROTATION SELF_HEAL reason=NO_FUTURE_SLOT_SCHEDULED rearm_slot={target_slots[0]} "
+            f"ROTATION SELF_HEAL reason=NO_FUTURE_SLOT_SCHEDULED rearm_slots={target_slots} "
             f"active_slot={local_active_slot} configured_slots={sorted(local_slots)}",
             "WARN",
             iface,
             "MASTER",
         )
-
     activation_grace = adaptive_activation_grace_seconds(state)
     if operation == "ROLLING_REPLACEMENT":
         if not _slots_consumed_before_active(state, target_slots, local_active_slot):
@@ -5736,9 +5791,20 @@ def run_master_rolling_link(link):
         first_start_epoch = int(time.time()) + activation_grace
 
     if rotation_too_soon(state, MIN_ROTATION_INTERVAL):
+        last_rotation = int(state.get("last_rotation", 0) or 0)
+        now_epoch = int(time.time())
+        age_seconds = max(0, now_epoch - last_rotation) if last_rotation > 0 else 0
+        remaining_seconds = max(0, int(MIN_ROTATION_INTERVAL) - age_seconds)
+        last_rotation_human = (
+            format_next_start_time_with_millis(junos_start_time_from_epoch(last_rotation))
+            if last_rotation > 0
+            else "None"
+        )
         log(
             f"ROTATION SKIP reason=ROTATION_TOO_SOON operation={operation} "
-            f"last_rotation={state.get('last_rotation')}",
+            f"last_rotation_epoch={last_rotation} last_rotation_time={last_rotation_human} "
+            f"age_seconds={age_seconds} min_interval_seconds={int(MIN_ROTATION_INTERVAL)} "
+            f"remaining_seconds={remaining_seconds}",
             "INFO",
             iface,
             "MASTER",
@@ -5931,6 +5997,8 @@ def run_master():
         # Log current peer key rotation state
         log(
             f"PEER-KEY-STATE: interval_seconds={rotation_interval} "
+            f"last_rotation_timestamp={last_rotation} "
+            f"last_rotation_time={format_epoch_human(last_rotation)} "
             f"last_rotation_ago_seconds={seconds_since_last} "
             f"next_rotation_in_seconds={seconds_until_next} "
             f"rotation_count={rotation_count} "
@@ -6369,7 +6437,24 @@ def run_master():
         log(f"ROTATION CHECK pending_key_id=NONE check1_passed=True", "DEBUG", iface, "MASTER")
 
         if rotation_too_soon(state, MIN_ROTATION_INTERVAL):
-            log(f"ROTATION SKIP last_rotation={state.get('last_rotation')} generation={state.get('generation')} reason=ROTATION_TOO_SOON min_interval={MIN_ROTATION_INTERVAL}", "INFO", iface, "MASTER")
+            last_rotation = int(state.get("last_rotation", 0) or 0)
+            now_epoch = int(time.time())
+            age_seconds = max(0, now_epoch - last_rotation) if last_rotation > 0 else 0
+            remaining_seconds = max(0, int(MIN_ROTATION_INTERVAL) - age_seconds)
+            last_rotation_human = (
+                format_next_start_time_with_millis(junos_start_time_from_epoch(last_rotation))
+                if last_rotation > 0
+                else "None"
+            )
+            log(
+                f"ROTATION SKIP reason=ROTATION_TOO_SOON last_rotation_epoch={last_rotation} "
+                f"last_rotation_time={last_rotation_human} age_seconds={age_seconds} "
+                f"min_interval_seconds={int(MIN_ROTATION_INTERVAL)} "
+                f"remaining_seconds={remaining_seconds} generation={state.get('generation')}",
+                "INFO",
+                iface,
+                "MASTER",
+            )
             continue
 
         log(f"ROTATION CHECK check2_passed=True (not too soon)", "DEBUG", iface, "MASTER")
