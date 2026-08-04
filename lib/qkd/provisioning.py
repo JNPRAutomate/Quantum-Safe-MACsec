@@ -271,6 +271,13 @@ def commit_safely(dev, cu, name, sync=True, phase="CONFIG_APPLY", detail=None):
 
     print(f"[{name}] Commit phase={phase} mode={commit_mode}")
 
+    def _is_benign_remote_re_warning(text):
+        low = str(text or "").lower()
+        return (
+            "requires 'l3 vpn' license" in low
+            and "remote load-configuration failed on re0" in low
+        )
+
     try:
         if sync and dual_re:
             cu.commit(sync=True, comment=commit_comment)
@@ -280,6 +287,14 @@ def commit_safely(dev, cu, name, sync=True, phase="CONFIG_APPLY", detail=None):
     except Exception as exc:
         text = str(exc)
         low = text.lower()
+
+        if sync and dual_re and _is_benign_remote_re_warning(text):
+            print(
+                f"[{name}] WARN commit synchronize hit remote RE license warning; "
+                "continuing deploy on active RE"
+            )
+            print(f"[{name}] WARN detail={text}")
+            return
 
         if sync and dual_re and (
             "event script missing" in low
