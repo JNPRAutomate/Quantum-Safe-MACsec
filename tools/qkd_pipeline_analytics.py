@@ -173,7 +173,22 @@ def parse_hhmmss_mmm(time_str: str) -> int:
 
 
 def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Analyze timing records."""
+    """Analyze timing records.
+    
+    The raw cumulative fields in the JSONL are all measured from different
+    start points but snapshot at the same moment (ACK received):
+
+        enc_batch_start ──────────────────────────── ACK received  = master_total
+        local_install_start ──────────────────────── ACK received  = master_commit_ms (raw)
+        peer_send_start ─────────────────────────── ACK received  = master_peer_send_ms (raw)
+        ack_wait_start ──────────────────────────── ACK received  = master_ack_wait_ms (raw)
+
+    So actual step durations are deltas:
+        ENC step    = master_total - master_commit_raw
+        COMMIT step = master_commit_raw - master_peer_send_raw
+        SCP step    = master_peer_send_raw - master_ack_wait_raw
+        ACK poll    = master_ack_wait_raw  (polling interval until slave ACKs)
+    """
     
     if not records:
         return {}
@@ -183,16 +198,19 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         'success_records': sum(1 for r in records if r.get('status') == 'ok'),
         'failed_records': sum(1 for r in records if r.get('status') == 'fail'),
         'success_rate': 0,
-        'master_enc_ms': [],
-        'master_commit_ms': [],
-        'master_send_ms': [],
-        'master_ack_wait_ms': [],
+        # Actual individual step durations (deltas)
+        'master_enc_step_ms': [],
+        'master_commit_step_ms': [],
+        'master_scp_step_ms': [],
+        'master_ack_poll_ms': [],
         'master_total_ms': [],
+        # Slave side (these are already true durations, not cumulative)
         'slave_dec_ms': [],
         'slave_commit_ms': [],
         'slave_total_ms': [],
         'slave_elapsed_from_enqueue_ms': [],
-        'enc_to_dec_ms': [],  # critical: time from master ENC to slave DEC
+        # Critical derived metric
+        'enc_to_dec_ms': [],
     }
     
     stats['success_rate'] = (
@@ -204,27 +222,39 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     for record in records:
         timings = record.get('timings_ms', {})
         
-        master_enc = parse_hhmmss_mmm(timings.get('master_enc_total_ms', 0))
-        master_commit = parse_hhmmss_mmm(timings.get('master_commit_ms', 0))
-        master_send = parse_hhmmss_mmm(timings.get('master_peer_send_ms', 0))
-        master_ack = parse_hhmmss_mmm(timings.get('master_ack_wait_ms', 0))
-        master_total = parse_hhmmss_mmm(timings.get('master_total_enc_to_ack_ms', 0))
+        # Raw cumulative timestamps (all end at ACK received)
+        master_commit_raw = parse_hhmmss_mmm(timings.get('master_commit_ms', 0))
+        master_send_raw   = parse_hhmmss_mmm(timings.get('master_peer_send_ms', 0))
+        master_ack_raw    = parse_hhmmss_mmm(timings.get('master_ack_wait_ms', 0))
+        master_total      = parse_hhmmss_mmm(timings.get('master_total_enc_to_ack_ms', 0))
         
-        slave_dec = parse_hhmmss_mmm(timings.get('slave_dec_total_ms', 0))
-        slave_commit = parse_hhmmss_mmm(timings.get('slave_commit_ms', 0))
-        slave_total = parse_hhmmss_mmm(timings.get('slave_total_ms', 0))
-        slave_elapsed = parse_hhmmss_mmm(timings.get('slave_elapsed_from_enqueue_ms', 0))
+        # Compute actual individual step durations via deltas
+        if master_total > 0 and master_commit_raw > 0:
+            enc_step = master_total - master_commit_raw
+            if enc_step > 0:
+                stats['master_enc_step_ms'].append(enc_step)
         
-        if master_enc > 0:
-            stats['master_enc_ms'].append(master_enc)
-        if master_commit > 0:
-            stats['master_commit_ms'].append(master_commit)
-        if master_send > 0:
-            stats['master_send_ms'].append(master_send)
-        if master_ack > 0:
-            stats['master_ack_wait_ms'].append(master_ack)
+        if master_commit_raw > 0 and master_send_raw > 0:
+            commit_step = master_commit_raw - master_send_raw
+            if commit_step > 0:
+                stats['master_commit_step_ms'].append(commit_step)
+        
+        if master_send_raw > 0 and master_ack_raw > 0:
+            scp_step = master_send_raw - master_ack_raw
+            if scp_step > 0:
+                stats['master_scp_step_ms'].append(scp_step)
+        
+        if master_ack_raw > 0:
+            stats['master_ack_poll_ms'].append(master_ack_raw)
+        
         if master_total > 0:
             stats['master_total_ms'].append(master_total)
+        
+        # Slave side — these are already true durations (not cumulative)
+        slave_dec     = parse_hhmmss_mmm(timings.get('slave_dec_total_ms', 0))
+        slave_commit  = parse_hhmmss_mmm(timings.get('slave_commit_ms', 0))
+        slave_total   = parse_hhmmss_mmm(timings.get('slave_total_ms', 0))
+        slave_elapsed = parse_hhmmss_mmm(timings.get('slave_elapsed_from_enqueue_ms', 0))
         
         if slave_dec > 0:
             stats['slave_dec_ms'].append(slave_dec)
@@ -235,9 +265,9 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         if slave_elapsed > 0:
             stats['slave_elapsed_from_enqueue_ms'].append(slave_elapsed)
         
-        # Key metric: time from master ENC to slave DEC
-        # = total pipeline time - slave processing time + slave dec time
-        # This is how long a key must survive in KME before dec() retrieves it
+        # Key metric: time from master ENC call to slave DEC call
+        # = master_total - slave_elapsed + slave_dec
+        # This is how long a key must survive in KME before the slave retrieves it
         if master_total > 0 and slave_elapsed > 0 and slave_dec > 0:
             enc_to_dec = master_total - slave_elapsed + slave_dec
             if enc_to_dec > 0:
@@ -344,20 +374,29 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
 """
         
         # Master timing table
-        html += "<div class='section'><h2>Master-Side Timing (ENC → COMMIT → SEND → ACK) [MM:SS.mmm]</h2><table>"
-        html += "<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
+        html += """<div class='section'>
+        <h2>Master-Side Timing [MM:SS.mmm]</h2>
+        <div class='summary-box'>
+            All values are <strong>actual durations of each individual step</strong>, computed as deltas
+            from the raw cumulative timestamps in the JSONL records.<br><br>
+            <strong>Pipeline order on master (sequential, blocking):</strong><br>
+            <code>ENC (KME call) → COMMIT (Junos keychain install) → SCP (send to slave) → ACK poll (wait for slave response)</code>
+        </div>
+        <table>"""
+        html += "<tr><th>Step</th><th>What it measures</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
         
-        for op_name, key in [
-            ('Encryption', 'master_enc_ms'),
-            ('Commit (install keys)', 'master_commit_ms'),
-            ('Peer Send (SCP)', 'master_send_ms'),
-            ('ACK Wait', 'master_ack_wait_ms'),
-            ('Total (ENC→ACK)', 'master_total_ms'),
+        for op_name, what, key in [
+            ('ENC',        'Time to call KME and get encrypted key material',               'master_enc_step_ms'),
+            ('COMMIT',     'Time to install keys into Junos keychain (netconf commit)',      'master_commit_step_ms'),
+            ('SCP send',   'Time to upload encrypted batch to slave device via SCP',        'master_scp_step_ms'),
+            ('ACK poll',   'Time waiting for slave to write its ACK file (rotation interval)', 'master_ack_poll_ms'),
+            ('TOTAL',      'Full pipeline: ENC start → ACK received',                       'master_total_ms'),
         ]:
             summary = calc_summary(stats[key])
             if summary.get('count', 0) > 0:
                 html += f"""<tr>
                     <td><strong>{op_name}</strong></td>
+                    <td style="font-size:12px;color:#555">{what}</td>
                     <td>{summary['count']}</td>
                     <td>{ms_to_human(summary['min'])}</td>
                     <td>{ms_to_human(summary['avg'])}</td>
@@ -370,19 +409,28 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         html += "</table></div>"
         
         # Slave timing table
-        html += "<div class='section'><h2>Slave-Side Timing (DEC → COMMIT) [MM:SS.mmm]</h2><table>"
-        html += "<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
+        html += """<div class='section'>
+        <h2>Slave-Side Timing [MM:SS.mmm]</h2>
+        <div class='summary-box'>
+            All slave timers start when the slave event script begins processing the received batch
+            (t=0 is <strong>not</strong> the same as master t=0 — slave starts counting after SCP file arrives).<br><br>
+            <strong>Exception:</strong> <em>Elapsed (enqueue→ACK)</em> starts from when the master wrote
+            the SCP envelope, so it includes network transfer time.
+        </div>
+        <table>"""
+        html += "<tr><th>Step</th><th>What it measures</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
         
-        for op_name, key in [
-            ('Decryption', 'slave_dec_ms'),
-            ('Commit', 'slave_commit_ms'),
-            ('Total Processing', 'slave_total_ms'),
-            ('Elapsed (enqueue→ACK)', 'slave_elapsed_from_enqueue_ms'),
+        for op_name, what, key in [
+            ('DEC',                   'Time to call KME and decrypt each key_id (HTTP GET)',        'slave_dec_ms'),
+            ('COMMIT',                'Time to install decrypted keys into Junos keychain',          'slave_commit_ms'),
+            ('Total processing',      'DEC + COMMIT + state save, from script start to ACK written','slave_total_ms'),
+            ('Elapsed (enqueue→ACK)', 'From master SCP write time to slave ACK written',            'slave_elapsed_from_enqueue_ms'),
         ]:
             summary = calc_summary(stats[key])
             if summary.get('count', 0) > 0:
                 html += f"""<tr>
                     <td><strong>{op_name}</strong></td>
+                    <td style="font-size:12px;color:#555">{what}</td>
                     <td>{summary['count']}</td>
                     <td>{ms_to_human(summary['min'])}</td>
                     <td>{ms_to_human(summary['avg'])}</td>
