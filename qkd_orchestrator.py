@@ -329,13 +329,41 @@ def parse_args():
         help="Disable key-batch rotation mode and use single-key commit cadence.",
     )
 
+    bootstrap = subparsers.add_parser(
+        "bootstrap",
+        help="Bootstrap script user and peer command user on devices",
+        description=(
+            "Bootstrap SCRIPT_USER (etsi_user) and PEER_CMD_USER (etsi_peer_view) on managed devices.\n\n"
+            "This includes:\n"
+            "  - Creating users with appropriate Junos class and login method\n"
+            "  - Generating and syncing SSH public keys\n"
+            "  - Setting up .ssh directory permissions\n\n"
+            "Bootstrap must run before deploy or predeploy validation.\n\n"
+            "Example:\n"
+            "  export QKD_BOOTSTRAP_PASSWORD='<root-password>'\n"
+            "  python3 qkd_orchestrator.py bootstrap\n"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    bootstrap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show bootstrap actions without applying changes.",
+    )
+    bootstrap.add_argument(
+        "-v", "--verbose", action="count", default=0
+    )
+    bootstrap.add_argument("--ssh-key")
+    bootstrap.add_argument("--debug", action="store_true")
+
     deploy = subparsers.add_parser(
         "deploy",
         help="Deploy generated artifacts and Junos configuration to devices",
         description=(
             "Deploy runtime artifacts to devices.\n\n"
             "Normal deploy order:\n"
-            "  1. bootstrap SCRIPT_USER on managed devices\n"
+            "  1. bootstrap SCRIPT_USER on managed devices (separate 'bootstrap' command)\n"
             "  2. predeploy validation\n"
             "  3. deploy qkd_onbox.py\n"
             "  4. render/push/commit Junos configuration\n"
@@ -356,16 +384,6 @@ def parse_args():
     deploy.add_argument("-v", "--verbose", action="count", default=0)
     deploy.add_argument("--ssh-key")
     deploy.add_argument("--debug", action="store_true")
-    deploy.add_argument(
-        "--skip-script-user-bootstrap",
-        action="store_true",
-        help="Skip SCRIPT_USER bootstrap before predeploy validation.",
-    )
-    deploy.add_argument(
-        "--script-user-bootstrap-dry-run",
-        action="store_true",
-        help="Run SCRIPT_USER bootstrap in dry-run mode, then stop before validation/deploy.",
-    )
     deploy.add_argument(
         "--shipment-preload",
         action="store_true",
@@ -1125,6 +1143,89 @@ def handle_create(args):
 
 
 # ---------------------------------------------------------------------------
+# BOOTSTRAP HANDLER
+# ---------------------------------------------------------------------------
+
+
+def handle_bootstrap(args):
+    def print_step_banner(title, state, purpose=None):
+        line = "=" * 88
+        print(line)
+        print(f"=== BOOTSTRAP: {title} [{state}] ===")
+        if purpose:
+            print(f"Purpose: {purpose}")
+        print(line)
+
+    log = setup_logger(verbose=args.verbose)
+    devices = load_runtime_devices()
+    inventory_base = load_inventory_base()
+    secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    bootstrap_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or secrets.get("default_user")
+        or None
+    )
+    bootstrap_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+        or None
+    )
+
+    if args.dry_run:
+        print_step_banner(
+            "SCRIPT_USER DRY-RUN",
+            "START",
+            "Show bootstrap actions without applying changes.",
+        )
+        bootstrap_script_users(
+            devices=devices,
+            repo_root=BASE_DIR,
+            deploy_user=bootstrap_user,
+            deploy_password=bootstrap_password,
+            dry_run=True,
+        )
+        print_step_banner("SCRIPT_USER DRY-RUN", "END")
+        return
+
+    print_step_banner(
+        "SCRIPT_USER",
+        "START",
+        "Bootstrap etsi_user and etsi_peer_view on all managed devices.",
+    )
+    
+    if bootstrap_user and bootstrap_password:
+        print(f"Bootstrap auth source: inventory_base user={bootstrap_user}")
+    else:
+        print("Bootstrap auth source: unresolved")
+    
+    ok, failed = bootstrap_script_users(
+        devices=devices,
+        repo_root=BASE_DIR,
+        deploy_user=bootstrap_user,
+        deploy_password=bootstrap_password,
+        dry_run=False,
+        skip_if_no_deploy_password=False,
+    )
+    
+    if failed:
+        print_step_banner("SCRIPT_USER", "FAILED")
+        raise RuntimeError("QKD bootstrap failed for: " + ", ".join(failed))
+    
+    print_step_banner("SCRIPT_USER", "OK")
+    print("\nBootstrap completed successfully.")
+    print("Next: run 'python3 qkd_orchestrator.py validate --phase predeploy'")
+
+
+# ---------------------------------------------------------------------------
 # DEPLOY HANDLER
 # ---------------------------------------------------------------------------
 
@@ -1192,7 +1293,7 @@ def handle_deploy(args):
 
     if args.preview or args.dry_run:
         print_step_banner(
-            "0/6",
+            "0/5",
             "PREVIEW OR DRY-RUN",
             "START",
             "Render and validate workflow output without modifying devices.",
@@ -1200,11 +1301,11 @@ def handle_deploy(args):
         if args.preview:
             print("=== DEPLOY PREVIEW MODE ===")
             print("Rendering generated Junos configuration only.")
-            print("No script-user bootstrap, device validation, SCP, script install, or commit will be attempted.")
+            print("No device validation, SCP, script install, or commit will be attempted.")
         elif args.dry_run:
             print("=== DEPLOY DRY-RUN MODE ===")
             print("Simulating deploy workflow without applying changes.")
-            print("No script-user bootstrap, SCP, script install, or commit will be attempted.")
+            print("No SCP, script install, or commit will be attempted.")
 
         run_provisioning(
             log=log,
@@ -1214,67 +1315,15 @@ def handle_deploy(args):
             debug=args.debug,
             verbose=args.verbose,
         )
-        print_step_banner("0/6", "PREVIEW OR DRY-RUN", "END")
-        return
-
-    if args.script_user_bootstrap_dry_run:
-        print_step_banner(
-            "1/6",
-            "SCRIPT_USER BOOTSTRAP",
-            "DRY-RUN",
-            "Show script-user bootstrap actions without changing devices.",
-        )
-        bootstrap_script_users(
-            devices=devices,
-            repo_root=BASE_DIR,
-            deploy_user=bootstrap_user,
-            deploy_password=bootstrap_password,
-            dry_run=True,
-        )
-        print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
+        print_step_banner("0/5", "PREVIEW OR DRY-RUN", "END")
         return
 
     print_step_banner(
-        "1/6",
-        "SCRIPT_USER BOOTSTRAP",
+        "1/5",
+        "PRE-DEPLOY VALIDATION",
         "START",
-        "Ensure script user credentials and SSH runtime prerequisites are ready.",
+        "Validate device access and bootstrap readiness.",
     )
-    if not args.skip_script_user_bootstrap:
-        if bootstrap_user and bootstrap_password:
-            print(f"Bootstrap auth source: inventory_base user={bootstrap_user}")
-        else:
-            print("Bootstrap auth source: unresolved")
-        ok, failed = bootstrap_script_users(
-            devices=devices,
-            repo_root=BASE_DIR,
-            deploy_user=bootstrap_user,
-            deploy_password=bootstrap_password,
-            script_auth_mode=script_auth_mode,
-            dry_run=False,
-            # Deploy must fail fast if privileged bootstrap credentials are missing.
-            skip_if_no_deploy_password=False,
-        )
-        if failed:
-            bootstrap_failed = sorted(set(failed))
-            print(
-                "[WARN] SCRIPT_USER bootstrap failed for: %s" % ", ".join(failed)
-            )
-            print(
-                "[WARN] Excluding failed bootstrap devices from this deploy run."
-            )
-            devices = {name: dev for name, dev in devices.items() if name not in set(failed)}
-            if not devices:
-                raise RuntimeError(
-                    "SCRIPT_USER bootstrap failed for all devices; nothing left to deploy."
-                )
-            print(
-                "[INFO] Remaining deploy targets after bootstrap filtering: %s"
-                % ", ".join(sorted(devices.keys()))
-            )
-    else:
-        print("[SKIP] script-user bootstrap skipped by CLI option")
-    print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
 
     if script_auth_mode == "key-only":
         # Always ensure the local account running qkd_orchestrator has the
@@ -1331,20 +1380,20 @@ def handle_deploy(args):
 
     if args.skip_pre_validation:
         print_step_banner(
-            "2/6",
+            "1/5",
             "PRE-DEPLOY VALIDATION",
             "SKIP",
             "Skipped by CLI option --skip-pre-validation.",
         )
     else:
         print_step_banner(
-            "2/6",
+            "1/5",
             "PRE-DEPLOY VALIDATION",
             "START",
             "Validate identity, permissions, scripts, and runtime prerequisites.",
         )
         validate_all_devices(devices, phase="predeploy")
-        print_step_banner("2/6", "PRE-DEPLOY VALIDATION", "END")
+        print_step_banner("1/5", "PRE-DEPLOY VALIDATION", "END")
 
         # After pre-deploy validation, switch transport auth to SCRIPT_USER only
         # when password-based auth is enabled. In key-only mode, keep bootstrap
@@ -1368,7 +1417,7 @@ def handle_deploy(args):
             )
 
     print_step_banner(
-        "3/6",
+        "2/5",
         "ARTIFACT COLLECTION",
         "START",
         "Collect generated on-box script artifacts for managed QKD devices.",
@@ -1387,10 +1436,10 @@ def handle_deploy(args):
             raise RuntimeError(f"[{name}] Missing runtime onbox artifact: {script_path}. Run create first.")
         artifacts.setdefault(name, {})["script"] = script_path
     print(f"Artifacts prepared for devices: {len(artifacts)}")
-    print_step_banner("3/6", "ARTIFACT COLLECTION", "END")
+    print_step_banner("2/5", "ARTIFACT COLLECTION", "END")
 
     print_step_banner(
-        "4/6",
+        "3/5",
         "ONBOX FILE DEPLOY",
         "START",
         "Copy and install qkd_onbox.py on target devices (including dual-RE sync).",
@@ -1403,18 +1452,18 @@ def handle_deploy(args):
         script_password=script_password,
         shipment_preload=args.shipment_preload,
     )
-    print_step_banner("4/6", "ONBOX FILE DEPLOY", "END")
+    print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")
 
     if args.shipment_preload:
         print_step_banner(
-            "5/6",
+            "4/5",
             "QKD PROVISIONING",
             "SKIP",
             "Skipped: --shipment-preload stages files only, no router config is applied.",
         )
     else:
         print_step_banner(
-            "5/6",
+            "4/5",
             "QKD PROVISIONING",
             "START",
             "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
@@ -1428,7 +1477,7 @@ def handle_deploy(args):
             verbose=args.verbose,
             devices=devices,
         )
-        print_step_banner("5/6", "QKD PROVISIONING", "END")
+        print_step_banner("4/5", "QKD PROVISIONING", "END")
 
     if args.skip_post_validation or args.shipment_preload:
         reason = (
@@ -1437,16 +1486,16 @@ def handle_deploy(args):
             if args.shipment_preload
             else "Skipped by CLI option --skip-post-validation."
         )
-        print_step_banner("6/6", "POST-DEPLOY VALIDATION", "SKIP", reason)
+        print_step_banner("5/5", "POST-DEPLOY VALIDATION", "SKIP", reason)
     else:
         print_step_banner(
-            "6/6",
+            "5/5",
             "POST-DEPLOY VALIDATION",
             "START",
             "Validate final runtime behavior, peer reachability, and state health.",
         )
         validate_all_devices(devices, phase="postdeploy")
-        print_step_banner("6/6", "POST-DEPLOY VALIDATION", "END")
+        print_step_banner("5/5", "POST-DEPLOY VALIDATION", "END")
 
     deploy_completed = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
     deploy_skipped = sorted(set(initial_targets) - set(deploy_completed))
@@ -1531,6 +1580,8 @@ def main():
 
     if args.command == "create":
         handle_create(args)
+    elif args.command == "bootstrap":
+        handle_bootstrap(args)
     elif args.command == "deploy":
         handle_deploy(args)
     elif args.command == "clean":
@@ -1538,7 +1589,7 @@ def main():
     elif args.command == "validate":
         handle_validate(args)
     else:
-        print("Use: create | deploy | validate | clean")
+        print("Use: create | bootstrap | deploy | validate | clean")
 
 
 if __name__ == "__main__":
