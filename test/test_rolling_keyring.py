@@ -86,13 +86,13 @@ class TestRollingKeyringPlan:
         assert set(slots) == {0, 3}
         assert {1, 2}.isdisjoint(slots)
 
-    def test_full_ring_without_pending_self_heals_by_rearming_n_minus_two_slots(self):
+    def test_full_ring_without_pending_self_heals_by_rearming_next_slot(self):
         # Every slot is configured but none carries a future start-time (the
         # ring was exhausted, e.g. by a transient rotation failure). Rather
-        # than stalling forever, re-arm the N-2 window starting right after active.
+        # than stalling forever, re-arm the slot right after active.
         assert self.plan({0, 1, 2, 3}, 1, None) == (
             "RING_REARM",
-            [2, 3],
+            [2],
             None,
         )
 

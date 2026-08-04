@@ -270,9 +270,6 @@ def clean_device(name, device, full_macsec=False):
             f"rm -f {op_script_dir}/qkd_onbox_inventory.json",
             f"rm -f {op_script_dir}/qkd_onbox_config.json",
             f"rm -f /var/tmp/{script_name}",
-            "rm -rf /var/tmp/qkd_peer_inbox",
-            "rm -rf /var/tmp/qkd_peer_status",
-            "rm -rf /var/tmp/qkd_peer_ack",
             "rm -f /var/db/scripts/event/qkd.conf",
             f"rm -rf {remote_cert_dir}",
             f"rm -rf {script_dir}/certs",
@@ -470,9 +467,6 @@ def clean_device(name, device, full_macsec=False):
                 f"{op_script_dir}/qkd_onbox_inventory.json",
                 f"{op_script_dir}/qkd_onbox_config.json",
                 f"/var/tmp/{script_name}",
-                "/var/tmp/qkd_peer_inbox",
-                "/var/tmp/qkd_peer_status",
-                "/var/tmp/qkd_peer_ack",
                 "/var/db/scripts/event/qkd.conf",
                 remote_cert_dir,
                 f"{script_dir}/certs",
@@ -551,9 +545,6 @@ def clean_device(name, device, full_macsec=False):
                 f"{op_script_dir}/qkd_onbox_inventory.json",
                 f"{op_script_dir}/qkd_onbox_config.json",
                 f"/var/tmp/{script_name}",
-                "/var/tmp/qkd_peer_inbox",
-                "/var/tmp/qkd_peer_status",
-                "/var/tmp/qkd_peer_ack",
                 "/var/db/scripts/event/qkd.conf",
                 remote_cert_dir,
                 f"{script_dir}/certs",
@@ -784,5 +775,6 @@ def handle_clean(args):
         print("Skipping local cert cleanup. Use --pki to remove certs.")
 
     print("Full clean complete")
+
 
 

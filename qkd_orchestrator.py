@@ -1276,7 +1276,6 @@ def handle_deploy(args):
         print("[SKIP] script-user bootstrap skipped by CLI option")
     print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
 
-    local_private_key_path = None
     if script_auth_mode == "key-only":
         # Always ensure the local account running qkd_orchestrator has the
         # script_user private key available for direct SSH access.
@@ -1310,16 +1309,11 @@ def handle_deploy(args):
     if bootstrap_user:
         QKD["DEPLOY_USER"] = bootstrap_user
 
-    # Pre-deploy should validate the real SCRIPT_USER runtime path when key-only
-    # auth is enabled. Use the locally mirrored script_user key for that phase,
-    # then switch back to bootstrap transport for provisioning/SCP afterwards.
+    # Pre-deploy checks should use bootstrap/deploy transport credentials when
+    # available. SCRIPT_USER credentials are validated by the checks themselves.
     predeploy_auth_user = script_user
     predeploy_auth_password = script_password
-    predeploy_ssh_key = None
-    if script_auth_mode == "key-only" and local_private_key_path:
-        predeploy_auth_password = None
-        predeploy_ssh_key = local_private_key_path
-    elif bootstrap_user and bootstrap_password:
+    if bootstrap_user and bootstrap_password:
         predeploy_auth_user = bootstrap_user
         predeploy_auth_password = bootstrap_password
 
@@ -1332,13 +1326,8 @@ def handle_deploy(args):
             device["auth"] = auth
         auth["username"] = predeploy_auth_user
         auth["password"] = predeploy_auth_password
-        if predeploy_ssh_key:
-            device["deploy_ssh_key"] = predeploy_ssh_key
         device["script_user"] = script_user
-    if predeploy_ssh_key:
-        print(f"Pre-deploy auth source: user={predeploy_auth_user} key={predeploy_ssh_key}")
-    else:
-        print(f"Pre-deploy auth source: user={predeploy_auth_user}")
+    print(f"Pre-deploy auth source: user={predeploy_auth_user}")
 
     if args.skip_pre_validation:
         print_step_banner(
@@ -1416,39 +1405,30 @@ def handle_deploy(args):
     )
     print_step_banner("4/6", "ONBOX FILE DEPLOY", "END")
 
-    if args.shipment_preload:
-        print_step_banner(
-            "5/6",
-            "QKD PROVISIONING",
-            "SKIP",
-            "Skipped: --shipment-preload stages files only, no router config is applied.",
-        )
-    else:
-        print_step_banner(
-            "5/6",
-            "QKD PROVISIONING",
-            "START",
-            "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
-        )
-        run_provisioning(
-            log=log,
-            dry_run=False,
-            preview=False,
-            ssh_key=args.ssh_key,
-            debug=args.debug,
-            verbose=args.verbose,
-            devices=devices,
-        )
-        print_step_banner("5/6", "QKD PROVISIONING", "END")
+    print_step_banner(
+        "5/6",
+        "QKD PROVISIONING",
+        "START",
+        "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
+    )
+    run_provisioning(
+        log=log,
+        dry_run=False,
+        preview=False,
+        ssh_key=args.ssh_key,
+        debug=args.debug,
+        verbose=args.verbose,
+        devices=devices,
+    )
+    print_step_banner("5/6", "QKD PROVISIONING", "END")
 
-    if args.skip_post_validation or args.shipment_preload:
-        reason = (
-            "Skipped: --shipment-preload stages empty JSON placeholders only; "
-            "runtime identity validation is not applicable until day-2 full deploy."
-            if args.shipment_preload
-            else "Skipped by CLI option --skip-post-validation."
+    if args.skip_post_validation:
+        print_step_banner(
+            "6/6",
+            "POST-DEPLOY VALIDATION",
+            "SKIP",
+            "Skipped by CLI option --skip-post-validation.",
         )
-        print_step_banner("6/6", "POST-DEPLOY VALIDATION", "SKIP", reason)
     else:
         print_step_banner(
             "6/6",
@@ -1482,23 +1462,6 @@ def handle_validate(args):
     if not isinstance(secrets, dict):
         secrets = {}
 
-    bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
-        or secrets.get("bootstrap_user")
-        or secrets.get("deploy_user")
-        or secrets.get("default_user")
-        or None
-    )
-    bootstrap_password = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
-        or secrets.get("bootstrap_password")
-        or secrets.get("deploy_password")
-        or secrets.get("root_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-        or secrets.get("default_password")
-        or None
-    )
-
     QKD["SCRIPT_USER"] = (
         os.getenv("QKD_SCRIPT_USER")
         or secrets.get("script_user")
@@ -1514,16 +1477,11 @@ def handle_validate(args):
         or secrets.get("default_password")
     )
 
-    validate_auth_user = bootstrap_user or QKD["SCRIPT_USER"]
-    validate_auth_password = bootstrap_password or resolved_script_password
-
-    if not validate_auth_password:
+    if not resolved_script_password:
         raise RuntimeError(
-            "Missing transport credentials for validate. Set one of "
-            "QKD_BOOTSTRAP_PASSWORD/inventory_base secrets.bootstrap_password/deploy_password/root_password "
-            "or script-user password values "
-            "(QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
-            "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password)."
+            "Missing script-user credentials for validate. Set one of "
+            "QKD_SCRIPT_PASSWORD, inventory_base secrets.script_password/admin_password, "
+            "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
         )
 
     for _, device in devices.items():
@@ -1533,14 +1491,13 @@ def handle_validate(args):
         if not isinstance(auth, dict):
             auth = {}
             device["auth"] = auth
-        auth["username"] = validate_auth_user
-        auth["password"] = validate_auth_password
+        auth["username"] = QKD["SCRIPT_USER"]
+        auth["password"] = resolved_script_password
 
     QKD["VALIDATE_VERBOSE"] = bool(args.verbose)
 
     print("=== QKD validation ===")
     print(f"phase = {args.phase}")
-    print(f"auth_user = {validate_auth_user}")
     print("")
 
     try:

@@ -252,20 +252,8 @@ def pyez_shell_cmd(device, command, timeout=60, include_failed_marker=True):
     auth = device.get("auth") or {}
     user = auth.get("username")
     passwd = auth.get("password")
-    if not user:
-        return CommandResult(1, "", f"missing auth.username for device {name}")
-    if not passwd:
-        # Key-only fallback for environments where transport auth is SSH key
-        # based and no NETCONF password is available.
-        try:
-            proc = ssh_cmd(device, command, user=user, timeout=timeout)
-        except Exception as e:
-            return CommandResult(1, "", str(e))
-        stdout = (proc.stdout or "").strip()
-        stderr = (proc.stderr or "").strip()
-        combined = "\n".join([x for x in (stdout, stderr) if x]).strip()
-        has_error = shell_output_has_error(combined, include_failed_marker=include_failed_marker)
-        return CommandResult(1 if proc.returncode != 0 or has_error else 0, stdout, stderr)
+    if not user or not passwd:
+        return CommandResult(1, "", f"missing auth.username/auth.password for device {name}")
     dev = Device(host=host, user=user, passwd=passwd, port=830, timeout=timeout)
     try:
         dev.open()
@@ -317,19 +305,12 @@ def pyez_cli_cmd(device, command, timeout=60, include_failed_marker=True):
 
 
 def ssh_cmd(device, command, user, timeout=30):
-    device = normalize_device(device)
     host = device_host(device)
-    if command.startswith("op "):
-        remote_command = command
-    elif platform_is_legacy_qfx(device):
-        remote_command = command
-    else:
-        remote_command = "start shell command " + junos_cli_quote(command)
     cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
     deploy_key = device.get("orchestrator_ssh_key") or device.get("deploy_ssh_key")
     if deploy_key:
         cmd.extend(["-i", deploy_key, "-o", "IdentitiesOnly=yes"])
-    cmd.extend([f"{user}@{host}", remote_command])
+    cmd.extend([f"{user}@{host}", command])
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
 
 
@@ -361,30 +342,6 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
         timeout=timeout,
         include_failed_marker=include_failed_marker,
     )
-
-
-def repair_script_user_ssh_state(device):
-    device = normalize_device(device)
-    script_user = qkd_script_user()
-    ssh_dir = qkd_ssh_dir()
-    key_path = qkd_ssh_private_key()
-    pub_path = qkd_ssh_public_key()
-    auth_path = qkd_authorized_keys()
-    cmd = (
-        f"mkdir -p {ssh_dir}; "
-        f"touch {auth_path}; "
-        f"if [ -f {key_path} ]; then chmod 600 {key_path}; fi; "
-        f"if [ -f {pub_path} ]; then chmod 644 {pub_path}; fi; "
-        f"chmod 700 {ssh_dir}; "
-        f"chmod 600 {auth_path}; "
-        f"chown {script_user} {ssh_dir} {auth_path} > /dev/null; "
-        f"if [ -f {key_path} ]; then chown {script_user} {key_path} > /dev/null; fi; "
-        f"if [ -f {pub_path} ]; then chown {script_user} {pub_path} > /dev/null; fi; "
-        f"ls -ld {ssh_dir}; "
-        f"ls -l {auth_path}; "
-        f"ls -l {key_path} {pub_path} 2>/dev/null || true"
-    )
-    return ssh_deploy_cmd(device, cmd, timeout=30, include_failed_marker=False)
 
 
 def postdeploy_worker_limit(task_count):
@@ -545,7 +502,6 @@ def check_runtime_cleanup_simple(device):
         "rm -f /var/tmp/qkd_db_*.json.*.tmp; "
         "rm -f /var/tmp/qkd_debug*.log; "
         "rm -rf /var/tmp/qkd_onbox_*; "
-        "rm -rf /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_status /var/tmp/qkd_peer_ack; "
         "echo ### qkd-runtime-cleanup-done"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=60)
@@ -841,25 +797,6 @@ def check_peer_ssh_from_device(device):
         stderr = result.stderr or ""
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
-
-        localhost_auth_failed = (
-            "permission denied" in combined_low
-            and f"{script_user}@127.0.0.1".lower() in combined_low
-        )
-        if localhost_auth_failed:
-            # Fallback: run probe directly via transport user (typically root)
-            # when localhost hop as script_user is not available.
-            fallback = ssh_deploy_cmd(
-                device,
-                cmd,
-                timeout=peer_timeout,
-                include_failed_marker=False,
-            )
-            stdout = fallback.stdout or ""
-            stderr = fallback.stderr or ""
-            combined = f"{stdout}\n{stderr}"
-            combined_low = combined.lower()
-            result = fallback
 
         if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
             return {"peer_ip": peer_ip, "ok": True}
@@ -1179,40 +1116,6 @@ def check_qkd_status_as_script_user(device):
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         combined = f"{stdout}\n{stderr}".lower()
-        localhost_auth_failed = (
-            "permission denied" in combined
-            and f"{script_user}@127.0.0.1".lower() in combined
-        )
-        if localhost_auth_failed:
-            repair_script_user_ssh_state(device)
-            result = ssh_script_user_onbox_cmd(
-                device,
-                cmd,
-                timeout=status_timeout,
-                include_failed_marker=False,
-            )
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            combined = f"{stdout}\n{stderr}".lower()
-            localhost_auth_failed = (
-                "permission denied" in combined
-                and f"{script_user}@127.0.0.1".lower() in combined
-            )
-            if localhost_auth_failed:
-                direct_status_cmd = f"python3 {qkd_remote_op_script()} action status"
-                fallback_cmd = (
-                    f"su -m {shlex.quote(script_user)} -c "
-                    f"{shlex.quote(direct_status_cmd)}"
-                )
-                result = ssh_deploy_cmd(
-                    device,
-                    fallback_cmd,
-                    timeout=status_timeout,
-                    include_failed_marker=False,
-                )
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
-                combined = f"{stdout}\n{stderr}".lower()
         is_timeout = ("rpctimeouterror" in combined) or ("timeout" in combined)
         if result.returncode == 0:
             break
