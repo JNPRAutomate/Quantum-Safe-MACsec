@@ -61,9 +61,9 @@ Each line is a JSON record:
   "iface": "et-0/0/0",
   "status": "ok",
   "timings_ms": {
-    "master_commit_ms":           "00:01:09:822",
-    "master_peer_send_ms":        "00:01:05:429",
-    "master_ack_wait_ms":         "00:01:02:200",
+    "master_commit_to_ack_ms":           "00:01:09:822",
+    "master_send_to_ack_ms":        "00:01:05:429",
+    "master_ack_to_ack_ms":         "00:01:02:200",
     "master_total_enc_to_ack_ms": "00:01:12:096",
     "slave_dec_total_ms":         "00:00:00:130",
     "slave_commit_ms":            "00:00:02:288",
@@ -92,15 +92,15 @@ enc_batch_start_ms ────────────────────�
 
 local_install_start_ms ────────────────────────── ACK received
                        │                           │
-                       └── master_commit_ms = 69.8s   ⚠ name misleading: also includes SCP + ACK wait!
+                       └── master_commit_to_ack_ms = 69.8s   (COMMIT + SCP + ACK_WAIT)
 
 peer_send_start_ms ─────────────────────── ACK received
                    │                       │
-                   └── master_peer_send_ms = 65.4s   ⚠ also includes ACK wait!
+                   └── master_send_to_ack_ms = 65.4s   (SCP + ACK_WAIT)
 
 ack_wait_start_ms ─────────── ACK received
                   │            │
-                  └── master_ack_wait_ms = 62.2s   ✓ true duration (ACK poll only)
+                  └── master_ack_to_ack_ms = 62.2s   ✓ true duration (ACK poll only)
 ```
 
 ### Computing actual step durations (deltas)
@@ -109,10 +109,10 @@ To get the real duration of each individual step, subtract adjacent cumulative v
 
 | Step | Formula | Example |
 |------|---------|---------|
-| **ENC** (KME HTTP call) | `master_total − master_commit_ms` | 72 − 69.8 = **2.2s** |
-| **COMMIT** (Junos keychain install) | `master_commit_ms − master_peer_send_ms` | 69.8 − 65.4 = **4.4s** |
-| **SCP send** (upload to slave) | `master_peer_send_ms − master_ack_wait_ms` | 65.4 − 62.2 = **3.2s** |
-| **ACK poll** (wait for slave ACK file) | `master_ack_wait_ms` (no delta needed) | **62.2s** |
+| **ENC** (KME HTTP call) | `master_total − master_commit_to_ack_ms` | 72 − 69.8 = **2.2s** |
+| **COMMIT** (Junos keychain install) | `master_commit_to_ack_ms − master_send_to_ack_ms` | 69.8 − 65.4 = **4.4s** |
+| **SCP send** (upload to slave) | `master_send_to_ack_ms − master_ack_to_ack_ms` | 65.4 − 62.2 = **3.2s** |
+| **ACK poll** (wait for slave ACK file) | `master_ack_to_ack_ms` (no delta needed) | **62.2s** |
 | **TOTAL** | `master_total_enc_to_ack_ms` (no delta needed) | **72s** |
 
 The report computes and displays these deltas automatically. The "Computed as (JSONL delta)" column in the HTML table shows the exact formula for each row.

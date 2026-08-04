@@ -179,9 +179,9 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     start points but snapshot at the same moment (ACK received):
 
         enc_batch_start ──────────────────────────── ACK received  = master_total
-        local_install_start ──────────────────────── ACK received  = master_commit_ms (raw)
-        peer_send_start ─────────────────────────── ACK received  = master_peer_send_ms (raw)
-        ack_wait_start ──────────────────────────── ACK received  = master_ack_wait_ms (raw)
+        local_install_start ──────────────────────── ACK received  = master_commit_to_ack_ms (raw)
+        peer_send_start ─────────────────────────── ACK received  = master_send_to_ack_ms (raw)
+        ack_wait_start ──────────────────────────── ACK received  = master_ack_to_ack_ms (raw)
 
     So actual step durations are deltas:
         ENC step    = master_total - master_commit_raw
@@ -223,9 +223,9 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         timings = record.get('timings_ms', {})
         
         # Raw cumulative timestamps (all end at ACK received)
-        master_commit_raw = parse_hhmmss_mmm(timings.get('master_commit_ms', 0))
-        master_send_raw   = parse_hhmmss_mmm(timings.get('master_peer_send_ms', 0))
-        master_ack_raw    = parse_hhmmss_mmm(timings.get('master_ack_wait_ms', 0))
+        master_commit_raw = parse_hhmmss_mmm(timings.get('master_commit_to_ack_ms', 0))
+        master_send_raw   = parse_hhmmss_mmm(timings.get('master_send_to_ack_ms', 0))
+        master_ack_raw    = parse_hhmmss_mmm(timings.get('master_ack_to_ack_ms', 0))
         master_total      = parse_hhmmss_mmm(timings.get('master_total_enc_to_ack_ms', 0))
         
         # Compute actual individual step durations via deltas
@@ -468,26 +468,26 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
           <text x="0"   y="31" font-size="11" fill="#2c3e50" font-weight="bold">enc_batch_start_ms</text>
           <text x="0"   y="44" font-size="10" fill="#2c3e50">→ master_total_enc_to_ack_ms = 72s</text>
 
-          <!-- Row 2: master_commit_ms  starts at x=195  (COMMIT+SCP+ACK_WAIT) -->
+          <!-- Row 2: master_commit_to_ack_ms  starts at x=195  (COMMIT+SCP+ACK_WAIT) -->
           <line x1="195" y1="75" x2="750" y2="75" stroke="#c0392b" stroke-width="3"/>
           <circle cx="195" cy="75" r="4" fill="#c0392b"/>
           <circle cx="750" cy="75" r="4" fill="#e74c3c"/>
           <text x="0"   y="71" font-size="11" fill="#c0392b" font-weight="bold">local_install_start_ms</text>
-          <text x="0"   y="80" font-size="10" fill="#c0392b">→ master_commit_ms = 69.8s  ⚠ name misleading!</text>
+          <text x="0"   y="80" font-size="10" fill="#c0392b">→ master_commit_to_ack_ms = 69.8s  (COMMIT + SCP + ACK_WAIT)</text>
 
-          <!-- Row 3: master_peer_send_ms  starts at x=345  (SCP+ACK_WAIT) -->
+          <!-- Row 3: master_send_to_ack_ms  starts at x=345  (SCP+ACK_WAIT) -->
           <line x1="345" y1="115" x2="750" y2="115" stroke="#e67e22" stroke-width="3"/>
           <circle cx="345" cy="115" r="4" fill="#e67e22"/>
           <circle cx="750" cy="115" r="4" fill="#e74c3c"/>
           <text x="0"   y="111" font-size="11" fill="#e67e22" font-weight="bold">peer_send_start_ms</text>
-          <text x="0"   y="120" font-size="10" fill="#e67e22">→ master_peer_send_ms = 65.4s  ⚠ includes ACK wait!</text>
+          <text x="0"   y="120" font-size="10" fill="#e67e22">→ master_send_to_ack_ms = 65.4s  (SCP + ACK_WAIT)</text>
 
-          <!-- Row 4: master_ack_wait_ms  starts at x=495  (ACK_WAIT only) -->
+          <!-- Row 4: master_ack_to_ack_ms  starts at x=495  (ACK_WAIT only) -->
           <line x1="495" y1="155" x2="750" y2="155" stroke="#7f8c8d" stroke-width="3"/>
           <circle cx="495" cy="155" r="4" fill="#7f8c8d"/>
           <circle cx="750" cy="155" r="4" fill="#e74c3c"/>
           <text x="0"   y="151" font-size="11" fill="#7f8c8d" font-weight="bold">ack_wait_start_ms</text>
-          <text x="0"   y="160" font-size="10" fill="#7f8c8d">→ master_ack_wait_ms = 62.2s  ✓ true duration</text>
+          <text x="0"   y="160" font-size="10" fill="#7f8c8d">→ master_ack_to_ack_ms = 62.2s  ✓ true duration</text>
 
           <!-- delta braces between start points -->
           <!-- ENC delta: 50→195 -->
@@ -519,13 +519,13 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         
         for op_name, what, formula, key in [
             ('ENC',      'KME HTTP call: request encrypted key material',
-             'master_total_enc_to_ack<br>− master_commit_ms',           'master_enc_step_ms'),
+             'master_total_enc_to_ack<br>− master_commit_to_ack_ms',           'master_enc_step_ms'),
             ('COMMIT',   'Junos netconf commit: install keys into keychain',
-             'master_commit_ms<br>− master_peer_send_ms',               'master_commit_step_ms'),
+             'master_commit_to_ack_ms<br>− master_send_to_ack_ms',               'master_commit_step_ms'),
             ('SCP send', 'Network upload of encrypted batch to slave',
-             'master_peer_send_ms<br>− master_ack_wait_ms',             'master_scp_step_ms'),
+             'master_send_to_ack_ms<br>− master_ack_to_ack_ms',             'master_scp_step_ms'),
             ('ACK poll', 'Polling wait until slave writes its ACK file (= rotation interval)',
-             'master_ack_wait_ms<br>(true duration, no delta needed)',   'master_ack_poll_ms'),
+             'master_ack_to_ack_ms<br>(true duration, no delta needed)',   'master_ack_poll_ms'),
             ('TOTAL',    'Full master pipeline: ENC start → ACK received',
              'master_total_enc_to_ack_ms<br>(raw field, all steps)',     'master_total_ms'),
         ]:

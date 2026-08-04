@@ -5842,9 +5842,9 @@ def resume_inflight_install(link, state):
             t1 = int(transaction.get("t1_commit_finished_ms") or 0)
             t2 = int(transaction.get("t2_peer_send_ms") or 0)
             if t0 > 0 and t1 >= t0:
-                snapshot["master_commit_ms"] = int(t1 - t0)
+                snapshot["master_commit_to_ack_ms"] = int(t1 - t0)
             if t1 > 0 and t2 >= t1:
-                snapshot["master_peer_send_ms"] = int(t2 - t1)
+                snapshot["master_send_to_ack_ms"] = int(t2 - t1)
             enc_total = int(transaction.get("enc_total_ms") or 0)
             if enc_total > 0:
                 snapshot["master_enc_total_ms"] = enc_total
@@ -5927,8 +5927,8 @@ def resume_inflight_install(link, state):
             ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
             ack_status_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
             timing_snapshot = _inflight_timing_snapshot()
-            timing_snapshot["master_peer_send_ms"] = int(elapsed_ms(peer_send_start_ms))
-            timing_snapshot["master_ack_wait_ms"] = int(elapsed_ms(ack_wait_start_ms))
+            timing_snapshot["master_send_to_ack_ms"] = int(elapsed_ms(peer_send_start_ms))
+            timing_snapshot["master_ack_to_ack_ms"] = int(elapsed_ms(ack_wait_start_ms))
             if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
                 timing_snapshot.update(ack_payload.get("timings_ms"))
             append_rolling_pipeline_timing_record(
@@ -6345,8 +6345,8 @@ def run_master_rolling_link(link):
             status="fail",
             timings_ms={
                 "master_enc_total_ms": int(enc_total_ms),
-                "master_commit_ms": int(elapsed_ms(local_commit_start_ms)),
-                "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
+                "master_commit_to_ack_ms": int(elapsed_ms(local_commit_start_ms)),
+                "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
             },
             reason_code="PEER_TRANSPORT_FAILED",
             reason_stage="MASTER_SCP_SEND",
@@ -6367,9 +6367,9 @@ def run_master_rolling_link(link):
         ack_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
         timing_snapshot = {
             "master_enc_total_ms": int(enc_total_ms),
-            "master_commit_ms": int(elapsed_ms(local_commit_start_ms)),
-            "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
-            "master_ack_wait_ms": int(elapsed_ms(ack_wait_start_ms)),
+            "master_commit_to_ack_ms": int(elapsed_ms(local_commit_start_ms)),
+            "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
+            "master_ack_to_ack_ms": int(elapsed_ms(ack_wait_start_ms)),
             "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
         }
         if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
@@ -7103,8 +7103,8 @@ def run_master():
                     status="fail",
                     timings_ms={
                         "master_enc_total_ms": int(elapsed_ms(enc_batch_start_ms)),
-                        "master_commit_ms": int(elapsed_ms(local_install_start_ms)),
-                        "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
+                        "master_commit_to_ack_ms": int(elapsed_ms(local_install_start_ms)),
+                        "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
                     },
                     reason_code="PEER_INSTALL_KEY_BATCH_FAILED",
                     reason_stage="MASTER_SCP_SEND",
@@ -7118,9 +7118,9 @@ def run_master():
                 ack_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
                 timing_snapshot = {
                     "master_enc_total_ms": int(elapsed_ms(enc_batch_start_ms)),
-                    "master_commit_ms": int(elapsed_ms(local_install_start_ms)),
-                    "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
-                    "master_ack_wait_ms": int(elapsed_ms(ack_wait_start_ms)),
+                    "master_commit_to_ack_ms": int(elapsed_ms(local_install_start_ms)),
+                    "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
+                    "master_ack_to_ack_ms": int(elapsed_ms(ack_wait_start_ms)),
                     "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
                 }
                 if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
