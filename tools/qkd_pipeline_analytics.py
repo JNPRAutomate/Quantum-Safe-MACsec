@@ -336,7 +336,7 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         
         # Master timing table
         html += "<div class='section'><h2>Master-Side Timing (ENC → COMMIT → SEND → ACK) [MM:SS.mmm]</h2><table>"
-        html += "<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95th %ile</th><th>99th %ile</th><th>Max</th></tr>"
+        html += "<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
         
         for op_name, key in [
             ('Encryption', 'master_enc_ms'),
@@ -362,7 +362,7 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         
         # Slave timing table
         html += "<div class='section'><h2>Slave-Side Timing (DEC → COMMIT) [MM:SS.mmm]</h2><table>"
-        html += "<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95th %ile</th><th>99th %ile</th><th>Max</th></tr>"
+        html += "<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
         
         for op_name, key in [
             ('Decryption', 'slave_dec_ms'),
