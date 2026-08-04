@@ -37,6 +37,22 @@ need_cmd() {
 need_cmd vault
 need_cmd jq
 
+vault_status_json() {
+  local out
+  if out="$(vault status -format=json 2>/dev/null)"; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  # vault status exits non-zero for valid states (e.g., sealed=2, uninitialized=1).
+  # As long as JSON is present, treat it as usable.
+  if [[ -n "${out:-}" ]]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  echo "ERROR: unable to read Vault status from $VAULT_ADDR" >&2
+  return 1
+}
+
 discover_init_file() {
   local candidates=(
     "$VAULT_INIT_FILE"
@@ -54,7 +70,7 @@ discover_init_file() {
 mkdir -p "$QKD_CONFIG_DIR"
 chmod 700 "$QKD_CONFIG_DIR"
 
-status_json="$(vault status -format=json)"
+status_json="$(vault_status_json)"
 initialized="$(jq -r '.initialized' <<<"$status_json")"
 sealed="$(jq -r '.sealed' <<<"$status_json")"
 
@@ -76,7 +92,7 @@ if [[ -f "$VAULT_INIT_FILE" ]]; then
   [[ -n "$ROOT_TOKEN" ]] || ROOT_TOKEN="$(awk -F': ' '/Initial Root Token/ {print $2}' "$VAULT_INIT_FILE" | tr -d '\r\n')"
 fi
 
-status_json="$(vault status -format=json)"
+status_json="$(vault_status_json)"
 sealed="$(jq -r '.sealed' <<<"$status_json")"
 if [[ "$sealed" == "true" ]]; then
   if [[ -z "$UNSEAL_KEY" ]]; then
