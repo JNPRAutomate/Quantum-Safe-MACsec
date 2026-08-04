@@ -6,37 +6,226 @@ Analyzes end-to-end pipeline timing from rolling and batch operations,
 generates reports on KME key validity (200 vs 404), and identifies performance
 bottlenecks.
 
+This tool runs OFFLINE on analysis machine, fetches timing JSONL files via SCP
+from QKD devices (via inventory), analyzes them, and generates a report.
+
 Usage:
-    python3 qkd_pipeline_analytics.py [--log-dir /var/home/etsi_user/logs] [--output report.html]
+    # Collect from all devices in inventory and analyze
+    python3 qkd_pipeline_analytics.py \
+      --inventory config/inventory/input/ring_mx_acx_unified_link_driven.yml \
+      --base-inventory config/inventory/inventory_base.yaml \
+      --output report.html
+    
+    # Analyze local files (for testing/offline mode)
+    python3 qkd_pipeline_analytics.py \
+      --local-files /tmp/timing1.jsonl,/tmp/timing2.jsonl \
+      --output report.html --json
 """
 
-import json
-import sys
+from __future__ import annotations
+
 import argparse
-from pathlib import Path
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 from collections import defaultdict
-import statistics
+
+import yaml
 
 
-def parse_hhmmss_mmm(time_str):
-    """Parse HH:MM:SS:mmm format to milliseconds."""
-    if not time_str or ':' not in time_str:
-        return 0
-    parts = str(time_str).split(':')
-    if len(parts) != 4:
-        return 0
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_INVENTORY = (
+    ROOT / "config" / "inventory" / "input" / "ring_mx_acx_unified_link_driven.yml"
+)
+DEFAULT_BASE_INVENTORY = ROOT / "config" / "inventory" / "inventory_base.yaml"
+DEFAULT_REMOTE_PATH = "/var/home/etsi_user/logs"
+
+
+@dataclass
+class Device:
+    """Device specification for log collection."""
+    name: str
+    hostname: str
+    address: str
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Analyze QKD pipeline timing and KME key validity (OFFLINE)",
+    )
+    
+    device_group = parser.add_argument_group('Device mode (fetch via SCP)')
+    device_group.add_argument(
+        "--inventory",
+        type=Path,
+        default=DEFAULT_INVENTORY,
+        help="Device inventory YAML (default: %(default)s)",
+    )
+    device_group.add_argument(
+        "--base-inventory",
+        type=Path,
+        default=DEFAULT_BASE_INVENTORY,
+        help="Base inventory containing script_user (default: %(default)s)",
+    )
+    device_group.add_argument(
+        "--remote-path",
+        default=DEFAULT_REMOTE_PATH,
+        help="Remote log directory on devices (default: %(default)s)",
+    )
+    device_group.add_argument(
+        "--user",
+        help="SSH user; defaults to secrets.script_user from base inventory",
+    )
+    device_group.add_argument(
+        "--identity-file",
+        type=Path,
+        help="SSH private key for auth",
+    )
+    device_group.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help="Parallel collection jobs (default: %(default)s)",
+    )
+    
+    local_group = parser.add_argument_group('Local file mode')
+    local_group.add_argument(
+        "--local-files",
+        help="Comma-separated list of local JSONL files to analyze",
+    )
+    
+    output_group = parser.add_argument_group('Output')
+    output_group.add_argument(
+        "--output",
+        default="qkd_pipeline_report.html",
+        help="Output report file (default: %(default)s)",
+    )
+    output_group.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON instead of HTML",
+    )
+    
+    return parser.parse_args()
+
+
+def load_inventory(inv_path: Path) -> Dict[str, Any]:
+    """Load YAML inventory."""
+    if not inv_path.exists():
+        raise FileNotFoundError(f"Inventory not found: {inv_path}")
+    
+    with open(inv_path, 'r') as f:
+        return yaml.safe_load(f) or {}
+
+
+def get_script_user(base_inv_path: Path) -> str:
+    """Extract script_user from base inventory."""
+    inv = load_inventory(base_inv_path)
+    
+    # Navigate to secrets.script_user
+    secrets = inv.get("secrets", {})
+    if isinstance(secrets, dict):
+        user = secrets.get("script_user")
+        if user:
+            return user
+    
+    raise ValueError("Could not find secrets.script_user in base inventory")
+
+
+def parse_devices_from_inventory(inv: Dict[str, Any]) -> List[Device]:
+    """Extract device list from inventory."""
+    devices = []
+    
+    # Typically structured as:
+    # endpoints:
+    #   <device_name>:
+    #     hostname: <hostname>
+    #     address: <ip>
+    
+    endpoints = inv.get("endpoints", {})
+    if not isinstance(endpoints, dict):
+        return devices
+    
+    for name, spec in endpoints.items():
+        if isinstance(spec, dict):
+            devices.append(Device(
+                name=name,
+                hostname=spec.get("hostname", name),
+                address=spec.get("address", ""),
+            ))
+    
+    return devices
+
+
+def fetch_timing_file_from_device(
+    device: Device,
+    user: str,
+    remote_path: str,
+    local_dir: Path,
+    filename: str,
+    identity_file: Optional[Path] = None,
+) -> Optional[Path]:
+    """Fetch single timing JSONL file from device via SCP."""
+    
+    remote_file = f"{user}@{device.address}:{remote_path}/pipeline_timing/{filename}"
+    local_file = local_dir / f"{device.name}_{filename}"
+    
+    cmd = ["scp", "-q"]
+    if identity_file:
+        cmd.extend(["-i", str(identity_file)])
+    cmd.extend([remote_file, str(local_file)])
+    
     try:
-        h, m, s, ms = map(int, parts)
-        return (h * 3600 + m * 60 + s) * 1000 + ms
-    except (ValueError, IndexError):
-        return 0
+        result = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+        
+        if result.returncode == 0 and local_file.exists():
+            return local_file
+        else:
+            return None
+    except subprocess.TimeoutExpired:
+        return None
+    except Exception:
+        return None
 
 
-def load_timing_records(file_path):
+def fetch_timing_files_from_device(
+    device: Device,
+    user: str,
+    remote_path: str,
+    local_dir: Path,
+    identity_file: Optional[Path] = None,
+) -> List[Path]:
+    """Fetch all timing JSONL files from device."""
+    
+    files = []
+    filenames = [
+        "qkd_rolling_pipeline_timing.jsonl",
+        "qkd_batch_pipeline_timing.jsonl",
+    ]
+    
+    for fname in filenames:
+        f = fetch_timing_file_from_device(
+            device, user, remote_path, local_dir, fname, identity_file
+        )
+        if f:
+            files.append(f)
+    
+    return files
+
+
+def load_timing_records(file_path: Path) -> List[Dict[str, Any]]:
     """Load JSONL timing records from file."""
     records = []
-    if not Path(file_path).exists():
+    
+    if not file_path.exists():
         return records
     
     try:
@@ -49,17 +238,33 @@ def load_timing_records(file_path):
                     record = json.loads(line)
                     records.append(record)
                 except json.JSONDecodeError as e:
-                    print(f"WARN: Failed to parse line {line_num} in {file_path}: {e}", file=sys.stderr)
+                    print(f"WARN: Line {line_num} in {file_path.name}: {e}", file=sys.stderr)
     except Exception as e:
-        print(f"ERROR: Failed to read {file_path}: {e}", file=sys.stderr)
+        print(f"ERROR: {file_path}: {e}", file=sys.stderr)
     
     return records
 
 
-def analyze_records(records):
+def parse_hhmmss_mmm(time_str: str) -> int:
+    """Parse HH:MM:SS:mmm format to milliseconds."""
+    if not time_str or ':' not in str(time_str):
+        return 0
+    
+    try:
+        parts = str(time_str).split(':')
+        if len(parts) != 4:
+            return 0
+        h, m, s, ms = map(int, parts)
+        return (h * 3600 + m * 60 + s) * 1000 + ms
+    except (ValueError, IndexError):
+        return 0
+
+
+def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze timing records and extract statistics."""
+    
     if not records:
-        return None
+        return {}
     
     stats = {
         'total_records': len(records),
@@ -79,12 +284,15 @@ def analyze_records(records):
         'slave_elapsed_from_enqueue_ms': [],
     }
     
-    stats['success_rate'] = (stats['success_records'] / stats['total_records'] * 100) if stats['total_records'] > 0 else 0
+    stats['success_rate'] = (
+        (stats['success_records'] / stats['total_records'] * 100)
+        if stats['total_records'] > 0
+        else 0
+    )
     
     for record in records:
         operation = record.get('operation', 'UNKNOWN')
         device = record.get('device', 'UNKNOWN')
-        status = record.get('status', 'unknown')
         timings = record.get('timings_ms', {})
         
         stats['by_operation'][operation]['count'] += 1
@@ -128,7 +336,7 @@ def analyze_records(records):
     return stats
 
 
-def calc_summary(values):
+def calc_summary(values: List[int]) -> Dict[str, float]:
     """Calculate min/avg/p50/p95/p99/max from a list of values."""
     if not values:
         return {}
@@ -147,7 +355,7 @@ def calc_summary(values):
     }
 
 
-def ms_to_human(ms):
+def ms_to_human(ms: int) -> str:
     """Convert milliseconds to HH:MM:SS.mmm format."""
     if ms < 0:
         return "0ms"
@@ -167,11 +375,11 @@ def ms_to_human(ms):
         return f"{seconds:02d}.{remaining_ms:03d}"
 
 
-def generate_html_report(stats, rolling_records, batch_records, output_path):
+def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
     """Generate HTML report."""
-    html_parts = []
     
-    html_parts.append("""<!DOCTYPE html>
+    html_parts = [
+        """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -192,7 +400,6 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
         .warning { color: #e67e22; }
         .danger { color: #e74c3c; }
         .summary-box { background: #f9f9f9; padding: 15px; border-left: 4px solid #1e3c72; margin: 10px 0; }
-        .chart-container { margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -200,10 +407,13 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
         <h1>QKD Pipeline Analytics Report</h1>
         <p>Generated: """ + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """</p>
     </div>
-""")
+"""
+    ]
     
-    if stats:
-        # Summary section
+    if not stats or stats.get('total_records', 0) == 0:
+        html_parts.append("<div class='section'><p><strong>No records to analyze.</strong></p></div>")
+    else:
+        # Summary
         html_parts.append(f"""
     <div class="section">
         <h2>Pipeline Summary</h2>
@@ -226,9 +436,8 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
     </div>
 """)
         
-        # Master-side timing analysis
+        # Master timing
         html_parts.append("<div class='section'><h2>Master-Side Timing</h2>")
-        
         master_summaries = {
             'Encryption': calc_summary(stats['master_enc_ms']),
             'Commit (install keys)': calc_summary(stats['master_commit_ms']),
@@ -239,7 +448,6 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
         
         html_parts.append("<table>")
         html_parts.append("<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>P50</th><th>P95</th><th>P99</th><th>Max</th></tr>")
-        
         for op_name, summary in master_summaries.items():
             if summary.get('count', 0) > 0:
                 html_parts.append(f"""<tr>
@@ -252,13 +460,10 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
                     <td>{ms_to_human(summary['p99'])}</td>
                     <td>{ms_to_human(summary['max'])}</td>
                 </tr>""")
+        html_parts.append("</table></div>")
         
-        html_parts.append("</table>")
-        html_parts.append("</div>")
-        
-        # Slave-side timing analysis
+        # Slave timing
         html_parts.append("<div class='section'><h2>Slave-Side Timing</h2>")
-        
         slave_summaries = {
             'Decryption': calc_summary(stats['slave_dec_ms']),
             'Commit': calc_summary(stats['slave_commit_ms']),
@@ -268,7 +473,6 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
         
         html_parts.append("<table>")
         html_parts.append("<tr><th>Operation</th><th>Count</th><th>Min</th><th>Avg</th><th>P50</th><th>P95</th><th>P99</th><th>Max</th></tr>")
-        
         for op_name, summary in slave_summaries.items():
             if summary.get('count', 0) > 0:
                 html_parts.append(f"""<tr>
@@ -281,169 +485,126 @@ def generate_html_report(stats, rolling_records, batch_records, output_path):
                     <td>{ms_to_human(summary['p99'])}</td>
                     <td>{ms_to_human(summary['max'])}</td>
                 </tr>""")
+        html_parts.append("</table></div>")
         
-        html_parts.append("</table>")
-        html_parts.append("</div>")
-        
-        # Analysis by operation
-        html_parts.append("<div class='section'><h2>Performance by Operation Type</h2>")
-        html_parts.append("<table>")
-        html_parts.append("<tr><th>Operation</th><th>Count</th><th>Avg Total Time</th><th>Min</th><th>Max</th></tr>")
-        
-        for op_type, op_stats in stats['by_operation'].items():
-            if op_stats['times']:
-                avg_time = sum(op_stats['times']) / len(op_stats['times'])
-                html_parts.append(f"""<tr>
-                    <td><strong>{op_type}</strong></td>
-                    <td>{op_stats['count']}</td>
-                    <td>{ms_to_human(avg_time)}</td>
-                    <td>{ms_to_human(min(op_stats['times']))}</td>
-                    <td>{ms_to_human(max(op_stats['times']))}</td>
-                </tr>""")
-        
-        html_parts.append("</table>")
-        html_parts.append("</div>")
-        
-        # Key validity analysis
+        # KME validity
         html_parts.append("""<div class='section'><h2>KME Key Validity Analysis</h2>
         <div class='summary-box'>
-            <strong>Success Rate (HTTP 200):</strong> Keys were found in KME database during decryption<br>
-            <strong>Failed Rate (HTTP 404):</strong> Keys were NOT found (expired or deleted before decryption)<br>
-            <strong>TTL Reference:</strong> KME default key TTL is ~10+ seconds; operations returning status=ok
-            indicate that decryption keys were still valid when dec() executed
+            <strong>Success Rate (HTTP 200):</strong> Keys were found in KME during decryption<br>
+            <strong>Failed Rate (HTTP 404):</strong> Keys NOT found (expired/deleted before decryption)<br>
+            <strong>Goal:</strong> Achieve ≥99% success rate to ensure key provisioning is faster than KME TTL
         </div>
         <table>
             <tr><th>Status</th><th>Count</th><th>Percentage</th></tr>
         """)
         
-        total = stats['total_records']
         html_parts.append(f"<tr><td class='success'><strong>✓ FOUND (200)</strong></td><td>{stats['success_records']}</td><td class='success'>{stats['success_rate']:.1f}%</td></tr>")
         html_parts.append(f"<tr><td class='danger'><strong>✗ NOT FOUND (404)</strong></td><td>{stats['failed_records']}</td><td class='danger'>{100 - stats['success_rate']:.1f}%</td></tr>")
         html_parts.append("</table>")
         
-        html_parts.append("""<p><strong>Interpretation:</strong> """)
         if stats['success_rate'] >= 99.0:
-            html_parts.append(f"""<span class='success'>✓ Excellent!</span> {stats['success_rate']:.1f}% of key fetches succeeded.
-                    Keys are being provisioned fast enough (well within KME TTL window).""")
+            html_parts.append(f"""<p><span class='success'>✓ Excellent!</span> {stats['success_rate']:.1f}% KME success rate.
+                    Key provisioning is reliably faster than KME TTL.</p>""")
         elif stats['success_rate'] >= 95.0:
-            html_parts.append(f"""<span class='warning'>⚠ Good.</span> {stats['success_rate']:.1f}% success rate.
-                    Most operations complete before key expiry, but some are near the TTL boundary.""")
+            html_parts.append(f"""<p><span class='warning'>⚠ Good.</span> {stats['success_rate']:.1f}% success rate.
+                    Most operations succeed, but some are near TTL boundary.</p>""")
         else:
-            html_parts.append(f"""<span class='danger'>✗ Critical issue!</span> {stats['success_rate']:.1f}% success rate.
-                    Many key fetches are failing (404). Keys expire before dec() retrieves them.
-                    Consider: faster master commit, faster network, longer KME TTL.""")
+            html_parts.append(f"""<p><span class='danger'>✗ Critical!</span> {stats['success_rate']:.1f}% success rate.
+                    Keys expiring before decryption. Improve master commit speed or increase KME TTL.</p>""")
         
-        html_parts.append("</p></div>")
-        
-        # Recommendations
-        html_parts.append("""<div class='section'><h2>Performance Insights</h2>
-        <div class='summary-box'>""")
-        
-        master_commit_summary = calc_summary(stats['master_commit_ms'])
-        slave_commit_summary = calc_summary(stats['slave_commit_ms'])
-        
-        html_parts.append(f"<strong>Commit Timing Ratio:</strong><br>")
-        html_parts.append(f"Master commit (MACsec key install): {ms_to_human(master_commit_summary.get('avg', 0))}<br>")
-        html_parts.append(f"Slave commit (parse keys): {ms_to_human(slave_commit_summary.get('avg', 0))}<br>")
-        
-        if master_commit_summary.get('avg', 0) > slave_commit_summary.get('avg', 0) * 10:
-            html_parts.append(f"""<p class='warning'><strong>⚠ Bottleneck Detected:</strong> Master MACsec commit is ~{master_commit_summary.get('avg', 0) / (slave_commit_summary.get('avg', 0) or 1):.0f}x slower than slave.
-                    This is where most of the pipeline time is spent. Consider:</p>
-                    <ul>
-                        <li>Check Junos device load and CPU during commit</li>
-                        <li>Verify MACsec SA installation on active RE</li>
-                        <li>Confirm no hardware issues with interface</li>
-                    </ul>""")
-        
-        html_parts.append("</div></div>")
+        html_parts.append("</div>")
     
     html_parts.append("</body></html>")
     
-    html_content = "\n".join(html_parts)
-    
-    with open(output_path, 'w') as f:
-        f.write(html_content)
-    
+    content = "\n".join(html_parts)
+    output_path.write_text(content)
     print(f"✓ Report generated: {output_path}")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze QKD pipeline timing and KME key validity"
-    )
-    parser.add_argument(
-        '--log-dir',
-        default='/var/home/etsi_user/logs',
-        help='Directory containing pipeline timing files'
-    )
-    parser.add_argument(
-        '--output',
-        default='qkd_pipeline_report.html',
-        help='Output file (HTML or JSON)'
-    )
-    parser.add_argument(
-        '--json',
-        action='store_true',
-        help='Output as JSON instead of HTML'
-    )
+def main() -> None:
+    args = parse_args()
     
-    args = parser.parse_args()
+    all_records = []
     
-    log_dir = Path(args.log_dir)
-    rolling_file = log_dir / 'pipeline_timing' / 'qkd_rolling_pipeline_timing.jsonl'
-    batch_file = log_dir / 'pipeline_timing' / 'qkd_batch_pipeline_timing.jsonl'
+    # Device mode: fetch via SCP
+    if not args.local_files:
+        if not args.inventory.exists():
+            print(f"ERROR: Inventory not found: {args.inventory}", file=sys.stderr)
+            sys.exit(1)
+        
+        print(f"[*] Loading inventory from {args.inventory}")
+        inv = load_inventory(args.inventory)
+        devices = parse_devices_from_inventory(inv)
+        
+        if not devices:
+            print("ERROR: No devices found in inventory", file=sys.stderr)
+            sys.exit(1)
+        
+        # Get SSH user
+        if args.user:
+            user = args.user
+        else:
+            user = get_script_user(args.base_inventory)
+        
+        print(f"[*] Collecting from {len(devices)} device(s) as user '{user}'")
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            
+            # Collect in parallel
+            with ThreadPoolExecutor(max_workers=args.jobs) as executor:
+                futures = {
+                    executor.submit(
+                        fetch_timing_files_from_device,
+                        device, user, args.remote_path, tmpdir, args.identity_file
+                    ): device
+                    for device in devices
+                }
+                
+                for future in as_completed(futures):
+                    device = futures[future]
+                    try:
+                        files = future.result()
+                        for fpath in files:
+                            records = load_timing_records(fpath)
+                            print(f"    {device.name}: {len(records)} records from {fpath.name}")
+                            all_records.extend(records)
+                    except Exception as e:
+                        print(f"    {device.name}: ERROR - {e}")
     
-    print(f"[*] Loading timing records...")
-    rolling_records = load_timing_records(rolling_file)
-    batch_records = load_timing_records(batch_file)
-    
-    all_records = rolling_records + batch_records
+    # Local file mode
+    else:
+        files = [Path(f.strip()) for f in args.local_files.split(',')]
+        print(f"[*] Loading {len(files)} local file(s)")
+        
+        for fpath in files:
+            records = load_timing_records(fpath)
+            print(f"    {fpath.name}: {len(records)} records")
+            all_records.extend(records)
     
     if not all_records:
-        print(f"ERROR: No timing records found in {log_dir}/pipeline_timing/", file=sys.stderr)
+        print("ERROR: No timing records loaded", file=sys.stderr)
         sys.exit(1)
     
-    print(f"[*] Loaded {len(rolling_records)} rolling records, {len(batch_records)} batch records")
     print(f"[*] Analyzing {len(all_records)} total records...")
-    
     stats = analyze_records(all_records)
+    
+    output_path = Path(args.output)
     
     if args.json:
         output_data = {
             'timestamp': datetime.now().isoformat(),
             'summary': {
-                'total_records': stats['total_records'],
-                'success_records': stats['success_records'],
-                'failed_records': stats['failed_records'],
-                'success_rate': stats['success_rate'],
+                'total_records': stats.get('total_records', 0),
+                'success_records': stats.get('success_records', 0),
+                'failed_records': stats.get('failed_records', 0),
+                'success_rate': stats.get('success_rate', 0),
             },
-            'master_timing': {
-                k: {**calc_summary(v), 'values': v} 
-                for k, v in [
-                    ('enc', stats['master_enc_ms']),
-                    ('commit', stats['master_commit_ms']),
-                    ('send', stats['master_send_ms']),
-                    ('ack_wait', stats['master_ack_wait_ms']),
-                    ('total', stats['master_total_ms']),
-                ]
-            },
-            'slave_timing': {
-                k: {**calc_summary(v), 'values': v}
-                for k, v in [
-                    ('dec', stats['slave_dec_ms']),
-                    ('commit', stats['slave_commit_ms']),
-                    ('total', stats['slave_total_ms']),
-                    ('elapsed_from_enqueue', stats['slave_elapsed_from_enqueue_ms']),
-                ]
-            }
         }
-        
-        with open(args.output, 'w') as f:
-            json.dump(output_data, f, indent=2, default=str)
-        
-        print(f"✓ JSON report generated: {args.output}")
+        output_path.write_text(json.dumps(output_data, indent=2))
+        print(f"✓ JSON report: {output_path}")
     else:
-        generate_html_report(stats, rolling_records, batch_records, args.output)
+        generate_html_report(stats, output_path)
 
 
 if __name__ == '__main__':
