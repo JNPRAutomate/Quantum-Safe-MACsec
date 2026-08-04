@@ -61,7 +61,7 @@ from lib.kme.instructions import print_manual_kme_copy_instructions
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
-SCRIPT_VERSION = "ver3.3.2.1"
+SCRIPT_VERSION = "ver3.3.3"
 
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ from typing import Any, Callable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "kme" / "lab.yaml"
-SCRIPT_VERSION = "ver3.3.2.1"
+SCRIPT_VERSION = "ver3.3.3"
 
 StepFunc = Callable[..., Any]
 

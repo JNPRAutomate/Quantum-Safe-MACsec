@@ -28,7 +28,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 """
 
 import sys
-EARLY_SCRIPT_VERSION = "ver3.3.2.1"
+EARLY_SCRIPT_VERSION = "ver3.3.3"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
     print(f"qkd_onbox.py {EARLY_SCRIPT_VERSION}")
@@ -59,7 +59,7 @@ import stat
 
 
 urllib3.disable_warnings()
-SCRIPT_VERSION = "ver3.3.2.1"
+SCRIPT_VERSION = "ver3.3.3"
 DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
 DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
 
@@ -738,6 +738,18 @@ def format_epoch_human(epoch_seconds):
     if value <= 0:
         return "None"
     return time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(value))
+
+
+def format_duration_human(duration_seconds):
+    try:
+        value = int(duration_seconds)
+    except Exception:
+        return "None"
+    if value < 0:
+        return "None"
+    hours, remainder = divmod(value, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def load_peer_key_rotation_state():
@@ -2783,9 +2795,21 @@ def acquire_action_lock(iface, action):
             log(f"ACTION LOCK EXISTS AND STAT FAILED action={action}", "ERROR", iface, "LOCK")
             return False
         if age < 120:
-            log(f"ACTION LOCK EXISTS action={action} iface={iface} age={int(age)} pid={pid} -> exit", "ERROR", iface, "LOCK")
+            log(
+                f"ACTION LOCK EXISTS action={action} iface={iface} age_seconds={int(age)} "
+                f"age={format_duration_human(age)} pid={pid} -> exit",
+                "ERROR",
+                iface,
+                "LOCK",
+            )
             return False
-        log(f"STALE ACTION LOCK FOUND action={action} iface={iface} age={int(age)} -> removing", "ERROR", iface, "LOCK")
+        log(
+            f"STALE ACTION LOCK FOUND action={action} iface={iface} age_seconds={int(age)} "
+            f"age={format_duration_human(age)} -> removing",
+            "ERROR",
+            iface,
+            "LOCK",
+        )
         try:
             if path.is_dir():
                 for child in path.iterdir():
@@ -4390,7 +4414,9 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
             min_margin = peer_enqueue_min_margin_seconds()
             if remaining_seconds < min_margin:
                 log(
-                    f"SSH ENQUEUE BLOCKED margin_too_small remaining_seconds={remaining_seconds} min_margin={min_margin} "
+                    f"SSH ENQUEUE BLOCKED margin_too_small remaining_seconds={remaining_seconds} "
+                    f"remaining={format_duration_human(remaining_seconds)} "
+                    f"min_margin_seconds={min_margin} min_margin={format_duration_human(min_margin)} "
                     f"peer_iface={peer_iface} start_time={start_time_human}",
                     "ERROR",
                     iface,
@@ -4558,7 +4584,8 @@ def get_peer_status(link, iface):
     age = int(time.time()) - exported_at
     if age > stale_threshold:
         log(
-            f"PEER STATUS SNAPSHOT STALE age={age}s threshold={stale_threshold}s -> QUERY LIVE",
+            f"PEER STATUS SNAPSHOT STALE age_seconds={age} age={format_duration_human(age)} "
+            f"threshold_seconds={stale_threshold} threshold={format_duration_human(stale_threshold)} -> QUERY LIVE",
             "WARN",
             iface,
             "MASTER",
@@ -4566,7 +4593,9 @@ def get_peer_status(link, iface):
         fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale")
         if fresh_state is None:
             log(
-                f"PEER STATUS FRESH DATA UNAVAILABLE stale_age={age}s threshold={stale_threshold}s",
+                f"PEER STATUS FRESH DATA UNAVAILABLE stale_age_seconds={age} "
+                f"stale_age={format_duration_human(age)} "
+                f"threshold_seconds={stale_threshold} threshold={format_duration_human(stale_threshold)}",
                 "ERROR",
                 iface,
                 "MASTER",
@@ -5544,7 +5573,8 @@ def resume_inflight_install(link, state):
         created_at = transaction.get("created_at") or 0
         age_seconds = int(time.time()) - created_at
         log(
-            f"{operation} INFLIGHT RETRY ack_id={ack_id} created_at={created_at} age={age_seconds}s",
+            f"{operation} INFLIGHT RETRY ack_id={ack_id} created_at={created_at} "
+            f"age_seconds={age_seconds} age={format_duration_human(age_seconds)}",
             "WARN",
             iface,
             "MASTER",
@@ -5552,8 +5582,10 @@ def resume_inflight_install(link, state):
         if age_seconds > INFLIGHT_STUCK_SECONDS:
             pending_start = transaction.get("records", [{}])[0].get("start_time", "unknown")
             log(
-                f"{operation} INFLIGHT STUCK ack_id={ack_id} age={age_seconds}s "
-                f"stuck_threshold={INFLIGHT_STUCK_SECONDS}s created_at={created_at} "
+                f"{operation} INFLIGHT STUCK ack_id={ack_id} age_seconds={age_seconds} "
+                f"age={format_duration_human(age_seconds)} "
+                f"stuck_threshold_seconds={INFLIGHT_STUCK_SECONDS} "
+                f"stuck_threshold={format_duration_human(INFLIGHT_STUCK_SECONDS)} created_at={created_at} "
                 f"pending_start_time={pending_start} "
                 f"action=MANUAL_INTERVENTION_OR_RING_RESET_REQUIRED",
                 "ERROR",
@@ -5817,8 +5849,10 @@ def run_master_rolling_link(link):
         log(
             f"ROTATION SKIP reason=ROTATION_TOO_SOON operation={operation} "
             f"last_rotation_epoch={last_rotation} last_rotation_time={last_rotation_human} "
-            f"age_seconds={age_seconds} min_interval_seconds={int(MIN_ROTATION_INTERVAL)} "
-            f"remaining_seconds={remaining_seconds}",
+            f"age_seconds={age_seconds} age={format_duration_human(age_seconds)} "
+            f"min_interval_seconds={int(MIN_ROTATION_INTERVAL)} "
+            f"min_interval={format_duration_human(MIN_ROTATION_INTERVAL)} "
+            f"remaining_seconds={remaining_seconds} remaining={format_duration_human(remaining_seconds)}",
             "INFO",
             iface,
             "MASTER",
@@ -6005,8 +6039,8 @@ def run_master():
         now = int(time.time())
         last_rotation = rotation_state.get("last_rotation_timestamp", 0)
         rotation_count = rotation_state.get("rotation_count", 0)
-        seconds_since_last = now - last_rotation
-        seconds_until_next = max(0, rotation_interval - seconds_since_last)
+        seconds_since_last = None if int(last_rotation or 0) <= 0 else max(0, now - int(last_rotation))
+        seconds_until_next = 0 if seconds_since_last is None else max(0, rotation_interval - seconds_since_last)
 
         # Log current peer key rotation state
         log(
@@ -6014,7 +6048,9 @@ def run_master():
             f"last_rotation_timestamp={last_rotation} "
             f"last_rotation_time={format_epoch_human(last_rotation)} "
             f"last_rotation_ago_seconds={seconds_since_last} "
+            f"last_rotation_ago={format_duration_human(seconds_since_last)} "
             f"next_rotation_in_seconds={seconds_until_next} "
+            f"next_rotation_in={format_duration_human(seconds_until_next)} "
             f"rotation_count={rotation_count} "
             f"device={DEVICE} peer_user={PEER_CMD_USER}",
             "INFO",
@@ -6232,7 +6268,10 @@ def run_master():
             if can_rotate_with_pending:
                 log(
                     f"PENDING KEY EXISTS BUT ACTIVE KEY IS LAST IN BATCH active_key_index={max_installed_keys() - 1} "
-                    f"active_age_seconds={active_last_slot_age_seconds} rotation_interval={rotation_interval_seconds()} -> CAN ROTATE",
+                    f"active_age_seconds={active_last_slot_age_seconds} "
+                    f"active_age={format_duration_human(active_last_slot_age_seconds)} "
+                    f"rotation_interval_seconds={rotation_interval_seconds()} "
+                    f"rotation_interval={format_duration_human(rotation_interval_seconds())} -> CAN ROTATE",
                     "INFO",
                     iface,
                     "MASTER",
@@ -6463,8 +6502,11 @@ def run_master():
             log(
                 f"ROTATION SKIP reason=ROTATION_TOO_SOON last_rotation_epoch={last_rotation} "
                 f"last_rotation_time={last_rotation_human} age_seconds={age_seconds} "
+                f"age={format_duration_human(age_seconds)} "
                 f"min_interval_seconds={int(MIN_ROTATION_INTERVAL)} "
-                f"remaining_seconds={remaining_seconds} generation={state.get('generation')}",
+                f"min_interval={format_duration_human(MIN_ROTATION_INTERVAL)} "
+                f"remaining_seconds={remaining_seconds} "
+                f"remaining={format_duration_human(remaining_seconds)} generation={state.get('generation')}",
                 "INFO",
                 iface,
                 "MASTER",
