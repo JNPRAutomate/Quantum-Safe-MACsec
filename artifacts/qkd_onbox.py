@@ -5570,10 +5570,14 @@ def resume_inflight_install(link, state):
         and str(ack.get("status") or "").lower() == "ok"
     )
     if not ack_ok:
-        created_at = transaction.get("created_at") or 0
-        age_seconds = int(time.time()) - created_at
+        try:
+            created_at = int(transaction.get("created_at") or 0)
+        except Exception:
+            created_at = 0
+        age_seconds = max(0, int(time.time()) - created_at)
         log(
             f"{operation} INFLIGHT RETRY ack_id={ack_id} created_at={created_at} "
+            f"created_at_time={format_epoch_human(created_at)} "
             f"age_seconds={age_seconds} age={format_duration_human(age_seconds)}",
             "WARN",
             iface,
@@ -5585,7 +5589,8 @@ def resume_inflight_install(link, state):
                 f"{operation} INFLIGHT STUCK ack_id={ack_id} age_seconds={age_seconds} "
                 f"age={format_duration_human(age_seconds)} "
                 f"stuck_threshold_seconds={INFLIGHT_STUCK_SECONDS} "
-                f"stuck_threshold={format_duration_human(INFLIGHT_STUCK_SECONDS)} created_at={created_at} "
+                f"stuck_threshold={format_duration_human(INFLIGHT_STUCK_SECONDS)} "
+                f"created_at={created_at} created_at_time={format_epoch_human(created_at)} "
                 f"pending_start_time={pending_start} "
                 f"action=MANUAL_INTERVENTION_OR_RING_RESET_REQUIRED",
                 "ERROR",
