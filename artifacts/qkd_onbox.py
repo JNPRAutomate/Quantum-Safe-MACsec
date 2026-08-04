@@ -4535,7 +4535,7 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
-        return _run_remote_status_command(SCRIPT_USER, "status-live-miss")
+        return _run_remote_status_command(PEER_CMD_USER, "status-live-miss")
 
     state = _parse_status_payload(stdout)
     if state is None:
