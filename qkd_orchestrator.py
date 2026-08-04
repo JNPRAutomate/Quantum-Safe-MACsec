@@ -1276,6 +1276,7 @@ def handle_deploy(args):
         print("[SKIP] script-user bootstrap skipped by CLI option")
     print_step_banner("1/6", "SCRIPT_USER BOOTSTRAP", "END")
 
+    local_private_key_path = None
     if script_auth_mode == "key-only":
         # Always ensure the local account running qkd_orchestrator has the
         # script_user private key available for direct SSH access.
@@ -1309,11 +1310,16 @@ def handle_deploy(args):
     if bootstrap_user:
         QKD["DEPLOY_USER"] = bootstrap_user
 
-    # Pre-deploy checks should use bootstrap/deploy transport credentials when
-    # available. SCRIPT_USER credentials are validated by the checks themselves.
+    # Pre-deploy should validate the real SCRIPT_USER runtime path when key-only
+    # auth is enabled. Use the locally mirrored script_user key for that phase,
+    # then switch back to bootstrap transport for provisioning/SCP afterwards.
     predeploy_auth_user = script_user
     predeploy_auth_password = script_password
-    if bootstrap_user and bootstrap_password:
+    predeploy_ssh_key = None
+    if script_auth_mode == "key-only" and local_private_key_path:
+        predeploy_auth_password = None
+        predeploy_ssh_key = local_private_key_path
+    elif bootstrap_user and bootstrap_password:
         predeploy_auth_user = bootstrap_user
         predeploy_auth_password = bootstrap_password
 
@@ -1326,8 +1332,13 @@ def handle_deploy(args):
             device["auth"] = auth
         auth["username"] = predeploy_auth_user
         auth["password"] = predeploy_auth_password
+        if predeploy_ssh_key:
+            device["deploy_ssh_key"] = predeploy_ssh_key
         device["script_user"] = script_user
-    print(f"Pre-deploy auth source: user={predeploy_auth_user}")
+    if predeploy_ssh_key:
+        print(f"Pre-deploy auth source: user={predeploy_auth_user} key={predeploy_ssh_key}")
+    else:
+        print(f"Pre-deploy auth source: user={predeploy_auth_user}")
 
     if args.skip_pre_validation:
         print_step_banner(
