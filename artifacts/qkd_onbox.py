@@ -196,6 +196,10 @@ PIPELINE_TIMING_FILE = CONFIG.get(
     "pipeline_timing_file",
     f"{PIPELINE_TIMING_DIR}/qkd_batch_pipeline_timing.jsonl",
 )
+ROLLING_PIPELINE_TIMING_FILE = CONFIG.get(
+    "rolling_pipeline_timing_file",
+    f"{PIPELINE_TIMING_DIR}/qkd_rolling_pipeline_timing.jsonl",
+)
 SSH_HOME_BASE = CONFIG.get("ssh_home_base", "/var/home")
 
 QKD_KEY_SIZE = 256
@@ -568,6 +572,7 @@ def append_pipeline_timing_record(
     reason_stage=None,
     reason_detail=None,
     operation="ROLLING_REPLACEMENT",
+    output_file=None,
 ):
     payload = {
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
@@ -585,7 +590,7 @@ def append_pipeline_timing_record(
     if reason_detail:
         payload["reason_detail"] = str(reason_detail)
 
-    path = Path(PIPELINE_TIMING_FILE)
+    path = Path(output_file or PIPELINE_TIMING_FILE)
     try:
         ensure_runtime_dirs()
         with path.open("a", encoding="utf-8") as handle:
@@ -597,6 +602,29 @@ def append_pipeline_timing_record(
             iface,
             "MASTER",
         )
+
+
+def append_rolling_pipeline_timing_record(
+    iface,
+    ack_id,
+    status,
+    timings_ms,
+    reason_code=None,
+    reason_stage=None,
+    reason_detail=None,
+    operation="ROLLING_REPLACEMENT",
+):
+    append_pipeline_timing_record(
+        iface=iface,
+        ack_id=ack_id,
+        status=status,
+        timings_ms=timings_ms,
+        reason_code=reason_code,
+        reason_stage=reason_stage,
+        reason_detail=reason_detail,
+        operation=operation,
+        output_file=ROLLING_PIPELINE_TIMING_FILE,
+    )
 
 
 # ----------------------------
@@ -5807,6 +5835,23 @@ def resume_inflight_install(link, state):
     records = transaction.get("records") or []
     payload_b64 = transaction.get("payload_b64")
     ack_id = transaction.get("ack_id")
+    def _inflight_timing_snapshot():
+        snapshot = {}
+        try:
+            t0 = int(transaction.get("t0_commit_request_ms") or 0)
+            t1 = int(transaction.get("t1_commit_finished_ms") or 0)
+            t2 = int(transaction.get("t2_peer_send_ms") or 0)
+            if t0 > 0 and t1 >= t0:
+                snapshot["master_commit_ms"] = int(t1 - t0)
+            if t1 > 0 and t2 >= t1:
+                snapshot["master_peer_send_ms"] = int(t2 - t1)
+            enc_total = int(transaction.get("enc_total_ms") or 0)
+            if enc_total > 0:
+                snapshot["master_enc_total_ms"] = enc_total
+        except Exception:
+            pass
+        return snapshot
+
     if not records or not payload_b64 or not ack_id:
         log(f"{operation} INFLIGHT INVALID -> BLOCK", "ERROR", iface, "MASTER")
         return state, False
@@ -5825,6 +5870,7 @@ def resume_inflight_install(link, state):
         and str(ack.get("ack_id")) == str(ack_id)
         and str(ack.get("status") or "").lower() == "ok"
     )
+    wrote_timing_record = False
     if not ack_ok:
         try:
             created_at = int(transaction.get("created_at") or 0)
@@ -5857,6 +5903,7 @@ def resume_inflight_install(link, state):
             transaction["t2_peer_send_ms"] = int(time.time() * 1000)
             if not save_db_state(peer, iface, state):
                 return state, False
+        peer_send_start_ms = now_ms()
         if not send_command(
             link,
             "install-key-batch",
@@ -5864,9 +5911,39 @@ def resume_inflight_install(link, state):
             batch_b64=payload_b64,
             ack_id=ack_id,
         ):
+            append_rolling_pipeline_timing_record(
+                iface,
+                ack_id,
+                status="fail",
+                timings_ms=_inflight_timing_snapshot(),
+                reason_code="PEER_TRANSPORT_FAILED",
+                reason_stage="MASTER_SCP_SEND",
+                reason_detail="inflight resend failed",
+                operation=operation,
+            )
             return state, False
-        if peer_transport_mode() == "queue" and not wait_for_peer_batch_ack(link, iface, ack_id):
-            return state, False
+        if peer_transport_mode() == "queue":
+            ack_wait_start_ms = now_ms()
+            ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
+            ack_status_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
+            timing_snapshot = _inflight_timing_snapshot()
+            timing_snapshot["master_peer_send_ms"] = int(elapsed_ms(peer_send_start_ms))
+            timing_snapshot["master_ack_wait_ms"] = int(elapsed_ms(ack_wait_start_ms))
+            if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
+                timing_snapshot.update(ack_payload.get("timings_ms"))
+            append_rolling_pipeline_timing_record(
+                iface,
+                ack_id,
+                status=str(ack_payload.get("status", "timeout") if isinstance(ack_payload, dict) else "timeout"),
+                timings_ms=timing_snapshot,
+                reason_code=(ack_payload or {}).get("reason_code") if isinstance(ack_payload, dict) else "PEER_ACK_TIMEOUT",
+                reason_stage=(ack_payload or {}).get("reason_stage") if isinstance(ack_payload, dict) else "MASTER_ACK_WAIT",
+                reason_detail=(ack_payload or {}).get("reason_detail") if isinstance(ack_payload, dict) else "peer ack timeout",
+                operation=operation,
+            )
+            wrote_timing_record = True
+            if not ack_status_ok:
+                return state, False
 
     # A pre-existing ACK was received during an earlier process lifetime.
     # Its local receipt time is unavailable, so do not mix the peer clock or
@@ -5884,6 +5961,20 @@ def resume_inflight_install(link, state):
     if not save_db_state(peer, iface, state):
         log(f"{operation} INFLIGHT FINALIZE STATE SAVE FAILED", "ERROR", iface, "MASTER")
         return state, False
+    if not wrote_timing_record:
+        timing_snapshot = _inflight_timing_snapshot()
+        if isinstance(ack, dict) and isinstance(ack.get("timings_ms"), dict):
+            timing_snapshot.update(ack.get("timings_ms"))
+        append_rolling_pipeline_timing_record(
+            iface,
+            ack_id,
+            status=str((ack or {}).get("status", "ok") if isinstance(ack, dict) else "ok"),
+            timings_ms=timing_snapshot,
+            reason_code=(ack or {}).get("reason_code") if isinstance(ack, dict) else None,
+            reason_stage=(ack or {}).get("reason_stage") if isinstance(ack, dict) else "INFLIGHT_FINALIZE",
+            reason_detail=(ack or {}).get("reason_detail") if isinstance(ack, dict) else None,
+            operation=operation,
+        )
     log(f"{operation} INFLIGHT FINALIZED ack_id={ack_id}", "INFO", iface, "MASTER")
     return state, True
 
@@ -6125,11 +6216,28 @@ def run_master_rolling_link(link):
 
     first_generation = next_generation(state)
     records = []
+    enc_batch_start_ms = now_ms()
+    enc_total_ms = 0
     for offset, slot in enumerate(target_slots):
         generation = int(first_generation) + offset
-        key_id, key = do_enc(link["peer_sae"])
+        key_id, key, enc_details = do_enc(link["peer_sae"], return_details=True)
+        if isinstance(enc_details, dict):
+            try:
+                enc_total_ms += int(enc_details.get("duration_ms", 0))
+            except Exception:
+                pass
         if not key_id:
             record_kme_failure(peer, iface, state, "ENC_FAILED")
+            append_rolling_pipeline_timing_record(
+                iface,
+                None,
+                status="fail",
+                timings_ms={"master_enc_total_ms": int(enc_total_ms)},
+                reason_code="ENC_FAILED",
+                reason_stage="MASTER_ENC",
+                reason_detail=(enc_details or {}).get("reason_detail") if isinstance(enc_details, dict) else "enc failed",
+                operation=operation,
+            )
             log(
                 f"{operation} ABORTED reason=ENC_FAILED slot={slot} active_and_next_unchanged=1",
                 "ERROR",
@@ -6168,6 +6276,8 @@ def run_master_rolling_link(link):
         "ack_id": ack_id,
         "created_at": int(time.time()),
         "t0_commit_request_ms": int(time.time() * 1000),
+        "enc_total_ms": int(enc_total_ms),
+        "enc_started_ms": int(enc_batch_start_ms),
     }
     if not save_db_state(peer, iface, state):
         log(
@@ -6186,6 +6296,7 @@ def run_master_rolling_link(link):
         iface,
         "MASTER",
     )
+    local_commit_start_ms = now_ms()
     if not install_keychain_batch(iface, records, ca_name, keychain, state=state, commit=True):
         record_kme_failure(peer, iface, state, "LOCAL_INSTALL_FAILED")
         if _configured_records_match(keychain, iface, peer_payload):
@@ -6217,7 +6328,8 @@ def run_master_rolling_link(link):
             "MASTER",
         )
         return False
-    state["inflight_install"]["t2_peer_send_ms"] = int(time.time() * 1000)
+    peer_send_start_ms = now_ms()
+    state["inflight_install"]["t2_peer_send_ms"] = int(peer_send_start_ms)
     if not save_db_state(peer, iface, state):
         return False
     if not send_command(
@@ -6227,6 +6339,20 @@ def run_master_rolling_link(link):
         batch_b64=payload_b64,
         ack_id=ack_id,
     ):
+        append_rolling_pipeline_timing_record(
+            iface,
+            ack_id,
+            status="fail",
+            timings_ms={
+                "master_enc_total_ms": int(enc_total_ms),
+                "master_commit_ms": int(elapsed_ms(local_commit_start_ms)),
+                "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
+            },
+            reason_code="PEER_TRANSPORT_FAILED",
+            reason_stage="MASTER_SCP_SEND",
+            reason_detail="send_command install-key-batch failed",
+            operation=operation,
+        )
         log(
             f"{operation} ABORTED reason=PEER_TRANSPORT_FAILED state_not_advanced=1 "
             "active_and_next_unchanged=1",
@@ -6235,15 +6361,38 @@ def run_master_rolling_link(link):
             "MASTER",
         )
         return False
-    if peer_transport_mode() == "queue" and not wait_for_peer_batch_ack(link, iface, ack_id):
-        log(
-            f"{operation} ABORTED reason=PEER_ACK_FAILED state_not_advanced=1 "
-            "active_and_next_unchanged=1",
-            "ERROR",
+    if peer_transport_mode() == "queue":
+        ack_wait_start_ms = now_ms()
+        ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
+        ack_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
+        timing_snapshot = {
+            "master_enc_total_ms": int(enc_total_ms),
+            "master_commit_ms": int(elapsed_ms(local_commit_start_ms)),
+            "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
+            "master_ack_wait_ms": int(elapsed_ms(ack_wait_start_ms)),
+            "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
+        }
+        if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
+            timing_snapshot.update(ack_payload.get("timings_ms"))
+        append_rolling_pipeline_timing_record(
             iface,
-            "MASTER",
+            ack_id,
+            status=str(ack_payload.get("status", "timeout") if isinstance(ack_payload, dict) else "timeout"),
+            timings_ms=timing_snapshot,
+            reason_code=(ack_payload or {}).get("reason_code") if isinstance(ack_payload, dict) else "PEER_ACK_TIMEOUT",
+            reason_stage=(ack_payload or {}).get("reason_stage") if isinstance(ack_payload, dict) else "MASTER_ACK_WAIT",
+            reason_detail=(ack_payload or {}).get("reason_detail") if isinstance(ack_payload, dict) else "peer ack timeout",
+            operation=operation,
         )
-        return False
+        if not ack_ok:
+            log(
+                f"{operation} ABORTED reason=PEER_ACK_FAILED state_not_advanced=1 "
+                "active_and_next_unchanged=1",
+                "ERROR",
+                iface,
+                "MASTER",
+            )
+            return False
 
     state = record_successful_transaction_timing(
         state,
