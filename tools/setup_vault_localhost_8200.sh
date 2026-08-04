@@ -37,6 +37,20 @@ need_cmd() {
 need_cmd vault
 need_cmd jq
 
+discover_init_file() {
+  local candidates=(
+    "$VAULT_INIT_FILE"
+    "$HOME/vault-init.txt"
+    "$HOME/.vault-init.txt"
+    "$HOME/.config/qkd/vault-init.txt"
+  )
+  local f
+  for f in "${candidates[@]}"; do
+    [[ -f "$f" ]] && { echo "$f"; return 0; }
+  done
+  return 1
+}
+
 mkdir -p "$QKD_CONFIG_DIR"
 chmod 700 "$QKD_CONFIG_DIR"
 
@@ -51,28 +65,40 @@ if [[ "$initialized" != "true" ]]; then
   echo "[+] Saved init material to: $VAULT_INIT_FILE"
 fi
 
-if [[ ! -f "$VAULT_INIT_FILE" ]]; then
-  echo "ERROR: missing $VAULT_INIT_FILE (cannot unseal/login)" >&2
-  exit 1
+if init_file_found="$(discover_init_file)"; then
+  VAULT_INIT_FILE="$init_file_found"
 fi
+UNSEAL_KEY="${VAULT_UNSEAL_KEY:-}"
+ROOT_TOKEN="${VAULT_ROOT_TOKEN:-}"
 
-UNSEAL_KEY="$(awk -F': ' '/Unseal Key 1/ {print $2}' "$VAULT_INIT_FILE" | tr -d '\r\n')"
-ROOT_TOKEN="$(awk -F': ' '/Initial Root Token/ {print $2}' "$VAULT_INIT_FILE" | tr -d '\r\n')"
-
-if [[ -z "$UNSEAL_KEY" || -z "$ROOT_TOKEN" ]]; then
-  echo "ERROR: could not parse unseal key/root token from $VAULT_INIT_FILE" >&2
-  exit 1
+if [[ -f "$VAULT_INIT_FILE" ]]; then
+  [[ -n "$UNSEAL_KEY" ]] || UNSEAL_KEY="$(awk -F': ' '/Unseal Key 1/ {print $2}' "$VAULT_INIT_FILE" | tr -d '\r\n')"
+  [[ -n "$ROOT_TOKEN" ]] || ROOT_TOKEN="$(awk -F': ' '/Initial Root Token/ {print $2}' "$VAULT_INIT_FILE" | tr -d '\r\n')"
 fi
 
 status_json="$(vault status -format=json)"
 sealed="$(jq -r '.sealed' <<<"$status_json")"
 if [[ "$sealed" == "true" ]]; then
+  if [[ -z "$UNSEAL_KEY" ]]; then
+    echo "ERROR: Vault is sealed and no unseal key is available." >&2
+    echo "Provide VAULT_UNSEAL_KEY, or set VAULT_INIT_FILE to a valid init file (e.g. ~/vault-init.txt)." >&2
+    exit 1
+  fi
   echo "[*] Unsealing Vault..."
   vault operator unseal "$UNSEAL_KEY" >/dev/null
 fi
 
-echo "[*] Logging in with root token..."
-vault login "$ROOT_TOKEN" >/dev/null
+if [[ -n "${VAULT_TOKEN:-}" ]] && vault token lookup >/dev/null 2>&1; then
+  echo "[*] Using existing VAULT_TOKEN from environment."
+else
+  if [[ -z "$ROOT_TOKEN" ]]; then
+    echo "ERROR: no usable Vault token found." >&2
+    echo "Set VAULT_TOKEN (already authenticated) or VAULT_ROOT_TOKEN, or provide VAULT_INIT_FILE with Initial Root Token." >&2
+    exit 1
+  fi
+  echo "[*] Logging in with root token..."
+  vault login "$ROOT_TOKEN" >/dev/null
+fi
 
 echo "[*] Enabling KV v2 at path 'secret' (if missing)..."
 vault secrets enable -path=secret kv-v2 >/dev/null 2>&1 || true
