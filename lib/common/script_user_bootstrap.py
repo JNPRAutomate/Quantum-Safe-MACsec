@@ -1043,6 +1043,7 @@ def bootstrap_script_user_on_device(
     peer_public_key_line: Optional[str] = None,
     port: int = 22,
     dry_run: bool = False,
+    verbose: int = 0,
 ) -> bool:
     host = str(device.get("ip") or device.get("mgmt_ip") or "")
     if not host:
@@ -1059,6 +1060,28 @@ def bootstrap_script_user_on_device(
         if script_auth_mode == "key-only":
             print("[%s] DRY-RUN configure SCRIPT_USER key-only authentication" % name)
         print("[%s] DRY-RUN fix /var/home/%s/.ssh ownership and permissions" % (name, script_user))
+        
+        # If verbose, show the actual config that would be applied
+        if verbose:
+            commands = []
+            commands.extend(build_script_user_class_commands(script_user_class))
+            commands.extend(build_peer_cmd_class_commands(peer_cmd_user_class))
+            commands.extend(build_set_commands(
+                script_user,
+                script_user_class,
+                encrypted_junos_password(script_password) if script_password and script_auth_mode == "password" else None,
+                user_exists=False,
+                auth_mode=script_auth_mode,
+                public_key_line=public_key_line,
+                remove_encrypted_password=False,
+            ))
+            if peer_public_key_line:
+                commands.extend(build_peer_cmd_set_commands(peer_cmd_user, peer_cmd_user_class, peer_public_key_line))
+            
+            print("[%s] candidate diff (DRY-RUN):" % name)
+            for cmd in commands:
+                print(cmd)
+        
         return True
 
     dev = Device(
@@ -1232,6 +1255,7 @@ def bootstrap_script_users(
     dry_run: bool = False,
     prompt_for_deploy_password: bool = False,
     skip_if_no_deploy_password: bool = True,
+    verbose: int = 0,
 ) -> Tuple[List[str], List[str]]:
     """
     Bootstrap SCRIPT_USER on managed devices.
@@ -1338,6 +1362,7 @@ def bootstrap_script_users(
             public_key_line=local_public_key_line,
             peer_public_key_line=peer_public_key_line,
             dry_run=dry_run,
+            verbose=verbose,
         )
         if success:
             ok.append(name)

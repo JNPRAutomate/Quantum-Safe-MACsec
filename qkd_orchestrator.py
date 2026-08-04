@@ -1189,6 +1189,7 @@ def handle_bootstrap(args):
             deploy_user=bootstrap_user,
             deploy_password=bootstrap_password,
             dry_run=True,
+            verbose=args.verbose,
         )
         print_step_banner("SCRIPT_USER DRY-RUN", "END")
         return
@@ -1211,6 +1212,7 @@ def handle_bootstrap(args):
         deploy_password=bootstrap_password,
         dry_run=False,
         skip_if_no_deploy_password=False,
+        verbose=args.verbose,
     )
     
     if failed:
