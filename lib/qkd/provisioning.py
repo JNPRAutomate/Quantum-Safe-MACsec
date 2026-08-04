@@ -1312,7 +1312,11 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
             continue
 
         if dry_run:
-            print(f"[{name}] dry-run -> skipping push")
+            if verbose:
+                print(f"\n=== {name} (dry-run) ===")
+                print("\n".join(commands))
+            else:
+                print(f"[{name}] dry-run -> skipping push")
             continue
 
         push_config(name, device, commands, base, devices)
