@@ -192,6 +192,7 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         'slave_commit_ms': [],
         'slave_total_ms': [],
         'slave_elapsed_from_enqueue_ms': [],
+        'enc_to_dec_ms': [],  # critical: time from master ENC to slave DEC
     }
     
     stats['success_rate'] = (
@@ -233,6 +234,14 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             stats['slave_total_ms'].append(slave_total)
         if slave_elapsed > 0:
             stats['slave_elapsed_from_enqueue_ms'].append(slave_elapsed)
+        
+        # Key metric: time from master ENC to slave DEC
+        # = total pipeline time - slave processing time + slave dec time
+        # This is how long a key must survive in KME before dec() retrieves it
+        if master_total > 0 and slave_elapsed > 0 and slave_dec > 0:
+            enc_to_dec = master_total - slave_elapsed + slave_dec
+            if enc_to_dec > 0:
+                stats['enc_to_dec_ms'].append(enc_to_dec)
     
     return stats
 
@@ -384,6 +393,37 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
                 </tr>"""
         
         html += "</table></div>"
+        
+        # KME TTL Budget — the critical derived metric
+        enc_to_dec_summary = calc_summary(stats['enc_to_dec_ms'])
+        if enc_to_dec_summary.get('count', 0) > 0:
+            worst_case_ms = enc_to_dec_summary['p99']
+            avg_ms = enc_to_dec_summary['avg']
+            # Recommended TTL = worst case rounded up to next second + 1s safety margin
+            recommended_ttl_s = int(worst_case_ms / 1000) + 2
+            css = 'success' if worst_case_ms < 8000 else ('warning' if worst_case_ms < 10000 else 'danger')
+            html += f"""<div class='section'>
+            <h2>KME TTL Budget — Time from Master ENC to Slave DEC [MM:SS.mmm]</h2>
+            <div class='summary-box'>
+                <strong>What this measures:</strong> How long a key must survive in the KME after the master fetches it,
+                before the slave can decrypt it.<br>
+                <strong>Formula:</strong> <code>master_total_enc_to_ack − slave_elapsed_from_enqueue + slave_dec_time</code><br>
+                <strong>Action:</strong> Set KME TTL ≥ the 99% value below to avoid HTTP 404 (key not found) failures.
+            </div>
+            <table>
+                <tr><th>Metric</th><th>Value</th></tr>
+                <tr><td>Min</td><td>{ms_to_human(enc_to_dec_summary['min'])}</td></tr>
+                <tr><td>Avg</td><td>{ms_to_human(avg_ms)}</td></tr>
+                <tr><td>Median (50%)</td><td>{ms_to_human(enc_to_dec_summary['p50'])}</td></tr>
+                <tr><td>95%</td><td>{ms_to_human(enc_to_dec_summary['p95'])}</td></tr>
+                <tr><td><strong>99% (worst case)</strong></td><td class='{css}'><strong>{ms_to_human(worst_case_ms)}</strong></td></tr>
+                <tr><td>Max</td><td>{ms_to_human(enc_to_dec_summary['max'])}</td></tr>
+            </table>
+            <p style="font-size:16px; margin-top:15px; padding:10px; background:#fff3cd; border-left:4px solid #e67e22;">
+                🔧 <strong>Recommended KME TTL: ≥ {recommended_ttl_s} seconds</strong><br>
+                Based on 99th percentile ENC→DEC = {ms_to_human(worst_case_ms)} + 1s safety margin.
+            </p>
+        </div>"""
         
         # KME validity
         html += """<div class='section'><h2>KME Key Validity Analysis</h2>
