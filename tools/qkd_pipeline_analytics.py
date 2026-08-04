@@ -97,13 +97,16 @@ def collect_timing_files(args: argparse.Namespace) -> Path:
     
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Use timestamp-based snapshot name to avoid conflicts
+    snapshot_name = f"timing_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
     cmd = [
         sys.executable,
         str(COLLECTOR_SCRIPT),
         "--inventory", str(args.inventory),
         "--base-inventory", str(args.base_inventory),
         "--output-root", str(args.output_dir),
-        "--snapshot-name", "timing_snapshot",
+        "--snapshot-name", snapshot_name,
         "--remote-path", args.remote_path,
         "--jobs", str(args.jobs),
     ]
@@ -121,7 +124,7 @@ def collect_timing_files(args: argparse.Namespace) -> Path:
         print("ERROR: Collection failed", file=sys.stderr)
         sys.exit(1)
     
-    snapshot_dir = args.output_dir / "timing_snapshot"
+    snapshot_dir = args.output_dir / snapshot_name
     return snapshot_dir
 
 
@@ -419,7 +422,19 @@ def main() -> None:
     if not args.skip_collect:
         collection_dir = collect_timing_files(args)
     else:
-        collection_dir = args.output_dir / "timing_snapshot"
+        # Find the most recent snapshot in output_dir
+        snapshots = sorted(
+            [d for d in args.output_dir.iterdir() if d.is_dir()],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        ) if args.output_dir.exists() else []
+        
+        if not snapshots:
+            print(f"ERROR: No snapshots found in {args.output_dir}. Run without --skip-collect first.", file=sys.stderr)
+            sys.exit(1)
+        
+        collection_dir = snapshots[0]
+        print(f"[*] Using existing snapshot: {collection_dir.name}")
     
     # Find all JSONL files
     print(f"[*] Finding .jsonl files in {collection_dir}")
