@@ -234,18 +234,14 @@ def link_endpoint_names(links: List[Dict[str, Any]]) -> List[str]:
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="qkd_orchestrator.py",
-        description=(
-            "Quantum-Safe MACsec orchestrator.\n\n"
-            "Commands:\n"
-            "  create     Build runtime inventory, onbox artifacts, and PKI material\n"
-            "  deploy     Bootstrap script user, deploy scripts/certs, and push Junos configuration\n"
-            "  clean      Clean local runtime and optionally remote device configuration\n"
-            "  validate   Validate device readiness before or after deploy\n\n"
-            "Examples:\n"
-            "  python3 qkd_orchestrator.py create --inventory ring_6_mx_link_driven_with_acx --pki-profile hierarchical_ca\n"
-            "  python3 qkd_orchestrator.py deploy\n"
-            "  python3 qkd_orchestrator.py validate --phase predeploy\n"
-            "  python3 qkd_orchestrator.py clean --pki\n"
+        description="Quantum-Safe MACsec orchestrator.",
+        epilog=(
+            "Workflow:\n"
+            "  1. python3 qkd_orchestrator.py create --inventory <name> --pki-profile <profile>\n"
+            "  2. python3 qkd_orchestrator.py bootstrap\n"
+            "  3. python3 qkd_orchestrator.py validate --phase predeploy\n"
+            "  4. python3 qkd_orchestrator.py deploy\n"
+            "  5. python3 qkd_orchestrator.py validate --phase postdeploy\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
