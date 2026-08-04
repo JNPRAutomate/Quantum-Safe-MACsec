@@ -402,13 +402,6 @@ def check_script_user_exists(device):
     name = device_name(device)
     script_user = qkd_script_user()
     host = device_host(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: SCRIPT_USER check requires password auth (key-only auth configured, will verify at postdeploy)")
-        return
-    
     result = ssh_deploy_cmd(device, f"id {script_user}", timeout=30)
     stdout = str(result.stdout or "")
     stderr = str(result.stderr or "")
@@ -446,13 +439,6 @@ def check_script_user_exists(device):
 def check_script_user_home_simple(device):
     device = normalize_device(device)
     name = device_name(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: SCRIPT_USER home check requires password auth (key-only auth configured, will verify at postdeploy)")
-        return
-    
     ssh_home = qkd_ssh_home()
     ssh_dir = qkd_ssh_dir()
     cmd = (
@@ -472,13 +458,6 @@ def check_script_user_home_simple(device):
 def check_script_dirs_simple(device):
     device = normalize_device(device)
     name = device_name(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: script dirs check requires password auth (key-only auth configured, will verify at postdeploy)")
-        return
-    
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
     cert_dir = qkd_remote_cert_dir()
@@ -502,13 +481,6 @@ def check_script_dirs_simple(device):
 def check_runtime_cleanup_simple(device):
     device = normalize_device(device)
     name = device_name(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: runtime cleanup requires password auth (key-only auth configured)")
-        return
-    
     runtime_state_dir = qkd_runtime_state_dir()
     runtime_log_dir = qkd_runtime_log_dir()
     cmd = (
@@ -541,13 +513,6 @@ def check_runtime_cleanup_simple(device):
 def check_remote_certs(device):
     device = normalize_device(device)
     name = device_name(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: remote certs check requires password auth (key-only auth configured)")
-        return
-    
     sae = (device.get("qkd") or {}).get("sae_id") or device.get("local_sae") or device.get("sae") or device.get("sae_id")
     if not sae:
         raise RuntimeError(f"cannot validate remote certs on {name}: missing SAE ID")
@@ -569,13 +534,6 @@ def check_remote_certs(device):
 def check_script_user_ssh_identity(device):
     device = normalize_device(device)
     name = device_name(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: SSH identity check requires password auth (key-only auth configured)")
-        return
-    
     script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     key_path = qkd_ssh_private_key()
@@ -611,13 +569,6 @@ def check_script_user_ssh_identity(device):
 def check_script_user_authorized_keys(device):
     device = normalize_device(device)
     name = device_name(device)
-    
-    # Skip if no auth password configured (key-only auth setup)
-    auth = device.get("auth") or {}
-    if not auth.get("password"):
-        print(f"[SKIP] {name}: authorized_keys check requires password auth (key-only auth configured)")
-        return
-    
     script_user = qkd_script_user()
     ssh_dir = qkd_ssh_dir()
     pub_path = qkd_ssh_public_key()
