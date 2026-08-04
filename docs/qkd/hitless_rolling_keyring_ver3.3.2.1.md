@@ -257,14 +257,34 @@ manuale.
 Dalla versione corrente, quando l'`active_slot` è valido (e già confermato
 bilateralmente dai controlli precedenti) ma nessuno slot ha un `start-time`
 futuro, `select_ring_update_slots()` restituisce invece un'operazione
-`RING_REARM` con target lo slot immediatamente successivo all'active
-(`(active_slot + 1) % N`). `run_master_rolling_link()` la gestisce riusando
-**la stessa pipeline bilaterale** di una rotazione normale: ENC dal KME,
-commit locale, invio SSH `install-key-batch` al peer, attesa ACK,
-finalizzazione bilaterale. Non viene introdotto nessun nuovo canale di
-comunicazione né alcuna possibilità di disallineamento tra i due router: è
-esattamente la stessa transazione atomica already-existing, applicata a un
-solo slot invece che a `N-2`.
+`RING_REARM` che riarma l'intera finestra `N-2` a partire dallo slot
+immediatamente successivo all'active.
+
+Con `N=4`:
+
+- active=1 -> `rearm_slots=[2,3]`
+- active=2 -> `rearm_slots=[3,0]`
+- active=3 -> `rearm_slots=[0,1]`
+
+`run_master_rolling_link()` la gestisce riusando **la stessa pipeline
+bilaterale** di una rotazione normale: ENC dal KME, commit locale, invio SSH
+`install-key-batch` al peer, attesa ACK, finalizzazione bilaterale. Non viene
+introdotto nessun nuovo canale di comunicazione né alcuna possibilità di
+disallineamento tra i due router: è esattamente la stessa transazione atomica
+already-existing, applicata alla finestra completa `N-2`.
+
+### Bug osservato e soluzione
+
+Durante i test di recovery dopo indisponibilità KME è emerso che il primo
+self-heal rearmava un solo slot per ciclo, causando recupero lento:
+
+- più cicli `RING_REARM START slots=[x] key_count=1`;
+- lunghi intervalli in cui `next_slot=None` ricompariva dopo ogni promozione;
+- ring operativo ma continuamente in rearm seriale.
+
+La soluzione è stata passare il self-heal da rearm seriale (1 slot) a rearm
+batch coerente con il modello (`N-2` slot nello stesso ciclo), così al primo
+recupero utile il ring torna immediatamente alla semantica steady-state.
 
 Il precondition check `ACTIVE_NOT_BILATERALLY_CONFIRMED` (active key e slot
 identici su entrambi i lati) resta invariato e viene eseguito **prima** di
@@ -276,7 +296,6 @@ i restanti motivi di blocco (`INVALID_RING_SHAPE`, `NOT_CLEAN_SEED`,
 `ACTIVE_SLOT_INVALID`, `ACTIVE_PENDING_PAIR_NOT_ADJACENT`,
 `NO_REPLACEABLE_SLOTS`) restano condizioni reali che richiedono
 investigazione manuale e continuano a produrre `ROTATION BLOCKED`.
-
 ## 9. Rotazione SSH indipendente
 
 La chiave ED25519 di `etsi_peer_view` ruota ogni 600 secondi ed è indipendente
@@ -295,7 +314,7 @@ ROLLING_REPLACEMENT START
 ROLLING_REPLACEMENT DONE
 RING_REARM START
 RING_REARM DONE
-ROTATION SELF_HEAL reason=NO_FUTURE_SLOT_SCHEDULED
+ROTATION SELF_HEAL reason=NO_FUTURE_SLOT_SCHEDULED rearm_slots=[...]
 INFLIGHT RETRY
 INFLIGHT FINALIZED
 ROTATION BLOCKED reason=ACTIVE_NOT_BILATERALLY_CONFIRMED
@@ -303,6 +322,7 @@ ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED
 ROTATION BLOCKED reason=ACTIVE_PENDING_PAIR_NOT_ADJACENT
 ROTATION BLOCKED reason=ADAPTIVE_GRACE_EXCEEDS_PROTECTED_HORIZON
 ROTATION SKIP reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED
+ROTATION SKIP reason=ROTATION_TOO_SOON ... last_rotation_time=... remaining_seconds=...
 ```
 
 Comandi Junos:

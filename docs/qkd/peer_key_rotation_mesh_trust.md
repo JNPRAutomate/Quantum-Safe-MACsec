@@ -163,7 +163,7 @@ deployed to routers — only `artifacts/qkd_onbox.py` is shipped to
   `acquire_action_lock("peer-pubkey", "install-peer-pubkey")` lock.
 - `run_master()` — rotation call site simplified to
   `run_peer_key_rotation_cycle(DEVICE, peer_devices)`; the rotation state
-  (`last_rotation_timestamp` / `rotation_count`) is now only advanced when the
+  (`last_rotation_timestamp` / `last_rotation_time` / `rotation_count`) is now only advanced when the
   cycle actually **succeeds** (previously it advanced unconditionally, hiding
   failures); the audit-log read of the new pubkey now uses `f"{PEER_SSH_KEY}.pub"`
   instead of the previously-wrong `peer_cmd_user`-home path.
@@ -172,7 +172,7 @@ deployed to routers — only `artifacts/qkd_onbox.py` is shipped to
 
 | File | Purpose |
 |---|---|
-| `{STATE_DIR}/qkd_peer_key_rotation.json` | `last_rotation_timestamp`, `rotation_count` — only updated on full success |
+| `{STATE_DIR}/qkd_peer_key_rotation.json` | `last_rotation_timestamp` (epoch), `last_rotation_time` (human-readable), `rotation_count` — only updated on full success |
 | `{STATE_DIR}/qkd_peer_known_pubkeys.json` | Per-peer map of the last `etsi_peer_view` public key installed locally, used to `delete` stale entries on the next rotation from that peer |
 
 (`STATE_DIR` = `/var/home/etsi_user` by default.)

@@ -160,7 +160,7 @@ During `qkd_orchestrator.py deploy`:
 
 | File | Purpose |
 |---|---|
-| `{STATE_DIR}/qkd_peer_key_rotation.json` | Last rotation timestamp and count (only updated on full cycle success) |
+| `{STATE_DIR}/qkd_peer_key_rotation.json` | Last rotation timestamp (`last_rotation_timestamp` epoch + `last_rotation_time` human-readable) and count (only updated on full cycle success) |
 | `{STATE_DIR}/qkd_peer_known_pubkeys.json` | Per-peer map: current and previous etsi_peer_view public key |
 
 `STATE_DIR` = `/var/home/etsi_user` by default.
