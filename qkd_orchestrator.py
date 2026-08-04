@@ -1545,6 +1545,14 @@ def handle_validate(args):
             "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
         )
 
+    deploy_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or inventory_base.get("secrets", {}).get("bootstrap_user")
+        or inventory_base.get("secrets", {}).get("deploy_user")
+        or inventory_base.get("secrets", {}).get("default_user")
+        or "root"
+    )
+
     for _, device in devices.items():
         if not isinstance(device, dict):
             continue
@@ -1552,7 +1560,7 @@ def handle_validate(args):
         if not isinstance(auth, dict):
             auth = {}
             device["auth"] = auth
-        auth["username"] = QKD["SCRIPT_USER"]
+        auth["username"] = deploy_user
         auth["password"] = resolved_script_password
 
     QKD["VALIDATE_VERBOSE"] = bool(args.verbose)
