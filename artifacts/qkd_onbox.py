@@ -191,6 +191,11 @@ LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
 PEER_STATUS_DIR = CONFIG.get("peer_status_dir", f"{STATE_DIR}/peer_status")
 PEER_INBOX_DIR = CONFIG.get("peer_inbox_dir", f"{STATE_DIR}/peer_inbox")
 PEER_ACK_DIR = CONFIG.get("peer_ack_dir", f"{STATE_DIR}/peer_ack")
+PIPELINE_TIMING_DIR = CONFIG.get("pipeline_timing_dir", f"{LOG_DIR}/pipeline_timing")
+PIPELINE_TIMING_FILE = CONFIG.get(
+    "pipeline_timing_file",
+    f"{PIPELINE_TIMING_DIR}/qkd_batch_pipeline_timing.jsonl",
+)
 SSH_HOME_BASE = CONFIG.get("ssh_home_base", "/var/home")
 
 QKD_KEY_SIZE = 256
@@ -222,7 +227,14 @@ KEY = f"{SCRIPT_DIR}/certs/{DEVICE}.key"
 CA = f"{SCRIPT_DIR}/certs/{CA_CERT}"
 
 def ensure_runtime_dirs():
-    for path in (STATE_DIR, LOG_DIR, PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
+    for path in (
+        STATE_DIR,
+        LOG_DIR,
+        PEER_STATUS_DIR,
+        PEER_INBOX_DIR,
+        PEER_ACK_DIR,
+        PIPELINE_TIMING_DIR,
+    ):
         try:
             Path(path).mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -547,6 +559,46 @@ def customer_event(event, iface=None, mode=None, **fields):
     log(" ".join(parts), "INFO", iface, mode)
 
 
+def append_pipeline_timing_record(
+    iface,
+    ack_id,
+    status,
+    timings_ms,
+    reason_code=None,
+    reason_stage=None,
+    reason_detail=None,
+    operation="ROLLING_REPLACEMENT",
+):
+    payload = {
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        "device": DEVICE,
+        "iface": str(iface or ""),
+        "operation": str(operation or "ROLLING_REPLACEMENT"),
+        "ack_id": str(ack_id or ""),
+        "status": str(status or ""),
+        "timings_ms": format_timing_fields_hhmmss_mmm(dict(timings_ms or {})),
+    }
+    if reason_code:
+        payload["reason_code"] = str(reason_code)
+    if reason_stage:
+        payload["reason_stage"] = str(reason_stage)
+    if reason_detail:
+        payload["reason_detail"] = str(reason_detail)
+
+    path = Path(PIPELINE_TIMING_FILE)
+    try:
+        ensure_runtime_dirs()
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception as e:
+        log(
+            f"PIPELINE TIMING WRITE FAIL file={path} ack_id={ack_id} error={str(e)}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+
+
 # ----------------------------
 # KEYCHAIN STATE HELPERS
 # ----------------------------
@@ -750,6 +802,35 @@ def format_duration_human(duration_seconds):
     hours, remainder = divmod(value, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def format_duration_ms_human(duration_ms):
+    try:
+        value = int(duration_ms)
+    except Exception:
+        return "None"
+    if value < 0:
+        return "None"
+    hours, remainder = divmod(value, 3600000)
+    minutes, remainder = divmod(remainder, 60000)
+    seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{milliseconds:03d}"
+
+
+def format_timing_fields_hhmmss_mmm(value):
+    if isinstance(value, dict):
+        formatted = {}
+        for key, item in value.items():
+            if isinstance(item, (int, float)) and str(key).endswith("_ms"):
+                formatted[key] = format_duration_ms_human(item)
+            elif isinstance(item, (dict, list)):
+                formatted[key] = format_timing_fields_hhmmss_mmm(item)
+            else:
+                formatted[key] = item
+        return formatted
+    if isinstance(value, list):
+        return [format_timing_fields_hhmmss_mmm(item) for item in value]
+    return value
 
 
 def load_peer_key_rotation_state():
@@ -2473,7 +2554,16 @@ def peer_states_aligned_strict(local_state, peer_state):
     return True
 
 
-def write_peer_batch_ack(iface, ack_id, status="ok", message=None):
+def write_peer_batch_ack(
+    iface,
+    ack_id,
+    status="ok",
+    message=None,
+    reason_code=None,
+    reason_stage=None,
+    reason_detail=None,
+    timings_ms=None,
+):
     if not ack_id:
         return False
 
@@ -2486,7 +2576,16 @@ def write_peer_batch_ack(iface, ack_id, status="ok", message=None):
         "device": DEVICE,
         "message": str(message or ""),
         "processed_at": int(time.time()),
+        "processed_at_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
     }
+    if reason_code:
+        payload["reason_code"] = str(reason_code)
+    if reason_stage:
+        payload["reason_stage"] = str(reason_stage)
+    if reason_detail:
+        payload["reason_detail"] = str(reason_detail)
+    if isinstance(timings_ms, dict) and timings_ms:
+        payload["timings_ms"] = format_timing_fields_hhmmss_mmm(timings_ms)
 
     try:
         ensure_runtime_dirs()
@@ -2537,9 +2636,9 @@ def read_remote_peer_batch_ack(link, iface):
     return payload
 
 
-def wait_for_peer_batch_ack(link, iface, ack_id):
+def wait_for_peer_batch_ack_payload(link, iface, ack_id):
     if not ack_id:
-        return False
+        return None
 
     timeout_seconds = peer_batch_ack_timeout_seconds()
     poll_interval_seconds = peer_batch_ack_poll_interval_seconds()
@@ -2552,14 +2651,16 @@ def wait_for_peer_batch_ack(link, iface, ack_id):
                 status = str(ack.get("status", "")).lower()
                 if status == "ok":
                     log(f"PEER BATCH ACK OK ack_id={ack_id}", "INFO", iface, "MASTER")
-                    return True
+                    return ack
                 log(
-                    f"PEER BATCH ACK FAIL ack_id={ack_id} status={ack.get('status')} message={ack.get('message')}",
+                    f"PEER BATCH ACK FAIL ack_id={ack_id} status={ack.get('status')} "
+                    f"reason_code={ack.get('reason_code')} reason_stage={ack.get('reason_stage')} "
+                    f"message={ack.get('message')} reason_detail={ack.get('reason_detail')}",
                     "ERROR",
                     iface,
                     "MASTER",
                 )
-                return False
+                return ack
         time.sleep(poll_interval_seconds)
 
     log(
@@ -2568,7 +2669,16 @@ def wait_for_peer_batch_ack(link, iface, ack_id):
         iface,
         "MASTER",
     )
-    return False
+    return {
+        "ack_id": str(ack_id),
+        "status": "timeout",
+        "message": "peer batch ack timeout",
+    }
+
+
+def wait_for_peer_batch_ack(link, iface, ack_id):
+    ack = wait_for_peer_batch_ack_payload(link, iface, ack_id)
+    return isinstance(ack, dict) and str(ack.get("status", "")).lower() == "ok"
 
 
 def save_db_state(peer, iface, state):
@@ -4131,44 +4241,99 @@ def kme_url(peer_sae, endpoint, query):
     return f"https://{KME_IP}:{KME_PORT}/api/v1/keys/{peer_sae}/{endpoint}{query}"
 
 
-def do_enc(peer_sae):
+def do_enc(peer_sae, return_details=False):
+    started_ms = now_ms()
     url = kme_url(peer_sae, "enc_keys", f"?key_size={QKD_KEY_SIZE}")
     log(f"ENC REQUEST peer_sae={peer_sae} url={url}", "DEBUG", mode="MASTER")
     try:
         r = requests.get(url, cert=(CERT, KEY), verify=CA, timeout=5)
     except Exception as e:
         log(f"ENC ERROR {str(e)}", "ERROR", mode="MASTER")
+        details = {
+            "reason_code": "ENC_REQUEST_ERROR",
+            "reason_detail": str(e),
+            "duration_ms": elapsed_ms(started_ms),
+        }
+        if return_details:
+            return None, None, details
         return None, None
     if r.status_code != 200:
         log(f"ENC FAIL status={r.status_code}", "ERROR", mode="MASTER")
+        details = {
+            "reason_code": "ENC_HTTP_STATUS",
+            "reason_detail": f"http_status={r.status_code}",
+            "http_status": int(r.status_code),
+            "duration_ms": elapsed_ms(started_ms),
+        }
+        if return_details:
+            return None, None, details
         return None, None
     try:
         data = r.json()["keys"][0]
     except Exception as e:
         log(f"ENC JSON ERROR {str(e)}", "ERROR", mode="MASTER")
+        details = {
+            "reason_code": "ENC_JSON_ERROR",
+            "reason_detail": str(e),
+            "duration_ms": elapsed_ms(started_ms),
+        }
+        if return_details:
+            return None, None, details
         return None, None
     log(f"ENC OK key_id={data['key_ID']}", "INFO", mode="MASTER")
+    details = {
+        "reason_code": "ENC_OK",
+        "duration_ms": elapsed_ms(started_ms),
+    }
+    if return_details:
+        return data["key_ID"], data["key"], details
     return data["key_ID"], data["key"]
 
 
-def do_dec(peer_sae, key_id):
+def do_dec(peer_sae, key_id, return_details=False):
+    started_ms = now_ms()
+    last_http_status = None
+    last_error = None
     for i in range(max(1, DEC_RETRY)):
         log(f"DEC TRY {i} key_id={key_id}", "DEBUG", mode="SLAVE")
         try:
             url = kme_url(peer_sae, "dec_keys", f"?key_ID={key_id}&key_size={QKD_KEY_SIZE}")
             r = requests.get(url, cert=(CERT, KEY), verify=CA, timeout=5)
             if r.status_code != 200:
+                last_http_status = int(r.status_code)
                 log(f"DEC HTTP status={r.status_code} key_id={key_id}", "DEBUG", mode="SLAVE")
                 time.sleep(1)
                 continue
             data = r.json()
             if data.get("keys"):
                 log(f"DEC OK key_id={key_id}", "INFO", mode="SLAVE")
+                details = {
+                    "reason_code": "DEC_OK",
+                    "attempts": i + 1,
+                    "duration_ms": elapsed_ms(started_ms),
+                }
+                if return_details:
+                    return data["keys"][0]["key"], details
                 return data["keys"][0]["key"]
         except Exception as e:
+            last_error = str(e)
             log(f"DEC ERROR key_id={key_id} error={str(e)}", "ERROR", mode="SLAVE")
         time.sleep(1)
     log(f"DEC FAILED key_id={key_id}", "ERROR", mode="SLAVE")
+    details = {
+        "reason_code": "DEC_FAILED",
+        "attempts": max(1, DEC_RETRY),
+        "duration_ms": elapsed_ms(started_ms),
+    }
+    if last_http_status is not None:
+        details["http_status"] = int(last_http_status)
+        details["reason_detail"] = f"http_status={last_http_status}"
+    if last_error:
+        details["error"] = last_error
+        if "reason_detail" not in details:
+            details["reason_detail"] = last_error
+    if return_details:
+        return None, details
     return None
 
 
@@ -4356,7 +4521,18 @@ def validate_ssh_runtime_for_master():
     return True
 
 
-def send_command(link, action, iface, key_id=None, generation=None, start_time=None, batch_b64=None, ack_id=None, bypass_enqueue_margin=False):
+def send_command(
+    link,
+    action,
+    iface,
+    key_id=None,
+    generation=None,
+    start_time=None,
+    batch_b64=None,
+    ack_id=None,
+    bypass_enqueue_margin=False,
+    trace_context=None,
+):
     if not validate_link_runtime(link, require_peer_transport=True):
         return False
 
@@ -4433,6 +4609,8 @@ def send_command(link, action, iface, key_id=None, generation=None, start_time=N
             "target_iface": peer_iface,
             "created_at": int(time.time()),
         }
+        if isinstance(trace_context, dict) and trace_context:
+            envelope["trace_context"] = trace_context
         transport_payload = json.dumps(envelope, separators=(",", ":"))
         log(
             f"SCP PUT {peer_user}@{peer_ip} action=enqueue-batch local_iface={iface} peer_iface={peer_iface} "
@@ -4754,17 +4932,30 @@ def run_slave_install_key(key_id, iface, generation=None, start_time=None):
     return True
 
 
-def run_slave_install_key_batch(batch_b64, iface):
+def run_slave_install_key_batch(batch_b64, iface, ack_context=None):
+    def _ack_fail(reason_code, reason_stage, reason_detail):
+        if not isinstance(ack_context, dict):
+            return
+        ack_context["reason_code"] = str(reason_code)
+        ack_context["reason_stage"] = str(reason_stage)
+        ack_context["reason_detail"] = str(reason_detail)
+
     if not batch_b64:
         log("INSTALL-KEY-BATCH MISSING batch-b64", "ERROR", iface, "SLAVE")
+        _ack_fail("MISSING_BATCH_PAYLOAD", "INPUT", "missing batch-b64")
         print("ERROR MISSING batch-b64")
         return False
 
+    slave_batch_started_ms = now_ms()
+    total_dec_ms = 0
+    dec_key_ms = []
+    slave_commit_ms = 0
     runtime_mode, effective_batch = log_runtime_mode(iface, "SLAVE")
 
     link = link_by_interface(iface)
     if not link:
         log(f"NO LINK MATCH iface={iface}", "ERROR", iface, "SLAVE")
+        _ack_fail("LINK_NOT_FOUND", "INPUT", f"no link match for iface={iface}")
         print(f"ERROR NO LINK MATCH iface={iface}")
         return False
 
@@ -4782,6 +4973,7 @@ def run_slave_install_key_batch(batch_b64, iface):
                 iface,
                 "SLAVE",
             )
+            _ack_fail("SEED_NOT_ADOPTED", "SEED", "orchestrator seed not adopted")
             print("ERROR SEED NOT ADOPTED")
             return False
         if not save_db_state(peer, iface, state):
@@ -4791,6 +4983,7 @@ def run_slave_install_key_batch(batch_b64, iface):
                 iface,
                 "SLAVE",
             )
+            _ack_fail("SEED_STATE_SAVE_FAILED", "SEED", "seed state save failed")
             print("ERROR SEED STATE SAVE FAIL")
             return False
 
@@ -4799,11 +4992,13 @@ def run_slave_install_key_batch(batch_b64, iface):
         batch = json.loads(decoded)
     except Exception as e:
         log(f"INSTALL-KEY-BATCH DECODE FAIL error={str(e)}", "ERROR", iface, "SLAVE")
+        _ack_fail("BATCH_DECODE_FAILED", "DECODE", str(e))
         print("ERROR INVALID BATCH")
         return False
 
     if not isinstance(batch, list) or not batch:
         log("INSTALL-KEY-BATCH EMPTY", "ERROR", iface, "SLAVE")
+        _ack_fail("BATCH_EMPTY", "DECODE", "batch payload is empty or invalid")
         print("ERROR EMPTY BATCH")
         return False
 
@@ -4825,6 +5020,7 @@ def run_slave_install_key_batch(batch_b64, iface):
 
         if not key_id:
             log(f"INSTALL-KEY-BATCH INVALID ENTRY item={item}", "ERROR", iface, "SLAVE")
+            _ack_fail("INVALID_BATCH_ENTRY", "VALIDATION", f"missing key_id entry={item}")
             print("ERROR INVALID BATCH ENTRY")
             return False
 
@@ -4834,9 +5030,16 @@ def run_slave_install_key_batch(batch_b64, iface):
         rotation = rotation_id_for(iface, generation, key_id)
         customer_event("PEER_INSTALL_REQUEST", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id, start_time=start_time)
         customer_event("DEC_KEY_START", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
-        key = do_dec(link["peer_sae"], key_id)
+        key, dec_details = do_dec(link["peer_sae"], key_id, return_details=True)
+        dec_elapsed_ms = int(dec_details.get("duration_ms", 0)) if isinstance(dec_details, dict) else 0
+        total_dec_ms += dec_elapsed_ms
+        dec_key_ms.append({"key_id": key_id, "duration_ms": dec_elapsed_ms})
         if not key:
             record_kme_failure(peer, iface, state, "DEC_FAILED")
+            reason_detail = "dec failed"
+            if isinstance(dec_details, dict):
+                reason_detail = dec_details.get("reason_detail") or reason_detail
+            _ack_fail("DEC_FAILED", "DEC", f"key_id={key_id} {reason_detail}")
             print(f"ERROR DEC FAILED key_id={key_id}")
             return False
         customer_event("DEC_KEY_OK", iface=iface, mode="SLAVE", rotation=rotation, generation=generation, key_id=key_id)
@@ -4851,12 +5054,16 @@ def run_slave_install_key_batch(batch_b64, iface):
             }
         )
 
+    slave_commit_start_ms = now_ms()
     if not install_keychain_batch(iface, install_entries, ca_name, keychain, state=state, commit=True):
         record_kme_failure(peer, iface, state, "BATCH_INSTALL_FAILED")
+        _ack_fail("KEYCHAIN_BATCH_INSTALL_FAILED", "SLAVE_COMMIT", "keychain batch install failed")
         print("ERROR KEYCHAIN BATCH INSTALL FAIL")
         return False
+    slave_commit_ms = elapsed_ms(slave_commit_start_ms)
 
     if not bind_interface_to_stable_ca(iface, ca_name, keychain):
+        _ack_fail("INTERFACE_BIND_FAILED", "SLAVE_BIND", f"ca={ca_name}")
         print(f"ERROR INTERFACE BIND FAIL ca={ca_name}")
         return False
 
@@ -4932,6 +5139,7 @@ def run_slave_install_key_batch(batch_b64, iface):
     state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
 
     if not save_db_state(peer, iface, state):
+        _ack_fail("STATE_SAVE_FAILED", "SLAVE_STATE", "state save failed")
         print("ERROR STATE SAVE FAIL")
         return False
 
@@ -4944,6 +5152,23 @@ def run_slave_install_key_batch(batch_b64, iface):
         pending_key_id=state.get("pending_key_id"),
         promoted=promoted,
     )
+    if isinstance(ack_context, dict):
+        timings = {
+            "slave_dec_total_ms": int(total_dec_ms),
+            "slave_dec_per_key_ms": dec_key_ms,
+            "slave_commit_ms": int(slave_commit_ms),
+            "slave_total_ms": int(elapsed_ms(slave_batch_started_ms)),
+        }
+        source_created_at = ack_context.get("source_created_at")
+        if source_created_at is not None:
+            try:
+                created_at_epoch = int(source_created_at)
+                timings["slave_elapsed_from_enqueue_ms"] = max(
+                    0, int(time.time() * 1000) - (created_at_epoch * 1000)
+                )
+            except Exception:
+                pass
+        ack_context["timings_ms"] = timings
     print(f"OK INSTALL-KEY-BATCH count={len(install_entries)}")
     return True
 
@@ -5160,19 +5385,34 @@ def process_inbound_transport_for_slave(link):
         return False
 
     ack_id = None
+    ack_context = {}
     batch_b64 = raw_payload
     try:
         decoded_payload = json.loads(raw_payload)
         if isinstance(decoded_payload, dict) and decoded_payload.get("kind") == "install-key-batch":
             ack_id = decoded_payload.get("ack_id")
             batch_b64 = str(decoded_payload.get("batch_b64") or "")
+            created_at = decoded_payload.get("created_at")
+            if created_at is not None:
+                ack_context["source_created_at"] = created_at
+            trace_context = decoded_payload.get("trace_context")
+            if isinstance(trace_context, dict):
+                ack_context["trace_context"] = trace_context
     except Exception:
         pass
 
     if not batch_b64:
         log(f"INBOUND BATCH INVALID envelope missing batch_b64 file={processing_path}", "ERROR", iface, "SLAVE")
         if ack_id:
-            write_peer_batch_ack(iface, ack_id, status="fail", message="missing batch_b64")
+            write_peer_batch_ack(
+                iface,
+                ack_id,
+                status="fail",
+                message="missing batch_b64",
+                reason_code="MISSING_BATCH_PAYLOAD",
+                reason_stage="INPUT",
+                reason_detail="envelope missing batch_b64",
+            )
         try:
             processing_path.unlink()
         except Exception:
@@ -5189,13 +5429,20 @@ def process_inbound_transport_for_slave(link):
 
     try:
         log(f"INBOUND BATCH PROCESS START file={processing_path} ack_id={ack_id}", "INFO", iface, "SLAVE")
-        ok = run_slave_install_key_batch(batch_b64, iface)
+        ok = run_slave_install_key_batch(batch_b64, iface, ack_context=ack_context)
     finally:
         release_action_lock(iface, "install-key-batch")
 
     if ok:
         if ack_id:
-            write_peer_batch_ack(iface, ack_id, status="ok", message="batch installed")
+            ack_timings = dict(ack_context.get("timings_ms") or {})
+            write_peer_batch_ack(
+                iface,
+                ack_id,
+                status="ok",
+                message="batch installed",
+                timings_ms=ack_timings,
+            )
         try:
             processing_path.unlink()
         except Exception:
@@ -5204,7 +5451,16 @@ def process_inbound_transport_for_slave(link):
         return True
 
     if ack_id:
-        write_peer_batch_ack(iface, ack_id, status="fail", message="batch processing failed")
+        write_peer_batch_ack(
+            iface,
+            ack_id,
+            status="fail",
+            message="batch processing failed",
+            reason_code=str(ack_context.get("reason_code") or "BATCH_PROCESSING_FAILED"),
+            reason_stage=str(ack_context.get("reason_stage") or "SLAVE"),
+            reason_detail=str(ack_context.get("reason_detail") or "batch processing failed"),
+            timings_ms=ack_context.get("timings_ms"),
+        )
     try:
         processing_path.replace(inbox_path)
     except Exception:
@@ -6678,12 +6934,58 @@ def run_master():
             payload_json = json.dumps(peer_payload, separators=(",", ":"))
             payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
             ack_id = compute_batch_ack_id(payload_b64)
-            if not send_command(link, "install-key-batch", iface, batch_b64=payload_b64, ack_id=ack_id):
+            trace_context = {
+                "master_enc_started_ms": int(enc_batch_start_ms),
+                "master_local_commit_started_ms": int(local_install_start_ms),
+            }
+            peer_send_start_ms = now_ms()
+            if not send_command(
+                link,
+                "install-key-batch",
+                iface,
+                batch_b64=payload_b64,
+                ack_id=ack_id,
+                trace_context=trace_context,
+            ):
                 record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
+                append_pipeline_timing_record(
+                    iface,
+                    ack_id,
+                    status="fail",
+                    timings_ms={
+                        "master_enc_total_ms": int(elapsed_ms(enc_batch_start_ms)),
+                        "master_commit_ms": int(elapsed_ms(local_install_start_ms)),
+                        "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
+                    },
+                    reason_code="PEER_INSTALL_KEY_BATCH_FAILED",
+                    reason_stage="MASTER_SCP_SEND",
+                    reason_detail="send_command install-key-batch failed",
+                )
                 log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                 continue
             if peer_transport_mode() == "queue":
-                if not wait_for_peer_batch_ack(link, iface, ack_id):
+                ack_wait_start_ms = now_ms()
+                ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
+                ack_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
+                timing_snapshot = {
+                    "master_enc_total_ms": int(elapsed_ms(enc_batch_start_ms)),
+                    "master_commit_ms": int(elapsed_ms(local_install_start_ms)),
+                    "master_peer_send_ms": int(elapsed_ms(peer_send_start_ms)),
+                    "master_ack_wait_ms": int(elapsed_ms(ack_wait_start_ms)),
+                    "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
+                }
+                if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
+                    timing_snapshot.update(ack_payload.get("timings_ms"))
+                append_pipeline_timing_record(
+                    iface,
+                    ack_id,
+                    status=str(ack_payload.get("status", "timeout") if isinstance(ack_payload, dict) else "timeout"),
+                    timings_ms=timing_snapshot,
+                    reason_code=(ack_payload or {}).get("reason_code") if isinstance(ack_payload, dict) else "PEER_ACK_TIMEOUT",
+                    reason_stage=(ack_payload or {}).get("reason_stage") if isinstance(ack_payload, dict) else "MASTER_ACK_WAIT",
+                    reason_detail=(ack_payload or {}).get("reason_detail") if isinstance(ack_payload, dict) else "peer ack timeout",
+                )
+                if not ack_ok:
                     record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_ACK_FAILED")
                     log("PEER INSTALL-KEY-BATCH ACK FAILED AFTER ENQUEUE -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
                     continue
