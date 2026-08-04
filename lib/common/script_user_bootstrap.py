@@ -774,6 +774,10 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
     )
 
 
+def deploy_user_can_repair_script_user_ssh(deploy_user: str, script_user: str) -> bool:
+    return deploy_user in ("root", script_user)
+
+
 def run_shell_fix(
     dev: Device,
     name: str,
@@ -783,7 +787,7 @@ def run_shell_fix(
 ) -> bool:
     # Non-privileged bootstrap users cannot reliably repair another user's
     # home/.ssh ownership on all Junos variants.
-    if deploy_user not in ("root", script_user):
+    if not deploy_user_can_repair_script_user_ssh(deploy_user, script_user):
         print(
             "[%s] INFO ssh home fix skipped: deploy user %s is not privileged for %s home ownership repair" %
             (name, deploy_user, script_user)
@@ -838,7 +842,7 @@ def run_script_user_key_fix(
     key_path = f"{ssh_home_base}/{script_user}/.ssh/{key_name}"
     pub_path = f"{key_path}.pub"
 
-    if deploy_user not in ("root", script_user):
+    if not deploy_user_can_repair_script_user_ssh(deploy_user, script_user):
         print(
             "[%s] INFO ssh key fix skipped: deploy user %s is not privileged for %s ownership repair" %
             (name, deploy_user, script_user)
@@ -1160,6 +1164,14 @@ def bootstrap_script_user_on_device(
                 "[%s] hint: predeploy/provisioning will continue with runtime checks and config-based peer SSH auth" %
                 name
             )
+
+        if not deploy_user_can_repair_script_user_ssh(deploy_user, script_user):
+            if script_auth_mode == "key-only":
+                print(
+                    "[%s] INFO canonical key sync skipped: deploy user %s is not privileged for %s key ownership repair"
+                    % (name, deploy_user, script_user)
+                )
+            return True
 
         if script_auth_mode == "key-only" and local_private_key_path:
             if not sync_script_user_keypair_from_local(

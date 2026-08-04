@@ -317,12 +317,19 @@ def pyez_cli_cmd(device, command, timeout=60, include_failed_marker=True):
 
 
 def ssh_cmd(device, command, user, timeout=30):
+    device = normalize_device(device)
     host = device_host(device)
+    if command.startswith("op "):
+        remote_command = command
+    elif platform_is_legacy_qfx(device):
+        remote_command = command
+    else:
+        remote_command = "start shell command " + junos_cli_quote(command)
     cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
     deploy_key = device.get("orchestrator_ssh_key") or device.get("deploy_ssh_key")
     if deploy_key:
         cmd.extend(["-i", deploy_key, "-o", "IdentitiesOnly=yes"])
-    cmd.extend([f"{user}@{host}", command])
+    cmd.extend([f"{user}@{host}", remote_command])
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
 
 
