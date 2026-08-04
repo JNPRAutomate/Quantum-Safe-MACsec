@@ -237,6 +237,7 @@ def parse_args():
         description="Quantum-Safe MACsec orchestrator.",
         epilog=(
             "Workflow:\n"
+            "  0. python3 qkd_orchestrator.py clean  (optional cleanup before fresh start)\n"
             "  1. python3 qkd_orchestrator.py create --inventory <name> --pki-profile <profile>\n"
             "  2. python3 qkd_orchestrator.py bootstrap\n"
             "  3. python3 qkd_orchestrator.py validate --phase predeploy\n"
@@ -327,7 +328,7 @@ def parse_args():
 
     bootstrap = subparsers.add_parser(
         "bootstrap",
-        help="Bootstrap script user and peer command user on devices",
+        help="Bootstrap SCRIPT_USER and PEER_CMD_USER on devices",
         description=(
             "Bootstrap SCRIPT_USER (etsi_user) and PEER_CMD_USER (etsi_peer_view) on managed devices.\n\n"
             "This includes:\n"
