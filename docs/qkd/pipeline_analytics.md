@@ -2,70 +2,11 @@
 
 Tool: `tools/qkd_pipeline_analytics.py`
 
-Collects end-to-end pipeline timing data from all QKD devices in the inventory and generates an offline HTML or JSON report. The primary goal is to verify that **≥99% of key fetches succeed within the KME TTL window** (i.e., decryption receives HTTP 200, not HTTP 404).
+Collects end-to-end pipeline timing data from all QKD devices in the inventory and generates an offline HTML report. The primary goal is to answer one operational question:
 
----
+> **What is the minimum key retention period (TTL) the KME must be configured with?**
 
-## What It Measures
-
-Each key rotation cycle generates a timing record on the master device. The tool collects and analyzes these records across all devices.
-
-### Master-side timings
-
-| Field | Description |
-|-------|-------------|
-| **Encryption** | Time for master to call KME and encrypt the key batch |
-| **Commit (install keys)** | Time to commit MACsec keys to the Junos keychain |
-| **Peer Send (SCP)** | Time to send the encrypted batch to the slave device |
-| **ACK Wait** | Time waiting for the slave to acknowledge |
-| **Total (ENC→ACK)** | End-to-end time from encryption start to ACK received |
-
-### Slave-side timings
-
-| Field | Description |
-|-------|-------------|
-| **Decryption** | Time for slave to call KME and decrypt the key batch |
-| **Commit** | Time to commit decrypted keys to the Junos keychain |
-| **Total Processing** | Total slave processing time |
-| **Elapsed (enqueue→ACK)** | Total time from batch received to ACK written |
-
----
-
-## KME TTL Budget — The Critical Metric
-
-The most important derived metric is: **how long must a key survive in KME** between the moment the master fetches it (ENC) and the moment the slave retrieves it (DEC)?
-
-```
-ENC → DEC time = master_total_enc_to_ack − slave_elapsed_from_enqueue + slave_dec_time
-```
-
-The report includes a dedicated section for this showing Min/Avg/Median/95%/99%/Max with a color-coded verdict:
-
-| Worst case (99%) | Verdict |
-|------------------|---------|
-| < 8 seconds | ✅ Green — Well within KME TTL |
-| 8–10 seconds | ⚠️ Orange — Close to boundary |
-| > 10 seconds | 🔴 Red — Expect HTTP 404 failures |
-
-**Example from real data:**
-```
-master_total  ≈ 72s
-slave_elapsed ≈ 59s
-slave_dec     ≈ 0.13s
-──────────────────────
-ENC → DEC     ≈ 13 seconds  ← exceeds 10s KME TTL!
-```
-
-This tells you the KME TTL needs to be at least 13 seconds, or the master commit must be faster.
-
-
-
-- **HTTP 200** — Key found and valid (success)
-- **HTTP 404** — Key not found, expired or already deleted (failure)
-
-The KME deletes keys after a configured TTL (typically 10+ seconds). If the full pipeline takes too long, keys may expire before decryption.
-
-**Goal:** ≥99% of operations must complete within the KME TTL window.
+The answer comes from measuring how long a key must survive in the KME between when the master fetches it (ENC call) and when the slave retrieves it (DEC call).
 
 ---
 
@@ -77,109 +18,199 @@ The KME deletes keys after a configured TTL (typically 10+ seconds). If the full
 python3 tools/qkd_pipeline_analytics.py
 ```
 
-Uses the default inventory (`ring_mx_acx_unified_link_driven.yml`) and base inventory to discover all devices, fetches timing files via SCP, and generates `qkd_pipeline_report.html`.
+Reads the default inventory, fetches timing JSONL files from all devices via SCP, and generates `qkd_pipeline_report.html`.
 
-### Custom inventory or output
-
-```bash
-python3 tools/qkd_pipeline_analytics.py \
-  --inventory config/inventory/input/my_inventory.yml \
-  --output report.html
-```
-
-### Re-analyze existing data (skip SCP)
+### Re-analyze existing data (no SCP)
 
 ```bash
 python3 tools/qkd_pipeline_analytics.py --skip-collect
 ```
 
-Automatically selects the most recent snapshot in `--output-dir`.
+Automatically selects the most recent local snapshot. Use this to regenerate the report after the tool is updated.
 
-### JSON output
-
-```bash
-python3 tools/qkd_pipeline_analytics.py --json --output timing_stats.json
-```
-
----
-
-## Options
+### Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--inventory` | `ring_mx_acx_unified_link_driven.yml` | Device inventory YAML |
-| `--base-inventory` | `inventory_base.yaml` | Base inventory (for SSH user) |
+| `--base-inventory` | `inventory_base.yaml` | Base inventory (SSH user/key) |
 | `--output-dir` | `./qkd_timings` | Local directory for collected files |
-| `--output` | `qkd_pipeline_report.html` | Output report file |
-| `--json` | — | Output JSON instead of HTML |
+| `--output` | `qkd_pipeline_report.html` | Output HTML file |
 | `--skip-collect` | — | Skip SCP, analyze latest existing snapshot |
-| `--remote-path` | `/var/home/etsi_user/logs/pipeline_timing` | Remote directory on devices |
+| `--remote-path` | `/var/home/etsi_user/logs/pipeline_timing` | Remote log directory |
 | `--jobs` | `4` | Parallel SCP collection jobs |
-| `--user` | from base inventory | SSH user override |
-| `--identity-file` | — | SSH private key path |
+| `--identity-file` | — | SSH private key path override |
 
 ---
 
 ## Data Source
 
-Timing records are written by `qkd_onbox.py` on each device to:
+Timing records are written by `qkd_onbox.py` on each master device after every successful key rotation:
 
 ```
 /var/home/etsi_user/logs/pipeline_timing/qkd_rolling_pipeline_timing.jsonl
 /var/home/etsi_user/logs/pipeline_timing/qkd_batch_pipeline_timing.jsonl
 ```
 
-Each record is a JSON line with the following structure:
+Each line is a JSON record:
 
 ```json
 {
   "timestamp": "2026-08-04 13:45:55.511",
   "device": "sae-001",
   "iface": "et-0/0/0",
-  "operation": "ROLLING_REPLACEMENT",
-  "ack_id": "8ca21fee...",
   "status": "ok",
   "timings_ms": {
-    "master_enc_total_ms": "00:00:00:123",
-    "master_commit_ms": "00:01:09:822",
-    "master_peer_send_ms": "00:01:05:429",
-    "master_ack_wait_ms": "00:01:02:200",
+    "master_commit_ms":           "00:01:09:822",
+    "master_peer_send_ms":        "00:01:05:429",
+    "master_ack_wait_ms":         "00:01:02:200",
     "master_total_enc_to_ack_ms": "00:01:12:096",
-    "slave_dec_total_ms": "00:00:00:130",
-    "slave_commit_ms": "00:00:02:288",
-    "slave_total_ms": "00:00:07:441",
+    "slave_dec_total_ms":         "00:00:00:130",
+    "slave_commit_ms":            "00:00:02:288",
+    "slave_total_ms":             "00:00:07:441",
     "slave_elapsed_from_enqueue_ms": "00:00:58:822"
   }
 }
 ```
 
-All durations are in `HH:MM:SS:mmm` format (hours, minutes, seconds, milliseconds).
+All durations use `HH:MM:SS:mmm` format (hours, minutes, seconds, milliseconds).
 
 ---
 
-## Interpreting the Report
+## Understanding the Raw JSONL Fields
 
-### HTML Report sections
+### ⚠️ Master fields are cumulative timestamps, not individual durations
 
-1. **Pipeline Summary** — Total records, success/fail counts, KME success rate
-2. **Master-Side Timing** — Statistics table with Min/Avg/Median(50%)/95%/99%/Max for each operation (in `MM:SS.mmm` format)
-3. **Slave-Side Timing** — Same statistics for slave-side operations
-4. **KME Key Validity** — Success rate verdict with recommendations
+This is the most important thing to understand when reading the raw log or the report.
 
-### Example output (real data)
+All four master fields are measured **at the same moment** (when the ACK is received) but from **different start points**. They are cumulative elapsed times that all end at ACK received — not individual step durations.
 
 ```
-Master Commit (install keys): Avg 01:09.728, Max 01:09.822
-Slave Decryption:             Avg 00.130,   Max 00.191
-KME Success Rate:             100%
+enc_batch_start_ms ──────────────────────────────────── ACK received
+                   │                                     │
+                   └──── master_total_enc_to_ack_ms = 72s
+
+local_install_start_ms ────────────────────────── ACK received
+                       │                           │
+                       └── master_commit_ms = 69.8s   ⚠ name misleading: also includes SCP + ACK wait!
+
+peer_send_start_ms ─────────────────────── ACK received
+                   │                       │
+                   └── master_peer_send_ms = 65.4s   ⚠ also includes ACK wait!
+
+ack_wait_start_ms ─────────── ACK received
+                  │            │
+                  └── master_ack_wait_ms = 62.2s   ✓ true duration (ACK poll only)
 ```
 
-**Interpretation:** Master commit (~69s) is the main bottleneck; slave decryption is fast (<200ms). All keys were still valid in KME at time of decryption.
+### Computing actual step durations (deltas)
+
+To get the real duration of each individual step, subtract adjacent cumulative values:
+
+| Step | Formula | Example |
+|------|---------|---------|
+| **ENC** (KME HTTP call) | `master_total − master_commit_ms` | 72 − 69.8 = **2.2s** |
+| **COMMIT** (Junos keychain install) | `master_commit_ms − master_peer_send_ms` | 69.8 − 65.4 = **4.4s** |
+| **SCP send** (upload to slave) | `master_peer_send_ms − master_ack_wait_ms` | 65.4 − 62.2 = **3.2s** |
+| **ACK poll** (wait for slave ACK file) | `master_ack_wait_ms` (no delta needed) | **62.2s** |
+| **TOTAL** | `master_total_enc_to_ack_ms` (no delta needed) | **72s** |
+
+The report computes and displays these deltas automatically. The "Computed as (JSONL delta)" column in the HTML table shows the exact formula for each row.
+
+### Slave fields are already true durations
+
+Slave-side fields are measured from the moment the slave script starts processing, so they are individual durations — no delta computation needed:
+
+| Field | What it measures | t=0 |
+|-------|-----------------|-----|
+| `slave_dec_total_ms` | KME HTTP GET calls to decrypt all key_ids | slave script start |
+| `slave_commit_ms` | Junos netconf commit on slave | after DEC complete |
+| `slave_total_ms` | DEC + COMMIT + state write + ACK write | slave script start |
+| `slave_elapsed_from_enqueue_ms` | From master SCP write to slave ACK written | master SCP write time (`created_at` in envelope) |
+
+Note: `slave_elapsed_from_enqueue_ms` has a different t=0 than the others — it starts from when the master wrote the SCP file, so it includes network transit time. It is used in the ENC→DEC formula.
+
+---
+
+## The Master Pipeline (sequential, blocking)
+
+```
+enc_batch_start
+      │
+      ├──[ENC ~2s]──► local_install_start
+      │
+      ├──[COMMIT ~4s]──► peer_send_start
+      │
+      ├──[SCP send ~3s]──► ack_wait_start
+      │
+      └──[ACK poll ~62s]──► ACK received
+```
+
+The ACK poll (~62s) is the **rotation interval** — the master polls every N seconds for the slave's written ACK file. It dominates the total time but is **not** part of the KME retention window (the slave has already called DEC before this wait ends).
+
+---
+
+## KME TTL Budget — The Critical Metric
+
+### What to ask the KME operator
+
+> *"How long does the KME keep a key after it is first fetched?"*
+
+That retention period must be ≥ the ENC→DEC time measured by this tool.
+
+### Formula
+
+```
+ENC→DEC = master_total_enc_to_ack − slave_elapsed_from_enqueue + slave_dec_total
+         = 72s − 59s + 0.13s
+         ≈ 13 seconds
+```
+
+This works because `slave_elapsed_from_enqueue` starts from the master SCP write time — subtracting it cancels out the SCP upload time and the ACK poll wait, leaving only the window from ENC call to slave DEC call.
+
+### Why the TOTAL (72s) is not the answer
+
+The 72s total includes ~62s of ACK polling, which happens **after** the slave has already decrypted. The key only needs to exist in the KME for the ~13s window shown above.
+
+### Recommended KME TTL
+
+```
+Recommended TTL = ceil(ENC→DEC 99th percentile) + 1s safety margin
+```
+
+| ENC→DEC 99% | Verdict | Action |
+|-------------|---------|--------|
+| < 8s | ✅ Green | Current KME TTL is adequate |
+| 8–10s | ⚠️ Orange | Review KME TTL, monitor closely |
+| > 10s | 🔴 Red | Increase KME TTL immediately to avoid HTTP 404 failures |
+
+### Example from real data
+
+```
+ENC→DEC Median: ~11s
+ENC→DEC 99%:    ~13s
+→ Recommended KME TTL: ≥ 14 seconds
+```
+
+---
+
+## HTML Report Sections
+
+1. **Pipeline Summary** — Total records, HTTP 200/404 counts, success rate
+2. **Master-Side Timing** — Per-step statistics with "What it measures" and "Computed as (JSONL delta)" columns
+   - Includes two SVG diagrams: the step timeline and the raw-field waterfall
+3. **Slave-Side Timing** — Per-step statistics with "JSONL field (raw)" column
+   - Includes SVG diagram showing slave t=0 and `slave_elapsed_from_enqueue` span
+4. **KME TTL Budget** — ENC→DEC statistics with combined master+slave timeline SVG
+   - Red bracket showing the actual key retention window
+   - Recommended TTL highlighted in amber banner
+5. **KME Key Validity** — HTTP 200 vs 404 breakdown with pass/warn/fail verdict
 
 ---
 
 ## Related Files
 
-- `tools/collect_device_logs.py` — Used internally for SCP collection
-- `artifacts/qkd_onbox.py` — Writes timing records on-device
+- `tools/collect_device_logs.py` — SCP collection backend used internally
+- `artifacts/qkd_onbox.py` — Writes timing records on-device (see `write_pipeline_timing_record()`)
+- `docs/qkd/kme_key_retention_and_commit_ordering.md` — KME TTL design rationale
 - `docs/qkd/logging_and_customer_reporting.md` — Logging architecture overview
