@@ -1216,12 +1216,16 @@ def handle_bootstrap(args):
     )
     
     if failed:
-        print_step_banner("SCRIPT_USER", "FAILED")
-        raise RuntimeError("QKD bootstrap failed for: " + ", ".join(failed))
+        print_step_banner("SCRIPT_USER", "PARTIAL SUCCESS")
+        print(f"[WARN] Bootstrap failed for: {', '.join(failed)}")
+        print(f"[WARN] Successfully bootstrapped: {', '.join(ok)}")
+        print("[INFO] Deploy will skip failed devices and continue with successful ones.")
+    else:
+        print_step_banner("SCRIPT_USER", "OK")
     
-    print_step_banner("SCRIPT_USER", "OK")
-    print("\nBootstrap completed successfully.")
-    print("Next: run 'python3 qkd_orchestrator.py validate --phase predeploy'")
+    print("\nNext: run 'python3 qkd_orchestrator.py validate --phase predeploy'")
+    print("      (will skip unavailable devices)")
+
 
 
 # ---------------------------------------------------------------------------
