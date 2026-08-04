@@ -9,11 +9,11 @@ set -Eeuo pipefail
 # - Verifies service status and API health
 #
 # Optional: run initial bootstrap flow (init/unseal/policy/approle/secrets)
-# via tools/setup_vault_localhost_8200.sh
+# via tools/vault/setup_vault_localhost_8200.sh
 #
 # Usage:
-#   bash tools/deploy_vault_localhost_8200.sh
-#   bash tools/deploy_vault_localhost_8200.sh --with-bootstrap
+#   bash tools/vault/deploy_vault_localhost_8200.sh
+#   bash tools/vault/deploy_vault_localhost_8200.sh --with-bootstrap
 
 WITH_BOOTSTRAP=0
 for arg in "$@"; do
@@ -101,4 +101,4 @@ fi
 
 echo
 echo "[+] Vault deploy completed on http://127.0.0.1:8200"
-echo "    Next (manual bootstrap): bash tools/setup_vault_localhost_8200.sh"
+echo "    Next (manual bootstrap): bash tools/vault/setup_vault_localhost_8200.sh"

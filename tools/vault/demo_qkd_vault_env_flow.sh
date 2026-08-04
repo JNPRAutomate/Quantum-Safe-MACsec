@@ -17,7 +17,7 @@ WRITE_SECRETS=0
 
 usage() {
   cat <<'EOF'
-Usage: demo_qkd_vault_env_flow.sh [options]
+Usage: tools/vault/demo_qkd_vault_env_flow.sh [options]
 
 Options:
   --pause-seconds N      Seconds to wait between demo phases (default: 5)
