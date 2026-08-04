@@ -1,7 +1,4 @@
 set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} allow-commands exit
 set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} deny-commands "file .*"
 set system login user {{ script_user }} class {{ script_user_class | default('super-user', true) }}
-{% if peer_cmd_user and peer_cmd_user_pubkey %}
 set system login user {{ peer_cmd_user }} class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }}
-set system login user {{ peer_cmd_user }} authentication ssh-ed25519 "{{ peer_cmd_user_pubkey }}"
-{% endif %}
