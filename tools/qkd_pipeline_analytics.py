@@ -379,24 +379,162 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         <div class='summary-box'>
             All values are <strong>actual durations of each individual step</strong>, computed as deltas
             from the raw cumulative timestamps in the JSONL records.<br><br>
-            <strong>Pipeline order on master (sequential, blocking):</strong><br>
-            <code>ENC (KME call) → COMMIT (Junos keychain install) → SCP (send to slave) → ACK poll (wait for slave response)</code>
+            <strong>Pipeline order on master (sequential, blocking):</strong>
         </div>
+
+        <!-- Master timeline SVG diagram -->
+        <svg viewBox="0 0 860 170" xmlns="http://www.w3.org/2000/svg"
+             style="width:100%;max-width:860px;display:block;margin:16px 0;font-family:monospace">
+
+          <!-- timeline rail -->
+          <line x1="30" y1="60" x2="830" y2="60" stroke="#aaa" stroke-width="2"/>
+
+          <!-- milestone markers -->
+          <circle cx="30"  cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="200" cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="370" cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="560" cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="830" cy="60" r="6" fill="#e74c3c"/>
+
+          <!-- milestone labels (above) -->
+          <text x="30"  y="44" text-anchor="middle" font-size="11" fill="#333">enc_batch</text>
+          <text x="30"  y="56" text-anchor="middle" font-size="11" fill="#333">_start</text>
+          <text x="200" y="44" text-anchor="middle" font-size="11" fill="#333">local_install</text>
+          <text x="200" y="56" text-anchor="middle" font-size="11" fill="#333">_start</text>
+          <text x="370" y="44" text-anchor="middle" font-size="11" fill="#333">peer_send</text>
+          <text x="370" y="56" text-anchor="middle" font-size="11" fill="#333">_start</text>
+          <text x="560" y="44" text-anchor="middle" font-size="11" fill="#333">ack_wait</text>
+          <text x="560" y="56" text-anchor="middle" font-size="11" fill="#333">_start</text>
+          <text x="830" y="44" text-anchor="middle" font-size="11" fill="#e74c3c">ACK</text>
+          <text x="830" y="56" text-anchor="middle" font-size="11" fill="#e74c3c">received</text>
+
+          <!-- step brackets (below rail) -->
+          <!-- ENC step: 30→200 -->
+          <line x1="30"  y1="72" x2="30"  y2="84" stroke="#27ae60" stroke-width="1.5"/>
+          <line x1="30"  y1="78" x2="200" y2="78" stroke="#27ae60" stroke-width="1.5"/>
+          <line x1="200" y1="72" x2="200" y2="84" stroke="#27ae60" stroke-width="1.5"/>
+          <text x="115" y="96" text-anchor="middle" font-size="12" fill="#27ae60" font-weight="bold">ENC ~2s</text>
+
+          <!-- COMMIT step: 200→370 -->
+          <line x1="200" y1="100" x2="200" y2="112" stroke="#8e44ad" stroke-width="1.5"/>
+          <line x1="200" y1="106" x2="370" y2="106" stroke="#8e44ad" stroke-width="1.5"/>
+          <line x1="370" y1="100" x2="370" y2="112" stroke="#8e44ad" stroke-width="1.5"/>
+          <text x="285" y="124" text-anchor="middle" font-size="12" fill="#8e44ad" font-weight="bold">COMMIT ~4s</text>
+
+          <!-- SCP step: 370→560 -->
+          <line x1="370" y1="72" x2="370" y2="84" stroke="#e67e22" stroke-width="1.5"/>
+          <line x1="370" y1="78" x2="560" y2="78" stroke="#e67e22" stroke-width="1.5"/>
+          <line x1="560" y1="72" x2="560" y2="84" stroke="#e67e22" stroke-width="1.5"/>
+          <text x="465" y="96" text-anchor="middle" font-size="12" fill="#e67e22" font-weight="bold">SCP send ~3s</text>
+
+          <!-- ACK poll: 560→830 -->
+          <line x1="560" y1="100" x2="560" y2="112" stroke="#c0392b" stroke-width="1.5"/>
+          <line x1="560" y1="106" x2="830" y2="106" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="6,3"/>
+          <line x1="830" y1="100" x2="830" y2="112" stroke="#c0392b" stroke-width="1.5"/>
+          <text x="695" y="124" text-anchor="middle" font-size="12" fill="#c0392b" font-weight="bold">ACK poll ~62s (rotation interval)</text>
+
+          <!-- TOTAL span: 30→830 -->
+          <line x1="30"  y1="138" x2="30"  y2="150" stroke="#2c3e50" stroke-width="1.5"/>
+          <line x1="30"  y1="144" x2="830" y2="144" stroke="#2c3e50" stroke-width="1.5"/>
+          <line x1="830" y1="138" x2="830" y2="150" stroke="#2c3e50" stroke-width="1.5"/>
+          <text x="430" y="164" text-anchor="middle" font-size="12" fill="#2c3e50" font-weight="bold">TOTAL ~71s</text>
+        </svg>
+
+        <div class='summary-box' style="margin-top:8px;font-size:13px">
+            <strong>Note on KME retention window:</strong> The slave calls DEC shortly after SCP arrives
+            (~3s into the ACK poll phase). The key must exist in the KME from <em>ENC start</em>
+            until <em>slave DEC call</em> — typically <strong>~13s</strong>, not the full 71s TOTAL.
+            The remaining ~58s of ACK poll is just the master waiting for the slave's written ACK file.
+        </div>
+
+        <!-- Raw JSONL fields diagram: waterfall ending at same point (ACK received) -->
+        <h3 style="margin-top:20px;color:#555">How raw JSONL fields map to the timeline</h3>
+        <p style="font-size:13px;color:#666;margin-bottom:6px">
+            All four raw fields end at the <strong>same moment</strong> (ACK received) but start at different points.
+            They are cumulative timestamps, not individual durations.
+            Subtract adjacent values to get actual step durations (shown in the table below).
+        </p>
+        <svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg"
+             style="width:100%;max-width:800px;display:block;margin:8px 0 16px 0;font-family:monospace;font-size:12px">
+
+          <!-- shared right edge: ACK received at x=750 -->
+          <line x1="750" y1="10" x2="750" y2="185" stroke="#e74c3c" stroke-width="1.5" stroke-dasharray="5,3"/>
+          <text x="753" y="14" font-size="11" fill="#e74c3c" font-weight="bold">ACK received</text>
+
+          <!-- Row 1: master_total_enc_to_ack_ms  starts at x=50  (longest, ENC+COMMIT+SCP+ACK_WAIT) -->
+          <line x1="50"  y1="35" x2="750" y2="35" stroke="#2c3e50" stroke-width="3"/>
+          <circle cx="50"  cy="35" r="4" fill="#2c3e50"/>
+          <circle cx="750" cy="35" r="4" fill="#e74c3c"/>
+          <text x="0"   y="31" font-size="11" fill="#2c3e50" font-weight="bold">enc_batch_start_ms</text>
+          <text x="0"   y="44" font-size="10" fill="#2c3e50">→ master_total_enc_to_ack_ms = 72s</text>
+
+          <!-- Row 2: master_commit_ms  starts at x=195  (COMMIT+SCP+ACK_WAIT) -->
+          <line x1="195" y1="75" x2="750" y2="75" stroke="#c0392b" stroke-width="3"/>
+          <circle cx="195" cy="75" r="4" fill="#c0392b"/>
+          <circle cx="750" cy="75" r="4" fill="#e74c3c"/>
+          <text x="0"   y="71" font-size="11" fill="#c0392b" font-weight="bold">local_install_start_ms</text>
+          <text x="0"   y="80" font-size="10" fill="#c0392b">→ master_commit_ms = 69.8s  ⚠ name misleading!</text>
+
+          <!-- Row 3: master_peer_send_ms  starts at x=345  (SCP+ACK_WAIT) -->
+          <line x1="345" y1="115" x2="750" y2="115" stroke="#e67e22" stroke-width="3"/>
+          <circle cx="345" cy="115" r="4" fill="#e67e22"/>
+          <circle cx="750" cy="115" r="4" fill="#e74c3c"/>
+          <text x="0"   y="111" font-size="11" fill="#e67e22" font-weight="bold">peer_send_start_ms</text>
+          <text x="0"   y="120" font-size="10" fill="#e67e22">→ master_peer_send_ms = 65.4s  ⚠ includes ACK wait!</text>
+
+          <!-- Row 4: master_ack_wait_ms  starts at x=495  (ACK_WAIT only) -->
+          <line x1="495" y1="155" x2="750" y2="155" stroke="#7f8c8d" stroke-width="3"/>
+          <circle cx="495" cy="155" r="4" fill="#7f8c8d"/>
+          <circle cx="750" cy="155" r="4" fill="#e74c3c"/>
+          <text x="0"   y="151" font-size="11" fill="#7f8c8d" font-weight="bold">ack_wait_start_ms</text>
+          <text x="0"   y="160" font-size="10" fill="#7f8c8d">→ master_ack_wait_ms = 62.2s  ✓ true duration</text>
+
+          <!-- delta braces between start points -->
+          <!-- ENC delta: 50→195 -->
+          <line x1="50"  y1="175" x2="50"  y2="183" stroke="#27ae60" stroke-width="1.5"/>
+          <line x1="50"  y1="179" x2="195" y2="179" stroke="#27ae60" stroke-width="1.5"/>
+          <line x1="195" y1="175" x2="195" y2="183" stroke="#27ae60" stroke-width="1.5"/>
+          <text x="122"  y="195" text-anchor="middle" font-size="10" fill="#27ae60" font-weight="bold">ENC=72−69.8=2.2s</text>
+
+          <!-- COMMIT delta: 195→345 -->
+          <line x1="195" y1="175" x2="195" y2="183" stroke="#8e44ad" stroke-width="1.5"/>
+          <line x1="195" y1="179" x2="345" y2="179" stroke="#8e44ad" stroke-width="1.5"/>
+          <line x1="345" y1="175" x2="345" y2="183" stroke="#8e44ad" stroke-width="1.5"/>
+          <text x="270"  y="195" text-anchor="middle" font-size="10" fill="#8e44ad" font-weight="bold">COMMIT=69.8−65.4=4.4s</text>
+
+          <!-- SCP delta: 345→495 -->
+          <line x1="345" y1="175" x2="345" y2="183" stroke="#e67e22" stroke-width="1.5"/>
+          <line x1="345" y1="179" x2="495" y2="179" stroke="#e67e22" stroke-width="1.5"/>
+          <line x1="495" y1="175" x2="495" y2="183" stroke="#e67e22" stroke-width="1.5"/>
+          <text x="420"  y="195" text-anchor="middle" font-size="10" fill="#e67e22" font-weight="bold">SCP=65.4−62.2=3.2s</text>
+
+          <!-- ACK poll: 495→750 -->
+          <line x1="495" y1="175" x2="495" y2="183" stroke="#7f8c8d" stroke-width="1.5"/>
+          <line x1="495" y1="179" x2="750" y2="179" stroke="#7f8c8d" stroke-width="1.5"/>
+          <line x1="750" y1="175" x2="750" y2="183" stroke="#7f8c8d" stroke-width="1.5"/>
+          <text x="622"  y="195" text-anchor="middle" font-size="10" fill="#7f8c8d" font-weight="bold">ACK poll=62.2s</text>
+        </svg>
         <table>"""
-        html += "<tr><th>Step</th><th>What it measures</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
+        html += "<tr><th>Step</th><th>What it measures</th><th>Computed as (JSONL delta)</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
         
-        for op_name, what, key in [
-            ('ENC',        'Time to call KME and get encrypted key material',               'master_enc_step_ms'),
-            ('COMMIT',     'Time to install keys into Junos keychain (netconf commit)',      'master_commit_step_ms'),
-            ('SCP send',   'Time to upload encrypted batch to slave device via SCP',        'master_scp_step_ms'),
-            ('ACK poll',   'Time waiting for slave to write its ACK file (rotation interval)', 'master_ack_poll_ms'),
-            ('TOTAL',      'Full pipeline: ENC start → ACK received',                       'master_total_ms'),
+        for op_name, what, formula, key in [
+            ('ENC',      'KME HTTP call: request encrypted key material',
+             'master_total_enc_to_ack<br>− master_commit_ms',           'master_enc_step_ms'),
+            ('COMMIT',   'Junos netconf commit: install keys into keychain',
+             'master_commit_ms<br>− master_peer_send_ms',               'master_commit_step_ms'),
+            ('SCP send', 'Network upload of encrypted batch to slave',
+             'master_peer_send_ms<br>− master_ack_wait_ms',             'master_scp_step_ms'),
+            ('ACK poll', 'Polling wait until slave writes its ACK file (= rotation interval)',
+             'master_ack_wait_ms<br>(true duration, no delta needed)',   'master_ack_poll_ms'),
+            ('TOTAL',    'Full master pipeline: ENC start → ACK received',
+             'master_total_enc_to_ack_ms<br>(raw field, all steps)',     'master_total_ms'),
         ]:
             summary = calc_summary(stats[key])
             if summary.get('count', 0) > 0:
                 html += f"""<tr>
                     <td><strong>{op_name}</strong></td>
                     <td style="font-size:12px;color:#555">{what}</td>
+                    <td style="font-size:11px;color:#888;font-family:monospace">{formula}</td>
                     <td>{summary['count']}</td>
                     <td>{ms_to_human(summary['min'])}</td>
                     <td>{ms_to_human(summary['avg'])}</td>
@@ -412,25 +550,82 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         html += """<div class='section'>
         <h2>Slave-Side Timing [MM:SS.mmm]</h2>
         <div class='summary-box'>
-            All slave timers start when the slave event script begins processing the received batch
-            (t=0 is <strong>not</strong> the same as master t=0 — slave starts counting after SCP file arrives).<br><br>
-            <strong>Exception:</strong> <em>Elapsed (enqueue→ACK)</em> starts from when the master wrote
-            the SCP envelope, so it includes network transfer time.
+            The slave timer <strong>t=0 is NOT the same as master t=0</strong>.
+            Slave starts counting when its event script is triggered after the SCP file arrives.
         </div>
+
+        <!-- Slave timeline SVG -->
+        <svg viewBox="0 0 860 150" xmlns="http://www.w3.org/2000/svg"
+             style="width:100%;max-width:860px;display:block;margin:16px 0;font-family:monospace">
+
+          <!-- timeline rail -->
+          <line x1="30" y1="60" x2="830" y2="60" stroke="#aaa" stroke-width="2"/>
+
+          <!-- milestones -->
+          <circle cx="30"  cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="200" cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="560" cy="60" r="6" fill="#3a7bd5"/>
+          <circle cx="830" cy="60" r="6" fill="#e74c3c"/>
+
+          <!-- labels above -->
+          <text x="30"  y="44" text-anchor="middle" font-size="11" fill="#333">SCP file</text>
+          <text x="30"  y="56" text-anchor="middle" font-size="11" fill="#333">arrives (t=0)</text>
+          <text x="200" y="44" text-anchor="middle" font-size="11" fill="#333">DEC calls</text>
+          <text x="200" y="56" text-anchor="middle" font-size="11" fill="#333">complete</text>
+          <text x="560" y="44" text-anchor="middle" font-size="11" fill="#333">COMMIT</text>
+          <text x="560" y="56" text-anchor="middle" font-size="11" fill="#333">complete</text>
+          <text x="830" y="44" text-anchor="middle" font-size="11" fill="#e74c3c">ACK file</text>
+          <text x="830" y="56" text-anchor="middle" font-size="11" fill="#e74c3c">written</text>
+
+          <!-- DEC step: 30→200 -->
+          <line x1="30"  y1="72" x2="30"  y2="84" stroke="#27ae60" stroke-width="1.5"/>
+          <line x1="30"  y1="78" x2="200" y2="78" stroke="#27ae60" stroke-width="1.5"/>
+          <line x1="200" y1="72" x2="200" y2="84" stroke="#27ae60" stroke-width="1.5"/>
+          <text x="115" y="96" text-anchor="middle" font-size="12" fill="#27ae60" font-weight="bold">DEC ~0.13s</text>
+
+          <!-- COMMIT step: 200→560 -->
+          <line x1="200" y1="100" x2="200" y2="112" stroke="#8e44ad" stroke-width="1.5"/>
+          <line x1="200" y1="106" x2="560" y2="106" stroke="#8e44ad" stroke-width="1.5"/>
+          <line x1="560" y1="100" x2="560" y2="112" stroke="#8e44ad" stroke-width="1.5"/>
+          <text x="380" y="124" text-anchor="middle" font-size="12" fill="#8e44ad" font-weight="bold">COMMIT ~2.3s</text>
+
+          <!-- Total processing: 30→830 -->
+          <line x1="30"  y1="130" x2="30"  y2="142" stroke="#2c3e50" stroke-width="1.5"/>
+          <line x1="30"  y1="136" x2="830" y2="136" stroke="#2c3e50" stroke-width="1.5"/>
+          <line x1="830" y1="130" x2="830" y2="142" stroke="#2c3e50" stroke-width="1.5"/>
+          <text x="430" y="152" text-anchor="middle" font-size="12" fill="#2c3e50" font-weight="bold">slave_total_ms ~3s</text>
+
+          <!-- "elapsed from enqueue" label — starts before the diagram (shown with dashed line from left edge) -->
+          <text x="30" y="18" text-anchor="start" font-size="11" fill="#c0392b">← slave_elapsed_from_enqueue starts at master SCP write (off-chart left), includes network transit ~4s</text>
+        </svg>
+
         <table>"""
-        html += "<tr><th>Step</th><th>What it measures</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
+        html += "<tr><th>Step</th><th>What it measures</th><th>JSONL field (raw)</th><th>Count</th><th>Min</th><th>Avg</th><th>Median (50%)</th><th>95%</th><th>99%</th><th>Max</th></tr>"
         
-        for op_name, what, key in [
-            ('DEC',                   'Time to call KME and decrypt each key_id (HTTP GET)',        'slave_dec_ms'),
-            ('COMMIT',                'Time to install decrypted keys into Junos keychain',          'slave_commit_ms'),
-            ('Total processing',      'DEC + COMMIT + state save, from script start to ACK written','slave_total_ms'),
-            ('Elapsed (enqueue→ACK)', 'From master SCP write time to slave ACK written',            'slave_elapsed_from_enqueue_ms'),
+        for op_name, what, field, key in [
+            ('DEC',
+             'KME HTTP GET calls to decrypt each key_id — true individual duration',
+             'slave_dec_total_ms',
+             'slave_dec_ms'),
+            ('COMMIT',
+             'Junos netconf commit to install decrypted keys into keychain',
+             'slave_commit_ms',
+             'slave_commit_ms'),
+            ('Total processing',
+             'DEC + COMMIT + state save; from slave script start (SCP arrives) to ACK written',
+             'slave_total_ms',
+             'slave_total_ms'),
+            ('Elapsed (enqueue→ACK)',
+             'From master SCP write time (created_at in envelope) to slave ACK written — includes network transit',
+             'slave_elapsed_from_enqueue_ms',
+             'slave_elapsed_from_enqueue_ms'),
         ]:
             summary = calc_summary(stats[key])
             if summary.get('count', 0) > 0:
                 html += f"""<tr>
                     <td><strong>{op_name}</strong></td>
                     <td style="font-size:12px;color:#555">{what}</td>
+                    <td style="font-size:11px;color:#888;font-family:monospace">{field}</td>
                     <td>{summary['count']}</td>
                     <td>{ms_to_human(summary['min'])}</td>
                     <td>{ms_to_human(summary['avg'])}</td>
@@ -458,6 +653,69 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
                 <strong>Formula:</strong> <code>master_total_enc_to_ack − slave_elapsed_from_enqueue + slave_dec_time</code><br>
                 <strong>Action:</strong> Set KME TTL ≥ the 99% value below to avoid HTTP 404 (key not found) failures.
             </div>
+
+            <!-- Combined master+slave ENC→DEC window diagram -->
+            <svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg"
+                 style="width:100%;max-width:900px;display:block;margin:16px 0;font-family:monospace">
+
+              <!-- row labels -->
+              <text x="0" y="55"  font-size="12" fill="#2c3e50" font-weight="bold">MASTER</text>
+              <text x="0" y="145" font-size="12" fill="#2c3e50" font-weight="bold">SLAVE</text>
+
+              <!-- ── MASTER timeline ── -->
+              <line x1="80" y1="50" x2="860" y2="50" stroke="#aaa" stroke-width="2"/>
+              <circle cx="80"  cy="50" r="5" fill="#3a7bd5"/>
+              <circle cx="230" cy="50" r="5" fill="#3a7bd5"/>
+              <circle cx="380" cy="50" r="5" fill="#3a7bd5"/>
+              <circle cx="530" cy="50" r="5" fill="#3a7bd5"/>
+              <circle cx="860" cy="50" r="5" fill="#999"/>
+
+              <text x="80"  y="36" text-anchor="middle" font-size="10" fill="#333">ENC start</text>
+              <text x="230" y="36" text-anchor="middle" font-size="10" fill="#333">COMMIT start</text>
+              <text x="380" y="36" text-anchor="middle" font-size="10" fill="#333">SCP start</text>
+              <text x="530" y="36" text-anchor="middle" font-size="10" fill="#333">ACK poll start</text>
+              <text x="860" y="36" text-anchor="middle" font-size="10" fill="#999">ACK rcvd</text>
+
+              <!-- master step bars -->
+              <rect x="80"  y="55" width="150" height="12" fill="#27ae60" opacity="0.8" rx="2"/>
+              <text x="155" y="74" text-anchor="middle" font-size="10" fill="#27ae60">ENC ~2s</text>
+              <rect x="230" y="55" width="150" height="12" fill="#8e44ad" opacity="0.8" rx="2"/>
+              <text x="305" y="74" text-anchor="middle" font-size="10" fill="#8e44ad">COMMIT ~4s</text>
+              <rect x="380" y="55" width="150" height="12" fill="#e67e22" opacity="0.8" rx="2"/>
+              <text x="455" y="74" text-anchor="middle" font-size="10" fill="#e67e22">SCP ~3s</text>
+              <rect x="530" y="55" width="330" height="12" fill="#bdc3c7" opacity="0.8" rx="2" stroke-dasharray="4"/>
+              <text x="695" y="74" text-anchor="middle" font-size="10" fill="#7f8c8d">ACK poll ~62s (rotation wait)</text>
+
+              <!-- ── SLAVE timeline (offset ~7s after master SCP start) ── -->
+              <line x1="415" y1="140" x2="700" y2="140" stroke="#aaa" stroke-width="2"/>
+              <circle cx="415" cy="140" r="5" fill="#e74c3c"/>
+              <circle cx="480" cy="140" r="5" fill="#3a7bd5"/>
+              <circle cx="620" cy="140" r="5" fill="#3a7bd5"/>
+              <circle cx="700" cy="140" r="5" fill="#3a7bd5"/>
+
+              <text x="415" y="128" text-anchor="middle" font-size="10" fill="#e74c3c">SCP arrives</text>
+              <text x="480" y="128" text-anchor="middle" font-size="10" fill="#333">DEC done</text>
+              <text x="620" y="128" text-anchor="middle" font-size="10" fill="#333">COMMIT done</text>
+              <text x="700" y="128" text-anchor="middle" font-size="10" fill="#333">ACK written</text>
+
+              <rect x="415" y="145" width="65"  height="12" fill="#27ae60" opacity="0.8" rx="2"/>
+              <text x="447" y="165" text-anchor="middle" font-size="10" fill="#27ae60">DEC ~0.13s</text>
+              <rect x="480" y="145" width="140" height="12" fill="#8e44ad" opacity="0.8" rx="2"/>
+              <text x="550" y="165" text-anchor="middle" font-size="10" fill="#8e44ad">COMMIT ~2.3s</text>
+
+              <!-- ══ KME retention window: ENC start → slave DEC done ══ -->
+              <line x1="80"  y1="185" x2="80"  y2="200" stroke="#e74c3c" stroke-width="2"/>
+              <line x1="80"  y1="192" x2="480" y2="192" stroke="#e74c3c" stroke-width="2.5"/>
+              <line x1="480" y1="185" x2="480" y2="200" stroke="#e74c3c" stroke-width="2"/>
+              <text x="280" y="215" text-anchor="middle" font-size="13" fill="#e74c3c" font-weight="bold">
+                ▲ KME retention window (key must exist here) ≈ 13s ▲
+              </text>
+
+              <!-- vertical dotted connectors -->
+              <line x1="80"  y1="50"  x2="80"  y2="185" stroke="#e74c3c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+              <line x1="480" y1="140" x2="480" y2="192" stroke="#e74c3c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+            </svg>
+
             <table>
                 <tr><th>Metric</th><th>Value</th></tr>
                 <tr><td>Min</td><td>{ms_to_human(enc_to_dec_summary['min'])}</td></tr>
