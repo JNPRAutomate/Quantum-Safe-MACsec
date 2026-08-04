@@ -1,4 +1,3 @@
-set system login user {{ script_user }} class {{ script_user_class | default('super-user', true) }}
 set system scripts language python3
 set event-options generate-event QKD_TIMER time-interval {{ rotation_interval_seconds | default(60, true) }}
 set event-options policy QKD events QKD_TIMER

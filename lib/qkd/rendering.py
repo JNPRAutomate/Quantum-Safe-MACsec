@@ -49,6 +49,11 @@ def build_device_config(device_name, device, platform, base, topology):
         "script_user": QKD.get("SCRIPT_USER", "etsi_user"),
         "script_user_class": base.get("secrets", {}).get("script_user_class")
         or QKD.get("SCRIPT_USER_CLASS", "super-user"),
+        "peer_cmd_user": base.get("secrets", {}).get("peer_cmd_user")
+        or QKD.get("PEER_CMD_USER", "etsi_peer_view"),
+        "peer_cmd_user_class": base.get("secrets", {}).get("peer_cmd_user_class")
+        or QKD.get("PEER_CMD_USER_CLASS", "qkd-peer-cmd-class"),
+        "peer_cmd_user_pubkey": device.get("peer_cmd_user_pubkey"),
         "rotation_interval_seconds": rotation_interval_seconds,
     }
 
@@ -265,6 +270,9 @@ def build_device_config(device_name, device, platform, base, topology):
         for link in links
         if link.get("role")
     }
+
+    # Users and authentication (always include)
+    render_and_add("common/users.j2")
 
     if "master" in roles:
         render_and_add("common/event.j2")
