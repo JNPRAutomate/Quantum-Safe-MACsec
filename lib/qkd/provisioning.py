@@ -290,10 +290,10 @@ def commit_safely(dev, cu, name, sync=True, phase="CONFIG_APPLY", detail=None):
 
         if sync and dual_re and _is_benign_remote_re_warning(text):
             print(
-                f"[{name}] WARN commit synchronize hit remote RE license warning; "
-                "continuing deploy on active RE"
+                f"[{name}] WARN phase={phase} commit synchronize hit remote RE license warning; "
+                "continuing deploy on active RE (passive RE license mismatch does not block active deployment)"
             )
-            print(f"[{name}] WARN detail={text}")
+            print(f"[{name}] WARN detail: {text}")
             return
 
         if sync and dual_re and (
