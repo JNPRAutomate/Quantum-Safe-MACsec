@@ -145,13 +145,23 @@ def load_device_platforms(inventory_path: Path) -> Dict[str, str]:
         return {}
 
     platform_map: Dict[str, str] = {}
-    for device in devices:
+    for index, device in enumerate(devices, start=1):
         if not isinstance(device, dict):
             continue
         name = str(device.get("name") or "").strip()
         platform = str(device.get("platform") or "").strip().lower()
         if name and platform:
             platform_map[name.upper()] = platform
+            qkd = device.get("qkd") or {}
+            sae_id = str(
+                device.get("sae_id")
+                or (qkd.get("sae_id") if isinstance(qkd, dict) else "")
+                or ""
+            ).strip()
+            if not sae_id:
+                sae_id = f"sae-{index:03d}"
+            if sae_id:
+                platform_map[sae_id.upper()] = platform
     return platform_map
 
 
