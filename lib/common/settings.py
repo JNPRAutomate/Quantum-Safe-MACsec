@@ -141,6 +141,10 @@ QKD = {
     # Per-peer SSH probe timeout in seconds. Keep this short so a degraded
     # link is warned and the validation moves on instead of stalling the batch.
     "POSTDEPLOY_PEER_SSH_TIMEOUT": 10,
+    # PyEZ timeout for the device connection when running peer SSH probe.
+    # Set shorter than PEER_SSH_TIMEOUT to reduce overhead from NETCONF handshake
+    # when the actual SSH command finishes quickly (typically <1s).
+    "POSTDEPLOY_PEER_SSH_PYEZ_TIMEOUT": 5,
     "POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT": 2,
     "POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL": 2,
     "POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX": 1,

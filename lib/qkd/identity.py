@@ -753,6 +753,7 @@ def check_peer_ssh_from_device(device):
     peer_cmd_user = str(device.get("peer_cmd_user") or qkd_peer_cmd_user())
     key_path = qkd_peer_transport_private_key()
     peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 10))
+    pyez_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_PYEZ_TIMEOUT", 5))
     max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 0))
     connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 2))
     alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 2))
@@ -808,7 +809,7 @@ def check_peer_ssh_from_device(device):
             f"-o LogLevel=ERROR "
             f"{peer_cmd_user}@{peer_ip} exit"
         )
-        result = ssh_script_user_onbox_cmd(device, cmd, timeout=peer_timeout)
+        result = ssh_script_user_onbox_cmd(device, cmd, timeout=pyez_timeout)
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         combined = f"{stdout}\n{stderr}"
@@ -886,7 +887,7 @@ def check_peer_ssh_from_device(device):
             timeout_count += 1
             print(
                 f"[WARN] peer reachability check timed out: {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}; "
-                "manual SSH may still be valid"
+                f"PyEZ timeout={pyez_timeout}s (SSH probe timed out during NETCONF communication)"
             )
             print_if_verbose(result.get("stdout", ""))
             print_if_verbose(result.get("stderr", ""))
