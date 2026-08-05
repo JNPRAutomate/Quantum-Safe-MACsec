@@ -122,8 +122,10 @@ def collect_timing_files(args: argparse.Namespace) -> Path:
     result = subprocess.run(cmd, capture_output=False, check=False)
     
     if result.returncode != 0:
-        print("ERROR: Collection failed", file=sys.stderr)
-        sys.exit(1)
+        print(
+            "[WARN] Collection completed with errors; continuing with any files that were collected.",
+            file=sys.stderr,
+        )
     
     snapshot_dir = args.output_dir / snapshot_name
     return snapshot_dir
