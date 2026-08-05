@@ -1286,36 +1286,46 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
     if devices is None:
         devices = runtime_devices
 
+    failed_devices = []
+
     for name, device in devices.items():
         if should_skip_device(name, device):
             continue
 
-        platform_cfg = load_platform(device["platform"])
-        macsec = device.get("macsec", {})
+        try:
+            platform_cfg = load_platform(device["platform"])
+            macsec = device.get("macsec", {})
 
-        if "cak" in macsec and "ckn" in macsec:
-            print(f"[{name}] STATIC MACsec detected")
-            commands = build_macsec_static(device, platform_cfg)
-        else:
-            commands = build_device_config(
-                device_name=name,
-                device=device,
-                platform=platform_cfg,
-                base=base,
-                topology=topology,
-            )
-
-        if preview:
-            print(f"\n=== {name} ===")
-            print("\n".join(commands))
-            continue
-
-        if dry_run:
-            if verbose:
-                print(f"\n=== {name} (dry-run) ===")
-                print("\n".join(commands))
+            if "cak" in macsec and "ckn" in macsec:
+                print(f"[{name}] STATIC MACsec detected")
+                commands = build_macsec_static(device, platform_cfg)
             else:
-                print(f"[{name}] dry-run -> skipping push")
-            continue
+                commands = build_device_config(
+                    device_name=name,
+                    device=device,
+                    platform=platform_cfg,
+                    base=base,
+                    topology=topology,
+                )
 
-        push_config(name, device, commands, base, devices)
+            if preview:
+                print(f"\n=== {name} ===")
+                print("\n".join(commands))
+                continue
+
+            if dry_run:
+                if verbose:
+                    print(f"\n=== {name} (dry-run) ===")
+                    print("\n".join(commands))
+                else:
+                    print(f"[{name}] dry-run -> skipping push")
+                continue
+
+            push_config(name, device, commands, base, devices)
+        except Exception as exc:
+            failed_devices.append(name)
+            print(f"[{name}] WARN provisioning failed; continuing with remaining devices")
+            print(f"[{name}] WARN detail: {exc}")
+
+    if failed_devices:
+        print(f"[WARN] provisioning completed with failures on: {', '.join(sorted(failed_devices))}")
