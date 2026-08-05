@@ -310,6 +310,100 @@ This guarantees Junos never sees two overlapping configuration sessions from
 this script on the same device, regardless of which action or interface
 triggered them.
 
+---
+
+## Rotation Overlap: Current + Previous Key Persistence (v3.3.3+)
+
+### Problem: Rotation Lag During Public Key Propagation
+
+When `etsi_peer_view` rotates to a new keypair, there is an inherent timing race:
+
+1. Device A generates a new private key and new public key
+2. Device A immediately starts using the new private key for peer connections
+3. Device A distributes the new public key to peers (via `etsi_user` SSH)
+4. **Meanwhile:** Device A tries to SSH to peer (Device B) using the new private key
+5. If Device B hasn't yet committed the new public key to `authorized_keys`, the
+   authentication fails with "Permission denied (publickey,...)"
+
+This lag is particularly acute when:
+- Multiple rotations happen in succession (new keys haven't stabilized)
+- Post-deploy validation runs immediately after deployment
+- Peer devices are under high load and slow to commit
+
+### Solution: Archive Previous Keypair (`.prev` suffix)
+
+Starting in v3.3.3, the rotation logic now maintains **both current and
+previous** private keys for up to two rotation cycles:
+
+```
+Rotation N → generate new key
+   qkd_peer_cmd_ed25519      (old from rotation N-1) → qkd_peer_cmd_ed25519.prev
+   qkd_peer_cmd_ed25519.new  (generated)             → qkd_peer_cmd_ed25519 (active)
+   
+Rotation N+1 → generate newer key
+   qkd_peer_cmd_ed25519      (from rotation N)       → qkd_peer_cmd_ed25519.prev
+   qkd_peer_cmd_ed25519.new  (generated)             → qkd_peer_cmd_ed25519 (active)
+   [previous .prev key is discarded]
+
+Rotation N+2 → cycle continues...
+   qkd_peer_cmd_ed25519      (from rotation N+1)     → qkd_peer_cmd_ed25519.prev
+   qkd_peer_cmd_ed25519.new  (generated)             → qkd_peer_cmd_ed25519 (active)
+   [old key from rotation N is now gone]
+```
+
+### Implementation Details
+
+**File:** `lib/qkd/peer_key_rotation.py`
+
+- `rotate_peer_ssh_keypair()` now archives the current key as `.prev` instead of
+  deleting it. This preserves the key's ability to authenticate while the new
+  public key propagates to peers.
+
+**File:** `lib/qkd/identity.py`
+
+- `check_peer_ssh_from_device()` (peer SSH validation probe) now tries **both**
+  keys: `-i qkd_peer_cmd_ed25519 -i qkd_peer_cmd_ed25519.prev`. SSH will attempt
+  each key in order and succeed if either is trusted by the peer.
+  
+- The probe now uses a simple `ssh ... help` command (instead of SCP file
+  transfer), which works with restricted login classes that only allow
+  `allow-commands` (e.g., `qkd-peer-cmd-class`).
+
+### Operational Impact
+
+- **During rotation lag:** Both old and new keys remain valid for authentication.
+  Peers can accept inbound SSH from a device even if their `authorized_keys` is
+  mid-update.
+- **One rotation cycle delay:** The old key is kept until the *next* rotation
+  cycle (not discarded immediately). This is safe because:
+  - Peer public keys are always in authorized_keys (not rotating)
+  - Only the private key needs to stay available for outbound connections
+  - After one more rotation, the lag window has fully closed, so the old key can
+    be safely discarded.
+- **No config churn:** Peer devices do not need to re-commit or change behavior.
+  They simply receive new public keys via `etsi_user` SSH and add them
+  (`install-peer-pubkey` action). The rotated device tolerates the lag by trying
+  both keys.
+
+### Testing & Validation
+
+- Pre-deploy validation continues to pass (bootstrap sets up initial keys)
+- Post-deploy peer SSH checks now succeed even if peers' `authorized_keys` is
+  being updated (uses both current + previous keys)
+- Continuous rotation (every ~10 min) maintains stable peer connectivity
+  throughout the rotation window
+
+### Related Issue
+
+This fix addresses the race condition observed in production where:
+- `post-deploy validation` runs immediately after deploy
+- Peer keys were rotated during bootstrap/provisioning
+- New public keys hadn't yet fully propagated to all peers' `authorized_keys`
+- Probe failed with "Permission denied" because only the new key was available
+  locally, but peers didn't have the new pubkey yet
+
+---
+
 ## Related Docs
 
 - [ssh_key_rotation_design.md](ssh_key_rotation_design.md) — historical
