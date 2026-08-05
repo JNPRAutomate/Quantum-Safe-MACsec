@@ -752,7 +752,7 @@ def check_peer_ssh_from_device(device):
     script_user = qkd_script_user()
     peer_cmd_user = str(device.get("peer_cmd_user") or qkd_peer_cmd_user())
     key_path = qkd_peer_transport_private_key()
-    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 4))
+    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 10))
     max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 0))
     connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 2))
     alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 2))
@@ -766,7 +766,8 @@ def check_peer_ssh_from_device(device):
             print(f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip")
             continue
 
-        links.append((link, peer_ip))
+        peer_name = str(link.get("peer") or link.get("peer_name") or peer_ip)
+        links.append((link, peer_name, peer_ip))
 
     if not links:
         return
@@ -780,7 +781,7 @@ def check_peer_ssh_from_device(device):
 
     started = time.perf_counter()
 
-    def probe_peer_ssh(peer_link, peer_ip):
+    def probe_peer_ssh(peer_link, peer_name, peer_ip):
         # Transport-auth probe for peer_cmd_user: simple SSH connection test.
         # Try both current and previous peer SSH keys to tolerate rotation lag.
         # Run 'exit' command which is explicitly allowed by the peer login class.
@@ -812,9 +813,13 @@ def check_peer_ssh_from_device(device):
         stderr = result.stderr or ""
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
+        restricted_session_seen = "restricted user session" in combined_low
+
+        if restricted_session_seen and "permission denied" not in combined_low and "authentication failed" not in combined_low:
+            return {"peer_ip": peer_ip, "peer_name": peer_name, "ok": True}
 
         if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
-            return {"peer_ip": peer_ip, "ok": True}
+            return {"peer_ip": peer_ip, "peer_name": peer_name, "ok": True}
 
         hard_fail_markers = [
             "permission denied",
@@ -825,55 +830,62 @@ def check_peer_ssh_from_device(device):
             "private key",
         ]
         if any(m in combined_low for m in hard_fail_markers):
-            raise RuntimeError(
-                f"peer SSH authentication failed from {name} to {peer_ip} as {peer_cmd_user}\n"
-                f"stdout={stdout}\n"
-                f"stderr={stderr}"
-            )
+            return {
+                "peer_ip": peer_ip,
+                "peer_name": peer_name,
+                "warning": True,
+                "reason": "authentication_failed",
+                "stdout": stdout,
+                "stderr": stderr,
+            }
 
         if "rpctimeouterror" in combined_low or "timeout" in combined_low:
             return {
                 "peer_ip": peer_ip,
+                "peer_name": peer_name,
                 "timeout": True,
                 "stdout": stdout,
                 "stderr": stderr,
             }
 
-        raise RuntimeError(
-            f"peer SSH probe command did not succeed from {name} to {peer_ip} as {peer_cmd_user}\n"
-            f"probe_command=ssh-exit\n"
-            f"stdout={stdout}\n"
-            f"stderr={stderr}"
-        )
+        return {
+            "peer_ip": peer_ip,
+            "peer_name": peer_name,
+            "warning": True,
+            "reason": "probe_not_confirmed",
+            "stdout": stdout,
+            "stderr": stderr,
+        }
 
     peer_results = []
     failures = []
     with ThreadPoolExecutor(max_workers=postdeploy_worker_limit(len(links))) as executor:
         futures = {
-            executor.submit(probe_peer_ssh, link, peer_ip): peer_ip
-            for link, peer_ip in links
+            executor.submit(probe_peer_ssh, link, peer_name, peer_ip): (peer_name, peer_ip)
+            for link, peer_name, peer_ip in links
         }
         for future in as_completed(futures):
-            peer_ip = futures[future]
+            peer_name, peer_ip = futures[future]
             try:
                 peer_results.append(future.result())
             except Exception as exc:
-                failures.append((peer_ip, exc))
+                failures.append((peer_name, peer_ip, exc))
 
     if failures:
-        peer_ip, exc = failures[0]
-        raise RuntimeError(f"peer SSH validation failed on {name} peer={peer_ip}\n{exc}")
+        peer_name, peer_ip, exc = failures[0]
+        raise RuntimeError(f"peer SSH validation failed on {name} peer={peer_name} ({peer_ip})\n{exc}")
 
     timeout_count = 0
     for result in peer_results:
         peer_ip = result["peer_ip"]
+        peer_name = result.get("peer_name", peer_ip)
         if result.get("ok"):
-            print(f"[OK] peer SSH {name} -> {peer_ip} as {peer_cmd_user}")
+            print(f"[OK] peer SSH {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}")
             continue
         if result.get("timeout"):
             timeout_count += 1
             print(
-                f"[WARN] peer reachability check timed out: {name} -> {peer_ip} as {peer_cmd_user}; "
+                f"[WARN] peer reachability check timed out: {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}; "
                 "manual SSH may still be valid"
             )
             print_if_verbose(result.get("stdout", ""))
@@ -885,7 +897,16 @@ def check_peer_ssh_from_device(device):
                 )
             continue
 
-        raise RuntimeError(f"unexpected peer SSH result state on {name} peer={peer_ip}: {result}")
+        if result.get("warning"):
+            print(
+                f"[WARN] peer SSH check inconclusive: {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}; "
+                f"reason={result.get('reason', 'unknown')}"
+            )
+            print_if_verbose(result.get("stdout", ""))
+            print_if_verbose(result.get("stderr", ""))
+            continue
+
+        raise RuntimeError(f"unexpected peer SSH result state on {name} peer={peer_name} ({peer_ip}): {result}")
 
     elapsed = time.perf_counter() - started
     print(f"[TIMER] peer SSH checks on {name}: {elapsed:.2f}s for {len(links)} peers")

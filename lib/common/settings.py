@@ -138,6 +138,15 @@ QKD = {
     # 0 => validate all link peers for each device (default, fail-fast).
     # >0 => sample only first N peers.
     "POSTDEPLOY_PEER_SSH_MAX_PEERS": 0,
+    # Per-peer SSH probe timeout in seconds. Keep this short so a degraded
+    # link is warned and the validation moves on instead of stalling the batch.
+    "POSTDEPLOY_PEER_SSH_TIMEOUT": 10,
+    "POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT": 2,
+    "POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL": 2,
+    "POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX": 1,
+    # Optional cap on how many timeout warnings to print per device before
+    # continuing silently with the remaining peers.
+    "POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE": 0,
 
     # If True, qkd_onbox.py must refuse runtime actions when executed
     # as root or as a user different from SCRIPT_USER.
