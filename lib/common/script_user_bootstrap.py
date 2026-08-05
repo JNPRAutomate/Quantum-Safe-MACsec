@@ -724,6 +724,22 @@ def build_peer_cmd_set_commands(
     return commands
 
 
+def rewrite_public_key_comment(public_key_line: str, new_comment: str) -> str:
+    """Replace the comment (last field) of a public key line with a new comment.
+    
+    Example:
+        rewrite_public_key_comment(
+            "ssh-ed25519 AAAAC3... old_comment",
+            "etsi_peer_view@MX1"
+        ) -> "ssh-ed25519 AAAAC3... etsi_peer_view@MX1"
+    """
+    parts = public_key_line.strip().split()
+    if len(parts) < 2:
+        return public_key_line
+    # Keep type + key blob, replace the comment (last field)
+    return f"{parts[0]} {parts[1]} {new_comment}"
+
+
 def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = None) -> str:
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
@@ -1075,8 +1091,12 @@ def bootstrap_script_user_on_device(
                 public_key_line=public_key_line,
                 remove_encrypted_password=False,
             ))
-            if peer_public_key_line:
-                commands.extend(build_peer_cmd_set_commands(peer_cmd_user, peer_cmd_user_class, peer_public_key_line))
+            if peer_public_key_line and script_auth_mode == "key-only":
+                peer_key_for_display = rewrite_public_key_comment(
+                    peer_public_key_line,
+                    f"{peer_cmd_user}@{name}"
+                )
+                commands.extend(build_peer_cmd_set_commands(peer_cmd_user, peer_cmd_user_class, peer_key_for_display))
             
             print("[%s] candidate diff (DRY-RUN):" % name)
             for cmd in commands:
@@ -1128,11 +1148,23 @@ def bootstrap_script_user_on_device(
             public_key_line=public_key_line,
             remove_encrypted_password=remove_encrypted_password,
         ))
+        
+        # Rewrite peer transport key comment to device-specific identifier
+        # so runtime rotation can properly track and expire old keys.
+        # Example: "ssh-ed25519 AAAAC... etsi_peer_view@qkd-peer-bootstrap"
+        #       -> "ssh-ed25519 AAAAC... etsi_peer_view@MX1"
+        peer_key_for_config = peer_public_key_line
+        if peer_key_for_config and script_auth_mode == "key-only":
+            peer_key_for_config = rewrite_public_key_comment(
+                peer_key_for_config,
+                f"{peer_cmd_user}@{name}"
+            )
+        
         commands.extend(
             build_peer_cmd_set_commands(
                 peer_cmd_user,
                 peer_cmd_user_class,
-                public_key_line=peer_public_key_line if script_auth_mode == "key-only" else None,
+                public_key_line=peer_key_for_config if script_auth_mode == "key-only" else None,
             )
         )
 
