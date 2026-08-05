@@ -9,6 +9,7 @@ import subprocess
 import shlex
 import re
 import time
+import os
 
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
@@ -780,31 +781,31 @@ def check_peer_ssh_from_device(device):
     started = time.perf_counter()
 
     def probe_peer_ssh(peer_link, peer_ip):
-        # Transport-auth probe for peer_cmd_user: validate the same scp channel
-        # used by runtime queue/status exchange, without requiring remote shell.
-        peer_ip_safe = str(peer_ip).replace(".", "_")
-        local_probe = f"/var/tmp/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
-        # Use the peer_cmd_user home dir as remote destination.
-        # On Junos EVO (ACX) /var/tmp has SMACK label 'System' which blocks
-        # writes by non-root users. The peer_cmd_user home is owned by that
-        # user and always writable.
-        remote_probe = f"/var/home/{peer_cmd_user}/qkd_peer_probe_{name}_{peer_ip_safe}.txt"
+        # Transport-auth probe for peer_cmd_user: simple SSH connection test.
+        # Try both current and previous peer SSH keys to tolerate rotation lag.
+        # Run 'help' command which is in allow-commands list.
+        
+        # Build list of key paths to try
+        key_paths_to_try = [key_path]
+        prev_key = f"{key_path}.prev"
+        if os.path.exists(prev_key):
+            key_paths_to_try.append(prev_key)
+        
+        # Try each key with -i option
+        key_options = " ".join([f"-i {shlex.quote(kp)}" for kp in key_paths_to_try])
+        
         cmd = (
-            f"echo qkd-peer-probe > {shlex.quote(local_probe)}; "
-            f"scp -O -i {shlex.quote(key_path)} "
+            f"ssh -T {key_options} "
             f"-o IdentitiesOnly=yes "
             f"-o StrictHostKeyChecking=no "
             f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
             f"-o BatchMode=yes "
+            f"-o PasswordAuthentication=no "
             f"-o ConnectTimeout={connect_timeout} "
             f"-o ServerAliveInterval={alive_interval} "
             f"-o ServerAliveCountMax={alive_max} "
             f"-o LogLevel=ERROR "
-            f"{shlex.quote(local_probe)} "
-            f"{peer_cmd_user}@{peer_ip}:{shlex.quote(remote_probe)}; "
-            f"set rc=$status; "
-            f"rm -f {shlex.quote(local_probe)}; "
-            f"exit $rc"
+            f"{peer_cmd_user}@{peer_ip} help"
         )
         result = ssh_script_user_onbox_cmd(device, cmd, timeout=peer_timeout)
         stdout = result.stdout or ""
@@ -812,7 +813,7 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
-        if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
+        if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low and "restricted" not in combined_low:
             return {"peer_ip": peer_ip, "ok": True}
 
         hard_fail_markers = [
@@ -840,7 +841,7 @@ def check_peer_ssh_from_device(device):
 
         raise RuntimeError(
             f"peer SSH probe command did not succeed from {name} to {peer_ip} as {peer_cmd_user}\n"
-            f"probe_command=scp-upload\n"
+            f"probe_command=ssh-help\n"
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )

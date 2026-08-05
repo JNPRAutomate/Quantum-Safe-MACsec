@@ -41,11 +41,21 @@ def rotate_peer_ssh_keypair(
         # Ensure SSH directory exists with proper permissions
         os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
         
-        # Remove old keypair
+        # Archive old keypair as "previous" for overlap during rotation
+        # This allows peers to accept SSH from devices still using the old key
+        # while the new public key propagates to authorized_keys on peers
+        prev_key_path = f"{key_path}.prev"
+        prev_pub_path = f"{pub_path}.prev"
+        
         if os.path.exists(key_path):
-            os.remove(key_path)
+            # Move current -> previous
+            if os.path.exists(prev_key_path):
+                os.remove(prev_key_path)
+            os.rename(key_path, prev_key_path)
         if os.path.exists(pub_path):
-            os.remove(pub_path)
+            if os.path.exists(prev_pub_path):
+                os.remove(prev_pub_path)
+            os.rename(pub_path, prev_pub_path)
         
         # Generate new keypair
         comment = f"{peer_cmd_user}@{device_name}"
@@ -65,6 +75,8 @@ def rotate_peer_ssh_keypair(
         # Set proper permissions
         os.chmod(key_path, 0o600)
         os.chmod(pub_path, 0o644)
+        if os.path.exists(prev_key_path):
+            os.chmod(prev_key_path, 0o600)
         
         # Read and return public key
         with open(pub_path) as f:
