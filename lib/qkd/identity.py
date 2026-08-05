@@ -673,7 +673,11 @@ def collect_script_user_public_keys(devices):
         name = device_name(device)
         result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
         if result.returncode != 0:
-            raise RuntimeError(f"failed to read SCRIPT_USER public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+            print(
+                f"[WARN] skipping SCRIPT_USER public key on {name}: "
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+            continue
         key = None
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -681,7 +685,11 @@ def collect_script_user_public_keys(devices):
                 key = line
                 break
         if not key:
-            raise RuntimeError(f"invalid SCRIPT_USER public key on {name} path={pub_path}\nraw_output={result.stdout}")
+            print(
+                f"[WARN] invalid SCRIPT_USER public key on {name} "
+                f"path={pub_path}\nraw_output={result.stdout}"
+            )
+            continue
         pub_keys[name] = key
     return pub_keys
 
@@ -694,7 +702,11 @@ def collect_peer_transport_public_keys(devices):
         name = device_name(device)
         result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
         if result.returncode != 0:
-            raise RuntimeError(f"failed to read peer transport public key on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+            print(
+                f"[WARN] skipping peer transport public key on {name}: "
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+            continue
         key = None
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -702,7 +714,11 @@ def collect_peer_transport_public_keys(devices):
                 key = line
                 break
         if not key:
-            raise RuntimeError(f"invalid peer transport public key on {name} path={pub_path}\nraw_output={result.stdout}")
+            print(
+                f"[WARN] invalid peer transport public key on {name} "
+                f"path={pub_path}\nraw_output={result.stdout}"
+            )
+            continue
         pub_keys[name] = key
     return pub_keys
 
