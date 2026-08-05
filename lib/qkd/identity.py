@@ -783,7 +783,7 @@ def check_peer_ssh_from_device(device):
     def probe_peer_ssh(peer_link, peer_ip):
         # Transport-auth probe for peer_cmd_user: simple SSH connection test.
         # Try both current and previous peer SSH keys to tolerate rotation lag.
-        # Run 'help' command which is in allow-commands list.
+        # Run 'exit' command which is explicitly allowed by the peer login class.
         
         # Build list of key paths to try
         key_paths_to_try = [key_path]
@@ -805,7 +805,7 @@ def check_peer_ssh_from_device(device):
             f"-o ServerAliveInterval={alive_interval} "
             f"-o ServerAliveCountMax={alive_max} "
             f"-o LogLevel=ERROR "
-            f"{peer_cmd_user}@{peer_ip} help"
+            f"{peer_cmd_user}@{peer_ip} exit"
         )
         result = ssh_script_user_onbox_cmd(device, cmd, timeout=peer_timeout)
         stdout = result.stdout or ""
@@ -813,7 +813,7 @@ def check_peer_ssh_from_device(device):
         combined = f"{stdout}\n{stderr}"
         combined_low = combined.lower()
 
-        if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low and "restricted" not in combined_low:
+        if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
             return {"peer_ip": peer_ip, "ok": True}
 
         hard_fail_markers = [
@@ -841,7 +841,7 @@ def check_peer_ssh_from_device(device):
 
         raise RuntimeError(
             f"peer SSH probe command did not succeed from {name} to {peer_ip} as {peer_cmd_user}\n"
-            f"probe_command=ssh-help\n"
+            f"probe_command=ssh-exit\n"
             f"stdout={stdout}\n"
             f"stderr={stderr}"
         )

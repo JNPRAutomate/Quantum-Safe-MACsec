@@ -106,8 +106,9 @@ MX1 (rotation cycle every peer_key_rotation_interval_seconds):
           "op qkd_onbox.py action install-peer-pubkey \
            device mx1 pubkey-b64 <base64(new pubkey line)>"
     → exit code 0 = accepted; uses the permanent trusted etsi_user channel
- 3. If ANY peer fails → ABORT: delete temp keypair, keep OLD active, retry next cycle
- 4. If ALL peers succeed → atomically replace active PEER_SSH_KEY with new temp keypair
+ 3. If some peers fail → log a warning and continue if at least one peer accepted
+ 4. If all peers fail → ABORT: delete temp keypair, keep OLD active, retry next cycle
+ 5. If at least one peer succeeds → atomically replace active PEER_SSH_KEY with new temp keypair
 ```
 
 Receiving side (`run_slave_install_peer_pubkey()` on MX2):

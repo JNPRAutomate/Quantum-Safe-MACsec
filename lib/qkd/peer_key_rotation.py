@@ -3,7 +3,7 @@ Peer SSH key rotation for etsi_peer_view user.
 
 Rotates ED25519 keypair for etsi_peer_view at configurable intervals.
 Private key stays on-device filesystem only.
-Public key is distributed to peer devices via SCP.
+Public key is distributed to peer devices via SSH-backed on-box delivery.
 
 This paranoid approach keeps asymmetric keys out of Junos config,
 allowing frequent rotation without config commits.
@@ -258,7 +258,19 @@ def run_peer_key_rotation_cycle(
             f"[{device_name}] WARN peer key rotation: "
             f"failed to sync to {len(failed_peers)} devices: {failed_peers}"
         )
+
+    if len(failed_peers) == len(peer_names):
+        print(
+            f"[{device_name}] ERROR peer key rotation aborted: "
+            f"all peers failed to accept the new key"
+        )
+        return False
+
+    if failed_peers:
+        print(
+            f"[{device_name}] Peer SSH key rotation cycle completed with partial peer sync"
+        )
     else:
         print(f"[{device_name}] Peer SSH key rotation cycle completed successfully")
-    
-    return len(failed_peers) == 0 or len(failed_peers) < len(peer_names) / 2
+
+    return True

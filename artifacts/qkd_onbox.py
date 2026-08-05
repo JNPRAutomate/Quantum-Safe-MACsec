@@ -939,10 +939,10 @@ def save_peer_key_rotation_state(state):
 #     OWN PEER_CMD_USER account (op-script action "install-peer-pubkey"),
 #     running locally as its own SCRIPT_USER (qkd-script-class now allows
 #     "set/delete system login user {peer_cmd_user} authentication ...").
-#   - Only after every peer confirms (SSH exit code 0) does the local device
-#     atomically swap its own PEER_SSH_KEY files to the new keypair. If any
-#     peer fails, the whole rotation aborts and the OLD key stays active
-#     (rotation is retried again next cycle).
+#   - The local device swaps its own PEER_SSH_KEY files to the new keypair
+#     once at least one peer confirms. Peers that are down or temporarily
+#     unreachable are skipped for that cycle and remain reachable through the
+#     retained `.prev` private key during the grace window.
 # ---------------------------------------------------------------------------
 
 def peer_known_pubkeys_state_file():
@@ -1091,9 +1091,16 @@ def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_fu
 
     if failed_peers:
         log(
-            f"PEER-KEY ROTATION ABORTED not_all_peers_accepted failed={failed_peers} "
-            "-> keeping current PEER_SSH_KEY active, discarding new temp keypair "
-            "(will retry on next rotation cycle)",
+            f"PEER-KEY ROTATION WARN partial_peer_acceptance failed={failed_peers} "
+            "-> continuing rotation for reachable peers",
+            "WARN",
+            mode="PEER-KEY-ROTATION",
+        )
+
+    if len(failed_peers) == len(peer_names):
+        log(
+            "PEER-KEY ROTATION ABORTED all_peers_rejected_or_unreachable "
+            "-> discarding new temp keypair and keeping current PEER_SSH_KEY active",
             "ERROR",
             mode="PEER-KEY-ROTATION",
         )
@@ -1111,7 +1118,18 @@ def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_fu
         log(f"PEER-KEY ERROR activating new keypair: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
         return False
 
-    log("PEER-KEY rotation cycle completed successfully - all peers accepted new key", "INFO", mode="PEER-KEY-ROTATION")
+    if failed_peers:
+        log(
+            "PEER-KEY rotation cycle completed with partial peer sync - new key activated locally",
+            "INFO",
+            mode="PEER-KEY-ROTATION",
+        )
+    else:
+        log(
+            "PEER-KEY rotation cycle completed successfully - all peers accepted new key",
+            "INFO",
+            mode="PEER-KEY-ROTATION",
+        )
     return True
 
 
@@ -4382,8 +4400,17 @@ def runtime_has_config_privilege():
 
 def ssh_transport_options(key_path=None):
     key_path = key_path or SSH_KEY
+    key_paths = [key_path]
+    if os.path.abspath(key_path) == os.path.abspath(PEER_SSH_KEY):
+        prev_key_path = f"{key_path}.prev"
+        if os.path.exists(prev_key_path):
+            key_paths.append(prev_key_path)
+
+    key_opts = []
+    for path in key_paths:
+        key_opts.extend(["-i", path])
     return [
-        "-i", key_path,
+        *key_opts,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",

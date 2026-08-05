@@ -146,10 +146,10 @@ deployed to routers — only `artifacts/qkd_onbox.py` is shipped to
   common `etsi_user` identity), invoking the new `install-peer-pubkey`
   op-script action on the peer.
 - `run_peer_key_rotation_cycle(device_name, local_devices_dict, ...)` —
-  orchestrates generate → distribute-to-all → all-or-nothing swap. Replaces
-  the old function, which wrote directly to `authorized_keys` files (wrong
-  location/permissions) and tolerated partial peer failures (left
-  inconsistent trust state).
+  orchestrates generate → distribute-to-reachable-peers → swap. Replaces the
+  old function, which wrote directly to `authorized_keys` files (wrong
+  location/permissions) and either aborted too aggressively or left
+  inconsistent trust state.
 - `run_slave_install_peer_pubkey(source_device, pubkey_b64)` — new slave-side
   handler that commits the received key into local Junos config. Tracks the
   last-known key per source device in `qkd_peer_known_pubkeys.json` so it can
@@ -179,11 +179,12 @@ deployed to routers — only `artifacts/qkd_onbox.py` is shipped to
 
 ## Failure Handling
 
-- Any single peer failing to accept the new key aborts the **entire** cycle
-  (all-or-nothing): the temp keypair is discarded, the currently-active
-  `PEER_SSH_KEY` keeps working for all peers, and the next scheduled cycle
-  retries from scratch. This avoids a split-trust state where some peers know
-  a key that the device itself never actually switches to.
+- A peer that is down or unreachable is skipped for that cycle and logged as a
+  warning. The device still activates the new key locally if at least one peer
+  accepted it.
+- Only the degenerate case where **all** peers fail causes the cycle to abort:
+  the temp keypair is discarded, the currently-active `PEER_SSH_KEY` keeps
+  working, and the next scheduled cycle retries from scratch.
 - `run_slave_install_peer_pubkey()` rolls back the candidate config
   (`configure; rollback 0; exit`) if the commit fails or Junos reports an
   error, matching the existing pattern used by the MACsec keychain installer.
