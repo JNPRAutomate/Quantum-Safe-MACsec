@@ -608,22 +608,21 @@ def check_script_user_authorized_keys(device):
     print(result.stdout)
 
 
-def check_peer_cmd_user_presence_optional(device):
+def check_peer_cmd_user_presence(device):
     device = normalize_device(device)
     name = device_name(device)
     peer_cmd_user = qkd_peer_cmd_user_for_device(device)
     result = ssh_deploy_cmd(device, f"id {peer_cmd_user}", timeout=30, include_failed_marker=False)
     if result.returncode != 0:
-        print(
-            f"[WARN] peer_cmd_user not present yet on {name}: user={peer_cmd_user}\n"
+        raise RuntimeError(
+            f"peer_cmd_user missing on {name}: user={peer_cmd_user}\n"
             f"stdout={result.stdout}\n"
             f"stderr={result.stderr}"
         )
-        return
     print(result.stdout)
 
 
-def check_peer_cmd_authorized_keys_optional(device):
+def check_peer_cmd_authorized_keys(device):
     device = normalize_device(device)
     name = device_name(device)
     peer_cmd_user = qkd_peer_cmd_user_for_device(device)
@@ -631,12 +630,11 @@ def check_peer_cmd_authorized_keys_optional(device):
     cmd = f"ls -l {auth_path}; wc -l {auth_path}"
     result = ssh_deploy_cmd(device, cmd, timeout=30, include_failed_marker=False)
     if result.returncode != 0:
-        print(
-            f"[WARN] peer_cmd_user authorized_keys not ready on {name}: user={peer_cmd_user} path={auth_path}\n"
+        raise RuntimeError(
+            f"peer_cmd_user authorized_keys missing on {name}: user={peer_cmd_user} path={auth_path}\n"
             f"stdout={result.stdout}\n"
             f"stderr={result.stderr}"
         )
-        return
     print(result.stdout)
 
 
@@ -1253,8 +1251,8 @@ def validate_device_identity_predeploy(device):
     check_script_dirs_simple(device)
     check_script_user_ssh_identity(device)
     check_script_user_authorized_keys(device)
-    check_peer_cmd_user_presence_optional(device)
-    check_peer_cmd_authorized_keys_optional(device)
+    check_peer_cmd_user_presence(device)
+    check_peer_cmd_authorized_keys(device)
     check_runtime_cleanup_simple(device)
     print(f"[OK] QKD pre-deploy validation passed: {name}")
 
@@ -1295,7 +1293,7 @@ def validate_device_identity_postdeploy(device):
         print(f"[TIMER] QKD post-deploy validation total on {name}: {time.perf_counter() - started:.2f}s")
 
 
-def validate_all_devices_predeploy(devices):
+def validate_all_devices_predeploy(devices, raise_on_failure=True):
     devices = normalize_devices(devices)
     check_validation_plan()
     print("")
@@ -1320,6 +1318,7 @@ def validate_all_devices_predeploy(devices):
             print(f"[FAIL] pre-deploy validation failed: {name}")
             print(str(exc))
             print("")
+    failed_names = [name for name, _ in failed]
     if failed:
         print("=== QKD pre-deploy validation summary ===")
         print("Result: FAILED")
@@ -1327,7 +1326,8 @@ def validate_all_devices_predeploy(devices):
         print("")
         for name, exc in failed:
             print(f"- {name}: {exc}")
-        raise RuntimeError("QKD pre-deploy validation failed for: " + ", ".join(name for name, _ in failed))
+        if raise_on_failure:
+            raise RuntimeError("QKD pre-deploy validation failed for: " + ", ".join(failed_names))
 
     # Fast predeploy: do not synchronize peer authorized_keys and do not run peer SSH matrix.
     # Those checks are expensive and can be blocked by Junos banner / PyEZ shell-wrapper behavior.
@@ -1335,6 +1335,7 @@ def validate_all_devices_predeploy(devices):
     print("[OK] fast predeploy complete: peer SSH matrix skipped")
     print("=== QKD pre-deploy validation complete ===")
     print("Result: OK")
+    return failed_names
 
 
 def validate_all_devices_postdeploy(devices):
@@ -1376,16 +1377,15 @@ def validate_all_devices_postdeploy(devices):
     print(f"[TIMER] all-device post-deploy validation total: {time.perf_counter() - started:.2f}s")
 
 
-def validate_all_devices(devices, phase="predeploy"):
+def validate_all_devices(devices, phase="predeploy", raise_on_failure=True):
     devices = normalize_devices(devices)
     if phase == "predeploy":
-        validate_all_devices_predeploy(devices)
-        return
+        return validate_all_devices_predeploy(devices, raise_on_failure=raise_on_failure)
     if phase == "postdeploy":
         validate_all_devices_postdeploy(devices)
         return
     if phase == "full":
-        validate_all_devices_predeploy(devices)
+        validate_all_devices_predeploy(devices, raise_on_failure=raise_on_failure)
         validate_all_devices_postdeploy(devices)
         return
     raise ValueError(f"unknown validate phase={phase}")

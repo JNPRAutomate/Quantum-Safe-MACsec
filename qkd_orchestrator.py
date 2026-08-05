@@ -1395,8 +1395,15 @@ def handle_deploy(args):
             "START",
             "Validate identity, permissions, scripts, and runtime prerequisites.",
         )
-        validate_all_devices(devices, phase="predeploy")
+        failed_predeploy = validate_all_devices(devices, phase="predeploy", raise_on_failure=False) or []
         print_step_banner("1/5", "PRE-DEPLOY VALIDATION", "END")
+
+        if failed_predeploy:
+            skipped = sorted(set(failed_predeploy))
+            print(f"[WARN] skipping deploy for predeploy-failed devices: {', '.join(skipped)}")
+            devices = {name: device for name, device in devices.items() if name not in skipped}
+            if not devices:
+                raise RuntimeError("No devices remain after pre-deploy validation failures")
 
         # After pre-deploy validation, switch transport auth to SCRIPT_USER only
         # when password-based auth is enabled. In key-only mode, keep bootstrap
