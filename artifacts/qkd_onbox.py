@@ -6494,7 +6494,7 @@ def run_master():
         # Log current peer key rotation state
         log(
             f"PEER-KEY-STATE: interval_seconds={rotation_interval} "
-            f"last_rotation_timestamp={last_rotation} "
+            f"last_rotation_epoch={last_rotation} "
             f"last_rotation_time={format_epoch_human(last_rotation)} "
             f"last_rotation_ago_seconds={seconds_since_last} "
             f"last_rotation_ago={format_duration_human(seconds_since_last)} "
