@@ -1206,6 +1206,8 @@ def bootstrap_script_user_on_device(
         # NOTE: Peer transport keys MUST be unique per device for rotation to work correctly
         # Do NOT sync from local; instead generate unique on-box keys via run_script_user_key_fix
         # This ensures each device has its own ed25519 keypair for etsi_peer_view
+        # IMPORTANT: DO NOT force_regenerate - bootstrap must be idempotent. Only generate if missing.
+        # Runtime peer key rotation (every ~10min) handles key refresh; bootstrap is seed initialization only.
         if script_auth_mode == "key-only":
             run_script_user_key_fix(
                 dev,
@@ -1214,7 +1216,6 @@ def bootstrap_script_user_on_device(
                 deploy_user,
                 key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
                 key_comment=f"{peer_cmd_user}@{name}",
-                force_regenerate=True,
             )
 
         if not run_script_user_key_fix(
