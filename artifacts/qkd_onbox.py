@@ -1111,7 +1111,19 @@ def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_fu
                 pass
         return False
 
+    prev_key_path = f"{PEER_SSH_KEY}.prev"
+    prev_pub_path = f"{PEER_SSH_KEY}.pub.prev"
+
     try:
+        if os.path.exists(PEER_SSH_KEY):
+            if os.path.exists(prev_key_path):
+                os.remove(prev_key_path)
+            os.replace(PEER_SSH_KEY, prev_key_path)
+        if os.path.exists(f"{PEER_SSH_KEY}.pub"):
+            if os.path.exists(prev_pub_path):
+                os.remove(prev_pub_path)
+            os.replace(f"{PEER_SSH_KEY}.pub", prev_pub_path)
+
         os.replace(new_key_path, PEER_SSH_KEY)
         os.replace(new_pub_path, f"{PEER_SSH_KEY}.pub")
     except Exception as exc:
