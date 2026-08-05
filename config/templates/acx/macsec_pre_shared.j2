@@ -1,5 +1,5 @@
 {# ------------------------------- #}
-{# QFX MACsec STATIC CONFIG       #}
+{# ACX MACsec STATIC CONFIG       #}
 {# ------------------------------- #}
 
 {% set ca = device.macsec.ca_name | default("CA1") %}
@@ -13,7 +13,6 @@
 
 set security macsec connectivity-association {{ ca }} cipher-suite {{ cipher }}
 set security macsec connectivity-association {{ ca }} security-mode static-cak
-set security macsec connectivity-association {{ ca }} replay-protect
 
 # STATIC KEYS
 set security macsec connectivity-association {{ ca }} pre-shared-key ckn {{ ckn }}

@@ -17,7 +17,6 @@
 
 set security macsec connectivity-association {{ ca }} cipher-suite {{ cipher }}
 set security macsec connectivity-association {{ ca }} security-mode static-cak
-set security macsec connectivity-association {{ ca }} replay-protect
 set security macsec interfaces {{ iface }} connectivity-association {{ ca }}
 set security macsec connectivity-association {{ ca }} pre-shared-key-chain {{ keychain }}
 

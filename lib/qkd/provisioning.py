@@ -1085,7 +1085,6 @@ def push_config(device_name, device, commands, base, devices_dict=None):
         extras = []
         for keychain_name in refs:
             required = [
-                f"set security authentication-key-chains key-chain {keychain_name}",
                 f"set security authentication-key-chains key-chain {keychain_name} key 0 key-name {_bootstrap_key_name(keychain_name, 0)}",
                 f"set security authentication-key-chains key-chain {keychain_name} key 0 secret \"{_bootstrap_secret(keychain_name, 0)}\"",
                 f"set security authentication-key-chains key-chain {keychain_name} key 0 start-time {_bootstrap_start_time()}",
