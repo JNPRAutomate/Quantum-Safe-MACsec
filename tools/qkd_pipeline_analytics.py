@@ -3,7 +3,8 @@
 QKD Pipeline Analytics Tool
 
 Collects timing JSONL files from all devices in inventory via SCP,
-then analyzes them offline to generate a report on KME key validity and performance.
+then analyzes them offline to generate separate HTML reports per device platform
+(for example MX and ACX) so their timing profiles can be compared independently.
 
 Usage:
     python3 qkd_pipeline_analytics.py
@@ -56,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         default="qkd_pipeline_report.html",
-        help="Output report file (default: %(default)s)",
+        help="Base output report name; HTML mode writes one file per platform (default: %(default)s)",
     )
     parser.add_argument(
         "--json",
@@ -131,6 +132,57 @@ def collect_timing_files(args: argparse.Namespace) -> Path:
 def find_jsonl_files(root_dir: Path) -> List[Path]:
     """Recursively find all .jsonl files."""
     return list(root_dir.glob("**/*.jsonl"))
+
+
+def load_device_platforms(inventory_path: Path) -> Dict[str, str]:
+    """Build a device-name -> platform map from inventory."""
+    with open(inventory_path, "r", encoding="utf-8") as f:
+        inventory = yaml.safe_load(f) or {}
+    devices = inventory.get("devices", [])
+    if not isinstance(devices, list):
+        return {}
+
+    platform_map: Dict[str, str] = {}
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        name = str(device.get("name") or "").strip()
+        platform = str(device.get("platform") or "").strip().lower()
+        if name and platform:
+            platform_map[name.upper()] = platform
+    return platform_map
+
+
+def normalize_platform_name(platform: str) -> str:
+    platform = str(platform or "").strip().lower()
+    if platform in {"mx", "acx"}:
+        return platform
+    return platform or "unknown"
+
+
+def infer_platform_from_record(record: Dict[str, Any], platform_map: Dict[str, str]) -> str:
+    device = str(record.get("device") or "").strip()
+    if device:
+        mapped = platform_map.get(device.upper())
+        if mapped:
+            return normalize_platform_name(mapped)
+        upper = device.upper()
+        if upper.startswith("MX"):
+            return "mx"
+        if upper.startswith("ACX"):
+            return "acx"
+    return "unknown"
+
+
+def group_records_by_platform(
+    records: List[Dict[str, Any]],
+    platform_map: Dict[str, str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for record in records:
+        platform = infer_platform_from_record(record, platform_map)
+        grouped.setdefault(platform, []).append(record)
+    return grouped
 
 
 def load_timing_records(file_path: Path) -> List[Dict[str, Any]]:
@@ -211,6 +263,7 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         'slave_elapsed_from_enqueue_ms': [],
         # Critical derived metric
         'enc_to_dec_ms': [],
+        'enc_to_dec_samples': [],
     }
     
     stats['success_rate'] = (
@@ -272,6 +325,18 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             enc_to_dec = master_total - slave_elapsed + slave_dec
             if enc_to_dec > 0:
                 stats['enc_to_dec_ms'].append(enc_to_dec)
+                stats['enc_to_dec_samples'].append({
+                    'enc_to_dec_ms': enc_to_dec,
+                    'timestamp': record.get('timestamp', ''),
+                    'device': record.get('device', ''),
+                    'iface': record.get('iface', ''),
+                    'operation': record.get('operation', ''),
+                    'status': record.get('status', ''),
+                    'ack_id': record.get('ack_id', ''),
+                    'master_total_ms': master_total,
+                    'slave_elapsed_from_enqueue_ms': slave_elapsed,
+                    'slave_dec_ms': slave_dec,
+                })
     
     return stats
 
@@ -315,14 +380,19 @@ def ms_to_human(ms: int) -> str:
         return f"{seconds:02d}.{remaining_ms:03d}"
 
 
-def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
+def generate_html_report(
+    stats: Dict[str, Any],
+    output_path: Path,
+    report_title: str = "QKD Pipeline Analytics Report",
+    report_scope: str = "All Devices",
+) -> None:
     """Generate HTML report."""
     
     html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>QKD Pipeline Analytics Report</title>
+    <title>{report_title}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
         .header {{ background: #1e3c72; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }}
@@ -342,7 +412,8 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
 </head>
 <body>
     <div class="header">
-        <h1>QKD Pipeline Analytics Report</h1>
+        <h1>{report_title}</h1>
+        <p>Scope: {report_scope}</p>
         <p>Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
     </div>
 """
@@ -555,8 +626,8 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
         </div>
 
         <!-- Slave timeline SVG -->
-        <svg viewBox="0 0 860 150" xmlns="http://www.w3.org/2000/svg"
-             style="width:100%;max-width:860px;display:block;margin:16px 0;font-family:monospace">
+        <svg viewBox="0 0 860 170" xmlns="http://www.w3.org/2000/svg"
+             style="width:100%;max-width:860px;display:block;margin:16px 0 28px 0;font-family:monospace">
 
           <!-- timeline rail -->
           <line x1="30" y1="60" x2="830" y2="60" stroke="#aaa" stroke-width="2"/>
@@ -730,6 +801,60 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
                 Based on 99th percentile ENC→DEC = {ms_to_human(worst_case_ms)} + 1s safety margin.
             </p>
         </div>"""
+
+            # Worst ENC→DEC tail samples (what drives p99/pmax)
+            worst_samples = sorted(
+                stats.get('enc_to_dec_samples', []),
+                key=lambda s: s.get('enc_to_dec_ms', 0),
+                reverse=True,
+            )[:15]
+            if worst_samples:
+                html += """<div class='section'>
+            <h2>Worst ENC→DEC Tail Samples (Top 15)</h2>
+            <div class='summary-box'>
+                These records are the outliers that push 95%/99% up.
+                Use this table to locate device/interface/timestamp for deeper troubleshooting.
+            </div>
+            <table>
+                <tr>
+                    <th>#</th>
+                    <th>ENC→DEC</th>
+                    <th>Device</th>
+                    <th>Iface</th>
+                    <th>Timestamp</th>
+                    <th>Status</th>
+                    <th>Operation</th>
+                    <th>master_total</th>
+                    <th>slave_elapsed_from_enqueue</th>
+                    <th>slave_dec</th>
+                    <th>Formula check</th>
+                </tr>
+            """
+                for idx, sample in enumerate(worst_samples, start=1):
+                    enc_to_dec = int(sample.get('enc_to_dec_ms', 0))
+                    master_total = int(sample.get('master_total_ms', 0))
+                    slave_elapsed = int(sample.get('slave_elapsed_from_enqueue_ms', 0))
+                    slave_dec = int(sample.get('slave_dec_ms', 0))
+                    formula_text = (
+                        f"{ms_to_human(master_total)} - {ms_to_human(slave_elapsed)} + "
+                        f"{ms_to_human(slave_dec)} = {ms_to_human(enc_to_dec)}"
+                    )
+                    status = str(sample.get('status', ''))
+                    status_css = "success" if status == "ok" else ("danger" if status == "fail" else "")
+                    html += f"""<tr>
+                    <td>{idx}</td>
+                    <td><strong>{ms_to_human(enc_to_dec)}</strong></td>
+                    <td>{sample.get('device', '')}</td>
+                    <td>{sample.get('iface', '')}</td>
+                    <td style="font-family:monospace">{sample.get('timestamp', '')}</td>
+                    <td class="{status_css}">{status}</td>
+                    <td>{sample.get('operation', '')}</td>
+                    <td>{ms_to_human(master_total)}</td>
+                    <td>{ms_to_human(slave_elapsed)}</td>
+                    <td>{ms_to_human(slave_dec)}</td>
+                    <td style="font-size:11px;font-family:monospace">{formula_text}</td>
+                </tr>"""
+                html += "</table></div>"
         
         # KME validity
         html += """<div class='section'><h2>KME Key Validity Analysis</h2>
@@ -759,6 +884,13 @@ def generate_html_report(stats: Dict[str, Any], output_path: Path) -> None:
     
     output_path.write_text(html)
     print(f"✓ Report: {output_path}")
+
+
+def output_report_path(base_output: Path, suffix: str) -> Path:
+    """Derive a sibling output path with a platform suffix."""
+    if base_output.suffix:
+        return base_output.with_name(f"{base_output.stem}_{suffix}{base_output.suffix}")
+    return base_output.with_name(f"{base_output.name}_{suffix}.html")
 
 
 def main() -> None:
@@ -806,11 +938,13 @@ def main() -> None:
     
     print(f"[*] Analyzing {len(all_records)} total records...")
     
-    stats = analyze_records(all_records)
+    platform_map = load_device_platforms(args.inventory)
+    grouped_records = group_records_by_platform(all_records, platform_map)
     
     output_path = Path(args.output)
     
     if args.json:
+        stats = analyze_records(all_records)
         output_data = {
             'timestamp': datetime.now().isoformat(),
             'summary': {
@@ -823,7 +957,26 @@ def main() -> None:
         output_path.write_text(json.dumps(output_data, indent=2))
         print(f"✓ JSON: {output_path}")
     else:
-        generate_html_report(stats, output_path)
+        preferred_order = {"mx": 0, "acx": 1}
+        report_targets = sorted(
+            grouped_records.items(),
+            key=lambda item: (preferred_order.get(item[0], 99), item[0]),
+        )
+
+        if not report_targets:
+            report_targets = [("all", all_records)]
+
+        for platform, records in report_targets:
+            stats = analyze_records(records)
+            scoped_output = output_report_path(output_path, platform)
+            report_title = "QKD Pipeline Analytics Report"
+            scope_label = platform.upper() if platform != "all" else "All Devices"
+            generate_html_report(
+                stats,
+                scoped_output,
+                report_title=report_title,
+                report_scope=scope_label,
+            )
 
 
 if __name__ == '__main__':

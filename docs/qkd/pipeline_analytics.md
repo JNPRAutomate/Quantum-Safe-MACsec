@@ -8,6 +8,8 @@ Collects end-to-end pipeline timing data from all QKD devices in the inventory a
 
 The answer comes from measuring how long a key must survive in the KME between when the master fetches it (ENC call) and when the slave retrieves it (DEC call).
 
+When run in HTML mode, the tool writes one report per device platform (for example `mx` and `acx`) so you can compare average performance by device family.
+
 ---
 
 ## Usage
@@ -35,7 +37,7 @@ Automatically selects the most recent local snapshot. Use this to regenerate the
 | `--inventory` | `ring_mx_acx_unified_link_driven.yml` | Device inventory YAML |
 | `--base-inventory` | `inventory_base.yaml` | Base inventory (SSH user/key) |
 | `--output-dir` | `./qkd_timings` | Local directory for collected files |
-| `--output` | `qkd_pipeline_report.html` | Output HTML file |
+| `--output` | `qkd_pipeline_report.html` | Base HTML name; HTML mode writes one file per platform |
 | `--skip-collect` | — | Skip SCP, analyze latest existing snapshot |
 | `--remote-path` | `/var/home/etsi_user/logs/pipeline_timing` | Remote log directory |
 | `--jobs` | `4` | Parallel SCP collection jobs |
