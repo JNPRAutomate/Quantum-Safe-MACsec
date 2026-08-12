@@ -75,6 +75,42 @@ DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
 
 
 # ============================================================================
+
+# ============================================================================
+# THREAD-SAFE WRAPPERS FOR STATEMANAGER
+# Acquire locks before accessing state files
+# ============================================================================
+
+def load_link_state_safe(peer, iface, link):
+    """Thread-safe load_link_state with lock."""
+    with _get_state_lock(peer, iface):
+        return StateManager.load_link_state(peer, iface, link)
+
+def save_db_state_safe(peer, iface, state):
+    """Thread-safe save_db_state with lock."""
+    with _get_state_lock(peer, iface):
+        return StateManager.save_db_state(peer, iface, state)
+
+def load_peer_key_rotation_state_safe():
+    """Thread-safe load_peer_key_rotation_state with global lock."""
+    with _rotation_state_lock:
+        return StateManager.load_peer_key_rotation_state()
+
+def save_peer_key_rotation_state_safe(state):
+    """Thread-safe save_peer_key_rotation_state with global lock."""
+    with _rotation_state_lock:
+        return StateManager.save_peer_key_rotation_state(state)
+
+def write_peer_batch_ack_safe(device, content):
+    """Thread-safe write_peer_batch_ack with device lock."""
+    with _get_ack_lock(device):
+        return PeerTransport.write_peer_batch_ack(device, content)
+
+def read_remote_peer_batch_ack_safe(device):
+    """Thread-safe read_remote_peer_batch_ack with device lock."""
+    with _get_ack_lock(device):
+        return PeerTransport.read_remote_peer_batch_ack(device)
+
 # MODULE-LEVEL WRAPPER FUNCTIONS
 # Maps old function calls to class methods
 # This maintains backward compatibility with existing call sites
@@ -270,7 +306,71 @@ def _get_junos_auth_keys_for_peer_device(*args, **kwargs):
 
 # MasterOrchestrator wrappers
 def run_master(*args, **kwargs):
-    return MasterOrchestrator.run_master(*args, **kwargs)
+    """Parallel execution of master links using ThreadPoolExecutor."""
+    return _run_master_parallel(*args, **kwargs)
+
+def _run_master_parallel(link_set=None, peer_set=None):
+    """Run master orchestration with parallel link processing."""
+    import time as time_module
+
+    # Get list of master links
+    master_links_list = []
+    for link in managed_links():
+        if link.get("role") == "master":
+            master_links_list.append(link)
+
+    if not master_links_list:
+        log("NO MASTER LINKS CONFIGURED", "INFO", mode="MASTER")
+        return True
+
+    # Determine number of worker threads
+    max_workers = min(len(master_links_list), 8)
+    log(f"MASTER PARALLELIZATION: {len(master_links_list)} links, {max_workers} threads", "INFO", mode="MASTER")
+
+    # Run links in parallel
+    failed_links = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all link tasks
+        future_to_link = {
+            executor.submit(_run_master_link_wrapper, link): link
+            for link in master_links_list
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_link):
+            link = future_to_link[future]
+            try:
+                result = future.result()
+                if not result:
+                    failed_links.append(link)
+                    log(f"LINK FAILED peer={link['peer']} iface={link['interface']}", "WARN", link['interface'], "MASTER")
+            except Exception as exc:
+                failed_links.append(link)
+                log(f"LINK EXCEPTION peer={link['peer']} iface={link['interface']}: {exc}", "ERROR", link['interface'], "MASTER")
+
+    if failed_links:
+        log(f"MASTER COMPLETE: {len(master_links_list) - len(failed_links)}/{len(master_links_list)} links succeeded", "WARN", mode="MASTER")
+    else:
+        log(f"MASTER COMPLETE: All {len(master_links_list)} links succeeded", "INFO", mode="MASTER")
+
+    return True  # Script succeeds if ANY link succeeded
+
+def _run_master_link_wrapper(link):
+    """Wrapper for running one master link with exception handling."""
+    try:
+        peer = link.get("peer")
+        iface = link.get("interface")
+
+        log(f"MASTER LINK START peer={peer} iface={iface}", "INFO", iface, "MASTER")
+        result = MasterOrchestrator.run_master_rolling_link(link)
+        log(f"MASTER LINK END peer={peer} iface={iface} result={result}", "INFO", iface, "MASTER")
+
+        return result
+    except Exception as exc:
+        log(f"MASTER LINK EXCEPTION: {exc}", "ERROR", link.get("interface"), "MASTER")
+        return False
+
 
 def run_master_rolling_link(*args, **kwargs):
     return MasterOrchestrator.run_master_rolling_link(*args, **kwargs)
@@ -298,7 +398,58 @@ def run_slave_status(*args, **kwargs):
     return SlaveOrchestrator.run_slave_status(*args, **kwargs)
 
 def process_slave_inbound_transports(*args, **kwargs):
-    return SlaveOrchestrator.process_slave_inbound_transports(*args, **kwargs)
+    """Parallel processing of slave inbound transports."""
+    return _process_slave_inbound_parallel(*args, **kwargs)
+
+def _process_slave_inbound_parallel(max_drain=20):
+    """Process slave inbound transports with parallel link processing (Phase 2)."""
+
+    slave_links_list = [
+        link for link in managed_links()
+        if link.get("role") == "slave"
+    ]
+
+    if not slave_links_list:
+        return True
+
+    max_workers = min(len(slave_links_list), 8)
+
+    for drain_cycle in range(max_drain):
+        log(f"SLAVE INBOUND DRAIN CYCLE {drain_cycle + 1}/{max_drain}: {len(slave_links_list)} links", "DEBUG", mode="SLAVE")
+
+        any_activity = False
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all slave transport tasks in parallel
+            future_to_link = {
+                executor.submit(_process_slave_inbound_wrapper, link): link
+                for link in slave_links_list
+            }
+
+            # Collect results
+            for future in as_completed(future_to_link):
+                link = future_to_link[future]
+                try:
+                    result = future.result()
+                    if result:
+                        any_activity = True
+                except Exception as exc:
+                    log(f"SLAVE INBOUND ERROR peer={link['peer']}: {exc}", "WARN", link['interface'], "SLAVE")
+
+        if not any_activity:
+            log(f"SLAVE INBOUND IDLE - exiting drain", "INFO", mode="SLAVE")
+            break
+
+    return True
+
+def _process_slave_inbound_wrapper(link):
+    """Wrapper for processing one slave link's inbound transports."""
+    try:
+        return SlaveOrchestrator.process_inbound_transport_for_slave(link)
+    except Exception as exc:
+        log(f"SLAVE INBOUND EXCEPTION: {exc}", "ERROR", link.get("interface"), "SLAVE")
+        return False
+
 
 def process_inbound_transport_for_slave(*args, **kwargs):
     return SlaveOrchestrator.process_inbound_transport_for_slave(*args, **kwargs)
@@ -382,6 +533,38 @@ def parse_qkd_comment_hint(*args, **kwargs):
 
 def get_keychain_key_comments(*args, **kwargs):
     return Utilities.get_keychain_key_comments(*args, **kwargs)
+
+
+
+
+# ============================================================================
+# LOCK INFRASTRUCTURE FOR MULTITHREADING
+# Thread-safe access to shared state
+# ============================================================================
+
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Global locks for thread-safe file access
+_state_locks = {}              # Dict[str, threading.Lock] - per (peer, iface)
+_rotation_state_lock = threading.Lock()  # Global for peer key rotation
+_ack_locks = {}                # Dict[str, threading.Lock] - per device
+_lock_lock = threading.Lock()  # Protects the lock dictionaries themselves
+
+def _get_state_lock(peer, iface):
+    """Get or create lock for (peer, iface) state file."""
+    key = f"{peer}:{iface}"
+    with _lock_lock:
+        if key not in _state_locks:
+            _state_locks[key] = threading.Lock()
+        return _state_locks[key]
+
+def _get_ack_lock(device):
+    """Get or create lock for device ACK files."""
+    with _lock_lock:
+        if device not in _ack_locks:
+            _ack_locks[device] = threading.Lock()
+        return _ack_locks[device]
 
 
 class KMEClient:
@@ -3119,7 +3302,7 @@ class MasterOrchestrator:
         keychain = stable_keychain_name(link)
         runtime_mode, effective_batch = log_runtime_mode(iface, "MASTER")
 
-        state = load_link_state(peer, iface, link)
+        state = load_link_state_safe(peer, iface, link)
         state = ensure_health_state(state)
         seed_reset = configured_bootstrap_seed_only(link, iface)
         if not keychain_state_valid(state) or seed_reset:
@@ -3141,7 +3324,7 @@ class MasterOrchestrator:
                     iface,
                     "BOOTSTRAP",
                 )
-            if not save_db_state(peer, iface, state):
+            if not save_db_state_safe(peer, iface, state):
                 log("STATE SAVE FAIL AFTER SEED ADOPTION", "ERROR", iface, "MASTER")
                 return False
 
@@ -3149,7 +3332,7 @@ class MasterOrchestrator:
         state = reconcile_state_with_router(link, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
         if promoted or before_reconcile != json.dumps(state, sort_keys=True):
-            if not save_db_state(peer, iface, state):
+            if not save_db_state_safe(peer, iface, state):
                 log("STATE SAVE FAIL AFTER RECONCILIATION", "ERROR", iface, "MASTER")
                 return False
 
@@ -3295,7 +3478,7 @@ class MasterOrchestrator:
                     "MASTER",
                 )
                 state["rotation_skip_reason"] = "N_MINUS_TWO_TARGETS_NOT_CONSUMED"
-                save_db_state(peer, iface, state)
+                save_db_state_safe(peer, iface, state)
                 return False
             protected_horizon = 2 * rotation_interval_seconds()
             maximum_safe_grace = protected_horizon - script_execution_interval_seconds()
@@ -3412,7 +3595,7 @@ class MasterOrchestrator:
             "enc_total_ms": int(enc_total_ms),
             "enc_started_ms": int(enc_batch_start_ms),
         }
-        if not save_db_state(peer, iface, state):
+        if not save_db_state_safe(peer, iface, state):
             log(
                 f"{operation} ABORTED reason=INFLIGHT_STATE_SAVE_FAILED no_config_change=1",
                 "ERROR",
@@ -3442,7 +3625,7 @@ class MasterOrchestrator:
                 )
             else:
                 state["inflight_install"] = None
-                save_db_state(peer, iface, state)
+                save_db_state_safe(peer, iface, state)
                 log(
                     f"{operation} ABORTED reason=LOCAL_COMMIT_NOT_PRESENT state_not_advanced=1",
                     "ERROR",
@@ -3452,7 +3635,7 @@ class MasterOrchestrator:
             return False
 
         state["inflight_install"]["t1_commit_finished_ms"] = int(time.time() * 1000)
-        if not save_db_state(peer, iface, state):
+        if not save_db_state_safe(peer, iface, state):
             log(
                 f"{operation} ABORTED reason=POST_COMMIT_TIMING_STATE_SAVE_FAILED "
                 f"ack_id={ack_id} action=KEEP_INFLIGHT",
@@ -3463,7 +3646,7 @@ class MasterOrchestrator:
             return False
         peer_send_start_ms = now_ms()
         state["inflight_install"]["t2_peer_send_ms"] = int(peer_send_start_ms)
-        if not save_db_state(peer, iface, state):
+        if not save_db_state_safe(peer, iface, state):
             return False
         if not send_command(
             link,
@@ -3537,7 +3720,7 @@ class MasterOrchestrator:
         state.pop("rotation_skip_reason", None)
         state = reconcile_state_with_router(link, iface, state)
         state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-        if not save_db_state(peer, iface, state):
+        if not save_db_state_safe(peer, iface, state):
             log(
                 f"{operation} STATE SAVE FAILED after_bilateral_commit=1",
                 "ERROR",
@@ -8137,6 +8320,49 @@ def main():
         sys.exit(0)
     finally:
         release_lock()
+
+
+
+def _fetch_keys_parallel(link, target_slots, first_generation):
+    """Fetch multiple keys in parallel from KME (Phase 3)."""
+    if not target_slots:
+        return []
+
+    log(f"KEY FETCH PARALLEL: {len(target_slots)} keys in parallel", "DEBUG", link.get("interface"), "MASTER")
+
+    keys = [None] * len(target_slots)
+
+    # Use ThreadPoolExecutor for parallel KME calls
+    max_workers = min(len(target_slots), 4)  # Limit KME parallelism to avoid rate limiting
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all key fetches
+        future_to_index = {
+            executor.submit(_fetch_single_key, link, offset, slot, first_generation): offset
+            for offset, slot in enumerate(target_slots)
+        }
+
+        # Collect results in order
+        for future in as_completed(future_to_index):
+            offset = future_to_index[future]
+            try:
+                key_id, key, enc_details = future.result()
+                keys[offset] = (key_id, key, enc_details)
+            except Exception as exc:
+                log(f"KEY FETCH FAILED slot_offset={offset}: {exc}", "ERROR", link.get("interface"), "MASTER")
+                return []  # Abort on first failure (existing behavior)
+
+    # Verify all keys were fetched
+    if None in keys:
+        return []
+
+    return keys
+
+def _fetch_single_key(link, offset, slot, first_generation):
+    """Fetch a single key from KME."""
+    generation = int(first_generation) + offset
+    key_id, key, enc_details = KMEClient.do_enc(link["peer_sae"])
+    return key_id, key, enc_details
 
 
 if __name__ == "__main__":
