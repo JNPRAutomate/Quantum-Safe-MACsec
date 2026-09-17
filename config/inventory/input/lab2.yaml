@@ -1,0 +1,125 @@
+topology: links
+platform: mixed
+mode: qkd
+pki_profile: hierarchical_ca
+devices:
+- name: EVO1
+  hostname: evo1
+  platform: ptx
+  ip: 10.38.97.218
+  kme:
+    ip: 10.10.10.21
+    port: 8443
+  interfaces:
+  - et-0/0/1
+  - et-0/0/2
+- name: EVO2
+  hostname: evo2
+  platform: ptx
+  ip: 10.38.97.228
+  kme:
+    ip: 10.10.10.22
+    port: 8443
+  interfaces:
+  - et-0/0/1
+  - et-0/0/2
+- name: MX4803
+  hostname: mx4803
+  platform: mx
+  ip: 10.38.98.141
+  kme:
+    ip: 10.10.10.23
+    port: 8443
+  interfaces:
+  - ge-0/0/1
+  - ge-0/0/2
+- name: MX4804
+  hostname: mx4804
+  platform: mx
+  ip: 10.38.110.12
+  kme:
+    ip: 10.10.10.24
+    port: 8443
+  interfaces:
+  - ge-0/0/1
+  - ge-0/0/2
+- name: MX9601
+  hostname: mx9601
+  platform: mx
+  ip: 10.38.98.94
+  kme:
+    ip: 10.10.10.25
+    port: 8443
+  interfaces:
+  - ge-0/0/1
+  - ge-0/0/2
+- name: MX9602
+  hostname: mx9602
+  platform: mx
+  ip: 10.38.97.250
+  kme:
+    ip: 10.10.10.26
+    port: 8443
+  interfaces:
+  - ge-0/0/1
+  - ge-0/0/2
+- name: MX9603
+  hostname: mx9603
+  platform: mx
+  ip: 10.38.97.71
+  kme:
+    ip: 10.10.10.27
+    port: 8443
+  interfaces:
+  - ge-0/0/1
+  - ge-0/0/2
+links:
+- id: EVO1-MX4803
+  node_a: EVO1
+  interface_a: et-0/0/2
+  node_b: MX4803
+  interface_b: ge-0/0/1
+  ca_name: CA_EVO1_MX4803
+  keychain_name: QKD_CA_EVO1_MX4803
+- id: MX4803-MX4804
+  node_a: MX4803
+  interface_a: ge-0/0/2
+  node_b: MX4804
+  interface_b: ge-0/0/1
+  ca_name: CA_MX4803_MX4804
+  keychain_name: QKD_CA_MX4803_MX4804
+- id: MX4804-MX9603
+  node_a: MX4804
+  interface_a: ge-0/0/2
+  node_b: MX9603
+  interface_b: ge-0/0/1
+  ca_name: CA_MX4804_MX9603
+  keychain_name: QKD_CA_MX4804_MX9603
+- id: MX9603-MX9602
+  node_a: MX9603
+  interface_a: ge-0/0/2
+  node_b: MX9602
+  interface_b: ge-0/0/1
+  ca_name: CA_MX9603_MX9602
+  keychain_name: QKD_CA_MX9603_MX9602
+- id: MX9602-MX9601
+  node_a: MX9602
+  interface_a: ge-0/0/2
+  node_b: MX9601
+  interface_b: ge-0/0/1
+  ca_name: CA_MX9602_MX9601
+  keychain_name: QKD_CA_MX9602_MX9601
+- id: MX9601-EVO2
+  node_a: MX9601
+  interface_a: ge-0/0/2
+  node_b: EVO2
+  interface_b: et-0/0/2
+  ca_name: CA_MX9601_EVO2
+  keychain_name: QKD_CA_MX9601_EVO2
+- id: EVO2-EVO1
+  node_a: EVO2
+  interface_a: et-0/0/1
+  node_b: EVO1
+  interface_b: et-0/0/1
+  ca_name: CA_EVO2_EVO1
+  keychain_name: QKD_CA_EVO2_EVO1

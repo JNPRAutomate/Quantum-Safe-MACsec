@@ -319,6 +319,7 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
     device = normalize_device(device)
     script_user = qkd_script_user()
     key_path = qkd_ssh_private_key()
+    self_ssh_host = device_host(device)
 
     if command.startswith("op "):
         remote_payload = command
@@ -332,7 +333,7 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
         f"-o IdentitiesOnly=yes "
         f"-o StrictHostKeyChecking=no "
         f"-o BatchMode=yes "
-        f"{script_user}@127.0.0.1 "
+        f"{script_user}@{self_ssh_host} "
         f"{shlex.quote(remote_payload)}"
     )
     if validate_verbose():
