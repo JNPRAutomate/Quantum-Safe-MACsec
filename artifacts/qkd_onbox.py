@@ -245,10 +245,11 @@ def ensure_runtime_dirs():
             pass
 
     # Queue transport uses a different SSH identity than runtime user.
-    # Keep shared exchange directories writable/readable across both users.
+    # Keep shared exchange directories writable/readable across both users
+    # without granting access to unrelated local users.
     for shared_dir in (PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
         try:
-            os.chmod(shared_dir, 0o777)
+            os.chmod(shared_dir, 0o770)
         except Exception:
             pass
 
@@ -302,14 +303,14 @@ def enforce_runtime_file_permissions():
 
     readonly_targets = [op_script, event_script]
     # Peer read-only status account must read these JSON files.
-    # Keep owner write, world read to preserve read-only introspection.
+    # Keep owner write and group read to preserve read-only introspection.
     owner_rw_targets = [config_json, inventory_json]
 
     for target in readonly_targets:
         if not target.exists():
             log(f"PERM GUARD missing script target={target}", "WARN")
             continue
-        ok, detail = _set_mode_if_needed(target, 0o555)
+        ok, detail = _set_mode_if_needed(target, 0o550)
         if not ok:
             log(f"PERM GUARD readonly enforce failed target={target} detail={detail}", "WARN")
         elif detail == "not-owner-skip":
@@ -319,7 +320,7 @@ def enforce_runtime_file_permissions():
         if not target.exists():
             log(f"PERM GUARD missing runtime json target={target}", "WARN")
             continue
-        ok, detail = _set_mode_if_needed(target, 0o644)
+        ok, detail = _set_mode_if_needed(target, 0o640)
         if not ok:
             log(f"PERM GUARD json mode enforce failed target={target} detail={detail}", "WARN")
 
@@ -1001,7 +1002,7 @@ def _peer_generate_new_keypair(device_name, temp_suffix="new"):
         )
 
         os.chmod(key_path, 0o600)
-        os.chmod(pub_path, 0o644)
+        os.chmod(pub_path, 0o640)
 
         with open(pub_path) as f:
             pubkey_line = f.read().strip()
@@ -2655,7 +2656,7 @@ def write_peer_batch_ack(
             pass
         tmp.replace(path)
         try:
-            os.chmod(str(path), 0o644)
+            os.chmod(str(path), 0o640)
         except Exception:
             pass
         log(f"BATCH ACK WRITTEN file={path} ack_id={ack_id} status={status}", "INFO", iface, "SLAVE")
@@ -4434,7 +4435,7 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
     try:
         local_tmp.write_text(str(payload_text), encoding="utf-8")
         try:
-            os.chmod(str(local_tmp), 0o644)
+            os.chmod(str(local_tmp), 0o600)
         except Exception:
             pass
         cmd = [
@@ -5355,7 +5356,7 @@ def export_peer_status_snapshot(link, state=None):
             pass
         tmp.replace(path)
         try:
-            os.chmod(str(path), 0o644)
+            os.chmod(str(path), 0o640)
         except Exception:
             pass
         log(f"PEER STATUS SNAPSHOT EXPORTED file={path}", "DEBUG", iface, "STATUS")
@@ -5775,9 +5776,9 @@ def select_ring_update_slots(
             return "RING_COMPLETION", sorted(ring_slots - configured_slots), None
         return None, [], "NOT_CLEAN_SEED"
 
-    if active_slot not in ring_slots:
+    if active_slot is None or active_slot not in ring_slots:
         return None, [], "ACTIVE_SLOT_INVALID"
-    if next_slot not in ring_slots:
+    if next_slot is None or next_slot not in ring_slots:
         # The ring is fully populated (all slots configured) but no slot
         # carries a future start-time. This happens when a transient failure
         # (KME/SSH/commit-lock/ACK timeout, missed cron tick, etc.) prevented
@@ -6570,711 +6571,6 @@ def run_master():
 
     return
 
-    # Legacy full-batch implementation retained below only as historical code
-    # during the ver3.3.2.1 migration. It is unreachable by design.
-    for link in master_links:
-        peer = link["peer"]
-        iface = link["interface"]
-        ca_name = stable_ca_name(link)
-        keychain = stable_keychain_name(link)
-        runtime_mode, effective_batch = log_runtime_mode(iface, "MASTER")
-
-        state = load_link_state(peer, iface, link)
-        state = ensure_health_state(state)
-        before_reconcile_fingerprint = json.dumps(state, sort_keys=True)
-        state = reconcile_state_with_router(link, iface, state)
-        state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-        after_reconcile_fingerprint = json.dumps(state, sort_keys=True)
-        if promoted or before_reconcile_fingerprint != after_reconcile_fingerprint:
-            if not save_db_state(peer, iface, state):
-                log("STATE SAVE FAIL AFTER RECONCILIATION", "ERROR", iface, "MASTER")
-                continue
-
-        if not keychain_state_valid(state):
-            log("KEYCHAIN STATE INVALID OR UNREADY -> BOOTSTRAP", "ERROR", iface, "MASTER")
-            if not bootstrap_keychain_link(link, force=True):
-                continue
-            log("KEYCHAIN BOOTSTRAP COMPLETE -> EXIT THIS CYCLE", "INFO", iface, "MASTER")
-            continue
-
-        if not verify_local_config_state(link, state):
-            force_local_config_bootstrap = bool(
-                qkd_policy().get("force_bootstrap_on_local_config_invalid", True)
-            )
-            if not force_local_config_bootstrap:
-                log(
-                    "LOCAL CONFIG INVALID -> SKIP BOOTSTRAP (policy default)",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                continue
-
-            log(
-                "LOCAL CONFIG INVALID -> CONTROLLED BOOTSTRAP (policy override)",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            if not bootstrap_keychain_link(link, force=True):
-                log("CONTROLLED BOOTSTRAP FAILED AFTER LOCAL CONFIG INVALID", "ERROR", iface, "MASTER")
-                continue
-            log("CONTROLLED BOOTSTRAP COMPLETE AFTER LOCAL CONFIG INVALID -> EXIT THIS LINK CYCLE", "INFO", iface, "MASTER")
-            continue
-
-        pending_stuck_exceeded = False
-        pending_stuck_overdue_seconds = None
-        can_rotate_with_pending = False
-        active_last_slot_age_seconds = None
-
-        active_key_id = state.get("active_key_id")
-        if state.get("pending_key_id") and active_key_id:
-            active_entry = next(
-                (
-                    entry
-                    for entry in (state.get("installed_keys") or [])
-                    if isinstance(entry, dict) and entry.get("key_id") == active_key_id
-                ),
-                None,
-            )
-            if active_entry:
-                active_slot = active_entry.get("slot")
-                try:
-                    active_slot = int(active_slot)
-                except (TypeError, ValueError):
-                    active_slot = None
-                active_start_epoch = epoch_from_junos_start_time(active_entry.get("start_time"))
-                if (
-                    active_slot is not None
-                    and active_slot == (max_installed_keys() - 1)
-                    and active_start_epoch is not None
-                ):
-                    active_age_seconds = int(time.time()) - int(active_start_epoch)
-                    if active_age_seconds >= rotation_interval_seconds():
-                        can_rotate_with_pending = True
-                        active_last_slot_age_seconds = active_age_seconds
-
-        # A future pending key must never be replaced before its activation time.
-        if state.get("pending_key_id") and start_time_is_future(state.get("next_start_time")):
-            if not state.get("pending_stuck_at"):
-                state["pending_stuck_at"] = int(time.time())
-                save_db_state(peer, iface, state)
-
-            log(
-                f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} "
-                f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                f"reason=PENDING_KEY_SCHEDULED_NOT_DUE",
-                "INFO",
-                iface,
-                "MASTER",
-            )
-            continue
-
-        # Once the start-time passes, preserve the confirmation grace. After the
-        # grace, the final active slot may rotate; every other case remains
-        # blocked until the bounded pending recovery timeout expires.
-        if state.get("pending_key_id") and state.get("next_start_time"):
-            pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
-            confirm_grace_seconds = pending_confirm_grace_seconds()
-            if pending_epoch is None:
-                log(
-                    f"PENDING START TIME INVALID pending_key_id={state.get('pending_key_id')} "
-                    f"next_start_time={state.get('next_start_time')}",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-                pending_stuck_exceeded = True
-            else:
-                confirm_deadline = int(pending_epoch) + confirm_grace_seconds
-                now_epoch = int(time.time())
-                if now_epoch < confirm_deadline:
-                    log(
-                        f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                        f"reason=PENDING_CONFIRM_GRACE pending_confirm_grace_seconds={confirm_grace_seconds}",
-                        "INFO",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
-                pending_stuck_overdue_seconds = max(0, now_epoch - confirm_deadline)
-                pending_stuck_exceeded = (
-                    pending_stuck_overdue_seconds > pending_stuck_recovery_seconds()
-                )
-
-            if not can_rotate_with_pending and not pending_stuck_exceeded:
-                log(
-                    f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                    f"reason=PENDING_AWAITING_MKA_CONFIRMATION overdue_seconds={pending_stuck_overdue_seconds} "
-                    f"pending_stuck_recovery_seconds={pending_stuck_recovery_seconds()}",
-                    "WARN",
-                    iface,
-                    "MASTER",
-                )
-                continue
-
-            if can_rotate_with_pending:
-                log(
-                    f"PENDING KEY EXISTS BUT ACTIVE KEY IS LAST IN BATCH active_key_index={max_installed_keys() - 1} "
-                    f"active_age_seconds={active_last_slot_age_seconds} "
-                    f"active_age={format_duration_human(active_last_slot_age_seconds)} "
-                    f"rotation_interval_seconds={rotation_interval_seconds()} "
-                    f"rotation_interval={format_duration_human(rotation_interval_seconds())} -> CAN ROTATE",
-                    "INFO",
-                    iface,
-                    "MASTER",
-                )
-
-            if pending_stuck_exceeded:
-                log(
-                    f"PENDING STUCK EXCEEDED -> ALLOW RECOVERY pending_key_id={state.get('pending_key_id')} "
-                    f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                    f"overdue_seconds={pending_stuck_overdue_seconds} "
-                    f"pending_stuck_recovery_seconds={pending_stuck_recovery_seconds()}",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-
-        if kme_hold_expired(state, KME_HOLD_DOWN_SECONDS):
-            if state["health"].get("declared_down", False):
-                # If MACsec is still operational despite declared_down, clear the
-                # stale failure state and allow recovery. declared_down is now a
-                # no-op (macsec_down does not delete the interface binding).
-                if macsec_has_inuse_sa(iface, expected_ca=ca_name):
-                    log("KME HOLD EXPIRED BUT MACSEC STILL INUSE -> CLEAR DECLARED_DOWN AND RECOVER", "INFO", iface, "MASTER")
-                    state = clear_kme_failure(peer, iface, state)
-                    save_db_state(peer, iface, state)
-                    # Fall through to rotation logic
-                else:
-                    log("KME HOLD EXPIRED AND LINK ALREADY DECLARED DOWN -> SKIP", "ERROR", iface, "MASTER")
-                    continue
-            else:
-                log("KME HOLD EXPIRED -> MACSEC DOWN", "ERROR", iface, "MASTER")
-                macsec_down(iface)
-                state["health"]["declared_down"] = True
-                save_db_state(peer, iface, state)
-                continue
-
-        if link_in_kme_hold(state, KME_FAIL_THRESHOLD, KME_HOLD_DOWN_SECONDS):
-            fail_count = int(state['health'].get('kme_fail_count', 0))
-            log(
-                f"KME HOLD ACTIVE - keep current MACsec ca={ca_name} active_key_id={state.get('active_key_id')} "
-                f"fail_count={fail_count} unavailable_since={state['health'].get('kme_unavailable_since')}",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            # Only hard-block if fail_count has reached the threshold.
-            # Low fail_count (e.g. 1) means a transient error - clear and proceed.
-            if fail_count < KME_FAIL_THRESHOLD:
-                log(f"KME HOLD fail_count={fail_count} below threshold={KME_FAIL_THRESHOLD} -> clear and proceed", "INFO", iface, "MASTER")
-                state = clear_kme_failure(peer, iface, state)
-                save_db_state(peer, iface, state)
-                # Fall through to rotation logic
-            else:
-                if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
-                    log("KME HOLD ACTIVE BUT MACSEC NOT INUSE -> KEEP HOLD", "ERROR", iface, "MASTER")
-                continue
-
-        if not macsec_has_inuse_sa(iface, expected_ca=ca_name):
-            log(f"MACSEC NOT INUSE ca={ca_name} -> CONTROLLED BOOTSTRAP", "ERROR", iface, "MASTER")
-            bootstrap_keychain_link(link, force=True)
-            continue
-
-        peer_state = get_peer_status(link, iface)
-        if peer_state is None:
-            log(
-                "PEER STATUS unavailable -> SKIP LINK CYCLE",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            continue
-
-        if not keychain_state_valid(peer_state):
-            log(
-                f"PEER STATE INVALID -> SKIP LINK CYCLE local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} "
-                f"local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            continue
-
-        local_pending_id = state.get("pending_key_id")
-        peer_pending_id = peer_state.get("pending_key_id")
-        local_pending_epoch = epoch_from_junos_start_time(state.get("next_start_time"))
-        peer_pending_epoch = epoch_from_junos_start_time(peer_state.get("next_start_time"))
-        pending_head_aligned_with_peer = (
-            bool(local_pending_id)
-            and str(local_pending_id) == str(peer_pending_id)
-            and local_pending_epoch is not None
-            and peer_pending_epoch is not None
-            and int(local_pending_epoch) == int(peer_pending_epoch)
-        )
-        aligned_pending_extra_hold_seconds = rotation_interval_seconds()
-
-        if strict_sync_enabled() and not peer_states_aligned_strict(state, peer_state):
-            log(
-                f"STRICT SYNC MISMATCH OBSERVE local_active={state.get('active_key_id')} peer_active={peer_state.get('active_key_id')} "
-                f"local_pending={state.get('pending_key_id')} peer_pending={peer_state.get('pending_key_id')} "
-                f"local_next_start={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                f"peer_next_start={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-
-            if pending_stuck_exceeded:
-                if pending_head_aligned_with_peer:
-                    overdue_seconds = int(pending_stuck_overdue_seconds or 0)
-                    if overdue_seconds <= (pending_stuck_recovery_seconds() + aligned_pending_extra_hold_seconds):
-                        log(
-                            f"PENDING STUCK BUT PEER ALIGNED -> KEEP PENDING pending_key_id={state.get('pending_key_id')} "
-                            f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                            f"overdue_seconds={overdue_seconds} extra_hold_seconds={aligned_pending_extra_hold_seconds}",
-                            "WARN",
-                            iface,
-                            "MASTER",
-                        )
-                        continue
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
-                    iface,
-                    reason="PENDING_STUCK_AND_STRICT_SYNC_BLOCK",
-                    peer_state=peer_state,
-                    overdue_seconds=pending_stuck_overdue_seconds,
-                )
-                if cleared:
-                    save_db_state(peer, iface, state)
-                    log(
-                        f"STRICT SYNC RECOVERY APPLIED -> RETRY NEXT CYCLE pending_key_id={state.get('pending_key_id')} "
-                        f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-                    continue
-
-        if not compare_peer_keychain_state(state, peer_state):
-            local_active = state.get("active_key_id")
-            peer_active = peer_state.get("active_key_id")
-            local_pending = state.get("pending_key_id")
-            peer_pending = peer_state.get("pending_key_id")
-            log(
-                f"PEER STATE MISMATCH -> MASTER AUTHORITATIVE CONTINUE local_active_key={local_active} peer_active_key={peer_active} "
-                f"local_pending_key={local_pending} peer_pending_key={peer_pending} "
-                f"local_next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} peer_next_start_time={format_next_start_time_with_millis(peer_state.get('next_start_time'))}",
-                "WARN",
-                iface,
-                "MASTER",
-            )
-            if pending_stuck_exceeded and state.get("pending_key_id"):
-                if pending_head_aligned_with_peer:
-                    overdue_seconds = int(pending_stuck_overdue_seconds or 0)
-                    if overdue_seconds <= (pending_stuck_recovery_seconds() + aligned_pending_extra_hold_seconds):
-                        log(
-                            f"PENDING STUCK BUT PEER ALIGNED -> SKIP MISMATCH CLEAR pending_key_id={state.get('pending_key_id')} "
-                            f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                            f"overdue_seconds={overdue_seconds} extra_hold_seconds={aligned_pending_extra_hold_seconds}",
-                            "WARN",
-                            iface,
-                            "MASTER",
-                        )
-                        continue
-                state, cleared = clear_pending_head_for_recovery(
-                    state,
-                    iface,
-                    reason="PENDING_STUCK_AND_PEER_MISMATCH",
-                    peer_state=peer_state,
-                    overdue_seconds=pending_stuck_overdue_seconds,
-                )
-                if cleared:
-                    save_db_state(peer, iface, state)
-                    continue
-
-        if state.get("pending_key_id") and not can_rotate_with_pending:
-            if pending_stuck_exceeded:
-                if pending_head_aligned_with_peer:
-                    overdue_seconds = int(pending_stuck_overdue_seconds or 0)
-                    if overdue_seconds <= (pending_stuck_recovery_seconds() + aligned_pending_extra_hold_seconds):
-                        log(
-                            f"PENDING STUCK BUT PEER ALIGNED -> SKIP STATUS CLEAR pending_key_id={state.get('pending_key_id')} "
-                            f"next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} "
-                            f"overdue_seconds={overdue_seconds} extra_hold_seconds={aligned_pending_extra_hold_seconds}",
-                            "WARN",
-                            iface,
-                            "MASTER",
-                        )
-                        continue
-                # Only clear pending when we're about to rotate AND macsec is degraded
-                if not macsec_has_inuse_sa(iface, expected_ca=ca_name) or not mka_session_secured(
-                    parse_mka_session_fields(get_mka_session_block_for_iface(iface) or {})
-                ):
-                    state, cleared = clear_pending_head_for_recovery(
-                        state,
-                        iface,
-                        reason="PENDING_STUCK_CONFIRMED_BY_PEER_STATUS",
-                        peer_state=peer_state,
-                        overdue_seconds=pending_stuck_overdue_seconds,
-                    )
-                    if cleared:
-                        save_db_state(peer, iface, state)
-                        continue
-                else:
-                    log(
-                        f"PENDING STUCK RECOVERY DEFERRED pending_key_id={state.get('pending_key_id')} "
-                        f"reason=LIVE_MACSEC_STILL_HEALTHY live_macsec_inuse=True",
-                        "WARN",
-                        iface,
-                        "MASTER",
-                    )
-
-            log(f"ROTATION SKIP pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))} reason=PENDING_KEY_NOT_CONFIRMED", "INFO", iface, "MASTER")
-            continue
-
-        # DEBUG: Log what's blocking rotation
-        log(f"ROTATION CHECK pending_key_id=NONE check1_passed=True", "DEBUG", iface, "MASTER")
-
-        if rotation_too_soon(state, MIN_ROTATION_INTERVAL):
-            last_rotation = int(state.get("last_rotation", 0) or 0)
-            now_epoch = int(time.time())
-            age_seconds = max(0, now_epoch - last_rotation) if last_rotation > 0 else 0
-            remaining_seconds = max(0, int(MIN_ROTATION_INTERVAL) - age_seconds)
-            last_rotation_human = (
-                format_next_start_time_with_millis(junos_start_time_from_epoch(last_rotation))
-                if last_rotation > 0
-                else "None"
-            )
-            log(
-                f"ROTATION SKIP reason=ROTATION_TOO_SOON last_rotation_epoch={last_rotation} "
-                f"last_rotation_time={last_rotation_human} age_seconds={age_seconds} "
-                f"age={format_duration_human(age_seconds)} "
-                f"min_interval_seconds={int(MIN_ROTATION_INTERVAL)} "
-                f"min_interval={format_duration_human(MIN_ROTATION_INTERVAL)} "
-                f"remaining_seconds={remaining_seconds} "
-                f"remaining={format_duration_human(remaining_seconds)} generation={state.get('generation')}",
-                "INFO",
-                iface,
-                "MASTER",
-            )
-            continue
-
-        log(f"ROTATION CHECK check2_passed=True (not too soon)", "DEBUG", iface, "MASTER")
-
-        if not rekey_enabled():
-            log("ROTATION SKIP reason=REKEY_DISABLED", "INFO", iface, "MASTER")
-            continue
-
-        log(f"ROTATION CHECK check3_passed=True (rekey enabled)", "DEBUG", iface, "MASTER")
-
-        log(f"ROTATION DECISION generation={state.get('generation')} active_key_id={state.get('active_key_id')} pending_key_id={state.get('pending_key_id')} next_start_time={format_next_start_time_with_millis(state.get('next_start_time'))}", "INFO", iface, "MASTER")
-
-        # Full-batch install: replace all slots at once with chronologically ordered keys.
-        # key[0] starts after the peer ACK window,
-        # key[1..N] at +interval increments so MKA sequences them autonomously.
-        install_count = max_installed_keys()
-        batch_size = install_count  # always full batch; kept for compatibility with install/transport logic below
-        target_slots = list(range(install_count))  # [0, 1, 2, 3]
-
-        first_generation = next_generation(state)
-        rotation = rotation_id_for(iface, first_generation)
-        rotation_start_ms = now_ms()
-
-        log(
-            f"KEYCHAIN ROTATION BATCH START rotation={rotation} ca={ca_name} keychain={keychain} "
-            f"first_generation={first_generation} install_count={install_count} "
-            f"runtime_mode={runtime_mode} stagger_minutes={link_stagger_minutes(link)}",
-            "INFO",
-            iface,
-            "MASTER",
-        )
-
-        batch_records = []
-        enc_batch_start_ms = now_ms()
-        try:
-            generation_cursor = int(first_generation)
-
-            for slot in target_slots:
-                generation = int(generation_cursor)
-                customer_event("ENC_KEY_START", iface=iface, mode="MASTER", rotation=rotation, generation=generation, peer_sae=link["peer_sae"])
-                key_id, key = do_enc(link["peer_sae"])
-                if not key_id:
-                    record_kme_failure(peer, iface, state, "ENC_FAILED")
-                    log("ENC FAILED -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                    batch_records = []
-                    break
-                customer_event("ENC_KEY_OK", iface=iface, mode="MASTER", rotation=rotation_id_for(iface, generation, key_id), generation=generation, key_id=key_id)
-                batch_records.append(
-                    {
-                        "generation": generation,
-                        "slot": int(slot),
-                        "start_time": None,
-                        "key_id": key_id,
-                        "key": key,
-                    }
-                )
-                generation_cursor += 1
-        except Exception as e:
-            log(f"BATCH ENC EXCEPTION {type(e).__name__}: {str(e)}", "ERROR", iface, "MASTER")
-            import traceback
-            log(f"TRACEBACK: {traceback.format_exc()}", "ERROR", iface, "MASTER")
-            batch_records = []
-
-        if not batch_records:
-            log(f"BATCH RECORDS EMPTY -> SKIP INSTALL batch_records={batch_records}", "ERROR", iface, "MASTER")
-            continue
-
-        activation_margin = batch_activation_margin_seconds()
-        batch_epoch = int(time.time()) + activation_margin
-        for index, item in enumerate(batch_records):
-            item["start_time"] = junos_start_time_from_epoch(
-                batch_epoch + index * rotation_interval_seconds()
-            )
-
-        log(f"BATCH RECORDS READY count={len(batch_records)} batch_size={batch_size}", "INFO", iface, "MASTER")
-        log(
-            f"BATCH ACTIVATION SCHEDULED first_start_time={format_next_start_time_with_millis(batch_records[0]['start_time'])} "
-            f"activation_margin_seconds={activation_margin} peer_ack_timeout_seconds={peer_batch_ack_timeout_seconds()}",
-            "INFO",
-            iface,
-            "MASTER",
-        )
-
-        try:
-            peer_payload = []
-            for item in batch_records:
-                peer_payload.append(
-                    {
-                        "generation": item["generation"],
-                        "slot": item.get("slot"),
-                        "start_time": item["start_time"],
-                        "key_id": item["key_id"],
-                    }
-                )
-
-            local_install_start_ms = now_ms()
-            log(f"PRE_INSTALL_CHECK batch_size={batch_size} ca={ca_name} keychain={keychain}", "DEBUG", iface, "MASTER")
-            
-            if batch_size > 1:
-                log(f"BATCH INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
-                install_ok = install_keychain_batch(iface, batch_records, ca_name, keychain, state=state, commit=True)
-                fail_reason = "LOCAL_INSTALL_KEY_BATCH_FAILED"
-                fail_log = "LOCAL INSTALL-KEY-BATCH FAILED -> KEEP CURRENT KEYCHAIN KEY"
-            else:
-                log(f"SINGLE INSTALL CALLING batch_size={batch_size} entries={len(batch_records)}", "INFO", iface, "MASTER")
-                item = batch_records[0]
-                install_ok = install_keychain_key(
-                    iface,
-                    item["key_id"],
-                    item["key"],
-                    ca_name,
-                    keychain,
-                    state=state,
-                    generation=item["generation"],
-                    start_time=item["start_time"],
-                    commit=True,
-                )
-                fail_reason = "LOCAL_INSTALL_KEY_FAILED"
-                fail_log = "LOCAL INSTALL-KEY FAILED -> KEEP CURRENT KEYCHAIN KEY"
-
-        except Exception as e:
-            log(f"BATCH INSTALL EXCEPTION {type(e).__name__}: {str(e)}", "ERROR", iface, "MASTER")
-            import traceback
-            log(f"TRACEBACK: {traceback.format_exc()}", "ERROR", iface, "MASTER")
-            record_kme_failure(peer, iface, state, "LOCAL_INSTALL_EXCEPTION")
-            continue
-
-        if not install_ok:
-            record_kme_failure(peer, iface, state, fail_reason)
-            log(fail_log, "ERROR", iface, "MASTER")
-            continue
-
-        # Installation succeeded - clear KME failure counter
-        if state.get("health", {}).get("kme_fail_count", 0) > 0:
-            state = clear_kme_failure(peer, iface, state)
-            log(f"KME FAILURE CLEARED after successful install", "INFO", iface, "MASTER")
-
-        customer_event(
-            "LOCAL_KEYCHAIN_INSTALL_OK",
-            iface=iface,
-            mode="MASTER",
-            rotation=rotation,
-            generation=batch_records[-1]["generation"],
-            key_id=batch_records[0]["key_id"],
-            ca=ca_name,
-            keychain=keychain,
-            start_time=batch_records[0]["start_time"],
-            install_latency_ms=elapsed_ms(local_install_start_ms),
-            pending_seconds=pending_seconds_until(batch_records[0]["start_time"]),
-            key_count=len(batch_records),
-            enc_latency_ms=elapsed_ms(enc_batch_start_ms),
-        )
-
-        peer_notify_start_ms = now_ms()
-        # In queue mode, always use install-key-batch (even with one key)
-        # so we can wait for peer ACK before continuing.
-        use_batch_transport = (batch_size > 1) or (peer_transport_mode() == "queue")
-
-        if use_batch_transport:
-            payload_json = json.dumps(peer_payload, separators=(",", ":"))
-            payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode()
-            ack_id = compute_batch_ack_id(payload_b64)
-            trace_context = {
-                "master_enc_started_ms": int(enc_batch_start_ms),
-                "master_local_commit_started_ms": int(local_install_start_ms),
-            }
-            peer_send_start_ms = now_ms()
-            if not send_command(
-                link,
-                "install-key-batch",
-                iface,
-                batch_b64=payload_b64,
-                ack_id=ack_id,
-                trace_context=trace_context,
-            ):
-                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_FAILED")
-                append_pipeline_timing_record(
-                    iface,
-                    ack_id,
-                    status="fail",
-                    timings_ms={
-                        "master_enc_total_ms": int(elapsed_ms(enc_batch_start_ms)),
-                        "master_commit_to_ack_ms": int(elapsed_ms(local_install_start_ms)),
-                        "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
-                    },
-                    reason_code="PEER_INSTALL_KEY_BATCH_FAILED",
-                    reason_stage="MASTER_SCP_SEND",
-                    reason_detail="send_command install-key-batch failed",
-                )
-                log("PEER INSTALL-KEY-BATCH FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                continue
-            if peer_transport_mode() == "queue":
-                ack_wait_start_ms = now_ms()
-                ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
-                ack_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
-                timing_snapshot = {
-                    "master_enc_total_ms": int(elapsed_ms(enc_batch_start_ms)),
-                    "master_commit_to_ack_ms": int(elapsed_ms(local_install_start_ms)),
-                    "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
-                    "master_ack_to_ack_ms": int(elapsed_ms(ack_wait_start_ms)),
-                    "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
-                }
-                if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
-                    timing_snapshot.update(ack_payload.get("timings_ms"))
-                append_pipeline_timing_record(
-                    iface,
-                    ack_id,
-                    status=str(ack_payload.get("status", "timeout") if isinstance(ack_payload, dict) else "timeout"),
-                    timings_ms=timing_snapshot,
-                    reason_code=(ack_payload or {}).get("reason_code") if isinstance(ack_payload, dict) else "PEER_ACK_TIMEOUT",
-                    reason_stage=(ack_payload or {}).get("reason_stage") if isinstance(ack_payload, dict) else "MASTER_ACK_WAIT",
-                    reason_detail=(ack_payload or {}).get("reason_detail") if isinstance(ack_payload, dict) else "peer ack timeout",
-                )
-                if not ack_ok:
-                    record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_BATCH_ACK_FAILED")
-                    log("PEER INSTALL-KEY-BATCH ACK FAILED AFTER ENQUEUE -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                    continue
-        else:
-            item = batch_records[0]
-            if not send_command(
-                link,
-                "install-key",
-                iface,
-                key_id=item["key_id"],
-                generation=item["generation"],
-                start_time=item["start_time"],
-            ):
-                record_kme_failure(peer, iface, state, "PEER_INSTALL_KEY_FAILED")
-                log("PEER INSTALL-KEY FAILED AFTER LOCAL INSTALL -> KEEP CURRENT KEYCHAIN KEY", "ERROR", iface, "MASTER")
-                continue
-
-        customer_event(
-            "PEER_ACK",
-            iface=iface,
-            mode="MASTER",
-            rotation=rotation,
-            generation=batch_records[-1]["generation"],
-            key_id=batch_records[0]["key_id"],
-            peer=peer,
-            peer_latency_ms=elapsed_ms(peer_notify_start_ms),
-        )
-
-        time.sleep(POST_KEY_INSTALL_SETTLE_SECONDS)
-
-        first_start_time = batch_records[0]["start_time"]
-        if start_time_is_due(first_start_time):
-            if not wait_for_macsec_inuse(iface, ca_name, MACSEC_INUSE_GRACE_SECONDS):
-                record_kme_failure(peer, iface, state, "MACSEC_INUSE_TIMEOUT_AFTER_KEYCHAIN_INSTALL")
-                log("MACSEC NOT INUSE AFTER KEYCHAIN INSTALL -> MARK DEGRADED", "ERROR", iface, "MASTER")
-                continue
-        else:
-            log(f"MACSEC INUSE CHECK SKIPPED key scheduled in future ca={ca_name} start_time={format_next_start_time_with_millis(first_start_time)}", "INFO", iface, "MASTER")
-
-        state["generation"] = batch_records[-1]["generation"]
-        state["ca_name"] = ca_name
-        state["keychain_name"] = keychain
-        state["last_rotation"] = int(time.time())
-        for item in batch_records:
-            state = append_pending_key(state, item["generation"], item["key_id"], item["start_time"], slot=item.get("slot"))
-            state = record_installed_key(
-                state,
-                item["generation"],
-                item["key_id"],
-                item["start_time"],
-                item.get("slot"),
-                "pending",
-            )
-        state = clear_kme_failure(peer, iface, state)
-        state = reconcile_state_with_router(link, iface, state)
-        state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-
-        if not save_db_state(peer, iface, state):
-            log("STATE SAVE FAIL AFTER KEYCHAIN ROTATION", "ERROR", iface, "MASTER")
-            continue
-
-        peer_state = get_peer_status(link, iface)
-        if peer_state is None:
-            log("POST-ROTATION PEER STATUS unavailable", "ERROR", iface, "MASTER")
-            continue
-        if not keychain_state_valid(peer_state):
-            log(f"POST-ROTATION PEER STATE INVALID local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}", "ERROR", iface, "MASTER")
-            continue
-        if not compare_peer_keychain_state(state, peer_state):
-            # Check if this is a transient mismatch: same pending key with future start-time
-            local_pending_key = state.get("pending_key_id")
-            peer_pending_key = peer_state.get("pending_key_id")
-            local_pending_start = state.get("next_start_time")
-            peer_pending_start = peer_state.get("next_start_time")
-            is_transient_mismatch = (
-                local_pending_key 
-                and peer_pending_key 
-                and local_pending_key == peer_pending_key
-                and local_pending_start == peer_pending_start
-                and start_time_is_future(local_pending_start)
-            )
-            
-            if is_transient_mismatch:
-                log(f"POST-ROTATION PEER STATE TRANSIENT MISMATCH (pending key aligned, tolerating) local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} pending_key={local_pending_key} pending_start={format_next_start_time_with_millis(local_pending_start)}", "INFO", iface, "MASTER")
-            else:
-                log(f"POST-ROTATION PEER STATE MISMATCH local_generation={state.get('generation')} peer_generation={peer_state.get('generation')} local_ca={state.get('ca_name')} peer_ca={peer_state.get('ca_name')} local_keychain={state.get('keychain_name')} peer_keychain={peer_state.get('keychain_name')} local_key={state.get('active_key_id')} peer_key={peer_state.get('active_key_id')}", "ERROR", iface, "MASTER")
-                continue
-
-        log(
-            f"KEYCHAIN ROTATION BATCH DONE rotation={rotation} ca={ca_name} keychain={keychain} generation={state.get('generation')} pending_key_id={state.get('pending_key_id')} "
-            f"start_time={format_next_start_time_with_millis(state.get('next_start_time'))} pending_seconds={pending_seconds_until(state.get('next_start_time'))} promoted={promoted} key_count={len(batch_records)} cycle_duration_ms={elapsed_ms(rotation_start_ms)}",
-            "INFO",
-            iface,
-            "MASTER",
-        )
-        customer_event("ROTATION_DONE", iface=iface, mode="MASTER", rotation=rotation, generation=state.get("generation"), key_id=state.get("pending_key_id"), ca=ca_name, keychain=keychain, start_time=state.get("next_start_time"), pending_seconds=pending_seconds_until(state.get("next_start_time")), promoted=promoted, peer_latency_ms=elapsed_ms(peer_notify_start_ms), local_install_latency_ms=elapsed_ms(local_install_start_ms), cycle_duration_ms=elapsed_ms(rotation_start_ms), key_count=len(batch_records))
-
-
-# ----------------------------
-# ENTRY POINT
-# ----------------------------
 
 def main():
     log(f"SCRIPT START version={SCRIPT_VERSION}", "INFO")
