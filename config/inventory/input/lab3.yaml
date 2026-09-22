@@ -21,7 +21,7 @@ devices:
     port: 8443
   interfaces:
   - et-3/0/0
-  - et-0/0/4
+  - et-0/0/7
 - name: ACX7348-P1
   hostname: acx7348-p1
   platform: acx
@@ -41,7 +41,7 @@ links:
   keychain_name: QKD_CA_MX301-P1_MX304-P1
 - id: MX304-P1-ACX7348-P1
   node_a: MX304-P1
-  interface_a: et-0/0/4
+  interface_a: et-0/0/7
   node_b: ACX7348-P1
   interface_b: et-2/0/0
   ca_name: CA_MX304-P1_ACX7348-P1

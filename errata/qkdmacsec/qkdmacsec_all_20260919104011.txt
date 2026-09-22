@@ -1,0 +1,117 @@
+
+Total of 8 Static Analysis Defects Detected
+
+Total of 8 unclassified coverity defects detected
+
+Type: Bad use of null-like value (FORWARD_NULL)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5767:5:
+1. path: Condition "active_slot !== None", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5767:5:
+2. evaluate_null: Evaluating: "None".
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5767:5:
+3. alias_transfer: Assigning: "active_slot" = "(active_slot !== None) ? int(active_slot) : None".
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5768:5:
+4. path: Condition "next_slot !== None", taking true branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5770:5:
+5. path: Condition "len(ring_slots) < 2", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5770:5:
+6. path: Condition "!configured_slots", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5770:5:
+7. path: Condition "!configured_slots.issubset(ring_slots)", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5773:5:
+8. path: Condition "configured_slots != ring_slots", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5778:5:
+9. path: Condition "!(active_slot in ring_slots)", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5780:5:
+10. path: Condition "!(next_slot in ring_slots)", taking true branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5792:9:
+11. invalid_operation: Invalid operation on null-like value "active_slot".
+
+
+Type: Insecure File Permission (SIGMA.insecure_file_permission)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5358:
+1. Sigma main event: The Python application changes permissions on a file or path that leaves it world-readable, world-writable, or world-executable. This API grants access to the Others permission group. As a result, any application, or user with access to the file system can view, modify, or execute the unprotected file or directory.
+platform-utils/re-utils/src/qkd_macsec_onbox.py:5358:
+2. remediation: Avoid granting read, write, or execute permissions to the `Others` group for the file or path.
+
+
+Type: Insecure File Permission (SIGMA.insecure_file_permission)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:4437:
+1. Sigma main event: The Python application changes permissions on a file or path that leaves it world-readable, world-writable, or world-executable. This API grants access to the Others permission group. As a result, any application, or user with access to the file system can view, modify, or execute the unprotected file or directory.
+platform-utils/re-utils/src/qkd_macsec_onbox.py:4437:
+2. remediation: Avoid granting read, write, or execute permissions to the `Others` group for the file or path.
+
+
+Type: Insecure File Permission (SIGMA.insecure_file_permission)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:1004:
+1. Sigma main event: The Python application changes permissions on a file or path that leaves it world-readable, world-writable, or world-executable. This API grants access to the Others permission group. As a result, any application, or user with access to the file system can view, modify, or execute the unprotected file or directory.
+platform-utils/re-utils/src/qkd_macsec_onbox.py:1004:
+2. remediation: Avoid granting read, write, or execute permissions to the `Others` group for the file or path.
+
+
+Type: Bad use of null-like value (FORWARD_NULL)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5767:5:
+1. path: Condition "active_slot !== None", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5767:5:
+2. evaluate_null: Evaluating: "None".
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5767:5:
+3. alias_transfer: Assigning: "active_slot" = "(active_slot !== None) ? int(active_slot) : None".
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5768:5:
+4. path: Condition "next_slot !== None", taking true branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5770:5:
+5. path: Condition "len(ring_slots) < 2", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5770:5:
+6. path: Condition "!configured_slots", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5770:5:
+7. path: Condition "!configured_slots.issubset(ring_slots)", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5773:5:
+8. path: Condition "configured_slots != ring_slots", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5778:5:
+9. path: Condition "!(active_slot in ring_slots)", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5780:5:
+10. path: Condition "!(next_slot in ring_slots)", taking false branch.
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:5798:5:
+11. invalid_operation: Invalid operation on null-like value "active_slot".
+
+
+Type: Structurally dead code (UNREACHABLE)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:6575:5:
+unreachable: This code cannot be reached: "for each (link in master_li...".
+
+
+
+Type: Insecure File Permission (SIGMA.insecure_file_permission)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:2658:
+1. Sigma main event: The Python application changes permissions on a file or path that leaves it world-readable, world-writable, or world-executable. This API grants access to the Others permission group. As a result, any application, or user with access to the file system can view, modify, or execute the unprotected file or directory.
+platform-utils/re-utils/src/qkd_macsec_onbox.py:2658:
+2. remediation: Avoid granting read, write, or execute permissions to the `Others` group for the file or path.
+
+
+Type: Insecure File Permission (SIGMA.insecure_file_permission)
+
+/b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py:251:
+1. Sigma main event: The Python application changes permissions on a file or path that leaves it world-readable, world-writable, or world-executable. This API grants access to the Others permission group. As a result, any application, or user with access to the file system can view, modify, or execute the unprotected file or directory.
+platform-utils/re-utils/src/qkd_macsec_onbox.py:251:
+2. remediation: Avoid granting read, write, or execute permissions to the `Others` group for the file or path.
+
+
+
+Code Complexity Metrics: >=25(New functions)/50(Changed functions)
+
+ /b/workspace/qkdmacsec/platform-utils/re-utils/src/qkd_macsec_onbox.py
+	FunctionName:Lineno: CCM 
+	run_master_rolling_link:6021: 56
+	=========================================================================================
+
+# 
+# Local Variables:
+# mode: compilation-minor
+# End:
+#
