@@ -1,13 +1,15 @@
 system:
   threads: 1
-
 secrets:
   default_user: labuser
-  bootstrap_user: labuser
+  bootstrap_user: root
   script_user: etsi_user
   script_user_class: super-user
   peer_cmd_user: etsi_peer_view
   peer_cmd_user_class: qkd-peer-cmd-class
   script_user_auth_mode: key-only
+  default_password: lab123
+  bootstrap_password: lab123
+  script_password: lab123
 kme:
   port: 8443

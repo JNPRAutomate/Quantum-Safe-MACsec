@@ -1,0 +1,145 @@
+topology: links
+platform: mixed
+mode: qkd
+pki_profile: hierarchical_ca
+devices:
+- name: EVO1
+  hostname: evo1
+  platform: ptx
+  ip: 10.54.133.195
+  kme:
+    ip: 10.10.10.20
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/2
+- name: EVO2
+  hostname: evo2
+  platform: ptx
+  ip: 10.54.133.233
+  kme:
+    ip: 10.10.10.21
+    port: 8443
+  interfaces:
+  - et-0/0/0
+  - et-0/0/1
+- name: MX3
+  hostname: mx3
+  platform: mx
+  ip: 10.54.137.111
+  kme:
+    ip: 10.10.10.22
+    port: 8443
+  interfaces:
+  - ge-0/0/0
+  - ge-0/0/1
+  - ge-0/0/3
+  - ge-0/0/4
+- name: MX4
+  hostname: mx4
+  platform: mx
+  ip: 10.54.134.38
+  kme:
+    ip: 10.10.10.23
+    port: 8443
+  interfaces:
+  - ge-0/0/0
+  - ge-0/0/2
+- name: QFX3
+  hostname: qfx3
+  platform: qfx
+  ip: 10.54.145.11
+  kme:
+    ip: 10.10.10.24
+    port: 8443
+  interfaces:
+  - xe-0/0/1
+  - xe-0/0/2
+  - xe-0/0/3
+- name: QFX4
+  hostname: qfx4
+  platform: qfx
+  ip: 10.54.145.184
+  kme:
+    ip: 10.10.10.25
+    port: 8443
+  interfaces:
+  - xe-0/0/1
+  - xe-0/0/2
+- name: QFX2
+  hostname: qfx2
+  platform: qfx
+  ip: 10.54.137.177
+  kme:
+    ip: 10.10.10.26
+    port: 8443
+  interfaces:
+  - xe-0/0/1
+  - xe-0/0/2
+  - xe-0/0/3
+links:
+- id: EVO1-EVO2
+  node_a: EVO1
+  interface_a: et-0/0/0
+  node_b: EVO2
+  interface_b: et-0/0/0
+  ca_name: CA_EVO1_EVO2
+  keychain_name: QKD_CA_EVO1_EVO2
+- id: EVO2-MX3
+  node_a: EVO2
+  interface_a: et-0/0/1
+  node_b: MX3
+  interface_b: ge-0/0/0
+  ca_name: CA_EVO2_MX3
+  keychain_name: QKD_CA_EVO2_MX3
+- id: MX3-MX4
+  node_a: MX3
+  interface_a: ge-0/0/1
+  node_b: MX4
+  interface_b: ge-0/0/0
+  ca_name: CA_MX3_MX4
+  keychain_name: QKD_CA_MX3_MX4
+- id: MX4-QFX3
+  node_a: MX4
+  interface_a: ge-0/0/2
+  node_b: QFX3
+  interface_b: xe-0/0/2
+  ca_name: CA_MX4_QFX3
+  keychain_name: QKD_CA_MX4_QFX3
+- id: QFX3-QFX4
+  node_a: QFX3
+  interface_a: xe-0/0/1
+  node_b: QFX4
+  interface_b: xe-0/0/2
+  ca_name: CA_QFX3_QFX4
+  keychain_name: QKD_CA_QFX3_QFX4
+- id: QFX4-QFX2
+  node_a: QFX4
+  interface_a: xe-0/0/1
+  node_b: QFX2
+  interface_b: xe-0/0/1
+  ca_name: CA_QFX4_QFX2
+  keychain_name: QKD_CA_QFX4_QFX2
+- id: QFX2-EVO1
+  node_a: QFX2
+  interface_a: xe-0/0/2
+  node_b: EVO1
+  interface_b: et-0/0/2
+  ca_name: CA_QFX2_EVO1
+  keychain_name: QKD_CA_QFX2_EVO1
+- id: QFX2-MX3
+  type: extra
+  node_a: QFX2
+  interface_a: xe-0/0/3
+  node_b: MX3
+  interface_b: ge-0/0/3
+  ca_name: CA_QFX2_MX3
+  keychain_name: QKD_CA_QFX2_MX3
+- id: MX3-QFX3
+  type: extra
+  node_a: MX3
+  interface_a: ge-0/0/4
+  node_b: QFX3
+  interface_b: xe-0/0/3
+  ca_name: CA_MX3_QFX3
+  keychain_name: QKD_CA_MX3_QFX3
