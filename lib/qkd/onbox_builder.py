@@ -262,6 +262,7 @@ def build_onbox_config(name, device):
         # Runtime identity
         "script_user": device.get("script_user") or QKD["SCRIPT_USER"],
         "peer_cmd_user": device.get("peer_cmd_user") or QKD.get("PEER_CMD_USER") or QKD["SCRIPT_USER"],
+        "peer_transport_group": QKD.get("PEER_TRANSPORT_GROUP", "qkd_transport"),
         "script_dir": script_dir,
         "ssh_home_base": ssh_home_base,
         "ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{ssh_key_name}",

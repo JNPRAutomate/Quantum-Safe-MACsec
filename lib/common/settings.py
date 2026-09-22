@@ -77,6 +77,7 @@ QKD = {
     # for peer status reads and queue batch delivery.
     "PEER_CMD_USER": "etsi_peer_view",
     "PEER_CMD_USER_CLASS": "qkd-peer-cmd-class",
+    "PEER_TRANSPORT_GROUP": "qkd_transport",
 
     # Privileged deploy/cleanup user.
     #
