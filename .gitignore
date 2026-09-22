@@ -26,6 +26,9 @@ dist/
 # macOS
 .DS_Store
 
+# Local defect-analysis artifacts
+errata/
+
 # KME runtime
 certs/
 
