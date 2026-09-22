@@ -1,4 +1,5 @@
 set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} permissions shell
+set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} permissions view
 set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} allow-commands "(exit|scp -(f|t) /var/tmp/qkd_peer_(status|inbox|ack)/qkd_peer_(status|inbox|ack)_[A-Za-z0-9._-]+|op qkd_onbox.py action status iface [A-Za-z0-9./_-]+)"
 set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} deny-commands "file .*"
 set system login user {{ script_user }} class {{ script_user_class | default('super-user', true) }}

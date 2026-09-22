@@ -704,6 +704,7 @@ def deploy_onbox(
         )
 
         install_cmd = (
+            "set -e; "
             f"{shared_dir_setup}"
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"chown root {op_script_dir} {event_script_dir}; "
@@ -723,10 +724,15 @@ def deploy_onbox(
             f"{op_script_dir}/qkd_onbox.qkd_policy.json "
             f"{op_script_dir}/qkd_onbox.pki.json "
             f"{op_script_dir}/qkd_onbox.config.json "
-            f"rm -f {remote_tmp_script}"
+            f"rm -f {remote_tmp_script}; "
+            f"test -f {remote_op} -a -f {remote_event}; "
+            "echo __QKD_ONBOX_INSTALL_OK__"
         )
 
-        return run_shell(dev, install_cmd, strict=True)
+        output = run_shell(dev, install_cmd, strict=True)
+        if "__QKD_ONBOX_INSTALL_OK__" not in output:
+            raise RuntimeError(f"ONBOX install verification failed: {output}")
+        return output
 
     def sync_to_re1_if_needed(dev, name, extra_paths=None):
         """
