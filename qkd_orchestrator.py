@@ -18,6 +18,7 @@ import argparse
 import copy
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -728,6 +729,7 @@ def deploy_onbox(
             f"test -f {remote_op} -a -f {remote_event}; "
             "echo __QKD_ONBOX_INSTALL_OK__"
         )
+        install_cmd = "/bin/sh -c " + shlex.quote(install_cmd)
 
         output = run_shell(dev, install_cmd, strict=True)
         if "__QKD_ONBOX_INSTALL_OK__" not in output:
