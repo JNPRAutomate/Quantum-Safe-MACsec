@@ -20,7 +20,7 @@ devices:
     ip: 100.123.252.11
     port: 8443
   interfaces:
-  - et-3/0/0
+  - et-0/0/4
   - et-0/0/7
 - name: ACX7348-P1
   hostname: acx7348-p1
@@ -36,12 +36,12 @@ links:
   node_a: MX301-P1
   interface_a: et-0/0/2
   node_b: MX304-P1
-  interface_b: et-3/0/0
+  interface_b: et-0/0/7
   ca_name: CA_MX301-P1_MX304-P1
   keychain_name: QKD_CA_MX301-P1_MX304-P1
 - id: MX304-P1-ACX7348-P1
   node_a: MX304-P1
-  interface_a: et-0/0/7
+  interface_a: et-0/0/4
   node_b: ACX7348-P1
   interface_b: et-2/0/0
   ca_name: CA_MX304-P1_ACX7348-P1
