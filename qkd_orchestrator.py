@@ -18,6 +18,7 @@ import argparse
 import copy
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -526,6 +527,7 @@ def deploy_onbox(
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
+    resolved_peer_cmd_user = QKD.get("PEER_CMD_USER", resolved_script_user)
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -692,7 +694,19 @@ def deploy_onbox(
         if sidecar_harden:
             sidecar_harden = sidecar_harden + "; "
 
+        shared_dirs = "/var/tmp/qkd_peer_status /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_ack"
+        shared_dir_setup = (
+            f"peer_group=$(id -gn {resolved_peer_cmd_user}); "
+            f"mkdir -p {shared_dirs}; "
+            f"chown {resolved_script_user}:\"$peer_group\" {shared_dirs}; "
+            f"chmod 2770 {shared_dirs}; "
+            f"find {shared_dirs} -type f -exec chgrp \"$peer_group\" {{}} \\; "
+            f"-exec chmod 640 {{}} \\; ; "
+        )
+
         install_cmd = (
+            "set -e; "
+            f"{shared_dir_setup}"
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"chown root {op_script_dir} {event_script_dir}; "
             f"chmod 755 {op_script_dir} {event_script_dir}; "
@@ -711,10 +725,16 @@ def deploy_onbox(
             f"{op_script_dir}/qkd_onbox.qkd_policy.json "
             f"{op_script_dir}/qkd_onbox.pki.json "
             f"{op_script_dir}/qkd_onbox.config.json "
-            f"rm -f {remote_tmp_script}"
+            f"rm -f {remote_tmp_script}; "
+            f"test -f {remote_op} -a -f {remote_event}; "
+            "echo __QKD_ONBOX_INSTALL_OK__"
         )
+        install_cmd = "/bin/sh -c " + shlex.quote(install_cmd)
 
-        return run_shell(dev, install_cmd, strict=True)
+        output = run_shell(dev, install_cmd, strict=True)
+        if "__QKD_ONBOX_INSTALL_OK__" not in output:
+            raise RuntimeError(f"ONBOX install verification failed: {output}")
+        return output
 
     def sync_to_re1_if_needed(dev, name, extra_paths=None):
         """

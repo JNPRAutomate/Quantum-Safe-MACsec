@@ -690,14 +690,14 @@ def build_script_user_class_commands(script_user_class: str) -> List[str]:
 
 def build_peer_cmd_class_commands(peer_cmd_user_class: str) -> List[str]:
     return [
-        "set system login class %s allow-commands \"exit\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"show\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"show .*\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"configure\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"configure .*\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"op .*\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"start shell.*\"" % peer_cmd_user_class,
-        "set system login class %s deny-commands \"request .*\"" % peer_cmd_user_class,
+        "set system login class %s permissions shell" % peer_cmd_user_class,
+        "set system login class %s permissions view" % peer_cmd_user_class,
+        (
+            "set system login class %s allow-commands "
+            "\"(exit|scp -(f|t) /var/tmp/qkd_peer_(status|inbox|ack)/"
+            "qkd_peer_(status|inbox|ack)_[A-Za-z0-9._-]+|"
+            "op qkd_onbox.py action status iface [A-Za-z0-9./_-]+)\""
+        ) % peer_cmd_user_class,
         "set system login class %s deny-commands \"file .*\"" % peer_cmd_user_class,
     ]
 

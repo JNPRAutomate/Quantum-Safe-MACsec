@@ -32,6 +32,9 @@ certs/
 # Generated QKD runtime artifacts (local only)
 config/runtime/
 
+# KME orchestrator runtime state (regenerated automatically per environment)
+config/kme/state/*.yaml
+
 # Legacy local backups (keep archived legacy snapshots tracked)
 *.orig.py
 !archive/legacy_orig_py/**/*.orig.py
