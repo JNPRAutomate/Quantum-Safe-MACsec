@@ -526,8 +526,6 @@ def deploy_onbox(
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
-    resolved_peer_cmd_user = QKD.get("PEER_CMD_USER", resolved_script_user)
-    peer_transport_group = QKD.get("PEER_TRANSPORT_GROUP", "qkd_transport")
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -694,23 +692,7 @@ def deploy_onbox(
         if sidecar_harden:
             sidecar_harden = sidecar_harden + "; "
 
-        shared_dirs = "/var/tmp/qkd_peer_status /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_ack"
-        transport_group_setup = (
-            "if command -v pw >/dev/null 2>&1; then "
-            f"pw groupshow {peer_transport_group} >/dev/null 2>&1 || pw groupadd {peer_transport_group}; "
-            f"pw groupmod {peer_transport_group} -m {resolved_script_user},{resolved_peer_cmd_user}; "
-            "elif command -v groupadd >/dev/null 2>&1; then "
-            f"groupadd -f {peer_transport_group}; "
-            f"usermod -aG {peer_transport_group} {resolved_script_user}; "
-            f"usermod -aG {peer_transport_group} {resolved_peer_cmd_user}; "
-            "else echo 'No supported group management command found' >&2; exit 1; fi; "
-            f"mkdir -p {shared_dirs}; "
-            f"chown {resolved_script_user}:{peer_transport_group} {shared_dirs}; "
-            f"chmod 2770 {shared_dirs}; "
-        )
-
         install_cmd = (
-            f"{transport_group_setup}"
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"chown root {op_script_dir} {event_script_dir}; "
             f"chmod 755 {op_script_dir} {event_script_dir}; "

@@ -1,6 +1,4 @@
 import ast
-import os
-import stat
 from pathlib import Path
 from types import SimpleNamespace
 

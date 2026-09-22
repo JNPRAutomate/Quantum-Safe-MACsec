@@ -55,7 +55,6 @@ import json
 import os
 import hashlib
 import pwd
-import grp
 import stat
 
 
@@ -179,7 +178,6 @@ LINKS = CONFIG.get("links", [])
 
 SCRIPT_USER = CONFIG["script_user"]
 PEER_CMD_USER = str(CONFIG.get("peer_cmd_user", SCRIPT_USER) or SCRIPT_USER)
-PEER_TRANSPORT_GROUP = str(CONFIG.get("peer_transport_group", "qkd_transport"))
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
 PEER_SSH_KEY = str(CONFIG.get("peer_ssh_key", SSH_KEY) or SSH_KEY)
@@ -246,23 +244,14 @@ def ensure_runtime_dirs():
         except Exception:
             pass
 
+    # Queue transport uses a different SSH identity than runtime user.
+    # Keep shared exchange directories writable/readable across both users
+    # without granting access to unrelated local users.
     for shared_dir in (PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
         try:
-            shared_gid = grp.getgrnam(PEER_TRANSPORT_GROUP).gr_gid
-            os.chown(shared_dir, -1, shared_gid)
-            os.chmod(shared_dir, 0o2770)
+            os.chmod(shared_dir, 0o770)
         except Exception:
             pass
-
-
-def set_peer_transport_file_permissions(path):
-    try:
-        shared_gid = grp.getgrnam(PEER_TRANSPORT_GROUP).gr_gid
-        os.chown(str(path), -1, shared_gid)
-        os.chmod(str(path), 0o640)
-        return True
-    except Exception:
-        return False
 
 
 def _set_mode_if_needed(path_obj, target_mode):
@@ -2667,7 +2656,7 @@ def write_peer_batch_ack(
             pass
         tmp.replace(path)
         try:
-            os.chmod(str(path), 0o644)
+            os.chmod(str(path), 0o640)
         except Exception:
             pass
         log(f"BATCH ACK WRITTEN file={path} ack_id={ack_id} status={status}", "INFO", iface, "SLAVE")
@@ -4445,9 +4434,10 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
     local_tmp = Path(f"/tmp/qkd_scp_upload_{os.getpid()}_{int(time.time()*1000)}.tmp")
     try:
         local_tmp.write_text(str(payload_text), encoding="utf-8")
-        if not set_peer_transport_file_permissions(local_tmp):
-            log(f"SCP UPLOAD ERROR shared permissions failed path={local_tmp}", "ERROR", iface, mode_ctx)
-            return False
+        try:
+            os.chmod(str(local_tmp), 0o600)
+        except Exception:
+            pass
         cmd = [
             "scp",
             "-O",
@@ -5365,9 +5355,10 @@ def export_peer_status_snapshot(link, state=None):
         except Exception:
             pass
         tmp.replace(path)
-        if not set_peer_transport_file_permissions(path):
-            log(f"PEER STATUS SNAPSHOT PERMISSION FAIL file={path}", "WARN", iface, "STATUS")
-            return False
+        try:
+            os.chmod(str(path), 0o640)
+        except Exception:
+            pass
         log(f"PEER STATUS SNAPSHOT EXPORTED file={path}", "DEBUG", iface, "STATUS")
         return True
     except Exception as e:
