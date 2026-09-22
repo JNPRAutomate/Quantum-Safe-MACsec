@@ -526,6 +526,7 @@ def deploy_onbox(
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
+    resolved_peer_cmd_user = QKD.get("PEER_CMD_USER", resolved_script_user)
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -692,7 +693,18 @@ def deploy_onbox(
         if sidecar_harden:
             sidecar_harden = sidecar_harden + "; "
 
+        shared_dirs = "/var/tmp/qkd_peer_status /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_ack"
+        shared_dir_setup = (
+            f"peer_group=$(id -gn {resolved_peer_cmd_user}); "
+            f"mkdir -p {shared_dirs}; "
+            f"chown {resolved_script_user}:\"$peer_group\" {shared_dirs}; "
+            f"chmod 2770 {shared_dirs}; "
+            f"find {shared_dirs} -type f -exec chgrp \"$peer_group\" {{}} \\; "
+            f"-exec chmod 640 {{}} \\; ; "
+        )
+
         install_cmd = (
+            f"{shared_dir_setup}"
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"chown root {op_script_dir} {event_script_dir}; "
             f"chmod 755 {op_script_dir} {event_script_dir}; "

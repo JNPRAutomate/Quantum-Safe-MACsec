@@ -249,7 +249,9 @@ def ensure_runtime_dirs():
     # without granting access to unrelated local users.
     for shared_dir in (PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
         try:
-            os.chmod(shared_dir, 0o770)
+            current_mode = stat.S_IMODE(Path(shared_dir).stat().st_mode)
+            if current_mode & 0o007 or current_mode & 0o770 != 0o770:
+                os.chmod(shared_dir, (current_mode | 0o770) & ~0o007)
         except Exception:
             pass
 
