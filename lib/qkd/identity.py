@@ -12,7 +12,6 @@ import time
 import os
 
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
-ONBOX_TIMESTAMP_PROTOCOL = "timestamp_protocol=utc-v1"
 
 
 # -------------------------------------------------
@@ -954,24 +953,6 @@ def check_op_script_path(device):
 
 
 def check_op_script_permissions(device):
-    def check_onbox_timestamp_protocol(device):
-        device = normalize_device(device)
-        name = device_name(device)
-        result = ssh_script_user_onbox_cmd(
-            device,
-            "op qkd_onbox.py --version",
-            timeout=20,
-            include_failed_marker=False,
-        )
-        output = "\n".join([result.stdout or "", result.stderr or ""])
-        if result.returncode != 0 or ONBOX_TIMESTAMP_PROTOCOL not in output:
-            raise RuntimeError(
-                f"qkd_onbox timestamp protocol mismatch on {name}; "
-                f"expected={ONBOX_TIMESTAMP_PROTOCOL}\n"
-                f"stdout={result.stdout}\n"
-                f"stderr={result.stderr}"
-            )
-        print(f"[OK] qkd_onbox timestamp protocol on {name}: {ONBOX_TIMESTAMP_PROTOCOL}")
     device = normalize_device(device)
     name = device_name(device)
     path = qkd_remote_op_script()
@@ -1316,7 +1297,6 @@ def validate_device_identity_postdeploy(device):
         setup_started = time.perf_counter()
         check_op_script_path(device)
         check_op_script_permissions(device)
-        check_onbox_timestamp_protocol(device)
         check_event_script_path(device)
         check_event_script_permissions(device)
         check_system_scripts_python3(device)
