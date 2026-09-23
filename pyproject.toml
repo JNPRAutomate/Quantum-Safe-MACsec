@@ -1,6 +1,6 @@
 [project]
 name = "quantum-safe-macsec"
-version = "0.0.0"
+version = "3.3.4"
 description = "QKD-assisted MACsec orchestration and tooling for Juniper devices."
 readme = "README.md"
 requires-python = ">=3.9"

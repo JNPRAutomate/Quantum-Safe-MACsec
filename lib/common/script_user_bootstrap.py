@@ -1188,10 +1188,18 @@ def bootstrap_script_user_on_device(
 
         if diff:
             print("[%s] candidate diff:\n%s" % (name, diff))
-            cu.commit(
-                comment="QKD bootstrap SCRIPT_USER %s" % script_user,
-                sync=True,
-            )
+            commit_comment = "QKD bootstrap SCRIPT_USER %s" % script_user
+            try:
+                cu.commit(comment=commit_comment, sync=True)
+            except Exception as exc:
+                error_text = str(exc)
+                if "remote commit-configuration failed" not in error_text.lower():
+                    raise
+                print(
+                    "[%s] WARN synchronized bootstrap commit failed on remote RE; "
+                    "retrying local commit" % name
+                )
+                cu.commit(comment=commit_comment + " fallback=local")
             print("[%s] OK SCRIPT_USER bootstrap committed" % name)
         else:
             print("[%s] no SCRIPT_USER config change required" % name)

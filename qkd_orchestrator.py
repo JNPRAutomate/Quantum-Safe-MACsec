@@ -62,7 +62,7 @@ from lib.kme.instructions import print_manual_kme_copy_instructions
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
-SCRIPT_VERSION = "ver3.3.3"
+SCRIPT_VERSION = "ver3.3.4"
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +366,7 @@ def parse_args():
             "  3. deploy qkd_onbox.py\n"
             "  4. render/push/commit Junos configuration\n"
             "  5. postdeploy validation\n\n"
+            "Use --onbox-only to publish and validate qkd_onbox.py without changing Junos/MACsec configuration.\n\n"
             "Preview and dry-run do not bootstrap users or push config."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -389,6 +390,11 @@ def parse_args():
             "Preload only the minimal on-box runtime files needed by qkd_onbox.py "
             "as empty JSON placeholders (qkd_onbox_config.json and qkd_onbox_inventory.json)."
         ),
+    )
+    deploy.add_argument(
+        "--onbox-only",
+        action="store_true",
+        help="Deploy and validate qkd_onbox.py only; skip Junos/MACsec provisioning.",
     )
     deploy.add_argument(
         "--skip-pre-validation",
@@ -1262,6 +1268,9 @@ def handle_deploy(args):
             print(f"Purpose: {purpose}")
         print(line)
 
+    if args.onbox_only and args.shipment_preload:
+        raise ValueError("--onbox-only cannot be combined with --shipment-preload")
+
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
     initial_targets = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
@@ -1484,12 +1493,16 @@ def handle_deploy(args):
     )
     print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")
 
-    if args.shipment_preload:
+    if args.shipment_preload or args.onbox_only:
         print_step_banner(
             "4/5",
             "QKD PROVISIONING",
             "SKIP",
-            "Skipped: --shipment-preload stages files only, no router config is applied.",
+            (
+                "Skipped: --onbox-only publishes the runtime script without applying router config."
+                if args.onbox_only
+                else "Skipped: --shipment-preload stages files only, no router config is applied."
+            ),
         )
     else:
         print_step_banner(

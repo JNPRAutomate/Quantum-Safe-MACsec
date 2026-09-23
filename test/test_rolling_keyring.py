@@ -1,6 +1,8 @@
 import ast
+import calendar
 from pathlib import Path
 from types import SimpleNamespace
+import time
 
 import pytest
 
@@ -356,6 +358,27 @@ class TestRollingKeyringPlan:
         )
         save_index = source.index("if not save_db_state(peer, iface, state):", reconcile_index)
         assert finalize_index < reconcile_index < save_index
+
+
+class TestTimezoneSafeStartTimes:
+    @classmethod
+    def setup_class(cls):
+        cls.functions = load_functions(
+            "epoch_from_junos_start_time",
+            "junos_start_time_from_epoch",
+        )
+        cls.functions["calendar"] = calendar
+        cls.functions["time"] = time
+
+    def test_generated_start_time_is_explicit_utc(self):
+        value = self.functions["junos_start_time_from_epoch"](1790167106)
+        assert value == "2026-09-23.12:38:26 +0000"
+
+    def test_offset_and_utc_forms_represent_same_instant(self):
+        parse = self.functions["epoch_from_junos_start_time"]
+        assert parse("2026-09-23.14:38:26 +0200") == parse(
+            "2026-09-23.12:38:26 +0000"
+        )
 
 
 def test_qkd_policy_accepts_safe_independent_timers():

@@ -1,5 +1,7 @@
 # Quantum-Safe MACsec on Juniper devices - High-Level Design
 
+Release: 3.3.4
+
 ## 1. Purpose
 
 This repository implements a production-oriented framework for **QKD-assisted MACsec**:
