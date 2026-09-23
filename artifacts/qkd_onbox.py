@@ -4824,7 +4824,10 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
-        return _run_remote_status_command(PEER_CMD_USER, "status-live-miss")
+        state = _run_remote_status_command(SCRIPT_USER, "status-live-miss")
+        if state is not None or PEER_CMD_USER == SCRIPT_USER:
+            return state
+        return _run_remote_status_command(PEER_CMD_USER, "status-live-miss-fallback")
 
     state = _parse_status_payload(stdout)
     if state is None:
@@ -4841,7 +4844,10 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
-        return _run_remote_status_command(PEER_CMD_USER, "status-live-invalid-snapshot")
+        state = _run_remote_status_command(SCRIPT_USER, "status-live-invalid-snapshot")
+        if state is not None or PEER_CMD_USER == SCRIPT_USER:
+            return state
+        return _run_remote_status_command(PEER_CMD_USER, "status-live-invalid-snapshot-fallback")
 
     stale_threshold = max(rotation_interval_seconds() * 2, 120)
     age = int(time.time()) - exported_at
@@ -4853,7 +4859,9 @@ def get_peer_status(link, iface):
             iface,
             "MASTER",
         )
-        fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale")
+        fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale")
+        if fresh_state is None and PEER_CMD_USER != SCRIPT_USER:
+            fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale-fallback")
         if fresh_state is None:
             log(
                 f"PEER STATUS FRESH DATA UNAVAILABLE stale_age_seconds={age} "
