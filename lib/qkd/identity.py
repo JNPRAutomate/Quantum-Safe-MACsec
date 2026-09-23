@@ -966,9 +966,10 @@ def check_op_script_permissions(device):
 def check_onbox_timestamp_protocol(device):
     device = normalize_device(device)
     name = device_name(device)
-    result = ssh_script_user_onbox_cmd(
+    path = qkd_remote_op_script()
+    result = ssh_deploy_cmd(
         device,
-        "op qkd_onbox.py --version",
+        f"grep -F 'timestamp_protocol=utc-v1' {shlex.quote(path)}",
         timeout=20,
         include_failed_marker=False,
     )
