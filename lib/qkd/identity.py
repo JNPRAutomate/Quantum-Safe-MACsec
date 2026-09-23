@@ -969,12 +969,11 @@ def check_onbox_timestamp_protocol(device):
     path = qkd_remote_op_script()
     result = ssh_deploy_cmd(
         device,
-        f"grep -F 'timestamp_protocol=utc-v1' {shlex.quote(path)}",
+        f"grep -F 'timestamp_protocol=utc-v1' {shlex.quote(path)} >/dev/null 2>&1",
         timeout=20,
         include_failed_marker=False,
     )
-    output = "\n".join([result.stdout or "", result.stderr or ""])
-    if result.returncode != 0 or ONBOX_TIMESTAMP_PROTOCOL not in output:
+    if result.returncode != 0:
         raise RuntimeError(
             f"qkd_onbox timestamp protocol mismatch on {name}; "
             f"expected={ONBOX_TIMESTAMP_PROTOCOL}\n"
