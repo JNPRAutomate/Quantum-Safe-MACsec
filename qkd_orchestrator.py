@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -29,6 +30,7 @@ from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
 
 from lib.common.logger import setup_logger
+from lib.common.command_output import capture_command_output
 from lib.common.settings import CONFIG, PKI, QKD
 from lib.common.config import (
     load_inventory_file,
@@ -1606,20 +1608,25 @@ def handle_validate(args):
 
 
 def main():
-    args = parse_args()
-
-    if args.command == "create":
-        handle_create(args)
-    elif args.command == "bootstrap":
-        handle_bootstrap(args)
-    elif args.command == "deploy":
-        handle_deploy(args)
-    elif args.command == "clean":
-        handle_clean(args)
-    elif args.command == "validate":
-        handle_validate(args)
-    else:
-        print("Use: create | bootstrap | deploy | validate | clean")
+    action = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "help"
+    with capture_command_output("qkd_orchestrator", action):
+        try:
+            args = parse_args()
+            if args.command == "create":
+                handle_create(args)
+            elif args.command == "bootstrap":
+                handle_bootstrap(args)
+            elif args.command == "deploy":
+                handle_deploy(args)
+            elif args.command == "clean":
+                handle_clean(args)
+            elif args.command == "validate":
+                handle_validate(args)
+            else:
+                print("Use: create | bootstrap | deploy | validate | clean")
+        except BaseException:
+            traceback.print_exc()
+            raise
 
 
 if __name__ == "__main__":

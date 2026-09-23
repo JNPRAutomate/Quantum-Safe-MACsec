@@ -43,8 +43,10 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Optional
+from lib.common.command_output import capture_command_output
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -427,17 +429,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    try:
-        args.func(args)
-    except KeyboardInterrupt:
-        print("\n[ERROR] Interrupted")
-        sys.exit(130)
-    except Exception as exc:
-        print(f"[ERROR] {exc}")
-        sys.exit(1)
+    action = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "help"
+    with capture_command_output("kme_orchestrator", action):
+        try:
+            parser = build_parser()
+            args = parser.parse_args()
+            args.func(args)
+        except KeyboardInterrupt:
+            print("\n[ERROR] Interrupted")
+            sys.exit(130)
+        except Exception as exc:
+            print(f"[ERROR] {exc}")
+            traceback.print_exc()
+            sys.exit(1)
 
 
 if __name__ == "__main__":
