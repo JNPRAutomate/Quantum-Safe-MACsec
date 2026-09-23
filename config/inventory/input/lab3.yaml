@@ -1,0 +1,48 @@
+topology: links
+platform: mixed
+mode: qkd
+pki_profile: hierarchical_ca
+devices:
+- name: MX301-P1
+  hostname: mx301-p1
+  platform: mx
+  ip: 100.123.113.151
+  kme:
+    ip: 100.123.252.10
+    port: 8443
+  interfaces:
+  - et-0/0/2
+- name: MX304-P1
+  hostname: mx304-p1
+  platform: mx
+  ip: 100.123.113.1
+  kme:
+    ip: 100.123.252.11
+    port: 8443
+  interfaces:
+  - et-0/0/4
+  - et-0/0/7
+- name: ACX7348-P1
+  hostname: acx7348-p1
+  platform: acx
+  ip: 100.123.171.1
+  kme:
+    ip: 100.123.252.12
+    port: 8443
+  interfaces:
+  - et-2/0/0
+links:
+- id: MX301-P1-MX304-P1
+  node_a: MX301-P1
+  interface_a: et-0/0/2
+  node_b: MX304-P1
+  interface_b: et-0/0/7
+  ca_name: CA_MX301-P1_MX304-P1
+  keychain_name: QKD_CA_MX301-P1_MX304-P1
+- id: MX304-P1-ACX7348-P1
+  node_a: MX304-P1
+  interface_a: et-0/0/4
+  node_b: ACX7348-P1
+  interface_b: et-2/0/0
+  ca_name: CA_MX304-P1_ACX7348-P1
+  keychain_name: QKD_CA_MX304-P1_ACX7348-P1

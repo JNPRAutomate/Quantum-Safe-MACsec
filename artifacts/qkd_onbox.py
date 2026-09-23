@@ -28,10 +28,15 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 """
 
 import sys
-EARLY_SCRIPT_VERSION = "ver3.3.3"
+import calendar
+EARLY_SCRIPT_VERSION = "ver3.3.4"
+TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
-    print(f"qkd_onbox.py {EARLY_SCRIPT_VERSION}")
+    print(
+        f"qkd_onbox.py {EARLY_SCRIPT_VERSION} "
+        f"timestamp_protocol={TIMESTAMP_PROTOCOL_VERSION}"
+    )
     raise SystemExit(0)
 if "--help" in _EARLY_ARGS or "-h" in _EARLY_ARGS:
     print("qkd_onbox.py %s" % EARLY_SCRIPT_VERSION)
@@ -59,7 +64,7 @@ import stat
 
 
 urllib3.disable_warnings()
-SCRIPT_VERSION = "ver3.3.3"
+SCRIPT_VERSION = EARLY_SCRIPT_VERSION
 DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
 DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
 
@@ -249,7 +254,9 @@ def ensure_runtime_dirs():
     # without granting access to unrelated local users.
     for shared_dir in (PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
         try:
-            os.chmod(shared_dir, 0o770)
+            current_mode = stat.S_IMODE(Path(shared_dir).stat().st_mode)
+            if current_mode & 0o007 or current_mode & 0o770 != 0o770:
+                os.chmod(shared_dir, (current_mode | 0o770) & ~0o007)
         except Exception:
             pass
 
@@ -510,14 +517,21 @@ def epoch_from_junos_start_time(start_time):
         return None
     value = str(start_time).strip()
     formats = (
+        "%Y-%m-%d.%H:%M:%S %z",
+        "%Y-%m-%d.%H:%M %z",
         "%Y-%m-%d.%H:%M:%S",
         "%Y-%m-%d.%H:%M",
+        "%Y-%m-%d %H:%M:%S %z",
+        "%Y-%m-%d %H:%M %z",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
     )
     for fmt in formats:
         try:
-            return int(time.mktime(time.strptime(value, fmt)))
+            parsed = time.strptime(value, fmt)
+            if "%z" in fmt:
+                return int(calendar.timegm(parsed) - parsed.tm_gmtoff)
+            return int(time.mktime(parsed))
         except Exception:
             continue
     return None
@@ -734,10 +748,7 @@ def get_configured_next_pending_slot(keychain_name, iface=None, now_epoch=None):
         if start_raw.startswith('"') and start_raw.endswith('"'):
             start_raw = start_raw[1:-1]
 
-        # Junos may include timezone suffix in config output; keep the core
-        # timestamp expected by epoch parser.
-        start_core = start_raw.split()[0] if start_raw else ""
-        start_epoch = epoch_from_junos_start_time(start_core)
+        start_epoch = epoch_from_junos_start_time(start_raw)
         if start_epoch is None:
             continue
         if int(start_epoch) <= int(now_epoch):
@@ -797,7 +808,7 @@ def get_configured_keychain_entries(keychain_name, iface=None):
         if raw.startswith('"') and raw.endswith('"'):
             raw = raw[1:-1]
         entry = entries.setdefault(slot, {"slot": slot})
-        entry["start_time"] = raw.split()[0] if raw else None
+        entry["start_time"] = raw if raw else None
 
     return entries
 
@@ -2805,7 +2816,7 @@ def link_stagger_minutes(link):
 
 
 def junos_start_time_from_epoch(epoch_seconds):
-    return time.strftime("%Y-%m-%d.%H:%M:%S", time.localtime(int(epoch_seconds)))
+    return time.strftime("%Y-%m-%d.%H:%M:%S +0000", time.gmtime(int(epoch_seconds)))
 
 
 def format_start_time_cli(start_time):
@@ -4085,7 +4096,13 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         # Keep bucket slots stable and update values/timer in-place.
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} key-name {ckn}")
         cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} secret \"{cak}\"")
-        cli_cmds.append(f"set security authentication-key-chains key-chain {keychain_name} key {key_index} start-time {cli_start_time}")
+        cli_start_time_value = (
+            f'"{cli_start_time}"' if " " in cli_start_time else cli_start_time
+        )
+        cli_cmds.append(
+            f"set security authentication-key-chains key-chain {keychain_name} "
+            f"key {key_index} start-time {cli_start_time_value}"
+        )
 
     if commit:
         # Extract generation list from entries for commit comment

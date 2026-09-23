@@ -18,6 +18,7 @@ import argparse
 import copy
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -61,7 +62,7 @@ from lib.kme.instructions import print_manual_kme_copy_instructions
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
-SCRIPT_VERSION = "ver3.3.3"
+SCRIPT_VERSION = "ver3.3.4"
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +366,7 @@ def parse_args():
             "  3. deploy qkd_onbox.py\n"
             "  4. render/push/commit Junos configuration\n"
             "  5. postdeploy validation\n\n"
+            "Use --onbox-only to publish and validate qkd_onbox.py without changing Junos/MACsec configuration.\n\n"
             "Preview and dry-run do not bootstrap users or push config."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -388,6 +390,11 @@ def parse_args():
             "Preload only the minimal on-box runtime files needed by qkd_onbox.py "
             "as empty JSON placeholders (qkd_onbox_config.json and qkd_onbox_inventory.json)."
         ),
+    )
+    deploy.add_argument(
+        "--onbox-only",
+        action="store_true",
+        help="Deploy and validate qkd_onbox.py only; skip Junos/MACsec provisioning.",
     )
     deploy.add_argument(
         "--skip-pre-validation",
@@ -526,6 +533,7 @@ def deploy_onbox(
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
+    resolved_peer_cmd_user = QKD.get("PEER_CMD_USER", resolved_script_user)
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -692,7 +700,19 @@ def deploy_onbox(
         if sidecar_harden:
             sidecar_harden = sidecar_harden + "; "
 
+        shared_dirs = "/var/tmp/qkd_peer_status /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_ack"
+        shared_dir_setup = (
+            f"peer_group=$(id -gn {resolved_peer_cmd_user}); "
+            f"mkdir -p {shared_dirs}; "
+            f"chown {resolved_script_user}:\"$peer_group\" {shared_dirs}; "
+            f"chmod 2770 {shared_dirs}; "
+            f"find {shared_dirs} -type f -exec chgrp \"$peer_group\" {{}} \\; "
+            f"-exec chmod 640 {{}} \\; ; "
+        )
+
         install_cmd = (
+            "set -e; "
+            f"{shared_dir_setup}"
             f"mkdir -p {op_script_dir} {event_script_dir}; "
             f"chown root {op_script_dir} {event_script_dir}; "
             f"chmod 755 {op_script_dir} {event_script_dir}; "
@@ -711,10 +731,16 @@ def deploy_onbox(
             f"{op_script_dir}/qkd_onbox.qkd_policy.json "
             f"{op_script_dir}/qkd_onbox.pki.json "
             f"{op_script_dir}/qkd_onbox.config.json "
-            f"rm -f {remote_tmp_script}"
+            f"rm -f {remote_tmp_script}; "
+            f"test -f {remote_op} -a -f {remote_event}; "
+            "echo __QKD_ONBOX_INSTALL_OK__"
         )
+        install_cmd = "/bin/sh -c " + shlex.quote(install_cmd)
 
-        return run_shell(dev, install_cmd, strict=True)
+        output = run_shell(dev, install_cmd, strict=True)
+        if "__QKD_ONBOX_INSTALL_OK__" not in output:
+            raise RuntimeError(f"ONBOX install verification failed: {output}")
+        return output
 
     def sync_to_re1_if_needed(dev, name, extra_paths=None):
         """
@@ -1242,6 +1268,9 @@ def handle_deploy(args):
             print(f"Purpose: {purpose}")
         print(line)
 
+    if args.onbox_only and args.shipment_preload:
+        raise ValueError("--onbox-only cannot be combined with --shipment-preload")
+
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
     initial_targets = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
@@ -1464,12 +1493,16 @@ def handle_deploy(args):
     )
     print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")
 
-    if args.shipment_preload:
+    if args.shipment_preload or args.onbox_only:
         print_step_banner(
             "4/5",
             "QKD PROVISIONING",
             "SKIP",
-            "Skipped: --shipment-preload stages files only, no router config is applied.",
+            (
+                "Skipped: --onbox-only publishes the runtime script without applying router config."
+                if args.onbox_only
+                else "Skipped: --shipment-preload stages files only, no router config is applied."
+            ),
         )
     else:
         print_step_banner(
