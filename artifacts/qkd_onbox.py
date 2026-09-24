@@ -186,6 +186,7 @@ PEER_CMD_USER = str(CONFIG.get("peer_cmd_user", SCRIPT_USER) or SCRIPT_USER)
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
 PEER_SSH_KEY = str(CONFIG.get("peer_ssh_key", SSH_KEY) or SSH_KEY)
+SCP_BINARY = str(CONFIG.get("scp_binary", "/usr/bin/scp") or "/usr/bin/scp")
 OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
 
 LOG_FILE = CONFIG["log_file"]
@@ -4456,7 +4457,7 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
         except Exception:
             pass
         cmd = [
-            "scp",
+            SCP_BINARY,
             "-O",
             *ssh_transport_options(PEER_SSH_KEY),
             str(local_tmp),
@@ -4467,7 +4468,8 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
             stderr = result.stderr.decode(errors="ignore").strip()
             stdout = result.stdout.decode(errors="ignore").strip()
             log(
-                f"SCP UPLOAD FAIL user={peer_user} peer={peer_ip} path={remote_path} stderr={stderr} stdout={stdout}",
+                f"SCP UPLOAD FAIL binary={SCP_BINARY} path_env={os.environ.get('PATH', '')} "
+                f"user={peer_user} peer={peer_ip} path={remote_path} stderr={stderr} stdout={stdout}",
                 "ERROR",
                 iface,
                 mode_ctx,
@@ -4492,7 +4494,7 @@ def scp_download_text(peer_user, peer_ip, remote_path):
     local_tmp = Path(f"/tmp/qkd_scp_download_{os.getpid()}_{int(time.time()*1000)}.tmp")
     try:
         cmd = [
-            "scp",
+            SCP_BINARY,
             "-O",
             *ssh_transport_options(PEER_SSH_KEY),
             f"{peer_user}@{peer_ip}:{remote_path}",

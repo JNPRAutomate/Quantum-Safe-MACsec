@@ -266,6 +266,7 @@ def build_onbox_config(name, device):
         "ssh_home_base": ssh_home_base,
         "ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{ssh_key_name}",
         "peer_ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{peer_ssh_key_name}",
+        "scp_binary": device.get("scp_binary") or QKD.get("SCP_BINARY", "/usr/bin/scp"),
         "state_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}",
         "log_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs",
         # Shared paths used by low-privilege peer_cmd_user transport channel.
