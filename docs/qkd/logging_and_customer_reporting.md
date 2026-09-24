@@ -36,14 +36,14 @@ The deployed branch uses the following policy:
 | `bootstrap_fallback_keys` | `1` | Number of deterministic bootstrap keys |
 | `strict_sync_enabled` | `true` | Require bilateral state agreement |
 | `pending_auto_evict_enabled` | `false` | Never force progress by deleting pending state |
-| `peer_transport_mode` | `queue` | Use inbox/ACK file transport |
+| `peer_transport_mode` | `rpc` | Use synchronous JSSH op-script delivery |
 | `execution_interval_seconds` | `60` | Junos event-options script cadence |
 | `key_activation_interval_seconds` | `300` | Distance between key start-times |
 | `key_batch_size` | `4` | Configured ring/batch size |
 | `max_installed_keys` | `4` | Physical keychain slots |
 | `peer_enqueue_min_margin_seconds` | `60` | Minimum remaining lead time before enqueue |
-| `peer_batch_ack_timeout_seconds` | `150` | Maximum peer ACK wait |
-| `peer_batch_ack_poll_interval_seconds` | `5` | ACK polling cadence |
+| `peer_batch_ack_timeout_seconds` | `150` | Maximum batch RPC duration |
+| `peer_batch_ack_poll_interval_seconds` | `5` | Queue-mode ACK polling cadence |
 | `adaptive_grace_history_size` | `32` | Successful timing samples retained |
 | `adaptive_grace_floor_seconds` | `150` | Minimum observed-time baseline |
 | `adaptive_grace_safety_margin_seconds` | `30` | Safety added to the baseline |

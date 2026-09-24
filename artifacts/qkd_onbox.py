@@ -1432,8 +1432,8 @@ def qkd_policy():
 
 
 def peer_transport_mode():
-    value = qkd_policy().get("peer_transport_mode", CONFIG.get("peer_transport_mode", "queue"))
-    return str(value or "queue").strip().lower()
+    value = qkd_policy().get("peer_transport_mode", CONFIG.get("peer_transport_mode", "rpc"))
+    return str(value or "rpc").strip().lower()
 
 
 def strict_sync_enabled():
@@ -2904,7 +2904,8 @@ def acquire_lock():
         except Exception:
             log("LOCK EXISTS AND STAT FAILED -> exit", "ERROR")
             return False
-        if age < 120:
+        stale_after = max(120, peer_batch_ack_timeout_seconds() + 60)
+        if age < stale_after:
             log("LOCK EXISTS -> exit", "ERROR")
             return False
         log("STALE LOCK FOUND -> removing", "ERROR")
@@ -2977,7 +2978,8 @@ def acquire_action_lock(iface, action):
         except Exception:
             log(f"ACTION LOCK EXISTS AND STAT FAILED action={action}", "ERROR", iface, "LOCK")
             return False
-        if age < 120:
+        stale_after = max(120, peer_batch_ack_timeout_seconds() + 60)
+        if age < stale_after:
             log(
                 f"ACTION LOCK EXISTS action={action} iface={iface} age_seconds={int(age)} "
                 f"age={format_duration_human(age)} pid={pid} -> exit",
@@ -4697,19 +4699,13 @@ def send_command(
         except Exception:
             pass
 
-    ssh_options = ["ssh", *ssh_transport_options(PEER_SSH_KEY)]
-
-    if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
-        peer_user = PEER_CMD_USER
-        if not ack_id:
-            ack_id = compute_batch_ack_id(batch_b64)
-        remote_inbox = peer_inbox_file_for_ack(link.get("peer_sae"), peer_iface, ack_id)
+    if action == "install-key-batch" and batch_b64:
         if first_start_epoch is not None and not bypass_enqueue_margin:
             remaining_seconds = int(first_start_epoch - time.time())
             min_margin = peer_enqueue_min_margin_seconds()
             if remaining_seconds < min_margin:
                 log(
-                    f"SSH ENQUEUE BLOCKED margin_too_small remaining_seconds={remaining_seconds} "
+                    f"PEER DELIVERY BLOCKED margin_too_small remaining_seconds={remaining_seconds} "
                     f"remaining={format_duration_human(remaining_seconds)} "
                     f"min_margin_seconds={min_margin} min_margin={format_duration_human(min_margin)} "
                     f"peer_iface={peer_iface} start_time={start_time_human}",
@@ -4718,6 +4714,12 @@ def send_command(
                     "MASTER",
                 )
                 return False
+
+    if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
+        peer_user = PEER_CMD_USER
+        if not ack_id:
+            ack_id = compute_batch_ack_id(batch_b64)
+        remote_inbox = peer_inbox_file_for_ack(link.get("peer_sae"), peer_iface, ack_id)
 
         envelope = {
             "kind": "install-key-batch",
@@ -4742,8 +4744,15 @@ def send_command(
         return scp_upload_text(peer_user, peer_ip, remote_inbox, transport_payload, iface=iface, mode_ctx="MASTER")
 
     peer_user = SCRIPT_USER
+    ssh_options = [
+        "ssh",
+        *ssh_transport_options(SSH_KEY),
+        "-o", "ConnectTimeout=10",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
+    ]
     log(
-        f"SSH EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
+        f"SSH RPC EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
         f"scheduled_start_time={start_time_human} cmd=\"{cmd}\"",
         "INFO",
         iface,
@@ -4755,22 +4764,52 @@ def send_command(
         f"{peer_user}@{peer_ip}",
         cmd,
     ]
+    timeout = peer_batch_ack_timeout_seconds() if action == "install-key-batch" else 10
     try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        result = subprocess.run(
+            ssh_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
-        log(f"SSH TIMEOUT action={action} peer={peer_ip}", "ERROR", iface, "MASTER")
+        log(
+            f"SSH RPC TIMEOUT action={action} peer={peer_ip} timeout_seconds={timeout}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
         return False
     except Exception as e:
-        log(f"SSH ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
+        log(f"SSH RPC ERROR action={action} peer={peer_ip} error={str(e)}", "ERROR", iface, "MASTER")
         return False
 
     stdout = result.stdout.decode(errors="ignore").strip()
     stderr = result.stderr.decode(errors="ignore").strip()
-    log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
+    log(f"SSH RPC RC={result.returncode}", "INFO", iface, "MASTER")
     combined = f"{stdout}\n{stderr}"
-    failure_markers = ["ERROR", "DEC FAILED", "KEYCHAIN INSTALL FAIL", "INSTALL-KEY ABORTED", "Traceback", "PermissionError", "op script failed", "op script fails", "exit code"]
-    if result.returncode != 0 or any(marker in combined for marker in failure_markers):
-        log(f"SSH FAIL action={action} stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
+    combined_lower = combined.lower()
+    failure_markers = [
+        "error",
+        "dec failed",
+        "keychain install fail",
+        "install-key aborted",
+        "traceback",
+        "permissionerror",
+        "op script failed",
+        "op script fails",
+        "exit code",
+    ]
+    missing_batch_success = (
+        action == "install-key-batch"
+        and "OK INSTALL-KEY-BATCH" not in stdout
+    )
+    if (
+        result.returncode != 0
+        or any(marker in combined_lower for marker in failure_markers)
+        or missing_batch_success
+    ):
+        log(f"SSH RPC FAIL action={action} stderr={stderr} stdout={stdout}", "ERROR", iface, "MASTER")
         return False
     return True
 
@@ -5931,6 +5970,28 @@ def _configured_records_match(keychain_name, iface, records):
     return True
 
 
+def _state_records_match(state, records):
+    slots = state.get("slots") if isinstance(state, dict) else None
+    if not isinstance(slots, list):
+        return False
+    for item in records:
+        try:
+            actual = slots[int(item["slot"])]
+        except (IndexError, KeyError, TypeError, ValueError):
+            return False
+        if not isinstance(actual, dict):
+            return False
+        if str(actual.get("key_id") or "") != str(item.get("key_id") or ""):
+            return False
+        expected_epoch = epoch_from_junos_start_time(item.get("start_time"))
+        actual_epoch = epoch_from_junos_start_time(actual.get("start_time"))
+        if expected_epoch is None or actual_epoch is None:
+            return False
+        if int(expected_epoch) != int(actual_epoch):
+            return False
+    return True
+
+
 def resume_inflight_install(link, state):
     transaction = state.get("inflight_install")
     if not isinstance(transaction, dict):
@@ -5972,12 +6033,23 @@ def resume_inflight_install(link, state):
         )
         return state, False
 
-    ack = read_remote_peer_batch_ack(link, iface)
+    transport_mode = peer_transport_mode()
+    ack = read_remote_peer_batch_ack(link, iface) if transport_mode == "queue" else None
     ack_ok = (
         isinstance(ack, dict)
         and str(ack.get("ack_id")) == str(ack_id)
         and str(ack.get("status") or "").lower() == "ok"
     )
+    if transport_mode == "rpc":
+        peer_state = get_peer_status(link, iface)
+        ack_ok = _state_records_match(peer_state, records)
+        if ack_ok:
+            log(
+                f"{operation} INFLIGHT RPC PEER STATE CONFIRMED ack_id={ack_id}",
+                "INFO",
+                iface,
+                "MASTER",
+            )
     wrote_timing_record = False
     if not ack_ok:
         try:
@@ -6025,7 +6097,7 @@ def resume_inflight_install(link, state):
                 status="fail",
                 timings_ms=_inflight_timing_snapshot(),
                 reason_code="PEER_TRANSPORT_FAILED",
-                reason_stage="MASTER_SCP_SEND",
+                reason_stage="MASTER_PEER_SEND",
                 reason_detail="inflight resend failed",
                 operation=operation,
             )
@@ -6108,6 +6180,7 @@ def run_master_rolling_link(link):
                 "MASTER",
             )
             return False
+    else:
         if seed_reset and previous_active != state.get("active_key_id"):
             log(
                 f"ORCHESTRATOR SEED RESET RECONCILED old_active_key_id={previous_active} "
@@ -6457,7 +6530,7 @@ def run_master_rolling_link(link):
                 "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
             },
             reason_code="PEER_TRANSPORT_FAILED",
-            reason_stage="MASTER_SCP_SEND",
+            reason_stage="MASTER_PEER_SEND",
             reason_detail="send_command install-key-batch failed",
             operation=operation,
         )
@@ -6501,6 +6574,20 @@ def run_master_rolling_link(link):
                 "MASTER",
             )
             return False
+    else:
+        append_rolling_pipeline_timing_record(
+            iface,
+            ack_id,
+            status="ok",
+            timings_ms={
+                "master_enc_total_ms": int(enc_total_ms),
+                "master_commit_to_ack_ms": int(elapsed_ms(local_commit_start_ms)),
+                "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
+                "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
+            },
+            reason_stage="MASTER_RPC_RESPONSE",
+            operation=operation,
+        )
 
     state = record_successful_transaction_timing(
         state,
