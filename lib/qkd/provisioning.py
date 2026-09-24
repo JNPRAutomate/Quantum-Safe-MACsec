@@ -205,22 +205,37 @@ def has_dual_re(dev, name):
 
 def copy_file_to_other_re(dev, name, src_path, dst_name=None):
     """
-    Best-effort copy of a local file to the other Routing Engine.
+    Copy a local file to the peer Routing Engine.
 
-    Tries both re0: and re1: targets because the active RE identity may vary.
-    On single-RE systems this function should not be called.
+    The peer destination directory must exist before Junos file copy runs.
+    This is normally true for script directories, but a clean deployment
+    removes the certificate directory from both routing engines.
     """
     dst_path = str(Path(src_path).parent / (dst_name or Path(src_path).name))
-    ok = False
+    peer_dir = str(Path(dst_path).parent)
+    mkdir_command = (
+        "request routing-engine execute command "
+        f"\"mkdir -p {shlex.quote(peer_dir)}\" routing-engine other"
+    )
+    mkdir_output = run_cli_only(dev, mkdir_command, name=name, strict=False)
+    if "error:" in (mkdir_output or "").lower():
+        return False
 
     for re_name in ("re0", "re1"):
         cmd = f"file copy {src_path} {re_name}:{dst_path}"
         out = run_cli_only(dev, cmd, name=name, strict=False)
         low = (out or "").lower()
-        if "error" not in low and "failed" not in low and "no such" not in low:
-            ok = True
+        if (
+            "error" in low
+            or "failed" in low
+            or "no such" in low
+            or "operation-failed" in low
+        ):
+            continue
 
-    return ok
+        return True
+
+    return False
 
 
 def sync_qkd_scripts_dual_re(dev, name, script_name):
