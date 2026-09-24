@@ -166,6 +166,21 @@ def run_shell(dev, command, name=None, strict=False):
         return str(exc)
 
 
+def run_cli_only(dev, command, name=None, strict=False):
+    """
+    Run commands that Junos permits only from an interactive CLI session.
+
+    RPC <command> execution rejects file copy and commit synchronize scripts
+    on MX304, even though the same commands are accepted through cli -c.
+    """
+    return run_shell(
+        dev,
+        "cli -c " + shlex.quote(command),
+        name=name,
+        strict=strict,
+    )
+
+
 def has_dual_re(dev, name):
     """
     Detect dual RE robustly.
@@ -200,7 +215,7 @@ def copy_file_to_other_re(dev, name, src_path, dst_name=None):
 
     for re_name in ("re0", "re1"):
         cmd = f"file copy {src_path} {re_name}:{dst_path}"
-        out = run_cli(dev, cmd, name=name, strict=False)
+        out = run_cli_only(dev, cmd, name=name, strict=False)
         low = (out or "").lower()
         if "error" not in low and "failed" not in low and "no such" not in low:
             ok = True
@@ -239,7 +254,7 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
         copy_file_to_other_re(dev, name, path)
 
     # Ask Junos to push scripts too. Ignore failure here; file copy above is the primary sync.
-    run_cli(dev, "commit synchronize scripts", name=name, strict=False)
+    run_cli_only(dev, "commit synchronize scripts", name=name, strict=False)
 
 
 def sync_certs_dual_re(dev, name, remote_dir, filenames):
