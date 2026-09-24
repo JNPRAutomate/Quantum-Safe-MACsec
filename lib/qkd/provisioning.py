@@ -263,7 +263,22 @@ def sync_certs_dual_re(dev, name, remote_dir, filenames):
 
     print(f"[{name}] Dual-RE detected - syncing certs to peer RE")
     for filename in filenames:
-        copy_file_to_other_re(dev, name, f"{remote_dir}/{filename}")
+        remote_path = f"{remote_dir}/{filename}"
+        if not copy_file_to_other_re(dev, name, remote_path):
+            raise RuntimeError(
+                f"[{name}] Failed to copy certificate to peer RE: {remote_path}"
+            )
+
+        verify_command = (
+            "request routing-engine execute command "
+            f"\"ls -l {shlex.quote(remote_path)}\" routing-engine other"
+        )
+        output = run_cli_only(dev, verify_command, name=name, strict=False)
+        if "No such file or directory" in output or remote_path not in output:
+            raise RuntimeError(
+                f"[{name}] Peer RE certificate verification failed: {remote_path}\n"
+                f"output={output}"
+            )
 
 
 def commit_safely(dev, cu, name, sync=True, phase="CONFIG_APPLY", detail=None):
