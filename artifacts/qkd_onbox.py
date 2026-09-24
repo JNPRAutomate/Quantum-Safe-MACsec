@@ -61,6 +61,7 @@ import json
 import os
 import hashlib
 import pwd
+import signal
 import stat
 
 
@@ -4449,6 +4450,25 @@ def ssh_transport_options(key_path=None):
     ]
 
 
+def run_scp_command(cmd, timeout=10):
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise
+    return process.returncode, stdout, stderr
+
+
 def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, mode_ctx="MASTER"):
     local_tmp = Path(f"/tmp/qkd_scp_upload_{os.getpid()}_{int(time.time()*1000)}.tmp")
     try:
@@ -4475,10 +4495,10 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
             iface,
             mode_ctx,
         )
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="ignore").strip()
-            stdout = result.stdout.decode(errors="ignore").strip()
+        returncode, stdout_bytes, stderr_bytes = run_scp_command(cmd)
+        if returncode != 0:
+            stderr = stderr_bytes.decode(errors="ignore").strip()
+            stdout = stdout_bytes.decode(errors="ignore").strip()
             log(
                 f"SCP UPLOAD FAIL binary={SCP_BINARY} path_env={os.environ.get('PATH', '')} "
                 f"user={peer_user} peer={peer_ip} path={remote_path} stderr={stderr} stdout={stdout}",
@@ -4512,8 +4532,8 @@ def scp_download_text(peer_user, peer_ip, remote_path):
             f"{peer_user}@{peer_ip}:{remote_path}",
             str(local_tmp),
         ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-        if result.returncode != 0:
+        returncode, _, _ = run_scp_command(cmd)
+        if returncode != 0:
             return None
         return local_tmp.read_text(encoding="utf-8").strip()
     except Exception:

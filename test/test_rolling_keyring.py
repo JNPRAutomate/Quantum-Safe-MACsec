@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import time
 
 import pytest
+import subprocess
 
 from lib.qkd.inventory_builder import validate_qkd_policy
 
@@ -418,6 +419,35 @@ class TestBilateralSlotMetadata:
         }
 
         assert not self.functions["_slot_metadata_matches"](local_state, peer_state, {1})
+
+
+class TestScpTimeout:
+    def test_timeout_kills_entire_scp_process_group(self):
+        functions = load_functions("run_scp_command")
+        killed = []
+
+        class Process:
+            pid = 4321
+
+            def communicate(self, timeout=None):
+                if timeout is not None:
+                    raise subprocess.TimeoutExpired(["scp"], timeout)
+                return b"", b""
+
+        functions["subprocess"] = SimpleNamespace(
+            PIPE=object(),
+            TimeoutExpired=subprocess.TimeoutExpired,
+            Popen=lambda *args, **kwargs: Process(),
+        )
+        functions["os"] = SimpleNamespace(
+            killpg=lambda pid, signal: killed.append((pid, signal))
+        )
+        functions["signal"] = SimpleNamespace(SIGKILL=9)
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            functions["run_scp_command"](["scp"], timeout=10)
+
+        assert killed == [(4321, 9)]
 
 
 def test_qkd_policy_accepts_safe_independent_timers():
