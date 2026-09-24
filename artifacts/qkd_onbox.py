@@ -53,6 +53,7 @@ import datetime
 import requests
 import base64
 import re
+import shlex
 import subprocess
 import urllib3
 from pathlib import Path
@@ -4463,6 +4464,17 @@ def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, m
             str(local_tmp),
             f"{peer_user}@{peer_ip}:{remote_path}",
         ]
+        local_stat = local_tmp.stat()
+        log(
+            f"SCP UPLOAD EXEC binary={SCP_BINARY} argv={' '.join(shlex.quote(arg) for arg in cmd)} "
+            f"runtime_user={runtime_user()} uid={os.geteuid()} gid={os.getegid()} cwd={os.getcwd()} "
+            f"home={os.environ.get('HOME', '')} path_env={os.environ.get('PATH', '')} "
+            f"source_mode={stat.S_IMODE(local_stat.st_mode):04o} "
+            f"source_uid={local_stat.st_uid} source_gid={local_stat.st_gid}",
+            "INFO",
+            iface,
+            mode_ctx,
+        )
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="ignore").strip()
