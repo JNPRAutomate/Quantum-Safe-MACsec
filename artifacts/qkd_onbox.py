@@ -4749,8 +4749,6 @@ def get_peer_status(link, iface):
     peer_iface = link["peer_interface"]
     snapshot_path = remote_peer_status_file(link.get("peer_sae"), peer_iface)
 
-    ssh_options = ["ssh", *ssh_transport_options(PEER_SSH_KEY)]
-
     snapshot_user = PEER_CMD_USER
     log(
         f"SCP GET {snapshot_user}@{peer_ip} action=status-readonly local_iface={iface} peer_iface={peer_iface} snapshot={snapshot_path}",
@@ -4770,7 +4768,14 @@ def get_peer_status(link, iface):
         )
         try:
             result = subprocess.run(
-                ssh_options + [f"{peer_user}@{peer_ip}", cmd],
+                [
+                    "ssh",
+                    *ssh_transport_options(
+                        SSH_KEY if peer_user == SCRIPT_USER else PEER_SSH_KEY
+                    ),
+                    f"{peer_user}@{peer_ip}",
+                    cmd,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=10,
