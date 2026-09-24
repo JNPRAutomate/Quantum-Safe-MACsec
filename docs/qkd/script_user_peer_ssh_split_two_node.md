@@ -110,4 +110,9 @@ Read-only status snapshot retrieval can still use the legacy queue transport
 identity when configured. If that snapshot is unavailable, the runtime falls
 back to the JSSH `action status` RPC as `script_user`.
 
+The `peer_cmd_user` login class permits only `exit` and uses one combined
+`deny-commands` expression for `show`, `configure`, `op`, `request`, `file`,
+and `start shell`. Keeping these restrictions in one Junos leaf avoids relying
+on how repeated `deny-commands` assignments are merged or replaced.
+
 This keeps the control plane deterministic and easier to debug from logs every 60-second cycle.

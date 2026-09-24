@@ -4553,7 +4553,7 @@ def validate_ssh_runtime_for_master():
     if PEER_CMD_USER != SCRIPT_USER:
         log(
             f"PEER CMD USER CONFIGURED peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER} "
-            f"status=ACTIVE_FOR_STATUS_AND_BATCH_TRANSPORT_ONLY",
+            f"status=ACTIVE_FOR_READONLY_STATUS_COMPATIBILITY",
             "INFO",
             mode="MASTER",
         )

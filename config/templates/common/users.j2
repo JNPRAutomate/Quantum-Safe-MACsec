@@ -1,4 +1,4 @@
 set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} allow-commands exit
-set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} deny-commands "file .*"
+set system login class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }} deny-commands "(show|configure|op|request|file)( .*)?|start shell( .*)?"
 set system login user {{ script_user }} class {{ script_user_class | default('super-user', true) }}
 set system login user {{ peer_cmd_user }} class {{ peer_cmd_user_class | default('qkd-peer-cmd-class', true) }}
