@@ -221,20 +221,29 @@ def copy_file_to_other_re(dev, name, src_path, dst_name=None):
     if "error:" in (mkdir_output or "").lower():
         return False
 
+    copy_outputs = []
     for re_name in ("re0", "re1"):
         cmd = f"file copy {src_path} {re_name}:{dst_path}"
         out = run_cli_only(dev, cmd, name=name, strict=False)
+        copy_outputs.append(f"{re_name}: {out}")
         low = (out or "").lower()
-        if (
-            "error" in low
-            or "failed" in low
-            or "no such" in low
-            or "operation-failed" in low
-        ):
-            continue
+        if "operation allowed only from cli" in low:
+            return False
 
+    verify_command = (
+        "request routing-engine execute command "
+        f"\"ls -l {shlex.quote(dst_path)}\" routing-engine other"
+    )
+    verify_output = run_cli_only(dev, verify_command, name=name, strict=False)
+    if dst_path in verify_output and "No such file or directory" not in verify_output:
         return True
 
+    if DEBUG:
+        print(
+            f"[{name}] Peer RE copy verification failed for {dst_path}\n"
+            f"copy_outputs={copy_outputs}\n"
+            f"verify_output={verify_output}"
+        )
     return False
 
 
