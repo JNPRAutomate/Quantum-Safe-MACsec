@@ -773,15 +773,24 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
             ).format(q=quoted, ak=shlex.quote(authorized_keys))
 
     return (
+        "set -e; "
         "mkdir -p {ssh_dir}; "
         "touch {authorized_keys}; "
         "{append_public_key}"
-        "chown -R {user} {ssh_dir}; "
         "chown {user} {authorized_keys}; "
+        "chown {user} {ssh_dir}; "
         "chmod 700 {ssh_dir}; "
         "chmod 600 {authorized_keys}; "
+        "for path in {ssh_dir}/qkd_*; do "
+        "[ -e \"$path\" ] || continue; "
+        "chown {user} \"$path\"; "
+        "case \"$path\" in *.pub) chmod 644 \"$path\" ;; *) chmod 600 \"$path\" ;; esac; "
+        "done; "
+        "test \"$(ls -ld {ssh_dir} | awk '{{print $3}}')\" = {user}; "
+        "test \"$(ls -l {authorized_keys} | awk '{{print $3}}')\" = {user}; "
         "ls -ld {ssh_dir}; "
-        "ls -l {authorized_keys}"
+        "ls -l {authorized_keys}; "
+        "echo __QKD_SSH_HOME_FIX_OK__"
     ).format(
         user=shlex.quote(script_user),
         ssh_dir=shlex.quote(ssh_dir),
@@ -806,7 +815,9 @@ def run_shell_fix(
         )
         return True
 
-    command = build_ssh_fix_command(script_user, public_key_line=public_key_line)
+    command = "/bin/sh -c " + shlex.quote(
+        build_ssh_fix_command(script_user, public_key_line=public_key_line)
+    )
     try:
         result = dev.rpc.request_shell_execute(command=command)
         text = _rpc_text(result).strip()
@@ -831,6 +842,13 @@ def run_shell_fix(
             print(
                 "[%s] hint: bootstrap user must be able to repair %s/.ssh ownership and permissions" %
                 (name, script_user)
+            )
+            return False
+
+        if "__QKD_SSH_HOME_FIX_OK__" not in text:
+            print(
+                "[%s] FAIL ssh home fix: ownership and permission verification did not complete for %s"
+                % (name, script_user)
             )
             return False
 
@@ -1262,6 +1280,12 @@ def bootstrap_script_user_on_device(
                 "[%s] hint: the script user private key must remain owned by %s for runtime SSH checks" %
                 (name, script_user)
             )
+
+        if not run_shell_fix(dev, name, script_user, deploy_user):
+            print(
+                "[%s] FAIL final ssh ownership hardening did not complete" % name
+            )
+            return False
 
         return True
 

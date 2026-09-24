@@ -600,6 +600,8 @@ def check_script_user_authorized_keys(device):
         f"test -s {pub_path}; "
         f"touch {auth_path}; "
         f"grep -q -F -x -f {pub_path} {auth_path} || cat {pub_path} >> {auth_path}; "
+        f"chown {script_user} {ssh_dir} {auth_path} {pub_path}; "
+        f"chmod 700 {ssh_dir}; "
         f"chmod 600 {auth_path}; "
         f"ls -l {auth_path}; "
         f"wc -l {auth_path}"
