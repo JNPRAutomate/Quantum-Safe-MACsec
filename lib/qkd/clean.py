@@ -400,23 +400,11 @@ def clean_device(name, device, full_macsec=False):
                 return True
 
             print(f"[{name}] dual-RE detected: recursive peer RE cleanup ({len(unique_paths)} paths)")
-            quoted_paths = " ".join(shlex.quote(path) for path in unique_paths)
-            peer_command = (
-                f"rm -rf {quoted_paths}; "
-                f"for path in {quoted_paths}; do test ! -e \"$path\" || exit 1; done; "
-                "echo __QKD_PEER_RE_CLEAN_OK__"
-            )
-            escaped_command = peer_command.replace('"', '\\"')
-            candidates = [
-                f'request routing-engine execute command "{escaped_command}" routing-engine other',
-                f'request routing-engine execute other command "{escaped_command}"',
-                f'request routing-engine execute command "{escaped_command}" routing-engine backup',
-                f'request routing-engine execute command "{escaped_command}" routing-engine re1',
-                f'request routing-engine execute re1 command "{escaped_command}"',
-            ]
-
-            last_output = ""
-            for command in candidates:
+            for path in unique_paths:
+                command = (
+                    "request routing-engine execute command "
+                    f"\"rm -rf {shlex.quote(path)}\" routing-engine other"
+                )
                 output = run_shell(
                     "peer RE recursive cleanup",
                     "cli -c " + shlex.quote(command),
@@ -424,8 +412,7 @@ def clean_device(name, device, full_macsec=False):
                     show_output=False,
                     show_label=False,
                 )
-                last_output = output or ""
-                low = last_output.lower()
+                low = (output or "").lower()
                 if (
                     "syntax error" in low
                     or "unknown command" in low
@@ -434,12 +421,26 @@ def clean_device(name, device, full_macsec=False):
                     or "cannot connect" in low
                     or "error:" in low
                 ):
-                    continue
-                if "__QKD_PEER_RE_CLEAN_OK__" in last_output:
-                    return True
+                    print(f"[{name}] WARN peer RE cleanup failed for {path}: {output}")
+                    return False
 
-            print(f"[{name}] WARN peer RE recursive cleanup verification failed: {last_output}")
-            return False
+            for path in unique_paths:
+                command = (
+                    "request routing-engine execute command "
+                    f"\"ls -ld {shlex.quote(path)}\" routing-engine other"
+                )
+                output = run_shell(
+                    "peer RE cleanup verification",
+                    "cli -c " + shlex.quote(command),
+                    strict=False,
+                    show_output=False,
+                    show_label=False,
+                )
+                if "No such file or directory" not in output:
+                    print(f"[{name}] WARN peer RE path remains after cleanup: {path}")
+                    return False
+
+            return True
 
         ##
         def remote_path_exists(path):
