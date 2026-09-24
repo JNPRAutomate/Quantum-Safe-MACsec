@@ -381,6 +381,45 @@ class TestTimezoneSafeStartTimes:
         )
 
 
+class TestBilateralSlotMetadata:
+    @classmethod
+    def setup_class(cls):
+        cls.functions = load_functions("_slot_metadata_matches")
+        cls.functions["epoch_from_junos_start_time"] = lambda value: value
+
+    def test_accepts_bootstrap_seed_with_platform_timezone_difference(self):
+        local_state = {
+            "slots": [{
+                "key_id": "QKD_CA:bootstrap:key-name:0",
+                "start_time": "2026-1-1.00:01:00 +0100",
+            }],
+        }
+        peer_state = {
+            "slots": [{
+                "key_id": "QKD_CA:bootstrap:key-name:0",
+                "start_time": "2026-1-1.00:01:00 +0000",
+            }],
+        }
+
+        assert self.functions["_slot_metadata_matches"](local_state, peer_state, {0})
+
+    def test_rejects_different_timestamp_for_non_bootstrap_slot(self):
+        local_state = {
+            "slots": [
+                None,
+                {"key_id": "key-1", "start_time": "one"},
+            ],
+        }
+        peer_state = {
+            "slots": [
+                None,
+                {"key_id": "key-1", "start_time": "two"},
+            ],
+        }
+
+        assert not self.functions["_slot_metadata_matches"](local_state, peer_state, {1})
+
+
 def test_qkd_policy_accepts_safe_independent_timers():
     validate_qkd_policy(
         {

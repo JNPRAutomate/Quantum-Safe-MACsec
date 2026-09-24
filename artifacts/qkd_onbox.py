@@ -5759,8 +5759,12 @@ def _slot_metadata_matches(local_state, peer_state, configured_slots):
         peer_item = peer_slots[slot] if slot < len(peer_slots) else None
         if not isinstance(local_item, dict) or not isinstance(peer_item, dict):
             return False
-        if str(local_item.get("key_id") or "") != str(peer_item.get("key_id") or ""):
+        local_key_id = str(local_item.get("key_id") or "")
+        peer_key_id = str(peer_item.get("key_id") or "")
+        if local_key_id != peer_key_id:
             return False
+        if slot == 0 and ":bootstrap:key-name:0" in local_key_id:
+            continue
         local_epoch = epoch_from_junos_start_time(local_item.get("start_time"))
         peer_epoch = epoch_from_junos_start_time(peer_item.get("start_time"))
         if local_epoch is None or peer_epoch is None or int(local_epoch) != int(peer_epoch):
