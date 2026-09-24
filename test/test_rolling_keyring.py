@@ -573,6 +573,71 @@ class TestRpcBatchDelivery:
         assert not self.run_rpc(stdout=b"")
 
 
+class TestRpcPeerStatus:
+    def setup_method(self):
+        self.functions = load_functions("get_peer_status")
+        self.calls = []
+        self.logs = []
+        self.functions.update(
+            {
+                "validate_link_runtime": lambda link, require_peer_transport: True,
+                "SCRIPT_USER": "etsi_user",
+                "SSH_KEY": "/var/home/etsi_user/.ssh/qkd_id_ed25519",
+                "ssh_transport_options": lambda key: ["-i", key],
+                "json": json,
+                "log": lambda *args, **kwargs: self.logs.append(args),
+            }
+        )
+        self.link = {
+            "peer_ip": "100.123.113.1",
+            "peer_interface": "et-0/0/7",
+            "peer_sae": "sae-002",
+        }
+
+    def run_status(self, returncode=0, stdout=b'{"active_key_id":"key-1"}\n', stderr=b""):
+        def run(cmd, stdout=None, stderr=None, timeout=None):
+            self.calls.append((cmd, timeout))
+            return SimpleNamespace(
+                returncode=returncode,
+                stdout=self.stdout,
+                stderr=self.stderr,
+            )
+
+        self.stdout = stdout
+        self.stderr = stderr
+        self.functions["subprocess"] = SimpleNamespace(
+            PIPE=object(),
+            TimeoutExpired=subprocess.TimeoutExpired,
+            run=run,
+        )
+        return self.functions["get_peer_status"](self.link, "et-0/0/2")
+
+    def test_status_uses_script_user_rpc_without_scp(self):
+        assert self.run_status() == {"active_key_id": "key-1"}
+        cmd, timeout = self.calls[0]
+
+        assert cmd == [
+            "ssh",
+            "-i",
+            "/var/home/etsi_user/.ssh/qkd_id_ed25519",
+            "etsi_user@100.123.113.1",
+            "op qkd_onbox.py action status iface et-0/0/7",
+        ]
+        assert timeout == 10
+        assert all("SCP" not in str(entry) for entry in self.logs)
+
+    def test_status_accepts_json_wrapped_by_cli_output(self):
+        stdout = b'warning text\n{"active_key_id":"key-1"}\ncli trailer\n'
+
+        assert self.run_status(stdout=stdout) == {"active_key_id": "key-1"}
+
+    def test_status_rejects_nonzero_exit(self):
+        assert self.run_status(returncode=1, stderr=b"permission denied") is None
+
+    def test_status_rejects_malformed_json(self):
+        assert self.run_status(stdout=b"not-json") is None
+
+
 def test_qkd_policy_accepts_safe_independent_timers():
     validate_qkd_policy(
         {

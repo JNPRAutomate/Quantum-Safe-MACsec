@@ -4820,138 +4820,73 @@ def get_peer_status(link, iface):
 
     peer_ip = link["peer_ip"]
     peer_iface = link["peer_interface"]
-    snapshot_path = remote_peer_status_file(link.get("peer_sae"), peer_iface)
-
-    snapshot_user = PEER_CMD_USER
+    cmd = f"op qkd_onbox.py action status iface {peer_iface}"
     log(
-        f"SCP GET {snapshot_user}@{peer_ip} action=status-readonly local_iface={iface} peer_iface={peer_iface} snapshot={snapshot_path}",
+        f"SSH RPC EXEC {SCRIPT_USER}@{peer_ip} action=status "
+        f"local_iface={iface} peer_iface={peer_iface} cmd=\"{cmd}\"",
         "INFO",
         iface,
         "MASTER",
     )
-    stdout = scp_download_text(snapshot_user, peer_ip, snapshot_path)
-
-    def _run_remote_status_command(peer_user, action_label):
-        cmd = f"op qkd_onbox.py action status iface {peer_iface}"
-        log(
-            f"SSH EXEC {peer_user}@{peer_ip} action={action_label} local_iface={iface} peer_iface={peer_iface}",
-            "INFO",
-            iface,
-            "MASTER",
-        )
-        try:
-            result = subprocess.run(
-                [
-                    "ssh",
-                    *ssh_transport_options(
-                        SSH_KEY if peer_user == SCRIPT_USER else PEER_SSH_KEY
-                    ),
-                    f"{peer_user}@{peer_ip}",
-                    cmd,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=10,
-            )
-        except subprocess.TimeoutExpired:
-            log(f"SSH STATUS TIMEOUT peer={peer_ip} user={peer_user}", "ERROR", iface, "MASTER")
-            return None
-        except Exception as e:
-            log(f"SSH STATUS ERROR peer={peer_ip} user={peer_user} error={str(e)}", "ERROR", iface, "MASTER")
-            return None
-
-        log(f"SSH RC={result.returncode}", "INFO", iface, "MASTER")
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="ignore").strip()
-            out = result.stdout.decode(errors="ignore").strip()
-            log(f"SSH STATUS FAIL user={peer_user} stderr={stderr} stdout={out}", "ERROR", iface, "MASTER")
-            return None
-
-        out = result.stdout.decode(errors="ignore").strip()
-        try:
-            return json.loads(out)
-        except Exception:
-            try:
-                start = out.find("{")
-                end = out.rfind("}")
-                if start >= 0 and end > start:
-                    return json.loads(out[start:end + 1])
-            except Exception:
-                pass
-        log(f"SSH STATUS JSON FAIL user={peer_user} stdout={out}", "ERROR", iface, "MASTER")
-        return None
-
-    def _parse_status_payload(payload_text):
-        try:
-            return json.loads(payload_text)
-        except Exception:
-            pass
-        try:
-            start = payload_text.find("{")
-            end = payload_text.rfind("}")
-            if start >= 0 and end > start:
-                return json.loads(payload_text[start:end + 1])
-        except Exception:
-            pass
-        return None
-
-    if not stdout:
-        log(
-            f"SSH STATUS SNAPSHOT MISS user={snapshot_user} snapshot={snapshot_path}",
-            "WARN",
-            iface,
-            "MASTER",
-        )
-        state = _run_remote_status_command(SCRIPT_USER, "status-live-miss")
-        if state is not None or PEER_CMD_USER == SCRIPT_USER:
-            return state
-        return _run_remote_status_command(PEER_CMD_USER, "status-live-miss-fallback")
-
-    state = _parse_status_payload(stdout)
-    if state is None:
-        log(f"PEER STATUS JSON FAIL stdout={stdout}", "ERROR", iface, "MASTER")
-        return None
-
-    exported_at = state.get("exported_at") if isinstance(state, dict) else None
     try:
-        exported_at = int(exported_at)
-    except (TypeError, ValueError):
+        result = subprocess.run(
+            [
+                "ssh",
+                *ssh_transport_options(SSH_KEY),
+                f"{SCRIPT_USER}@{peer_ip}",
+                cmd,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
         log(
-            f"PEER STATUS SNAPSHOT INVALID exported_at={exported_at} -> QUERY LIVE",
+            f"SSH STATUS TIMEOUT peer={peer_ip} user={SCRIPT_USER} timeout_seconds=10",
             "ERROR",
             iface,
             "MASTER",
         )
-        state = _run_remote_status_command(SCRIPT_USER, "status-live-invalid-snapshot")
-        if state is not None or PEER_CMD_USER == SCRIPT_USER:
-            return state
-        return _run_remote_status_command(PEER_CMD_USER, "status-live-invalid-snapshot-fallback")
-
-    stale_threshold = max(rotation_interval_seconds() * 2, 120)
-    age = int(time.time()) - exported_at
-    if age > stale_threshold:
+        return None
+    except Exception as exc:
         log(
-            f"PEER STATUS SNAPSHOT STALE age_seconds={age} age={format_duration_human(age)} "
-            f"threshold_seconds={stale_threshold} threshold={format_duration_human(stale_threshold)} -> QUERY LIVE",
-            "WARN",
+            f"SSH STATUS ERROR peer={peer_ip} user={SCRIPT_USER} error={str(exc)}",
+            "ERROR",
             iface,
             "MASTER",
         )
-        fresh_state = _run_remote_status_command(SCRIPT_USER, "status-live-stale")
-        if fresh_state is None and PEER_CMD_USER != SCRIPT_USER:
-            fresh_state = _run_remote_status_command(PEER_CMD_USER, "status-live-stale-fallback")
-        if fresh_state is None:
-            log(
-                f"PEER STATUS FRESH DATA UNAVAILABLE stale_age_seconds={age} "
-                f"stale_age={format_duration_human(age)} "
-                f"threshold_seconds={stale_threshold} threshold={format_duration_human(stale_threshold)}",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            return None
-        return fresh_state
+        return None
 
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    log(f"SSH RPC RC={result.returncode}", "INFO", iface, "MASTER")
+    if result.returncode != 0:
+        log(
+            f"SSH STATUS FAIL user={SCRIPT_USER} stderr={stderr} stdout={stdout}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return None
+
+    try:
+        state = json.loads(stdout)
+    except Exception:
+        try:
+            start = stdout.find("{")
+            end = stdout.rfind("}")
+            state = json.loads(stdout[start:end + 1]) if start >= 0 and end > start else None
+        except Exception:
+            state = None
+
+    if not isinstance(state, dict):
+        log(
+            f"SSH STATUS JSON FAIL user={SCRIPT_USER} stdout={stdout}",
+            "ERROR",
+            iface,
+            "MASTER",
+        )
+        return None
     return state
 
 

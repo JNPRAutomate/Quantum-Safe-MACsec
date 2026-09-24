@@ -203,9 +203,9 @@ The script supports:
 - `runtime_user()`: local runtime username.
 - `validate_ssh_runtime_for_master()`: ensures SSH key exists/readable.
 - `send_command(link, action, iface, key_id=None, generation=None, start_time=None)`: master -> peer `op qkd_onbox.py action ...`.
-- `get_peer_status(link, iface)`: master pulls the peer status snapshot with
-  `etsi_peer_view`. Missing, invalid, or stale snapshots require a live query
-  as `SCRIPT_USER`; if that query fails, stale data is rejected.
+- `get_peer_status(link, iface)`: master queries the peer directly through the
+  JSSH `action status` RPC as `SCRIPT_USER` and rejects transport failures,
+  nonzero exits, and malformed JSON.
 - `refresh_peer_status_snapshots()`: refreshes every managed-link snapshot on
   each periodic script tick, after inbound batch processing and before the
   master cycle, so an idle peer remains observable without a live SSH query.

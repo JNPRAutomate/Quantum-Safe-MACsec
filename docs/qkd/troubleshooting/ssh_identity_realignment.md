@@ -1,4 +1,4 @@
-# Troubleshooting: SSH identity realignment for `etsi_user` and `etsi_peer_view`
+# Troubleshooting: SSH identity realignment for `etsi_user`
 
 ## Scope
 
@@ -10,26 +10,19 @@ Typical symptoms:
 - `SSH STATUS FAIL user=etsi_user stderr=... Permission denied`
 - `PEER STATUS FRESH DATA UNAVAILABLE`
 - `ROTATION BLOCKED reason=PEER_STATE_UNAVAILABLE_OR_INVALID`
-- stale peer snapshots that never refresh
 - peer public-key rotation succeeds on one side but the opposite side keeps
   failing authentication
 
 ## Which SSH identities are involved
 
-The runtime currently uses two different peer-access patterns:
+Peer status uses the `etsi_user` RPC path:
 
-1. `etsi_peer_view`
-   - used for readonly snapshot/file transport
-   - typical log line:
-     `SCP GET etsi_peer_view@<peer_ip> action=status-readonly`
+```text
+SSH RPC EXEC etsi_user@<peer_ip> action=status
+```
 
-2. `etsi_user`
-   - used for the live fallback command path
-   - typical log line:
-     `SSH EXEC etsi_user@<peer_ip> action=status-live-stale`
-
-Both paths must remain operational. A link can still block even if one of the
-two users works correctly but the other one does not.
+The runtime does not attempt an SCP snapshot read or fall back to
+`etsi_peer_view`.
 
 ## Minimal recovery rule
 
@@ -42,24 +35,15 @@ For `etsi_user`, inspect:
 /var/home/etsi_user/.ssh/qkd_id_ed25519.pub
 ```
 
-For `etsi_peer_view`, inspect:
-
-```text
-/var/home/etsi_user/.ssh/qkd_peer_cmd_ed25519.pub
-```
-
 Then verify that the opposite peer has the matching key(s) configured under:
 
 ```text
 show configuration system login user etsi_user
-show configuration system login user etsi_peer_view
 ```
 
 ## Recovery sequence
 
-1. Identify which user is failing from the runtime log:
-   - `user=etsi_user` -> live fallback path broken
-   - `etsi_peer_view@... action=status-readonly` failures -> readonly path broken
+1. Confirm the failing status request reports `user=etsi_user`.
 2. Read the current `.pub` file on the source device.
 3. Install that exact public key in the Junos login config of the peer device.
 4. Repeat in the opposite direction if the transport is bilateral.
@@ -67,7 +51,7 @@ show configuration system login user etsi_peer_view
 
 ## Useful manual tests
 
-### Test `etsi_user` live fallback path
+### Test the `etsi_user` status RPC
 
 ```text
 ssh -i /var/home/etsi_user/.ssh/qkd_id_ed25519 \
@@ -76,18 +60,8 @@ ssh -i /var/home/etsi_user/.ssh/qkd_id_ed25519 \
     "op qkd_onbox.py action status iface <peer_iface>"
 ```
 
-### Test `etsi_peer_view` readonly path
-
-```text
-scp -O -i /var/home/etsi_user/.ssh/qkd_peer_cmd_ed25519 \
-    -o IdentitiesOnly=yes \
-    etsi_peer_view@<peer_ip>:<remote_snapshot_path> <local_tmp_path>
-```
-
-If the runtime path is using `qkd_peer_cmd_ed25519` to authenticate as
-`etsi_user`, make sure that public key is also authorized for `etsi_user` on
-the peer. The important point is to align the peer's Junos login config with
-the **actual identity file used by the failing code path**, not with an assumed
+The important point is to align the peer's Junos login config with the
+**actual identity file used by the failing code path**, not with an assumed
 bootstrap key.
 
 ## Important note

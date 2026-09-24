@@ -57,9 +57,10 @@ Instead of transporting only one `key-id X`, router1 can transport an array of k
 
 The runtime now supports this split as follows:
 
-1. **Snapshot-first peer status**
-   - Peer status is read from exported JSON snapshot first (read-only path).
-   - Legacy `op ... action status` remains fallback for compatibility.
+1. **JSSH/RPC peer status**
+   - Router1 invokes `op qkd_onbox.py action status ...` as `script_user`.
+   - The returned JSON is used directly; no SCP snapshot transfer or
+     `peer_cmd_user` fallback is attempted.
 
 2. **JSSH/RPC batch delivery**
    - In `rpc` mode, router1 invokes
@@ -106,9 +107,9 @@ With this split:
 - `peer_cmd_user` is not converted into a Unix shell/SCP account
 - transport failures are explicit RPC failures and remain retriable
 
-Read-only status snapshot retrieval can still use the legacy queue transport
-identity when configured. If that snapshot is unavailable, the runtime falls
-back to the JSSH `action status` RPC as `script_user`.
+Peer status retrieval uses only the JSSH `action status` RPC as `script_user`.
+The legacy snapshot files may still be produced locally while queue rollback
+exists, but the master no longer transfers or reads them through SCP.
 
 The `peer_cmd_user` login class permits only `exit` and uses one combined
 `deny-commands` expression for `show`, `configure`, `op`, `request`, `file`,

@@ -25,13 +25,14 @@ Owns all runtime cryptographic/control actions:
 
 ### peer_cmd_user
 
-Owns transport-only SSH behavior:
+Owns transport-only SSH behavior in legacy `queue` mode:
 
 - enqueue batch payloads to peer inbox,
-- read peer status snapshots,
 - read peer ACK files.
 
-No remote `op` execution is required in queue transport mode for batch delivery.
+Peer status is independent of queue mode and always uses the JSSH `action
+status` RPC as `script_user`. No remote `op` execution is required in queue
+transport mode for batch delivery.
 
 ## 3. Runtime Files and Contracts
 
@@ -168,7 +169,7 @@ Cooldown/force-evict windows are intentionally large when enabled.
 - Enqueue failure: rotation blocked, existing key remains active.
 - ACK timeout/fail: rotation blocked, existing key remains active.
 - Slave decode/install failure: `fail` ACK + payload restored for retry.
-- Peer snapshot unavailable: strict-sync blocks new rotation.
+- Peer status RPC unavailable: strict-sync blocks new rotation.
 
 This prioritizes deterministic key alignment over aggressive forward progress.
 
@@ -186,7 +187,7 @@ Recommended log markers to track in tests:
 ## 10. Backward Compatibility
 
 - Non-queue actions still use legacy remote op path.
-- Status path supports snapshot-first with legacy op fallback.
+- Status always uses the JSSH `action status` RPC as `script_user`.
 - Inbox parser accepts both new envelope and legacy raw batch payload.
 
 ## 11. Bug: intermittent PEER BATCH ACK TIMEOUT (found 2026-07-28, live test)

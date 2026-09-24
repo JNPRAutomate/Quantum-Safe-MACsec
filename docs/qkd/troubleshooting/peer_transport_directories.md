@@ -25,11 +25,14 @@ To let both identities exchange state safely, the runtime uses shared
 directories (default on current deployment: under `/var/tmp`) instead of hiding
  everything under one user's private home.
 
-These directories are the transport substrate for:
+In legacy `queue` mode these directories are the transport substrate for:
 
-1. peer status snapshots;
+1. locally exported diagnostic status snapshots;
 2. queued batch delivery;
 3. ACK confirmation.
+
+The current `rpc` mode does not transfer peer status snapshots. It queries
+peer status directly through JSSH as `etsi_user`.
 
 ## 1. `qkd_peer_status`
 
@@ -42,7 +45,8 @@ Example path:
 ### What the file is
 
 A readonly exported snapshot of the runtime state for one local interface. It
-is written by the local runtime and read by the remote peer.
+is written locally for diagnostics and legacy compatibility. The current RPC
+status path does not transfer or read it from the remote peer.
 
 ### Naming rule
 
@@ -74,8 +78,8 @@ fields include:
 - `exported_at`
 - `exported_by`
 
-The remote master uses this file as the first source of truth for bilateral
-alignment checks.
+In current RPC mode, the remote master obtains the same state directly through
+`op qkd_onbox.py action status`.
 
 ### What to look for
 
@@ -167,11 +171,11 @@ Typical fields:
 The normal flow is:
 
 1. local device exports its current link status into `qkd_peer_status`;
-2. master reads the peer snapshot;
-3. master writes a batch envelope into peer `qkd_peer_inbox`;
-4. slave processes it locally;
-5. slave writes confirmation into `qkd_peer_ack`;
-6. master advances state only after reading a matching `ack_id`.
+2. master queries live peer status through JSSH RPC;
+3. in legacy queue mode, master writes a batch envelope into `qkd_peer_inbox`;
+4. the queue-mode slave processes it locally;
+5. the queue-mode slave writes confirmation into `qkd_peer_ack`;
+6. the queue-mode master advances state only after reading a matching `ack_id`.
 
 ## Practical troubleshooting questions
 
