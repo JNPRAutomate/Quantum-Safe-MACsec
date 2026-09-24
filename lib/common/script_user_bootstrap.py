@@ -690,7 +690,6 @@ def build_script_user_class_commands(script_user_class: str) -> List[str]:
 
 def build_peer_cmd_class_commands(peer_cmd_user_class: str) -> List[str]:
     return [
-        "set system login class %s permissions file" % peer_cmd_user_class,
         "set system login class %s allow-commands \"exit\"" % peer_cmd_user_class,
         "set system login class %s deny-commands \"show\"" % peer_cmd_user_class,
         "set system login class %s deny-commands \"show .*\"" % peer_cmd_user_class,

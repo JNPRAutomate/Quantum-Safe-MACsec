@@ -766,7 +766,6 @@ def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
         "system {\n"
         "  login {\n"
         f"    class {peer_cmd_user_class} {{\n"
-        "      permissions file;\n"
         "      allow-commands \"exit\";\n"
         "      deny-commands \"show\";\n"
         "      deny-commands \"show .*\";\n"
