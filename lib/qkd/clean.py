@@ -417,7 +417,13 @@ def clean_device(name, device, full_macsec=False):
 
             last_output = ""
             for command in candidates:
-                output = run_cli_show(command)
+                output = run_shell(
+                    "peer RE recursive cleanup",
+                    "cli -c " + shlex.quote(command),
+                    strict=False,
+                    show_output=False,
+                    show_label=False,
+                )
                 last_output = output or ""
                 low = last_output.lower()
                 if (
