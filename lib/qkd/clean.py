@@ -1,6 +1,8 @@
 # qkd_clean.py
 
 import os
+import shlex
+import time
 import yaml
 import shutil
 from lxml import etree
@@ -291,6 +293,11 @@ def clean_device(name, device, full_macsec=False):
             file_cleanup_parts.append(f"rm -f {path}")
         
         file_cleanup_cmd = "; ".join(file_cleanup_parts)
+        shared_transport_paths = [
+            "/var/tmp/qkd_peer_inbox",
+            "/var/tmp/qkd_peer_status",
+            "/var/tmp/qkd_peer_ack",
+        ]
 
         dev = Device(
             host=ip,
@@ -382,36 +389,51 @@ def clean_device(name, device, full_macsec=False):
 
         def clean_peer_re_files(paths):
             if not has_dual_re():
-                return
+                return True
 
-            print(f"[{name}] dual-RE detected: best-effort peer RE file cleanup")
             unique_paths = []
             for path in paths:
                 if path and path not in unique_paths:
                     unique_paths.append(path)
 
-            for re_name in ("re0", "re1"):
-                print(f"[{name}] peer {re_name} cleanup ({len(unique_paths)} paths)")
-                real_errors = 0
-                for path in unique_paths:
-                    out = run_shell(
-                        f"peer {re_name} delete {path}",
-                        f"cli -c 'file delete {re_name}:{path}'",
-                        strict=False,
-                        show_output=False,
-                        show_label=False,
-                    )
-                    low = (out or "").lower()
-                    if (
-                        "error" in low
-                        and "no such file" not in low
-                        and "cannot stat" not in low
-                        and "not found" not in low
-                    ):
-                        real_errors += 1
+            if not unique_paths:
+                return True
 
-                if real_errors:
-                    print(f"[{name}] WARN peer {re_name} cleanup had {real_errors} non-benign errors")
+            print(f"[{name}] dual-RE detected: recursive peer RE cleanup ({len(unique_paths)} paths)")
+            quoted_paths = " ".join(shlex.quote(path) for path in unique_paths)
+            peer_command = (
+                f"rm -rf {quoted_paths}; "
+                f"for path in {quoted_paths}; do test ! -e \"$path\" || exit 1; done; "
+                "echo __QKD_PEER_RE_CLEAN_OK__"
+            )
+            escaped_command = peer_command.replace('"', '\\"')
+            candidates = [
+                f'request routing-engine execute command "{escaped_command}" routing-engine other',
+                f'request routing-engine execute other command "{escaped_command}"',
+                f'request routing-engine execute command "{escaped_command}" routing-engine backup',
+                f'request routing-engine execute command "{escaped_command}" routing-engine re1',
+                f'request routing-engine execute re1 command "{escaped_command}"',
+            ]
+
+            last_output = ""
+            for command in candidates:
+                output = run_cli_show(command)
+                last_output = output or ""
+                low = last_output.lower()
+                if (
+                    "syntax error" in low
+                    or "unknown command" in low
+                    or "command not found" in low
+                    or "could not connect" in low
+                    or "cannot connect" in low
+                    or "error:" in low
+                ):
+                    continue
+                if "__QKD_PEER_RE_CLEAN_OK__" in last_output:
+                    return True
+
+            print(f"[{name}] WARN peer RE recursive cleanup verification failed: {last_output}")
+            return False
 
         ##
         def remote_path_exists(path):
@@ -485,9 +507,31 @@ def clean_device(name, device, full_macsec=False):
             for path in runtime_paths:
                 if path not in peer_cleanup_paths:
                     peer_cleanup_paths.append(path)
-            clean_peer_re_files(peer_cleanup_paths)
+            peer_cleanup_ok = clean_peer_re_files(peer_cleanup_paths)
+
+            for attempt in range(1, 4):
+                lingering_shared_paths = [
+                    path for path in shared_transport_paths if remote_path_exists(path)
+                ]
+                if not lingering_shared_paths:
+                    break
+
+                print(
+                    f"[{name}] removing recreated shared transport directories "
+                    f"(attempt {attempt}/3): {', '.join(lingering_shared_paths)}"
+                )
+                run_shell(
+                    "final shared transport cleanup",
+                    "; ".join(f"rm -rf {path}" for path in lingering_shared_paths),
+                    strict=True,
+                )
+                peer_cleanup_ok = clean_peer_re_files(lingering_shared_paths) and peer_cleanup_ok
+                if attempt < 3:
+                    time.sleep(2)
 
             failures = []
+            if not peer_cleanup_ok:
+                failures.append("peer RE cleanup verification failed")
 
             set_output = run_cli_show(
                 "show configuration | display set"
@@ -784,5 +828,3 @@ def handle_clean(args):
         print("Skipping local cert cleanup. Use --pki to remove certs.")
 
     print("Full clean complete")
-
-
