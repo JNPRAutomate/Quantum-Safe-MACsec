@@ -1412,6 +1412,14 @@ def handle_deploy(args):
         print_step_banner("0/5", "PREVIEW OR DRY-RUN", "END")
         return
 
+    if script_auth_mode == "key-only" and not (
+        bootstrap_user and bootstrap_password
+    ):
+        bootstrap_user, bootstrap_password = (
+            resolve_interactive_bootstrap_credentials(inventory_base)
+        )
+        print(f"Deploy credentials resolved for user={bootstrap_user}")
+
     print_step_banner(
         "1/5",
         "PRE-DEPLOY VALIDATION",
@@ -1650,15 +1658,22 @@ def handle_validate(args):
         or None
     )
 
-    # For predeploy validation, use bootstrap credentials if available, else script credentials
-    predeploy_auth_user = bootstrap_user or QKD["SCRIPT_USER"]
-    predeploy_auth_password = bootstrap_password or (
+    script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
         or secrets.get("admin_password")
         or os.getenv("QKD_DEFAULT_PASSWORD")
         or secrets.get("default_password")
     )
+    if not (bootstrap_user and bootstrap_password) and not script_password:
+        bootstrap_user, bootstrap_password = (
+            resolve_interactive_bootstrap_credentials(inventory_base)
+        )
+        print(f"Validation credentials resolved for user={bootstrap_user}")
+
+    # For predeploy validation, use bootstrap credentials if available, else script credentials
+    predeploy_auth_user = bootstrap_user or QKD["SCRIPT_USER"]
+    predeploy_auth_password = bootstrap_password or script_password
 
     if not predeploy_auth_password:
         raise RuntimeError(

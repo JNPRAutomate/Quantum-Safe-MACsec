@@ -151,3 +151,35 @@ def test_create_resolves_credentials_before_runtime_cleanup():
     assert source.index(
         "resolve_interactive_bootstrap_credentials(base)"
     ) < source.index("reset_local_runtime_for_create()")
+
+
+def function_source(name):
+    source_text = ORCHESTRATOR.read_text(encoding="utf-8")
+    tree = ast.parse(source_text)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    return ast.get_source_segment(source_text, function)
+
+
+def test_deploy_prompts_after_dry_run_and_preview_return():
+    source = function_source("handle_deploy")
+    dry_run_return = source.index(
+        'print_step_banner("0/5", "PREVIEW OR DRY-RUN", "END")'
+    )
+    prompt = source.index(
+        "resolve_interactive_bootstrap_credentials(inventory_base)"
+    )
+
+    assert dry_run_return < prompt
+    assert 'script_auth_mode == "key-only"' in source[dry_run_return:prompt]
+
+
+def test_validate_uses_interactive_fallback_when_all_passwords_are_missing():
+    source = function_source("handle_validate")
+
+    assert "not (bootstrap_user and bootstrap_password)" in source
+    assert "and not script_password" in source
+    assert "resolve_interactive_bootstrap_credentials(inventory_base)" in source
