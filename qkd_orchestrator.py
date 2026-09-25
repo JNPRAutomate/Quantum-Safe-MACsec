@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 
 import argparse
 import copy
+import getpass
 import json
 import os
 import shlex
@@ -25,7 +26,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
@@ -339,8 +340,9 @@ def parse_args():
             "  - Generating and syncing SSH public keys\n"
             "  - Setting up .ssh directory permissions\n\n"
             "Bootstrap must run before deploy or predeploy validation.\n\n"
+            "Missing bootstrap credentials are requested interactively.\n"
+            "Passwords are entered without terminal echo and are not persisted.\n\n"
             "Example:\n"
-            "  export QKD_BOOTSTRAP_PASSWORD='<root-password>'\n"
             "  python3 qkd_orchestrator.py bootstrap\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -951,6 +953,68 @@ def reset_local_runtime_for_create():
 # ---------------------------------------------------------------------------
 
 
+def resolve_interactive_bootstrap_credentials(
+    inventory_base: Dict[str, Any],
+    *,
+    input_fn: Callable[[str], str] = input,
+    password_fn: Callable[[str], str] = getpass.getpass,
+    interactive: Optional[bool] = None,
+) -> Tuple[str, str]:
+    secrets = (
+        inventory_base.get("secrets", {})
+        if isinstance(inventory_base, dict)
+        else {}
+    )
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    bootstrap_user = (
+        os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or os.getenv("QKD_DEFAULT_USER")
+        or secrets.get("default_user")
+    )
+    bootstrap_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+    )
+
+    missing = []
+    if not bootstrap_user:
+        missing.append("bootstrap user")
+    if not bootstrap_password:
+        missing.append("bootstrap password")
+
+    if missing and interactive is None:
+        interactive = sys.stdin.isatty()
+    if missing and not interactive:
+        raise RuntimeError(
+            "Missing bootstrap credentials and no interactive terminal is "
+            f"available: {', '.join(missing)}. Set "
+            "QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD or configure the "
+            "corresponding inventory secrets."
+        )
+
+    if not bootstrap_user:
+        bootstrap_user = input_fn("Bootstrap user: ").strip()
+        if not bootstrap_user:
+            raise RuntimeError("Bootstrap user cannot be empty")
+
+    if not bootstrap_password:
+        bootstrap_password = password_fn(
+            f"Bootstrap password for {bootstrap_user}: "
+        )
+        if not bootstrap_password:
+            raise RuntimeError("Bootstrap password cannot be empty")
+
+    return str(bootstrap_user), str(bootstrap_password)
+
+
 def handle_create(args):
     inventory_path = resolve_inventory(args.inventory)
     inventory = load_inventory_file(inventory_path)
@@ -990,24 +1054,21 @@ def handle_create(args):
         raise ValueError(f"Unsupported PKI profile: {pki_profile}")
 
     base = load_inventory_base()
-    reset_local_runtime_for_create()
     script_user = QKD["SCRIPT_USER"]
 
     secrets = base.get("secrets", {}) if isinstance(base.get("secrets", {}), dict) else {}
-    global_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
-        or secrets.get("bootstrap_user")
-        or secrets.get("default_user")
-    )
-    global_pwd = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
-        or secrets.get("bootstrap_password")
-        or secrets.get("default_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-    )
-    global_auth = {"username": global_user, "password": global_pwd} if global_user and global_pwd else {}
-
     device_auth_map = base.get("devices", {})
+    requires_global_auth = any(
+        not inv_dev.get("auth")
+        and not device_auth_map.get(str(inv_dev["name"]), {}).get("auth")
+        for inv_dev in inventory_devices
+    )
+    global_auth = {}
+    if requires_global_auth:
+        global_user, global_pwd = resolve_interactive_bootstrap_credentials(base)
+        global_auth = {"username": global_user, "password": global_pwd}
+
+    reset_local_runtime_for_create()
 
     devices = []
     seen_names = set()
@@ -1031,13 +1092,6 @@ def handle_create(args):
         if not device_auth:
             device_auth = device_auth_map.get(name, {}).get("auth")
         if not device_auth:
-            if not global_auth:
-                raise RuntimeError(
-                    f"Inventory device '{name}' has no 'auth' and no bootstrap/default credentials "
-                    "were resolved. Set secrets.bootstrap_user/secrets.bootstrap_password (or "
-                    "secrets.default_user/secrets.default_password) in inventory_base.yaml, or export "
-                    "QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD (or QKD_DEFAULT_PASSWORD)."
-                )
             device_auth = copy.deepcopy(global_auth)
 
         kme_ip = kme_ip_from_inventory_device(inv_dev)
@@ -1188,24 +1242,24 @@ def handle_bootstrap(args):
     if not isinstance(secrets, dict):
         secrets = {}
 
-    bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
-        or secrets.get("bootstrap_user")
-        or secrets.get("deploy_user")
-        or secrets.get("default_user")
-        or None
-    )
-    bootstrap_password = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
-        or secrets.get("bootstrap_password")
-        or secrets.get("deploy_password")
-        or secrets.get("root_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-        or secrets.get("default_password")
-        or None
-    )
-
     if args.dry_run:
+        bootstrap_user = (
+            os.getenv("QKD_BOOTSTRAP_USER")
+            or secrets.get("bootstrap_user")
+            or secrets.get("deploy_user")
+            or os.getenv("QKD_DEFAULT_USER")
+            or secrets.get("default_user")
+            or None
+        )
+        bootstrap_password = (
+            os.getenv("QKD_BOOTSTRAP_PASSWORD")
+            or secrets.get("bootstrap_password")
+            or secrets.get("deploy_password")
+            or secrets.get("root_password")
+            or os.getenv("QKD_DEFAULT_PASSWORD")
+            or secrets.get("default_password")
+            or None
+        )
         print_step_banner(
             "SCRIPT_USER DRY-RUN",
             "START",
@@ -1222,16 +1276,17 @@ def handle_bootstrap(args):
         print_step_banner("SCRIPT_USER DRY-RUN", "END")
         return
 
+    bootstrap_user, bootstrap_password = (
+        resolve_interactive_bootstrap_credentials(inventory_base)
+    )
+
     print_step_banner(
         "SCRIPT_USER",
         "START",
         "Bootstrap etsi_user and etsi_peer_view on all managed devices.",
     )
     
-    if bootstrap_user and bootstrap_password:
-        print(f"Bootstrap auth source: inventory_base user={bootstrap_user}")
-    else:
-        print("Bootstrap auth source: unresolved")
+    print(f"Bootstrap credentials resolved for user={bootstrap_user}")
     
     ok, failed = bootstrap_script_users(
         devices=devices,
