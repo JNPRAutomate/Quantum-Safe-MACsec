@@ -243,6 +243,7 @@ def build_onbox_config(name, device):
     script_dir = QKD["SCRIPT_DIR"]
     ssh_home_base = QKD["SSH_HOME_BASE"]
     ssh_key_name = QKD["SSH_KEY_NAME"]
+    rpc_ssh_key_name = QKD.get("RPC_SSH_KEY_NAME", "qkd_rpc_id_ed25519")
     peer_ssh_key_name = QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")
 
     pki_runtime = resolve_pki_runtime()
@@ -265,6 +266,7 @@ def build_onbox_config(name, device):
         "script_dir": script_dir,
         "ssh_home_base": ssh_home_base,
         "ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{ssh_key_name}",
+        "rpc_ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{rpc_ssh_key_name}",
         "peer_ssh_key": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/.ssh/{peer_ssh_key_name}",
         "scp_binary": device.get("scp_binary") or QKD.get("SCP_BINARY", "/usr/bin/scp"),
         "state_dir": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}",

@@ -1,6 +1,162 @@
-# SSH Key Architecture — ver3.3.2
+# SSH Key Architecture — ver3.3.4.1
 
-## Overview
+## Current RPC identity architecture
+
+The Linux orchestrator keeps its deployment private key on Linux. Routers
+authorize only its public key; the orchestrator private key is never copied
+to a router.
+
+Every router generates a unique local ED25519 keypair named
+`qkd_rpc_id_ed25519`. Its private key never leaves that router. Direct peers
+authorize its public key under `etsi_user` with the exact comment
+`qkd-rpc@<source-device>`.
+
+Runtime rotation uses `rpc_key_rotation_interval_seconds` and is
+transactional:
+
+1. Generate `qkd_rpc_id_ed25519.next` locally.
+2. Prepare its public key on every direct peer while retaining the active key.
+3. Verify every peer with a status RPC that physically uses `.next`.
+4. Activate locally only after every prepare and verify succeeds.
+5. Finalize every peer, deleting only the old key tagged for that source.
+
+The persisted transaction records its phase, public key, complete peer set,
+prepared peers, verified peers, activation state, and finalized peers.
+Restarts resume idempotently. Missing peers block activation; partial
+activation is not allowed. The orchestrator key, unrelated authentication
+keys, and keys belonging to other peers are preserved.
+
+Active and recovery paths on each router:
+
+```text
+/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519
+/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519.pub
+/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519.next
+/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519.prev
+```
+
+`etsi_peer_view` and `qkd_peer_cmd_ed25519` remain temporarily for deployment
+compatibility and are removed in the following cleanup phase. They are not
+used by the transactional RPC-key rotation described above.
+
+## RPC authentication design decision
+
+Three authentication models were evaluated for router-to-router RPC.
+
+### Option A: Rotating SSH identity for the RPC connection — selected
+
+The implemented design uses an SSH connection between routers, authenticated
+with a unique ED25519 keypair generated locally on each source router. The
+router invokes application operations on its direct peer as `etsi_user`:
+
+```text
+ssh -i /var/home/etsi_user/.ssh/qkd_rpc_id_ed25519 \
+  etsi_user@<peer-ip> \
+  "op qkd_onbox.py action <action> ..."
+```
+
+The identity rotates independently according to
+`rpc_key_rotation_interval_seconds`. Rotation is transactional:
+
+```text
+generate .next
+  -> prepare its public key on every direct peer
+  -> verify every peer using the .next private key
+  -> activate the key locally
+  -> finalize every peer and remove only the previous source-tagged key
+```
+
+SSH provides transport encryption, integrity, source authentication, and
+protection against modification in transit. The application layer still
+validates arguments, JSON payloads, exit status, and explicit success
+sentinels. A successful SSH exit code without the expected application
+sentinel is treated as failure.
+
+This option was selected because it:
+
+- uses standard SSH authentication already supported by Junos;
+- gives every router a distinct identity and limits compromise scope;
+- keeps private keys on the router where they were generated;
+- supports transactional rotation and crash recovery;
+- keeps RPC authentication independent from QKD and MACsec key lifecycles;
+- avoids a second message-signing and anti-replay protocol.
+
+### Option B: Application signature on every key-ID message — not selected
+
+In this model, each RPC payload would be signed separately with a rotating
+asymmetric application key:
+
+```text
+signature = sign(private_key, canonical_payload)
+```
+
+The receiver would verify the signature in `qkd_onbox.py`. A complete design
+would also require:
+
+- a canonical message representation;
+- signer identity and key-version fields;
+- nonce or sequence-number management;
+- timestamp validation and clock-skew policy;
+- replay detection and persistent replay state;
+- application public-key distribution and rotation;
+- explicit behavior for duplicate, delayed, and reordered messages.
+
+This option was not selected for Phase 2 because SSH already authenticates
+the source and protects message integrity. Adding per-message signatures
+would create a second credential lifecycle and a second recovery protocol
+without being required by the current threat model.
+
+Option B may be reconsidered if future requirements demand application-level
+non-repudiation, signed messages outside an SSH session, or verification
+after a message has been stored or forwarded.
+
+### Option C: New RPC identity for every QKD key ID — not selected
+
+In this model, the RPC authentication keypair would change whenever a new QKD
+key ID or MACsec CAK is activated. The authentication and cryptographic
+lifecycles would therefore be coupled:
+
+```text
+QKD key ID changes
+  -> RPC identity changes
+  -> peer authorization changes
+  -> MACsec key activation proceeds
+```
+
+This option was rejected because it would:
+
+- require SSH authorization changes for every QKD key transition;
+- couple recovery-channel availability to the MACsec rotation being managed;
+- substantially increase Junos configuration commits;
+- make batched and pre-staged QKD keys ambiguous with respect to RPC identity;
+- complicate rollback, restart recovery, and partial-failure handling;
+- misuse short-lived QKD/MACsec key events as router identity events.
+
+QKD keys and MACsec CAKs are symmetric traffic-protection material. The RPC
+ED25519 key is a router authentication identity. Their purposes and rotation
+schedules therefore remain deliberately separate.
+
+### Decision summary
+
+| Option | Decision | Authentication lifecycle |
+|---|---|---|
+| A. Rotating SSH identity per router | **Selected and implemented** | Independent periodic RPC identity rotation |
+| B. Signature on every application message | Not selected | Separate application signing-key rotation |
+| C. RPC identity per QKD key ID | Rejected | Coupled to every QKD/MACsec key transition |
+
+The resulting architecture is an application RPC carried over an
+SSH-authenticated connection, using one unique, periodically rotated ED25519
+identity per router. It is not a per-message signature protocol, and its
+identity does not rotate with each QKD key ID.
+
+---
+
+## Legacy architecture retained during migration
+
+The remainder of this document describes the legacy `etsi_peer_view`
+implementation for migration reference only.
+
+### Overview
 
 The QKD/MACsec infrastructure uses **two Junos user accounts** with distinct roles and key management strategies:
 

@@ -2,6 +2,7 @@ import ast
 import base64
 import calendar
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import time
@@ -304,7 +305,7 @@ class TestRollingKeyringPlan:
             "et-0/0/0",
         )
 
-    def test_ssh_rotation_runs_after_macsec_keyring_cycle(self):
+    def test_rpc_rotation_runs_after_macsec_keyring_cycle(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
         run_master = next(
             node
@@ -313,7 +314,7 @@ class TestRollingKeyringPlan:
         )
         source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), run_master)
         assert source.index("run_master_rolling_link(link)") < source.index(
-            "run_peer_key_rotation_cycle(DEVICE, peer_devices)"
+            "run_rpc_key_rotation_cycle()"
         )
 
     def test_inflight_recovery_precedes_macsec_inuse_guard(self):
@@ -374,7 +375,7 @@ class TestRollingKeyringPlan:
         rpc_source = source[queue_end:]
 
         assert "peer_user = SCRIPT_USER" in rpc_source
-        assert 'ssh_transport_options(SSH_KEY)' in rpc_source
+        assert 'ssh_transport_options(RPC_SSH_KEY)' in rpc_source
         assert 'f"SSH RPC EXEC {peer_user}@{peer_ip}' in rpc_source
         assert 'timeout = peer_batch_ack_timeout_seconds()' in rpc_source
         assert '"OK INSTALL-KEY-BATCH" not in stdout' in rpc_source
@@ -410,6 +411,251 @@ class TestRollingKeyringPlan:
         )
 
         assert send_index < rpc_success_index < finalize_index
+
+
+class TestTransactionalRpcKeyRotation:
+    def test_corrupt_rotation_state_blocks_new_transaction(self, tmp_path):
+        functions = load_functions(
+            "rpc_key_rotation_state_file",
+            "load_rpc_key_rotation_state",
+        )
+        state_file = tmp_path / "qkd_rpc_key_rotation.json"
+        state_file.write_text("{not-json", encoding="utf-8")
+        functions.update(
+            {
+                "STATE_DIR": str(tmp_path),
+                "Path": Path,
+                "json": json,
+                "format_epoch_human": lambda value: str(value),
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="invalid RPC key rotation state"):
+            functions["load_rpc_key_rotation_state"]()
+
+    def test_incomplete_peer_metadata_blocks_rotation(self):
+        functions = load_functions("_rpc_rotation_peers")
+        functions["managed_links"] = lambda: [
+            {
+                "peer": "EVO2",
+                "peer_ip": "192.0.2.2",
+                "peer_interface": None,
+            }
+        ]
+
+        with pytest.raises(RuntimeError, match="incomplete direct RPC peer metadata"):
+            functions["_rpc_rotation_peers"]()
+
+    def test_source_filter_preserves_orchestrator_and_other_peer_keys(self):
+        functions = load_functions("_rpc_keys_for_source")
+        functions["SCRIPT_USER"] = "etsi_user"
+        functions["_get_all_junos_auth_keys_for_user"] = lambda _user: [
+            "ssh-ed25519 AAAAORCHESTRATOR orchestrator@linux",
+            "ssh-ed25519 AAAAOLD qkd-rpc@EVO1",
+            "ssh-ed25519 AAAAOTHER qkd-rpc@EVO2",
+            "ssh-ed25519 AAAANEW qkd-rpc@EVO1",
+        ]
+
+        assert functions["_rpc_keys_for_source"]("EVO1") == [
+            "ssh-ed25519 AAAAOLD qkd-rpc@EVO1",
+            "ssh-ed25519 AAAANEW qkd-rpc@EVO1",
+        ]
+
+    def test_finalize_deletes_only_old_key_for_source(self):
+        functions = load_functions("_decode_rpc_pubkey", "_apply_rpc_pubkey")
+        commands = []
+        new_key = "ssh-ed25519 AAAANEW qkd-rpc@EVO1"
+        functions.update(
+            {
+                "base64": base64,
+                "re": __import__("re"),
+                "SCRIPT_USER": "etsi_user",
+                "CLI_PATH": "/usr/sbin/cli",
+                "_rpc_keys_for_source": lambda _source: [
+                    "ssh-ed25519 AAAAOLD qkd-rpc@EVO1",
+                    new_key,
+                ],
+                "acquire_junos_commit_lock": lambda: True,
+                "release_junos_commit_lock": lambda: None,
+                "junos_output_has_error": lambda _out, _err: False,
+                "log": lambda *_args, **_kwargs: None,
+                "subprocess": SimpleNamespace(
+                    PIPE=object(),
+                    run=lambda argv, **_kwargs: (
+                        commands.append(argv[-1])
+                        or SimpleNamespace(
+                            returncode=0,
+                            stdout=b"commit complete",
+                            stderr=b"",
+                        )
+                    ),
+                    TimeoutExpired=subprocess.TimeoutExpired,
+                ),
+            }
+        )
+        encoded = base64.urlsafe_b64encode(new_key.encode()).decode()
+
+        assert functions["_apply_rpc_pubkey"]("EVO1", encoded, finalize=True)
+        assert len(commands) == 1
+        assert "AAAAOLD" in commands[0]
+        assert "AAAANEW" not in commands[0]
+        assert "orchestrator@linux" not in commands[0]
+
+    def test_verify_physically_uses_next_private_key(self):
+        functions = load_functions("_verify_rpc_next_key")
+        calls = []
+        functions.update(
+            {
+                "RPC_SSH_KEY": "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
+                "SCRIPT_USER": "etsi_user",
+                "json": json,
+                "log": lambda *_args, **_kwargs: None,
+                "ssh_transport_options": lambda path: ["-i", path],
+                "subprocess": SimpleNamespace(
+                    PIPE=object(),
+                    run=lambda argv, **_kwargs: (
+                        calls.append(argv)
+                        or SimpleNamespace(returncode=0, stdout=b'{"ok": true}', stderr=b"")
+                    )
+                ),
+            }
+        )
+
+        assert functions["_verify_rpc_next_key"](
+            {"name": "EVO2", "ip": "10.0.0.2", "interface": "et-0/0/1"}
+        )
+        assert "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519.next" in calls[0]
+
+    def test_application_sentinel_is_required(self):
+        functions = load_functions("_run_rpc_key_action")
+        functions.update(
+            {
+                "base64": base64,
+                "DEVICE_NAME": "EVO1",
+                "SCRIPT_USER": "etsi_user",
+                "log": lambda *_args, **_kwargs: None,
+                "ssh_transport_options": lambda path: ["-i", path],
+                "subprocess": SimpleNamespace(
+                    run=lambda *_args, **_kwargs: SimpleNamespace(
+                        returncode=0,
+                        stdout=b"commit complete",
+                        stderr=b"",
+                    )
+                ),
+            }
+        )
+
+        assert not functions["_run_rpc_key_action"](
+            {"name": "EVO2", "ip": "10.0.0.2"},
+            "prepare-rpc-pubkey",
+            "ssh-ed25519 AAAANEW qkd-rpc@EVO1",
+            "/tmp/current",
+        )
+
+    def test_missing_peer_blocks_activation(self):
+        functions = load_functions("run_rpc_key_rotation_cycle")
+        activated = []
+        state = {
+            "last_rotation_timestamp": 0,
+            "rotation_count": 0,
+            "transaction": {
+                "id": "txn",
+                "phase": "generated",
+                "pubkey": "ssh-ed25519 AAAANEW qkd-rpc@EVO1",
+                "peers": ["EVO2", "MX1"],
+                "prepared_peers": [],
+                "verified_peers": [],
+                "activated": False,
+                "finalized_peers": [],
+            },
+        }
+        functions.update(
+            {
+                "RPC_SSH_KEY": "/tmp/rpc",
+                "load_rpc_key_rotation_state": lambda: state,
+                "save_rpc_key_rotation_state": lambda _state: None,
+                "_rpc_rotation_peers": lambda: {
+                    "EVO2": {"name": "EVO2"},
+                    "MX1": {"name": "MX1"},
+                },
+                "_public_key_from_private": lambda _path: "ssh-ed25519 AAAAOLD",
+                "_public_keys_match": lambda left, right: left in right,
+                "_write_active_rpc_public_key": lambda _pubkey: True,
+                "_run_rpc_key_action": lambda peer, *_args: peer["name"] != "MX1",
+                "_verify_rpc_next_key": lambda _peer: True,
+                "_activate_rpc_next_keypair": lambda: activated.append(True) or True,
+                "log": lambda *_args, **_kwargs: None,
+            }
+        )
+
+        assert not functions["run_rpc_key_rotation_cycle"]()
+        assert activated == []
+        assert state["transaction"]["prepared_peers"] == ["EVO2"]
+
+    def test_recovery_after_activation_resumes_finalize(self):
+        functions = load_functions("run_rpc_key_rotation_cycle")
+        saved = []
+        activated = []
+        pubkey = "ssh-ed25519 AAAANEW qkd-rpc@EVO1"
+        state = {
+            "last_rotation_timestamp": 0,
+            "rotation_count": 4,
+            "transaction": {
+                "id": "txn",
+                "phase": "activating",
+                "pubkey": pubkey,
+                "peers": ["EVO2"],
+                "prepared_peers": ["EVO2"],
+                "verified_peers": ["EVO2"],
+                "activated": False,
+                "finalized_peers": [],
+            },
+        }
+        functions.update(
+            {
+                "RPC_SSH_KEY": "/tmp/rpc",
+                "time": SimpleNamespace(time=lambda: 500),
+                "load_rpc_key_rotation_state": lambda: state,
+                "save_rpc_key_rotation_state": lambda value: saved.append(
+                    json.loads(json.dumps(value))
+                ),
+                "_rpc_rotation_peers": lambda: {"EVO2": {"name": "EVO2"}},
+                "_public_key_from_private": lambda _path: "ssh-ed25519 AAAANEW",
+                "_public_keys_match": lambda left, right: left in right,
+                "_write_active_rpc_public_key": lambda value: value == pubkey,
+                "_run_rpc_key_action": lambda *_args: True,
+                "_verify_rpc_next_key": lambda _peer: True,
+                "_activate_rpc_next_keypair": lambda: activated.append(True) or True,
+                "log": lambda *_args, **_kwargs: None,
+            }
+        )
+
+        assert functions["run_rpc_key_rotation_cycle"]()
+        assert activated == []
+        assert saved[-1]["transaction"] is None
+        assert saved[-1]["rotation_count"] == 5
+
+    def test_activation_swaps_next_and_keeps_previous(self, tmp_path):
+        functions = load_functions("_activate_rpc_next_keypair")
+        active = tmp_path / "qkd_rpc_id_ed25519"
+        active.write_text("old-private")
+        Path(f"{active}.pub").write_text("old-public")
+        Path(f"{active}.next").write_text("new-private")
+        Path(f"{active}.next.pub").write_text("new-public")
+        functions.update(
+            {
+                "RPC_SSH_KEY": str(active),
+                "os": os,
+                "shutil": __import__("shutil"),
+                "log": lambda *_args, **_kwargs: None,
+            }
+        )
+
+        assert functions["_activate_rpc_next_keypair"]()
+        assert active.read_text() == "new-private"
+        assert Path(f"{active}.pub").read_text() == "new-public"
+        assert Path(f"{active}.prev").read_text() == "old-private"
+        assert Path(f"{active}.pub.prev").read_text() == "old-public"
 
 
 class TestTimezoneSafeStartTimes:
@@ -526,7 +772,7 @@ class TestRpcBatchDelivery:
                 "peer_transport_mode": lambda: "rpc",
                 "peer_enqueue_min_margin_seconds": lambda: 60,
                 "SCRIPT_USER": "etsi_user",
-                "SSH_KEY": "/var/home/etsi_user/.ssh/qkd_id_ed25519",
+                "RPC_SSH_KEY": "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
                 "ssh_transport_options": lambda key: ["-i", key],
                 "peer_batch_ack_timeout_seconds": lambda: 150,
                 "log": lambda *args, **kwargs: None,
@@ -564,7 +810,7 @@ class TestRpcBatchDelivery:
         cmd, timeout = self.calls[0]
 
         assert cmd[0] == "ssh"
-        assert "/var/home/etsi_user/.ssh/qkd_id_ed25519" in cmd
+        assert "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519" in cmd
         assert "etsi_user@100.123.113.1" in cmd
         assert "action install-key-batch iface et-0/0/7" in cmd[-1]
         assert timeout == 150
@@ -582,7 +828,7 @@ class TestRpcPeerStatus:
             {
                 "validate_link_runtime": lambda link, require_peer_transport: True,
                 "SCRIPT_USER": "etsi_user",
-                "SSH_KEY": "/var/home/etsi_user/.ssh/qkd_id_ed25519",
+                "RPC_SSH_KEY": "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
                 "ssh_transport_options": lambda key: ["-i", key],
                 "json": json,
                 "log": lambda *args, **kwargs: self.logs.append(args),
@@ -619,7 +865,7 @@ class TestRpcPeerStatus:
         assert cmd == [
             "ssh",
             "-i",
-            "/var/home/etsi_user/.ssh/qkd_id_ed25519",
+            "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
             "etsi_user@100.123.113.1",
             "op qkd_onbox.py action status iface et-0/0/7",
         ]
@@ -699,3 +945,29 @@ def test_qkd_policy_rejects_negative_adaptive_safety_margin():
                 "adaptive_grace_safety_margin_seconds": -1,
             }
         )
+
+
+def _valid_policy_with_rpc_rotation(interval):
+    return {
+        "rekey_enabled": True,
+        "execution_interval_seconds": 60,
+        "key_activation_interval_seconds": 120,
+        "key_batch_size": 4,
+        "max_installed_keys": 4,
+        "peer_batch_ack_timeout_seconds": 150,
+        "adaptive_grace_floor_seconds": 150,
+        "adaptive_grace_safety_margin_seconds": 30,
+        "adaptive_grace_rounding_seconds": 60,
+        "rpc_key_rotation_interval_seconds": interval,
+    }
+
+
+@pytest.mark.parametrize("interval", [0, 60, 600])
+def test_qkd_policy_accepts_safe_rpc_rotation_intervals(interval):
+    validate_qkd_policy(_valid_policy_with_rpc_rotation(interval))
+
+
+@pytest.mark.parametrize("interval", [-1, 1, 59])
+def test_qkd_policy_rejects_unsafe_rpc_rotation_intervals(interval):
+    with pytest.raises(ValueError, match="rpc_key_rotation_interval_seconds"):
+        validate_qkd_policy(_valid_policy_with_rpc_rotation(interval))

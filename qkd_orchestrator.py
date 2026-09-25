@@ -1324,6 +1324,11 @@ def handle_deploy(args):
         or secrets.get("script_user_auth_mode")
         or "password"
     ).strip().lower()
+    QKD["RPC_SSH_KEY_NAME"] = str(
+        secrets.get("rpc_ssh_key_name")
+        or QKD.get("RPC_SSH_KEY_NAME")
+        or "qkd_rpc_id_ed25519"
+    )
 
     if args.preview or args.dry_run:
         print_step_banner(

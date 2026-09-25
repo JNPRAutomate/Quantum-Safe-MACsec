@@ -440,13 +440,13 @@ def validate_qkd_policy(policy: Dict[str, Any]) -> None:
     if "batch_enabled" in policy and not isinstance(policy["batch_enabled"], bool):
         raise ValueError("qkd_policy.batch_enabled must be true or false")
 
-    # Validate peer key rotation interval if specified
-    if "peer_key_rotation_interval_seconds" in policy:
-        rotation_interval = int(policy["peer_key_rotation_interval_seconds"])
+    # Validate per-device RPC identity rotation interval if specified.
+    if "rpc_key_rotation_interval_seconds" in policy:
+        rotation_interval = int(policy["rpc_key_rotation_interval_seconds"])
         if rotation_interval < 0:
-            raise ValueError("qkd_policy.peer_key_rotation_interval_seconds must be >= 0")
+            raise ValueError("qkd_policy.rpc_key_rotation_interval_seconds must be >= 0")
         if rotation_interval > 0 and rotation_interval < 60:
-            raise ValueError("qkd_policy.peer_key_rotation_interval_seconds must be 0 or >= 60 seconds")
+            raise ValueError("qkd_policy.rpc_key_rotation_interval_seconds must be 0 or >= 60 seconds")
 
 
 def build_runtime_qkd_policy(

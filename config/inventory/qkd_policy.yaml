@@ -53,6 +53,7 @@ qkd_policy:
   peer_batch_ack_timeout_seconds: 150
   peer_batch_ack_poll_interval_seconds: 5
 
-  # Independent etsi_peer_view ED25519 transport-key rotation. qkd_onbox runs
-  # this only after MACsec keyring work, never during a keyring transaction.
-  peer_key_rotation_interval_seconds: 600
+  # Independent per-device etsi_user RPC identity rotation. The private key
+  # remains on its source router; only its public key is prepared on direct
+  # peers, verified with the .next private key, activated, then finalized.
+  rpc_key_rotation_interval_seconds: 600

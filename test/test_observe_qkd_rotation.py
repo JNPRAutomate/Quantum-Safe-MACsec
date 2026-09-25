@@ -22,7 +22,7 @@ def policy():
         "adaptive_grace_floor_seconds": 150,
         "adaptive_grace_safety_margin_seconds": 30,
         "adaptive_grace_rounding_seconds": 60,
-        "peer_key_rotation_interval_seconds": 300,
+        "rpc_key_rotation_interval_seconds": 300,
     }
 
 
@@ -71,8 +71,8 @@ def test_schedule_is_fully_derived_from_policy():
         "adaptive_grace_seconds": 180,
         "ring_size": 4,
         "replacement_count": 2,
-        "peer_key_rotation_interval_seconds": 300,
-        "peer_key_verification_offset_seconds": 360,
+        "rpc_key_rotation_interval_seconds": 300,
+        "rpc_key_verification_offset_seconds": 360,
         "t1_offset_seconds": 0,
         "t2_offset_seconds": 240,
         "final_offset_seconds": 420,
@@ -192,7 +192,7 @@ def test_stage_wait_reason_describes_policy_windows():
     schedule = calculate_schedule(policy())
     assert "baseline" in stage_wait_reason("t1", schedule)
     assert "execution_interval" in stage_wait_reason("t2", schedule)
-    assert "peer-key" in stage_wait_reason("final", schedule)
+    assert "RPC-key" in stage_wait_reason("final", schedule)
 
 
 def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_path):

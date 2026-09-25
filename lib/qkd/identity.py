@@ -52,6 +52,14 @@ def qkd_ssh_public_key():
     return f"{qkd_ssh_private_key()}.pub"
 
 
+def qkd_rpc_private_key():
+    return f"{qkd_ssh_dir()}/{QKD.get('RPC_SSH_KEY_NAME', 'qkd_rpc_id_ed25519')}"
+
+
+def qkd_rpc_public_key():
+    return f"{qkd_rpc_private_key()}.pub"
+
+
 def qkd_peer_transport_private_key():
     return f"{qkd_ssh_dir()}/{QKD.get('PEER_SSH_KEY_NAME', 'qkd_peer_cmd_ed25519')}"
 
@@ -718,6 +726,39 @@ def collect_peer_transport_public_keys(devices):
         if not key:
             print(
                 f"[WARN] invalid peer transport public key on {name} "
+                f"path={pub_path}\nraw_output={result.stdout}"
+            )
+            continue
+        pub_keys[name] = key
+    return pub_keys
+
+
+def collect_rpc_public_keys(devices):
+    devices = normalize_devices(devices)
+    pub_keys = {}
+    pub_path = qkd_rpc_public_key()
+    for device in devices:
+        name = device_name(device)
+        result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
+        if result.returncode != 0:
+            print(
+                f"[WARN] skipping RPC public key on {name}: "
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+            continue
+        key = next(
+            (
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.strip().startswith(
+                    ("ssh-rsa ", "ssh-ed25519 ", "ecdsa-sha2-")
+                )
+            ),
+            None,
+        )
+        if not key:
+            print(
+                f"[WARN] invalid RPC public key on {name} "
                 f"path={pub_path}\nraw_output={result.stdout}"
             )
             continue

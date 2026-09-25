@@ -62,6 +62,7 @@ import os
 import hashlib
 import pwd
 import signal
+import shutil
 import stat
 
 
@@ -79,6 +80,8 @@ def _print_cli_usage():
     print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
     print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
     print("  op qkd_onbox.py action install-peer-pubkey device <device> pubkey-b64 <payload>")
+    print("  op qkd_onbox.py action prepare-rpc-pubkey device <device> pubkey-b64 <payload>")
+    print("  op qkd_onbox.py action finalize-rpc-pubkey device <device> pubkey-b64 <payload>")
     print("  op qkd_onbox.py --version")
 
 
@@ -187,6 +190,7 @@ SCRIPT_USER = CONFIG["script_user"]
 PEER_CMD_USER = str(CONFIG.get("peer_cmd_user", SCRIPT_USER) or SCRIPT_USER)
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
+RPC_SSH_KEY = str(CONFIG.get("rpc_ssh_key", SSH_KEY) or SSH_KEY)
 PEER_SSH_KEY = str(CONFIG.get("peer_ssh_key", SSH_KEY) or SSH_KEY)
 SCP_BINARY = str(CONFIG.get("scp_binary", "/usr/bin/scp") or "/usr/bin/scp")
 OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
@@ -935,6 +939,85 @@ def save_peer_key_rotation_state(state):
     path.write_text(json.dumps(state, indent=2))
 
 
+def rpc_key_rotation_state_file():
+    return f"{STATE_DIR}/qkd_rpc_key_rotation.json"
+
+
+def load_rpc_key_rotation_state():
+    defaults = {
+        "last_rotation_timestamp": 0,
+        "last_rotation_time": "None",
+        "rotation_count": 0,
+        "transaction": None,
+    }
+    path = Path(rpc_key_rotation_state_file())
+    if not path.exists():
+        return defaults
+    try:
+        raw = json.loads(path.read_text())
+    except Exception as exc:
+        raise RuntimeError(
+            f"invalid RPC key rotation state file={path}: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError(
+            f"invalid RPC key rotation state file={path}: expected object"
+        )
+
+    state = dict(defaults)
+    try:
+        state["last_rotation_timestamp"] = int(raw.get("last_rotation_timestamp", 0))
+    except Exception as exc:
+        raise RuntimeError(
+            f"invalid RPC key rotation timestamp file={path}: {exc}"
+        ) from exc
+    try:
+        state["rotation_count"] = int(raw.get("rotation_count", 0))
+    except Exception as exc:
+        raise RuntimeError(
+            f"invalid RPC key rotation count file={path}: {exc}"
+        ) from exc
+    if state["rotation_count"] < 0:
+        raise RuntimeError(
+            f"invalid RPC key rotation count file={path}: must be >= 0"
+        )
+    transaction = raw.get("transaction")
+    if transaction is not None and not isinstance(transaction, dict):
+        raise RuntimeError(
+            f"invalid RPC key rotation transaction file={path}: expected object or null"
+        )
+    state["transaction"] = transaction
+    state["last_rotation_time"] = format_epoch_human(state["last_rotation_timestamp"])
+    return state
+
+
+def save_rpc_key_rotation_state(state):
+    state = dict(state or {})
+    try:
+        last_rotation = int(state.get("last_rotation_timestamp", 0))
+    except Exception:
+        last_rotation = 0
+    try:
+        rotation_count = max(0, int(state.get("rotation_count", 0)))
+    except Exception:
+        rotation_count = 0
+    transaction = state.get("transaction")
+    if transaction is not None and not isinstance(transaction, dict):
+        raise ValueError("RPC key rotation transaction must be an object or null")
+
+    payload = {
+        "last_rotation_timestamp": last_rotation,
+        "last_rotation_time": format_epoch_human(last_rotation),
+        "rotation_count": rotation_count,
+        "transaction": transaction,
+    }
+    path = Path(rpc_key_rotation_state_file())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(f"{path}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(str(tmp), str(path))
+
+
 # ---------------------------------------------------------------------------
 # PEER SSH KEY ROTATION (inlined - lib/ package is NOT deployed to routers,
 # only this single qkd_onbox.py file is shipped, so this logic must be
@@ -1355,6 +1438,441 @@ def run_slave_install_peer_pubkey(source_device, pubkey_b64):
     save_peer_known_pubkeys(known)
 
     log(f"PEER-PUBKEY INSTALLED source_device={source_device} key={pubkey_line[:80]}...", "INFO", mode="PEER-KEY-ROTATION")
+    return True
+
+
+def _decode_rpc_pubkey(source_device, pubkey_b64):
+    if not source_device or not re.fullmatch(r"[A-Za-z0-9_.:-]+", str(source_device)):
+        raise ValueError("invalid source device")
+    try:
+        decoded = base64.urlsafe_b64decode(pubkey_b64.encode()).decode().strip()
+    except Exception as exc:
+        raise ValueError(f"invalid RPC public key encoding: {exc}") from exc
+    parts = decoded.split()
+    if len(parts) < 2 or not parts[0].startswith(("ssh-", "ecdsa-sha2-")):
+        raise ValueError("malformed RPC public key")
+    return f"{parts[0]} {parts[1]} qkd-rpc@{source_device}"
+
+
+def _rpc_keys_for_source(source_device):
+    tag = f"qkd-rpc@{source_device}"
+    return [
+        key
+        for key in _get_all_junos_auth_keys_for_user(SCRIPT_USER)
+        if len(key.split()) >= 3 and key.split()[-1] == tag
+    ]
+
+
+def _apply_rpc_pubkey(source_device, pubkey_b64, finalize=False):
+    try:
+        pubkey_line = _decode_rpc_pubkey(source_device, pubkey_b64)
+    except ValueError as exc:
+        log(f"RPC-PUBKEY INVALID source_device={source_device} error={exc}", "ERROR", mode="RPC-KEY-ROTATION")
+        return False
+
+    existing = _rpc_keys_for_source(source_device)
+    commands = []
+    if finalize:
+        for stale_key in existing:
+            if stale_key == pubkey_line:
+                continue
+            stale_algo = stale_key.split()[0]
+            stale_payload = stale_key.replace('"', '\\"')
+            commands.append(
+                f'delete system login user {SCRIPT_USER} authentication '
+                f'{stale_algo} "{stale_payload}"'
+            )
+
+    if pubkey_line not in existing:
+        key_algo = pubkey_line.split()[0]
+        key_payload = pubkey_line.replace('"', '\\"')
+        commands.append(
+            f'set system login user {SCRIPT_USER} authentication '
+            f'{key_algo} "{key_payload}"'
+        )
+
+    if commands:
+        if not acquire_junos_commit_lock():
+            log(
+                f"RPC-PUBKEY DEFERRED source_device={source_device} reason=junos_commit_lock_busy",
+                "ERROR",
+                mode="RPC-KEY-ROTATION",
+            )
+            return False
+        try:
+            action = "finalize" if finalize else "prepare"
+            cli_cmd = "; ".join(
+                ["configure"]
+                + commands
+                + [f'commit comment "QKD: {action} RPC key source={source_device}"', "exit"]
+            )
+            result = subprocess.run(
+                [CLI_PATH, "-c", cli_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+            stdout = result.stdout.decode(errors="ignore").strip()
+            stderr = result.stderr.decode(errors="ignore").strip()
+            if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+                log(
+                    f"RPC-PUBKEY {action.upper()} FAIL source_device={source_device} "
+                    f"rc={result.returncode} stderr={stderr} stdout={stdout}",
+                    "ERROR",
+                    mode="RPC-KEY-ROTATION",
+                )
+                return False
+        except subprocess.TimeoutExpired:
+            log(
+                f"RPC-PUBKEY TIMEOUT source_device={source_device} finalize={finalize}",
+                "ERROR",
+                mode="RPC-KEY-ROTATION",
+            )
+            return False
+        finally:
+            release_junos_commit_lock()
+
+    sentinel = "OK FINALIZE-RPC-PUBKEY" if finalize else "OK PREPARE-RPC-PUBKEY"
+    log(f"{sentinel} source_device={source_device}", "INFO", mode="RPC-KEY-ROTATION")
+    print(f"{sentinel} source_device={source_device}")
+    return True
+
+
+def run_slave_prepare_rpc_pubkey(source_device, pubkey_b64):
+    return _apply_rpc_pubkey(source_device, pubkey_b64, finalize=False)
+
+
+def run_slave_finalize_rpc_pubkey(source_device, pubkey_b64):
+    return _apply_rpc_pubkey(source_device, pubkey_b64, finalize=True)
+
+
+def _read_public_key(path):
+    try:
+        value = Path(path).read_text().strip()
+    except Exception:
+        return None
+    parts = value.split()
+    if len(parts) < 2 or not parts[0].startswith(("ssh-", "ecdsa-sha2-")):
+        return None
+    return value
+
+
+def _public_key_from_private(path):
+    try:
+        result = subprocess.run(
+            ["ssh-keygen", "-y", "-f", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.decode(errors="ignore").strip()
+    parts = value.split()
+    if len(parts) < 2 or not parts[0].startswith(("ssh-", "ecdsa-sha2-")):
+        return None
+    return f"{parts[0]} {parts[1]}"
+
+
+def _public_keys_match(left, right):
+    left_parts = str(left or "").split()
+    right_parts = str(right or "").split()
+    return len(left_parts) >= 2 and left_parts[:2] == right_parts[:2]
+
+
+def _write_active_rpc_public_key(pubkey):
+    path = Path(f"{RPC_SSH_KEY}.pub")
+    tmp = Path(f"{path}.tmp")
+    try:
+        tmp.write_text(f"{pubkey.strip()}\n")
+        os.chmod(str(tmp), 0o640)
+        os.replace(str(tmp), str(path))
+        return True
+    except Exception as exc:
+        log(f"RPC-KEY PUBLIC KEY WRITE FAIL error={exc}", "ERROR", mode="RPC-KEY-ROTATION")
+        return False
+
+
+def _generate_rpc_next_keypair():
+    next_key = f"{RPC_SSH_KEY}.next"
+    next_pub = f"{next_key}.pub"
+    for path in (next_key, next_pub):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    try:
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                f"qkd-rpc@{DEVICE_NAME}",
+                "-f",
+                next_key,
+            ],
+            check=True,
+            timeout=10,
+        )
+        os.chmod(next_key, 0o600)
+        os.chmod(next_pub, 0o640)
+    except Exception as exc:
+        log(f"RPC-KEY GENERATE FAIL error={exc}", "ERROR", mode="RPC-KEY-ROTATION")
+        return None
+    return _read_public_key(next_pub)
+
+
+def _rpc_rotation_peers():
+    peers = {}
+    for link in managed_links():
+        peer_name = link.get("peer")
+        peer_ip = link.get("peer_ip")
+        peer_iface = link.get("peer_interface")
+        if not peer_name or not peer_ip or not peer_iface:
+            raise RuntimeError(
+                "incomplete direct RPC peer metadata "
+                f"peer={peer_name} peer_ip={peer_ip} peer_interface={peer_iface}"
+            )
+        peer = {
+            "name": peer_name,
+            "ip": peer_ip,
+            "interface": peer_iface,
+        }
+        existing = peers.get(peer_name)
+        if existing and existing != peer:
+            raise RuntimeError(
+                f"conflicting direct RPC peer metadata peer={peer_name}"
+            )
+        peers[peer_name] = peer
+    return peers
+
+
+def _run_rpc_key_action(peer, action, pubkey_line, key_path):
+    encoded = base64.urlsafe_b64encode(pubkey_line.encode()).decode()
+    cmd = (
+        f"op qkd_onbox.py action {action} "
+        f"device {DEVICE_NAME} pubkey-b64 {encoded}"
+    )
+    try:
+        result = subprocess.run(
+            [
+                "ssh",
+                *ssh_transport_options(key_path),
+                f"{SCRIPT_USER}@{peer['ip']}",
+                cmd,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+    except Exception as exc:
+        log(
+            f"RPC-KEY {action.upper()} ERROR peer={peer['name']} error={exc}",
+            "ERROR",
+            mode="RPC-KEY-ROTATION",
+        )
+        return False
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    sentinel = (
+        "OK PREPARE-RPC-PUBKEY"
+        if action == "prepare-rpc-pubkey"
+        else "OK FINALIZE-RPC-PUBKEY"
+    )
+    if result.returncode != 0 or sentinel not in stdout:
+        log(
+            f"RPC-KEY {action.upper()} FAIL peer={peer['name']} rc={result.returncode} "
+            f"stderr={stderr} stdout={stdout}",
+            "ERROR",
+            mode="RPC-KEY-ROTATION",
+        )
+        return False
+    return True
+
+
+def _verify_rpc_next_key(peer):
+    cmd = f"op qkd_onbox.py action status iface {peer['interface']}"
+    try:
+        result = subprocess.run(
+            [
+                "ssh",
+                *ssh_transport_options(f"{RPC_SSH_KEY}.next"),
+                f"{SCRIPT_USER}@{peer['ip']}",
+                cmd,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except Exception as exc:
+        log(
+            f"RPC-KEY VERIFY ERROR peer={peer['name']} error={exc}",
+            "ERROR",
+            mode="RPC-KEY-ROTATION",
+        )
+        return False
+    stdout = result.stdout.decode(errors="ignore").strip()
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(stdout)
+    except Exception:
+        start = stdout.find("{")
+        end = stdout.rfind("}")
+        try:
+            payload = json.loads(stdout[start:end + 1])
+        except Exception:
+            payload = None
+    return isinstance(payload, dict)
+
+
+def _activate_rpc_next_keypair():
+    next_key = f"{RPC_SSH_KEY}.next"
+    next_pub = f"{next_key}.pub"
+    if not os.path.isfile(next_key) or not os.path.isfile(next_pub):
+        return False
+    try:
+        if os.path.isfile(RPC_SSH_KEY):
+            shutil.copy2(RPC_SSH_KEY, f"{RPC_SSH_KEY}.prev")
+            os.chmod(f"{RPC_SSH_KEY}.prev", 0o600)
+        if os.path.isfile(f"{RPC_SSH_KEY}.pub"):
+            shutil.copy2(f"{RPC_SSH_KEY}.pub", f"{RPC_SSH_KEY}.pub.prev")
+        os.replace(next_key, RPC_SSH_KEY)
+        os.chmod(RPC_SSH_KEY, 0o600)
+        os.replace(next_pub, f"{RPC_SSH_KEY}.pub")
+        os.chmod(f"{RPC_SSH_KEY}.pub", 0o640)
+        return True
+    except Exception as exc:
+        log(f"RPC-KEY ACTIVATE FAIL error={exc}", "ERROR", mode="RPC-KEY-ROTATION")
+        return False
+
+
+def run_rpc_key_rotation_cycle():
+    state = load_rpc_key_rotation_state()
+    peers = _rpc_rotation_peers()
+    if not peers:
+        log("RPC-KEY ROTATION ABORTED reason=no_direct_peers", "ERROR", mode="RPC-KEY-ROTATION")
+        return False
+
+    transaction = state.get("transaction")
+    if not isinstance(transaction, dict):
+        pubkey = _generate_rpc_next_keypair()
+        if not pubkey:
+            return False
+        transaction = {
+            "id": hashlib.sha256(pubkey.encode()).hexdigest()[:16],
+            "phase": "generated",
+            "pubkey": pubkey,
+            "peers": sorted(peers),
+            "prepared_peers": [],
+            "verified_peers": [],
+            "activated": False,
+            "finalized_peers": [],
+            "created_at": int(time.time()),
+        }
+        state["transaction"] = transaction
+        save_rpc_key_rotation_state(state)
+
+    expected_peers = sorted(transaction.get("peers") or [])
+    if expected_peers != sorted(peers):
+        log(
+            f"RPC-KEY ROTATION BLOCKED reason=peer_set_changed "
+            f"transaction_peers={expected_peers} current_peers={sorted(peers)}",
+            "ERROR",
+            mode="RPC-KEY-ROTATION",
+        )
+        return False
+
+    pubkey = transaction.get("pubkey")
+    if not pubkey:
+        log("RPC-KEY ROTATION BLOCKED reason=missing_transaction_pubkey", "ERROR", mode="RPC-KEY-ROTATION")
+        return False
+
+    active_pubkey = _public_key_from_private(RPC_SSH_KEY)
+    if not transaction.get("activated") and _public_keys_match(active_pubkey, pubkey):
+        if not _write_active_rpc_public_key(pubkey):
+            return False
+        transaction["activated"] = True
+        transaction["phase"] = "activated"
+        save_rpc_key_rotation_state(state)
+
+    if not transaction.get("activated"):
+        prepared = set(transaction.get("prepared_peers") or [])
+        for peer_name in expected_peers:
+            if peer_name in prepared:
+                continue
+            if not _run_rpc_key_action(
+                peers[peer_name],
+                "prepare-rpc-pubkey",
+                pubkey,
+                RPC_SSH_KEY,
+            ):
+                return False
+            prepared.add(peer_name)
+            transaction["prepared_peers"] = sorted(prepared)
+            transaction["phase"] = "prepared"
+            save_rpc_key_rotation_state(state)
+        if prepared != set(expected_peers):
+            return False
+
+        verified = set(transaction.get("verified_peers") or [])
+        for peer_name in expected_peers:
+            if peer_name in verified:
+                continue
+            if not _verify_rpc_next_key(peers[peer_name]):
+                log(
+                    f"RPC-KEY VERIFY FAIL peer={peer_name} action=keep_current_key",
+                    "ERROR",
+                    mode="RPC-KEY-ROTATION",
+                )
+                return False
+            verified.add(peer_name)
+            transaction["verified_peers"] = sorted(verified)
+            transaction["phase"] = "verified"
+            save_rpc_key_rotation_state(state)
+        if verified != set(expected_peers):
+            return False
+
+        transaction["phase"] = "activating"
+        save_rpc_key_rotation_state(state)
+        if not _activate_rpc_next_keypair():
+            return False
+        transaction["activated"] = True
+        transaction["phase"] = "activated"
+        save_rpc_key_rotation_state(state)
+
+    finalized = set(transaction.get("finalized_peers") or [])
+    for peer_name in expected_peers:
+        if peer_name in finalized:
+            continue
+        if not _run_rpc_key_action(
+            peers[peer_name],
+            "finalize-rpc-pubkey",
+            pubkey,
+            RPC_SSH_KEY,
+        ):
+            return False
+        finalized.add(peer_name)
+        transaction["finalized_peers"] = sorted(finalized)
+        transaction["phase"] = "finalizing"
+        save_rpc_key_rotation_state(state)
+
+    now = int(time.time())
+    state["last_rotation_timestamp"] = now
+    state["rotation_count"] = int(state.get("rotation_count", 0)) + 1
+    state["transaction"] = None
+    save_rpc_key_rotation_state(state)
+    log(
+        f"RPC KEY ROTATION COMPLETED rotation_count={state['rotation_count']}",
+        "INFO",
+        mode="RPC-KEY-ROTATION",
+    )
     return True
 
 
@@ -4434,9 +4952,12 @@ def runtime_has_config_privilege():
 
 
 def ssh_transport_options(key_path=None):
-    key_path = key_path or SSH_KEY
+    key_path = key_path or RPC_SSH_KEY
     key_paths = [key_path]
-    if os.path.abspath(key_path) == os.path.abspath(PEER_SSH_KEY):
+    if os.path.abspath(key_path) in {
+        os.path.abspath(RPC_SSH_KEY),
+        os.path.abspath(PEER_SSH_KEY),
+    }:
         prev_key_path = f"{key_path}.prev"
         if os.path.exists(prev_key_path):
             key_paths.append(prev_key_path)
@@ -4557,19 +5078,23 @@ def validate_ssh_runtime_for_master():
             "INFO",
             mode="MASTER",
         )
-    if not SSH_KEY:
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=SSH_KEY_EMPTY", "ERROR", mode="MASTER")
+    if not RPC_SSH_KEY:
+        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=RPC_SSH_KEY_EMPTY", "ERROR", mode="MASTER")
         return False
-    if not Path(SSH_KEY).exists():
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} ssh_key={SSH_KEY} reason=KEY_NOT_FOUND", "ERROR", mode="MASTER")
-        return False
-    if not os.access(SSH_KEY, os.R_OK):
+    if not Path(RPC_SSH_KEY).exists():
         log(
-            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} rpc_ssh_key={RPC_SSH_KEY} reason=KEY_NOT_FOUND",
             "ERROR",
             mode="MASTER",
         )
-        print(f"ERROR SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY}")
+        return False
+    if not os.access(RPC_SSH_KEY, os.R_OK):
+        log(
+            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} "
+            f"rpc_ssh_key={RPC_SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
+            "ERROR",
+            mode="MASTER",
+        )
         return False
 
     if not PEER_SSH_KEY:
@@ -4634,7 +5159,8 @@ def validate_ssh_runtime_for_master():
             return False
 
     log(
-        f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} ssh_key={SSH_KEY} peer_ssh_key={PEER_SSH_KEY}",
+        f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} "
+        f"rpc_ssh_key={RPC_SSH_KEY} peer_ssh_key={PEER_SSH_KEY}",
         "INFO",
         mode="MASTER",
     )
@@ -4746,7 +5272,7 @@ def send_command(
     peer_user = SCRIPT_USER
     ssh_options = [
         "ssh",
-        *ssh_transport_options(SSH_KEY),
+        *ssh_transport_options(RPC_SSH_KEY),
         "-o", "ConnectTimeout=10",
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=4",
@@ -4832,7 +5358,7 @@ def get_peer_status(link, iface):
         result = subprocess.run(
             [
                 "ssh",
-                *ssh_transport_options(SSH_KEY),
+                *ssh_transport_options(RPC_SSH_KEY),
                 f"{SCRIPT_USER}@{peer_ip}",
                 cmd,
             ],
@@ -6572,10 +7098,10 @@ def run_master():
         for link in master_links:
             run_master_rolling_link(link)
 
-    # Check if peer SSH key rotation is needed
-    rotation_interval = qkd_policy().get("peer_key_rotation_interval_seconds", 0)
+    # Rotate the per-device RPC identity only after all MACsec work completes.
+    rotation_interval = qkd_policy().get("rpc_key_rotation_interval_seconds", 0)
     if rotation_interval > 0:
-        rotation_state = load_peer_key_rotation_state()
+        rotation_state = load_rpc_key_rotation_state()
         now = int(time.time())
         last_rotation = rotation_state.get("last_rotation_timestamp", 0)
         rotation_count = rotation_state.get("rotation_count", 0)
@@ -6584,7 +7110,7 @@ def run_master():
 
         # Log current peer key rotation state
         log(
-            f"PEER-KEY-STATE: interval_seconds={rotation_interval} "
+            f"RPC-KEY-STATE: interval_seconds={rotation_interval} "
             f"last_rotation_epoch={last_rotation} "
             f"last_rotation_time={format_epoch_human(last_rotation)} "
             f"last_rotation_ago_seconds={seconds_since_last} "
@@ -6592,71 +7118,25 @@ def run_master():
             f"next_rotation_in_seconds={seconds_until_next} "
             f"next_rotation_in={format_duration_human(seconds_until_next)} "
             f"rotation_count={rotation_count} "
-            f"device={DEVICE} peer_user={PEER_CMD_USER}",
+            f"device={DEVICE} rpc_user={SCRIPT_USER}",
             "INFO",
-            mode="PEER-KEY-ROTATION",
+            mode="RPC-KEY-ROTATION",
         )
 
-        if now - last_rotation >= rotation_interval:
+        if rotation_state.get("transaction") or now - last_rotation >= rotation_interval:
             try:
-                # NOTE: run_peer_key_rotation_cycle is defined locally in this file
-                # (lib/ package is NOT deployed to routers - only this single script is shipped)
-
-                # Build peer devices dict from managed links
-                peer_devices = {}
-                for link in managed_links():
-                    peer_name = link.get("peer")
-                    peer_ip = link.get("peer_ip")
-                    if peer_name and peer_name not in peer_devices:
-                        peer_devices[peer_name] = {
-                            "name": peer_name,
-                            "ip": peer_ip,
-                            "host": peer_ip,
-                            "peer": peer_name,
-                        }
-
-                rotated_ok = run_peer_key_rotation_cycle(DEVICE, peer_devices)
-
-                if rotated_ok:
-                    # Log the new public key for audit trail (PEER_SSH_KEY lives
-                    # under SCRIPT_USER's home - see onbox_builder.py convention)
-                    peer_key_path = f"{PEER_SSH_KEY}.pub"
-                    try:
-                        with open(peer_key_path, "r") as f:
-                            pubkey_line = f.read().strip()
-                        log(
-                            f"PEER-KEY-ROTATED: new_pubkey_installed={pubkey_line[:80]}...",
-                            "INFO",
-                            mode="PEER-KEY-ROTATION",
-                        )
-                    except Exception as e:
-                        log(
-                            f"PEER-KEY-ROTATED: could_not_read_pubkey_file={peer_key_path} error={e}",
-                            "WARN",
-                            mode="PEER-KEY-ROTATION",
-                        )
-
-                    rotation_state["last_rotation_timestamp"] = now
-                    rotation_state["rotation_count"] = rotation_state.get("rotation_count", 0) + 1
-                    save_peer_key_rotation_state(rotation_state)
-
+                if not run_rpc_key_rotation_cycle():
                     log(
-                        f"PEER KEY ROTATION COMPLETED rotation_count={rotation_state['rotation_count']}",
-                        "INFO",
-                        mode="PEER-KEY-ROTATION",
-                    )
-                else:
-                    log(
-                        "PEER KEY ROTATION NOT COMPLETED this cycle -> will retry next cycle "
+                        "RPC KEY ROTATION NOT COMPLETED this cycle -> will retry next cycle "
                         "(last_rotation_timestamp unchanged)",
                         "WARN",
-                        mode="PEER-KEY-ROTATION",
+                        mode="RPC-KEY-ROTATION",
                     )
             except Exception as exc:
                 log(
-                    f"PEER KEY ROTATION FAILED: {exc}",
+                    f"RPC KEY ROTATION FAILED: {exc}",
                     "ERROR",
-                    mode="PEER-KEY-ROTATION",
+                    mode="RPC-KEY-ROTATION",
                 )
 
     return
@@ -6743,6 +7223,29 @@ def main():
                 sys.exit(1)
             try:
                 ok = run_slave_install_peer_pubkey(source_device, pubkey_b64)
+            finally:
+                release_action_lock(lock_scope, action)
+            sys.exit(0 if ok else 1)
+
+        if action in ("prepare-rpc-pubkey", "finalize-rpc-pubkey"):
+            if not source_device or not pubkey_b64:
+                log(f"INVALID {action.upper()} ARGUMENTS", "ERROR", mode="RPC-KEY-ROTATION")
+                print(f"ERROR INVALID {action.upper()} ARGUMENTS")
+                sys.exit(1)
+            lock_scope = "rpc-pubkey"
+            if not acquire_action_lock(lock_scope, action):
+                log(
+                    f"ACTION LOCK BUSY action={action} iface={lock_scope}",
+                    "ERROR",
+                    mode="LOCK",
+                )
+                print(f"ERROR ACTION LOCK BUSY action={action}")
+                sys.exit(1)
+            try:
+                if action == "prepare-rpc-pubkey":
+                    ok = run_slave_prepare_rpc_pubkey(source_device, pubkey_b64)
+                else:
+                    ok = run_slave_finalize_rpc_pubkey(source_device, pubkey_b64)
             finally:
                 release_action_lock(lock_scope, action)
             sys.exit(0 if ok else 1)

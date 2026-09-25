@@ -1230,25 +1230,8 @@ def bootstrap_script_user_on_device(
                 name
             )
 
-        if script_auth_mode == "key-only" and local_private_key_path:
-            if not sync_script_user_keypair_from_local(
-                dev,
-                name,
-                script_user,
-                local_private_key_path,
-            ):
-                print(
-                    "[%s] WARN canonical local key sync did not complete; continuing with on-box key repair fallback"
-                    % name
-                )
-                run_script_user_key_fix(
-                    dev,
-                    name,
-                    script_user,
-                    deploy_user,
-                    key_name=str(QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")),
-                    key_comment=f"{script_user}@{name}",
-                )
+        # The orchestrator private key remains off-box. Routers receive only
+        # its public key through the Junos login configuration above.
         # NOTE: Peer transport keys MUST be unique per device for rotation to work correctly
         # Do NOT sync from local; instead generate unique on-box keys via run_script_user_key_fix
         # This ensures each device has its own ed25519 keypair for etsi_peer_view
@@ -1260,21 +1243,16 @@ def bootstrap_script_user_on_device(
                 name,
                 script_user,
                 deploy_user,
+                key_name=str(QKD.get("RPC_SSH_KEY_NAME", "qkd_rpc_id_ed25519")),
+                key_comment=f"qkd-rpc@{name}",
+            )
+            run_script_user_key_fix(
+                dev,
+                name,
+                script_user,
+                deploy_user,
                 key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
                 key_comment=f"{peer_cmd_user}@{name}",
-            )
-
-        if not run_script_user_key_fix(
-            dev, name, script_user, deploy_user,
-            key_comment=f"{script_user}@{name}"
-        ):
-            print(
-                "[%s] WARN ssh key fix did not complete; continuing because this can be platform-specific on Junos" %
-                name
-            )
-            print(
-                "[%s] hint: the script user private key must remain owned by %s for runtime SSH checks" %
-                (name, script_user)
             )
 
         if not run_shell_fix(dev, name, script_user, deploy_user):
@@ -1331,6 +1309,12 @@ def bootstrap_script_users(
 
     resolved_script_user = get_script_user(inventory_base, script_user)
     resolved_script_user_class = get_script_user_class(inventory_base)
+    inventory_secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
+    QKD["RPC_SSH_KEY_NAME"] = str(
+        inventory_secrets.get("rpc_ssh_key_name")
+        or QKD.get("RPC_SSH_KEY_NAME")
+        or "qkd_rpc_id_ed25519"
+    )
     resolved_peer_cmd_user = get_peer_cmd_user(inventory_base)
     resolved_peer_cmd_user_class = get_peer_cmd_user_class(inventory_base)
     resolved_script_auth_mode = get_script_user_auth_mode(inventory_base, script_auth_mode)

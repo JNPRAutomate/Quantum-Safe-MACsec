@@ -759,6 +759,8 @@ def configure_qkd_scripts(dev, name, base):
         allow_cmds_regex = (
             "(configure.*)|(commit.*)|(rollback.*)|"
             "(set security.*)|(delete security.*)|"
+            f"(set system login user {script_user} authentication.*)|"
+            f"(delete system login user {script_user} authentication.*)|"
             f"(set system login user {peer_cmd_user} authentication.*)|"
             f"(delete system login user {peer_cmd_user} authentication.*)|"
             "(show configuration.*)|(show security.*)|"
@@ -1089,6 +1091,120 @@ def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_dev
     print(f"[{device_name}] Peer SSH authorized_keys synchronized OK (keys={len(key_lines)} peers={source_names})")
 
 
+def direct_rpc_peer_names(device_name, device_dict, all_devices_dict):
+    ip_to_name = {}
+    for name, device in (all_devices_dict or {}).items():
+        for field in ("ip", "mgmt_ip", "host"):
+            value = device.get(field)
+            if value:
+                ip_to_name[str(value)] = name
+
+    direct_peer_names = []
+    for link in device_dict.get("links", []) or []:
+        peer_name = link.get("peer") or link.get("peer_name")
+        if not peer_name and link.get("peer_ip"):
+            peer_name = ip_to_name.get(str(link["peer_ip"]))
+        if not peer_name:
+            raise RuntimeError(
+                f"cannot resolve direct RPC peer for {device_name}: {link}"
+            )
+        if peer_name not in all_devices_dict:
+            raise RuntimeError(
+                f"unknown direct RPC peer for {device_name}: {peer_name}"
+            )
+        if peer_name not in direct_peer_names:
+            direct_peer_names.append(peer_name)
+
+    if not direct_peer_names:
+        raise RuntimeError(
+            f"no direct RPC peers configured for {device_name}"
+        )
+    return sorted(direct_peer_names)
+
+
+def apply_script_user_rpc_keys_config(dev, device_name, device_dict, all_devices_dict, base):
+    from lib.qkd.identity import collect_rpc_public_keys, qkd_script_user
+
+    secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
+    if not isinstance(secrets, dict):
+        secrets = {}
+    script_user = str(
+        secrets.get("script_user")
+        or device_dict.get("script_user")
+        or qkd_script_user()
+    ).strip()
+    direct_peer_names = direct_rpc_peer_names(
+        device_name,
+        device_dict,
+        all_devices_dict,
+    )
+    all_devices_list = [
+        all_devices_dict[name] for name in sorted(all_devices_dict.keys())
+    ]
+    pub_keys = collect_rpc_public_keys(all_devices_list)
+    missing_peer_keys = [
+        peer_name
+        for peer_name in direct_peer_names
+        if peer_name not in pub_keys
+    ]
+    if missing_peer_keys:
+        raise RuntimeError(
+            f"missing direct-peer RPC public keys for {device_name}: "
+            f"{','.join(missing_peer_keys)}"
+        )
+
+    current_cfg = dev.rpc.cli(
+        f"show configuration system login user {script_user} | display set",
+        format="text",
+    )
+    current_text = rpc_text(current_cfg)
+    commands = []
+    for source_name in sorted(direct_peer_names):
+        tag = f"qkd-rpc@{source_name}"
+        for line in current_text.splitlines():
+            line = line.strip()
+            prefix = f"set system login user {script_user} authentication "
+            if line.startswith(prefix) and line.endswith(f'{tag}"'):
+                commands.append("delete " + line[len("set "):])
+
+        parts = pub_keys[source_name].strip().split()
+        if len(parts) < 2:
+            raise RuntimeError(
+                f"malformed RPC public key source={source_name}: {pub_keys[source_name]}"
+            )
+        key_type, key_blob = parts[:2]
+        key_payload = f"{key_type} {key_blob} {tag}"
+        commands.append(
+            f'set system login user {script_user} authentication '
+            f'{key_type} "{key_payload}"'
+        )
+
+    with Config(dev) as cu:
+        cu.load(
+            "\n".join(commands),
+            format="set",
+            merge=True,
+            ignore_warning=["statement not found"],
+        )
+        if cu.diff():
+            commit_safely(
+                dev,
+                cu,
+                device_name,
+                sync=True,
+                phase="SCRIPT_USER_RPC_KEYS",
+                detail=(
+                    f"user={script_user} "
+                    f"sources={','.join(sorted(direct_peer_names))}"
+                ),
+            )
+        else:
+            print(
+                f"[{device_name}] script_user RPC keys already aligned "
+                f"user={script_user} peers={sorted(direct_peer_names)}"
+            )
+
+
 # ----------------------------------------
 # PUSH CONFIG
 # ----------------------------------------
@@ -1273,6 +1389,13 @@ def push_config(device_name, device, commands, base, devices_dict=None):
         # rebuild of the user SSH files (triggered by login-user config commits)
         # does not overwrite the multi-peer key set we write here.
         if devices_dict:
+            apply_script_user_rpc_keys_config(
+                dev,
+                device_name,
+                device,
+                devices_dict,
+                base,
+            )
             apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
 
     finally:
