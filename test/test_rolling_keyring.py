@@ -393,6 +393,32 @@ class TestRollingKeyringPlan:
         assert 'read_remote_peer_batch_ack(link, iface) if transport_mode == "queue" else None' in source
         assert "_state_records_match(peer_state, records)" in source
 
+    def test_stuck_inflight_transaction_is_auto_reset_not_retried_forever(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        resume = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "resume_inflight_install"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), resume)
+
+        stuck_index = source.index("if age_seconds > INFLIGHT_STUCK_SECONDS:")
+        stuck_block = source[stuck_index:]
+
+        # A transaction whose scheduled start_time is far in the past can
+        # never be delivered (send_command's own margin check will always
+        # reject it), so once the stuck threshold is exceeded the code must
+        # abandon it locally instead of retrying it forever and requiring
+        # manual intervention.
+        assert 'action=AUTO_RING_RESET' in stuck_block
+        assert 'action=MANUAL_INTERVENTION_OR_RING_RESET_REQUIRED' not in stuck_block
+        reset_index = stuck_block.index('state["inflight_install"] = None')
+        return_index = stuck_block.index("return state, False", reset_index)
+        send_retry_index = stuck_block.find('if not send_command(')
+        # The reset (and its early return) must happen before any resend of
+        # the doomed stale payload is attempted.
+        assert send_retry_index == -1 or return_index < send_retry_index
+
     def test_rpc_success_is_recorded_before_bilateral_finalize(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
         rolling_link = next(

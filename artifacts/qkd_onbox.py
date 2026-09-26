@@ -6074,11 +6074,37 @@ def resume_inflight_install(link, state):
                 f"stuck_threshold={format_duration_human(INFLIGHT_STUCK_SECONDS)} "
                 f"created_at={created_at} created_at_time={format_epoch_human(created_at)} "
                 f"pending_start_time={pending_start} "
-                f"action=MANUAL_INTERVENTION_OR_RING_RESET_REQUIRED",
+                f"action=AUTO_RING_RESET",
                 "ERROR",
                 iface,
                 "MASTER",
             )
+            # A transaction stuck past the threshold has a scheduled
+            # start_time so far in the past that retrying it can never
+            # succeed: send_command()'s own peer-delivery margin check will
+            # keep rejecting it (remaining_seconds deeply negative), so
+            # without this reset the ring stays deadlocked forever, silently
+            # requiring a human to intervene while MACsec keeps running the
+            # last confirmed key indefinitely. Abandon the stale transaction
+            # so the next master cycle can compute a fresh one with a
+            # start_time based on the current clock.
+            state["inflight_install"] = None
+            if not save_db_state(peer, iface, state):
+                log(
+                    f"{operation} INFLIGHT ABANDON STATE SAVE FAILED ack_id={ack_id}",
+                    "ERROR",
+                    iface,
+                    "MASTER",
+                )
+                return state, False
+            log(
+                f"{operation} INFLIGHT ABANDONED ack_id={ack_id} reason=STUCK_TIMEOUT_EXCEEDED "
+                "next_cycle_will_start_fresh=1",
+                "WARN",
+                iface,
+                "MASTER",
+            )
+            return state, False
         if not transaction.get("t2_peer_send_ms"):
             transaction["t2_peer_send_ms"] = int(time.time() * 1000)
             if not save_db_state(peer, iface, state):
