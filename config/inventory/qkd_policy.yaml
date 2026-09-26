@@ -10,9 +10,6 @@ qkd_policy:
   # Never advance the keyring by deleting pending software state without
   # bilateral MKA confirmation of the active key.
   pending_auto_evict_enabled: false
-  # Deliver batches through the Junos JSSH op-script RPC. The legacy queue
-  # mode remains available as an explicit rollback option.
-  peer_transport_mode: rpc
   # Junos event-options cadence. Keep this shorter than the protected
   # active/pending horizon so a delayed invocation cannot exhaust the ring.
   execution_interval_seconds: 60
@@ -46,12 +43,11 @@ qkd_policy:
   adaptive_grace_rounding_seconds: 60
 
   # Peer transport safety controls. RPC uses the timeout as its synchronous
-  # response bound; queue mode also uses it for ACK polling.
+  # response bound.
   peer_enqueue_min_margin_seconds: 60
   # One complete 60-second peer tick plus 90 seconds for lock, remote DEC,
   # commit, and response overhead.
   peer_batch_ack_timeout_seconds: 150
-  peer_batch_ack_poll_interval_seconds: 5
 
   # Independent per-device etsi_user RPC identity rotation. The private key
   # remains on its source router; only its public key is prepared on direct

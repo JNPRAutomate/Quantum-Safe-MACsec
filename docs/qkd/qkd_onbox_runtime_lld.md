@@ -1,448 +1,178 @@
 # QKD On-Box Deployment and Runtime LLD (`artifacts/qkd_onbox.py`)
 
-Version baseline: `ver3.3.2.1`
+Version baseline: `ver3.3.4.1`
 
 ## 1. Document purpose
 
 This low-level design explains:
 
-1. how `artifacts/qkd_onbox.py` is rendered with a per-device `CONFIG` dictionary,
+1. how `artifacts/qkd_onbox.py` is rendered with per-device runtime data,
 2. how that rendered script is deployed on each Junos device,
-3. what each function in `qkd_onbox.py` does and where it fits in the runtime flow.
-
-## 1.1 Suggested filename alternatives
-
-If you later want a more explicit name, these are meaningful alternatives:
-
-- `docs/qkd/qkd_onbox_runtime_lld.md`
-- `docs/qkd_onbox_deploy_and_rotation_lld.md`
-- `docs/qkd_onbox_function_reference.md`
+3. what the live runtime does during local execution and peer RPC,
+4. how the transactional RPC-key rotation fits into the runtime.
 
 ---
 
-## 2. Build-time embedding model (YAML -> CONFIG -> on-box script)
+## 2. Build-time embedding model
 
-## 2.1 Source of truth
-
-The embed pipeline consumes runtime YAML artifacts generated during `qkd_orchestrator.py create`:
+The build pipeline consumes runtime artifacts generated during
+`qkd_orchestrator.py create`:
 
 - `config/runtime/devices.yaml`
+- `config/runtime/topology.yaml`
 - `config/runtime/qkd_policy.yaml`
-- `config/runtime/pki_profile.yaml`
+- `config/runtime/<device>/qkd_onbox_config.json`
+- `config/runtime/<device>/qkd_onbox_inventory.json`
 
-## 2.2 Where the dictionary is built
+`lib/qkd/onbox_builder.py` renders one device-specific `qkd_onbox.py` and two
+JSON files per device.
 
-`lib/qkd/onbox_builder.py`:
-
-- `build_onbox_config(name, device)` builds one device-specific `CONFIG` dictionary.
-- `normalize_onbox_links()` and `normalize_onbox_link()` normalize link records.
-- `resolve_pki_runtime()` resolves PKI fields used by the on-box script.
-
-`CONFIG` includes (key examples):
-
-- identity: `device_name`, `hostname`, `local_sae`
-- KME: `kme_ip`, `kme_port`
-- PKI: `pki_profile`, `ca_cert`, `trust_bundle`
-- policy: `qkd_policy`
-- runtime user/path: `script_user`, `script_dir`, `ssh_key`
-- logging: `log_file`, `log_max_bytes`, `log_backup_count`
-- topology contract: `links`
-
-## 2.3 How embed is performed
-
-`generate_onbox_script()`:
-
-1. reads template `artifacts/qkd_onbox.py`,
-2. replaces `__CONFIG_PLACEHOLDER__` with `CONFIG = { ... }` (pretty-printed),
-3. writes `config/runtime/<device>/qkd_onbox.py`,
-4. sets executable permissions (`0755`).
+At runtime, `qkd_onbox.py` loads both JSON files, merges them in memory, and
+uses the merged `CONFIG` object.
 
 ---
 
-## 3. Deploy model (runtime artifact -> Junos op/event)
+## 3. Deploy model
 
-## 3.1 Deploy entrypoint
+`qkd_orchestrator.py deploy` pushes the rendered script and config to:
 
-`qkd_orchestrator.py` -> `handle_deploy()`:
+- `/var/db/scripts/op/qkd_onbox.py`
+- `/var/db/scripts/event/qkd_onbox.py`
+- `/var/db/scripts/op/qkd_onbox_config.json`
+- `/var/db/scripts/op/qkd_onbox_inventory.json`
+- `/var/db/scripts/op/qkd_policy.yaml`
 
-1. validates runtime artifacts exist,
-2. calls `deploy_onbox(log, devices, artifacts)`,
-3. continues with provisioning/validation.
-
-## 3.2 On-device install behavior
-
-`deploy_onbox()` pushes the rendered script as `SCRIPT_USER` (admin model), then:
-
-- SCP to temporary path (`/var/tmp/qkd_onbox.py`),
-- copies into:
-  - `/var/db/scripts/op/qkd_onbox.py`
-  - `/var/db/scripts/event/qkd_onbox.py`
-- keeps legacy shims:
-  - `/var/db/scripts/op/onbox.py`
-  - `/var/db/scripts/event/onbox.py`
-- for dual-RE, syncs to `re1:` as well.
-
-This ensures op/event execution paths are valid on both REs before synchronized commits.
+Legacy `onbox.py` shims are still installed for compatibility, but the live
+runtime model is the direct `qkd_onbox.py` invocation.
 
 ---
 
-## 4. Runtime execution model inside `qkd_onbox.py`
-
-## 4.1 Modes
+## 4. Runtime execution modes
 
 The script supports:
 
-1. **Master cycle mode** (no action arguments): executes periodic rotation logic.
-2. **Slave install mode** (`action install-key`): peer-side key install and state update.
-3. **Slave status mode** (`action status`): returns state JSON for master consistency checks.
+1. **master cycle mode**: no action arguments; performs local checks, strict
+   sync evaluation, KME work, peer coordination, and state advancement
+2. **status mode**: `action status`; returns the current link state as JSON
+3. **batch install mode**: `action install-key-batch`; peer-side decode and
+   keychain install
+4. **RPC-key prepare mode**: `action prepare-rpc-pubkey`; pre-authorize a
+   candidate peer RPC public key
+5. **RPC-key finalize mode**: `action finalize-rpc-pubkey`; remove the
+   superseded source-tagged RPC public key after activation
 
-## 4.2 Entry dispatch
-
-`main()`:
-
-1. validates model (`MACSEC_MODEL` must be `keychain`),
-2. parses action args via `parse_slave()`,
-3. dispatches to slave handlers if action is present,
-4. otherwise runs master flow with global lock.
-
-`main()` also supports informational flags before runtime checks:
-
-- `--version` / `-V` prints `qkd_onbox.py ver3.3.2.1`;
-- `--help` / `-h` prints action usage.
-
----
-## 5. Function-level reference
-
-## 5.1 Logging and observability
-
-- `rotate_log()`: rotates primary log file by size/count.
-- `log(msg, level, iface, mode)`: unified logger (global + per-interface logs).
-- `customer_event(event, iface, mode, **fields)`: structured timeline events for customer/debug visibility.
-- `now_ms()`, `elapsed_ms()`: millisecond timing helpers.
-
-## 5.2 Link normalization and lookup
-
-- `stable_ca_name(link)`: deterministic CA name fallback.
-- `stable_keychain_name(link)`: deterministic keychain name fallback.
-- `link_id(link)`: stable link identifier for logging/errors.
-- `validate_link_runtime(link, require_peer_transport=False)`: validates required embedded fields.
-- `managed_links()`: returns usable link records (`macsec != false` + validation).
-- `link_by_interface(iface)`: resolves one embedded link by local interface.
-
-## 5.3 Start-time and scheduling helpers
-
-- `epoch_from_junos_start_time(start_time)`: Junos `YYYY-MM-DD.HH:MM` -> epoch.
-- `pending_seconds_until(start_time)`: seconds until scheduled activation.
-- `rotation_id_for(iface, generation, key_id=None)`: deterministic rotation correlation ID.
-- `next_generation(state)`: generation increment.
-- `ceil_epoch_to_next_minute(epoch_seconds)`: rounds start to next minute boundary.
-- `link_stagger_minutes(link)`: deterministic per-link stagger to avoid synchronized rotations.
-- `junos_start_time_from_epoch(epoch_seconds)`: epoch -> Junos start-time string.
-- `start_time_is_future(start_time, grace_seconds=0)`: future schedule gate.
-- `start_time_is_due(start_time, grace_seconds=0)`: due/activation gate.
-- `scheduled_key_start_time(link)`: full schedule computation from base delay + stagger.
-
-## 5.4 State persistence and policy access
-
-- `db_state_file(peer, iface)`: per-link state path under `/var/tmp`.
-- `qkd_policy()`, `rekey_enabled()`: runtime policy readers.
-- `max_installed_keys()`, `key_batch_size()`: policy-bounded key limits.
-- `qkd_key_index_from_generation(generation)`, `qkd_key_index_from_time()`: key index mapping.
-- `default_keychain_state(link)`: initial state object.
-- `ensure_health_state(state)`: ensures health subtree fields.
-- `load_link_state(peer, iface, link)`: loads/merges persisted state.
-- `save_db_state(peer, iface, state)`: atomic save + state log.
-- `keychain_state_valid(state)`: validity gate.
-- `compare_peer_keychain_state(local_state, peer_state)`: strict peer/local parity check.
-
-## 5.5 Locking
-
-- `lock_file()`, `acquire_lock()`, `release_lock()`: global master cycle lock.
-- `action_lock_file(iface, action)`, `acquire_action_lock(iface, action)`, `release_action_lock(iface, action)`: per-interface action lock for slave commands.
-
-## 5.6 KME health/degradation control
-
-- `record_kme_failure(peer, iface, state, reason)`: increments failure counters and persists.
-- `clear_kme_failure(peer, iface, state)`: clears degraded/down markers after recovery.
-- `kme_hold_expired(state, hold_seconds)`: checks prolonged KME outage.
-- `link_in_kme_hold(state, fail_threshold, hold_seconds)`: hold-down gate before declaring down.
-- `rotation_too_soon(state, min_interval=50)`: anti-flap rotation interval guard.
-
-## 5.7 Junos operational/config checks
-
-- `junos_output_has_error(stdout, stderr)`: hard error marker detection.
-- `get_configured_active_ca(iface)`: reads configured CA on interface.
-- `macsec_has_inuse_sa(iface, expected_ca=None)`: checks operational in-use SA.
-- `wait_for_macsec_inuse(iface, expected_ca, grace_seconds)`: bounded wait loop.
-- `verify_local_config_state(link, state)`: configured CA must match expected state.
-
-## 5.8 MKA parsing and confirmation
-
-- `normalize_hex_string(value)`: canonical comparison form.
-- `get_mka_session_block_for_iface(iface)`: extracts interface block from MKA output.
-- `parse_mka_session_fields(mka_block)`: parses state/CAK/SAK fields.
-- `mka_session_secured(mka_fields)`: secured + non-suspended gate.
-- `mka_confirms_key(iface, key_id, generation=None)`: verifies MKA confirms expected CKN.
-- `promote_pending_key_if_mka_confirmed(peer, iface, state)`: pending -> active promotion.
-
-## 5.9 Key install and interface binding
-
-- `ckn_from_key_id(key_id)`: CKN derivation (`sha256(key_id)`).
-- `install_keychain_key(...)`: decodes key material, writes keychain/CA config, commits, rollback on failure.
-- `bind_interface_to_stable_ca(iface, ca_name, keychain_name=None)`: binds interface to target CA and verifies.
-- `macsec_down(iface)`: fail-safe delete of MACsec interface config after prolonged outage.
-
-## 5.10 KME API operations
-
-- `kme_url(peer_sae, endpoint, query)`: ETSI endpoint URL composer.
-- `do_enc(peer_sae)`: master-side `enc_keys` request, returns `(key_id, key_b64)`.
-- `do_dec(peer_sae, key_id)`: slave-side `dec_keys` request with retries, returns `key_b64`.
-
-## 5.11 SSH peer orchestration
-
-- `runtime_user()`: local runtime username.
-- `validate_ssh_runtime_for_master()`: ensures SSH key exists/readable.
-- `send_command(link, action, iface, key_id=None, generation=None, start_time=None)`: master -> peer `op qkd_onbox.py action ...`.
-- `get_peer_status(link, iface)`: master queries the peer directly through the
-  JSSH `action status` RPC as `SCRIPT_USER` and rejects transport failures,
-  nonzero exits, and malformed JSON.
-- `refresh_peer_status_snapshots()`: refreshes every managed-link snapshot on
-  each periodic script tick, after inbound batch processing and before the
-  master cycle, so an idle peer remains observable without a live SSH query.
-
-## 5.12 Slave action parsing/handlers
-
-- `parse_slave()`: parses CLI args (`action`, `iface`, `key-id`, `generation`, `start-time`).
-- `_handle_info_flags()`: handles `--version` and `--help` output.
-- `run_slave_install_key(key_id, iface, generation=None, start_time=None)`: slave full install path.
-- `run_slave_status(iface)`: outputs current state JSON (with opportunistic promotion).
-
-The status payload now includes `script_version` for runtime traceability
-across peers and snapshots.
-
-## 5.13 Bootstrap and master cycle
-
-- `bootstrap_keychain_link(link, force=False)`: controlled re-bootstrap when state/config/peer parity is invalid.
-- `run_master()`: full master decision engine:
-  - promote pending if confirmed,
-  - enforce hold-down and health gates,
-  - skip the link cycle when no fresh, valid peer state is available,
-  - verify local and peer state parity,
-  - rotate keys when due,
-  - coordinate peer install and local install,
-  - persist state and emit audit events.
-- `main()`: top-level dispatcher and lock orchestration.
+`main()` also supports `--version` and `--help`.
 
 ---
 
-## 6. Master rotation sequence (LLD)
+## 5. Current runtime transport model
 
-For each master link in `run_master()`:
+### 5.1 One runtime user
 
-1. load state and attempt pending promotion via MKA,
-2. if invalid state/config/peer parity -> `bootstrap_keychain_link()`,
-3. enforce KME hold-down and MACsec operational checks,
-4. compute generation + scheduled start-time,
-5. fetch ENC key (`do_enc()`),
-6. ask peer to install (`send_command(... action install-key ...)`),
-7. install locally (`install_keychain_key()`),
-8. bind/verify CA + wait operationally if key is due now,
-9. mark state pending and save,
-10. verify post-rotation peer parity,
-11. emit `KEYCHAIN ROTATION DONE`.
+The live system uses `etsi_user` for:
 
-For a running batch, all four ENC keys are fetched before their start-times are
-assigned. Key 0 is then scheduled at `now + batch_activation_margin_seconds`
-(480 seconds by policy and never less than the peer ACK timeout plus 30
-seconds); later keys remain spaced by `interval_seconds`. The queue enqueue
-margin guard remains enabled.
+- local runtime execution
+- peer status RPC
+- peer key-batch install RPC
+- RPC public-key prepare/finalize operations
 
----
+### 5.2 Direct SSH RPC only
 
-## 6.1 Batch timing semantics and pending-state model
+Router-to-router coordination uses direct SSH RPC only:
 
-This is the part that is easiest to misunderstand, so it is documented explicitly.
+```text
+ssh -i /var/home/etsi_user/.ssh/qkd_rpc_id_ed25519 \
+  -o IdentitiesOnly=yes \
+  etsi_user@<peer-ip> \
+  "op qkd_onbox.py action <action> ..."
+```
 
-### What a batch means
+There is no secondary transport account and no file-based batch-delivery path.
+The remote op-script exit status is the synchronous acknowledgement.
 
-When `qkd_onbox.py` runs in batch mode, the master does **not** ask the KME for one key and then let the key-chain rotate by itself.
+### 5.3 Key actions used over RPC
 
-Instead, the master:
-
-1. requests one ENC key per batch slot,
-2. installs all returned keys into the Junos authentication key-chain,
-3. assigns a scheduled `start-time` to each key,
-4. persists the head of that queue as the current `pending_key_id`.
-
-The key-chain stores the keys, but it does not decide when to fetch more keys from the KME. That is still the job of `qkd_onbox.py`.
-
-### Important distinction: batch size vs. interval
-
-These two values are related, but they are not the same thing:
-
-- `key_batch_size` = how many future keys are fetched and preloaded in one batch
-- `interval_seconds` = the spacing between successive keys inside that batch
-
-So if you configure:
-
-- `key_batch_size = 5`
-- `interval_seconds = 60`
-
-then the runtime does **not** mean “five keys every 12 seconds”.
-
-It means:
-
-- one batch contains 5 future keys,
-- key 0 starts at the base scheduled time,
-- key 1 starts 60 seconds later,
-- key 2 starts 120 seconds later,
-- key 3 starts 180 seconds later,
-- key 4 starts 240 seconds later.
-
-In other words, the total preloaded horizon of the batch is approximately:
-
-$$
-(key\_batch\_size - 1) \times interval\_seconds
-$$
-
-If you want a new key to become eligible every 30 seconds, set `interval_seconds = 30`.
-Do **not** divide 60 by the batch size unless you explicitly want a shorter spacing.
-
-### What `pending_key_id` and `next_start_time` are for
-
-The runtime keeps explicit pending state because Junos key-chain storage alone is not enough to coordinate safe rotation.
-
-`pending_key_id` and `next_start_time` exist so `qkd_onbox.py` can answer two separate questions:
-
-1. Is there already a future key queued for this link?
-2. Is that key due yet, or should the master skip fetching another batch?
-
-This prevents the master from requesting new ENC keys too early and keeps the active/pending timeline stable across both routers.
-
-### What actually promotes a key
-
-Promotion is not done by the key-chain by itself.
-
-The runtime promotes a pending key only when both of these are true:
-
-1. the scheduled `start-time` has arrived,
-2. MKA confirms that the key is the one currently in use.
-
-When that happens, `promote_pending_key_if_mka_confirmed()` moves the head of the pending queue into `active_key_id`.
-
-#### Reconciliation fallback for router-autonomous advancement
-
-In some scenarios, the router autonomously activates a key at its scheduled time even if MKA confirmation (CKN match) has not yet arrived. This can occur when:
-
-- MKA CKN derivation is temporarily delayed or transient mismatch occurs,
-- peer MKA state differs momentarily,
-- or network conditions introduce CKN confirmation latency.
-
-To prevent deadlock (where the script waits forever for MKA confirmation on a key the router has already activated), `promote_pending_key_if_mka_confirmed()` includes a **reconciliation fallback**:
-
-1. If standard MKA CKN confirmation fails (no match found in pending queue),
-2. the runtime checks whether the router's active CAK name matches any pending key's expected CKN,
-3. if a match is found and the key's start-time has passed (not scheduled for the future),
-4. the runtime promotes that pending key directly and logs `RECONCILIATION FALLBACK` with reason `router_autonomously_advanced`.
-
-This allows intermediate keys in a batch to advance even if MKA CKN confirmation lags. For a 4-key batch with `interval_seconds=120`:
-
-- key[0] at 11:14:02 → activates, confirmed via MKA CKN match,
-- key[1] at 11:16:02 → router activates, MKA confirmation delayed → reconciliation fallback promotes,
-- key[2] at 11:18:02 → reconciliation fallback promotes,
-- key[3] at 11:20:02 → reconciliation fallback promotes.
-- Once key[3] is active and 120s have elapsed, the next batch can be installed atomically.
-
-### Why the key-chain does not “do everything”
-
-JunOS key-chain configuration is only the local container for staged keys.
-It can store future entries and activate them at their programmed `start-time`, but it does not:
-
-- request new keys from the KME,
-- decide when a batch should be replenished,
-- persist peer/master synchronization state,
-- validate MKA confirmation against the runtime policy,
-- or coordinate the next ENC cycle.
-
-That orchestration remains in `qkd_onbox.py`.
-
-### Practical example
-
-If the runtime is configured with:
-
-- `batch_enabled = true`
-- `key_batch_size = 5`
-- `interval_seconds = 60`
-
-then a master cycle can fetch 5 keys in one pass and schedule them as a 5-minute future window.
-
-That means:
-
-- the first key is scheduled at the base start time,
-- the second key is scheduled one minute later,
-- and so on until the fifth key.
-
-When the queued keys are consumed and the head of the queue is confirmed/promoted, the next master cycle can fetch another batch.
+- `status`
+- `install-key-batch`
+- `prepare-rpc-pubkey`
+- `finalize-rpc-pubkey`
 
 ---
 
-## 7. How device YAML content reaches each on-box script
+## 6. Master-cycle summary
 
-## 7.1 Data path
+For each master link, the runtime:
 
-1. inventory YAML (input) -> `build_full_inventory()` -> runtime `devices.yaml`,
-2. `build_onbox_artifacts(runtime_devices)` iterates each managed `mode=qkd` device,
-3. `build_onbox_config()` extracts per-device values (SAE, KME, links, policy, script paths),
-4. `generate_onbox_script()` injects that dictionary into the template placeholder,
-5. deploy step copies this rendered script to each Junos device.
+1. loads local state and attempts pending promotion via MKA evidence
+2. validates local config and fresh peer state
+3. enforces KME hold-down and MACsec operational gates
+4. computes the next transaction window
+5. fetches an ENC batch from the local KME
+6. asks the peer to install the batch via `install-key-batch`
+7. installs the batch locally
+8. persists state and waits for future activation / later MKA confirmation
+9. reconciles local and peer state on subsequent cycles
 
-## 7.2 Result
+Strict-sync logic remains conservative: if peer state is missing or invalid,
+new rotation is blocked rather than forced.
 
-Each router gets its own `qkd_onbox.py` containing a merged runtime `CONFIG` loaded from two separate on-device JSON files:
+---
 
-- `qkd_onbox_config.json`: shared runtime configuration, policy, identity, and paths
-- `qkd_onbox_inventory.json`: per-device inventory and topology data
+## 7. Transactional RPC-key rotation
 
-At runtime, `qkd_onbox.py` loads both files, merges them in memory, and then uses the merged `CONFIG` object for execution.
+The same runtime also rotates the per-router RPC identity
+`qkd_rpc_id_ed25519`.
 
-This is intentional: the files stay physically separate so operators can inspect and manage them independently, even though the runtime script consumes them together.
+Sequence:
+
+1. generate `qkd_rpc_id_ed25519.next`
+2. call `prepare-rpc-pubkey` on every direct peer
+3. verify the candidate key can perform a peer `status` RPC
+4. activate locally
+5. call `finalize-rpc-pubkey` on every direct peer
+
+Expected log lines:
+
+```text
+RPC-KEY-STATE: interval_seconds=...
+RPC-KEY ROTATION START ...
+OK PREPARE-RPC-PUBKEY source_device=...
+OK FINALIZE-RPC-PUBKEY source_device=...
+```
+
+A persisted transaction records the current phase and peer progress so restarts
+resume safely.
 
 ---
 
 ## 8. Operational files created on device
 
-The on-box script uses `STATE_DIR` (default `/var/home/etsi_user`) for all runtime state:
+The on-box script uses `STATE_DIR` (default `/var/home/etsi_user`) for runtime
+state:
 
 - global lock: `{STATE_DIR}/qkd_onbox_<local_sae>.lock`
 - action locks: `{STATE_DIR}/qkd_onbox_<local_sae>_<iface>_<action>.lock`
 - Junos commit lock: `{STATE_DIR}/qkd_junos_commit.lock`
-- state DB: `{STATE_DIR}/qkd_db_<peer>_<iface>.json`
-- peer key state: `{STATE_DIR}/qkd_peer_key_rotation.json`
-- peer known pubkeys: `{STATE_DIR}/qkd_peer_known_pubkeys.json`
-- logs:
-  - primary log file from `CONFIG["log_file"]` (e.g. `/var/home/etsi_user/logs/qkd_debug.log`)
-  - per-interface debug logs (`qkd_debug_<local_sae>_<iface>.log`)
+- per-link state DB: `{STATE_DIR}/qkd_db_<peer>_<iface>.json`
+- peer status export: `{STATE_DIR}/peer_status/qkd_peer_status_<device>_<iface>.json`
+- RPC-key state: `{STATE_DIR}/qkd_rpc_key_rotation.json`
+- RPC-key transaction state: persisted prepare/verify/activate/finalize data
+- logs under `CONFIG["log_file"]` and per-interface debug logs
 
-Queue transport files (when `peer_transport_mode = queue`):
-- peer inbox: `{STATE_DIR}/peer_inbox/qkd_peer_inbox_<device>_<iface>.b64`
-- peer ACK: `{STATE_DIR}/peer_ack/qkd_peer_ack_<device>_<iface>.json`
-- peer status snapshots: `{STATE_DIR}/peer_status/qkd_peer_status_<device>_<iface>.json`
+The retained peer-status export is diagnostic data. The active runtime path
+still prefers live `status` RPC for peer state.
 
 ---
 
-## 9. Design constraints and unsupported modes
+## 9. Design constraints
 
-1. `MACSEC_MODEL` must be `keychain`; otherwise script exits with error.
-2. Legacy double-buffer `program/activate` actions are intentionally unsupported.
-3. Peer coordination depends on SSH transport and peer op-script availability.
-4. All key operations assume ETSI API + mTLS cert paths embedded in `CONFIG`.
-5. SAE identity naming used for cert/path material should remain LDH-safe (`sae-###` preferred, avoid `_` in hostname-like certificate identifiers).
-6. **Runtime user enforcement**: the script rejects execution as root and as any user other than `SCRIPT_USER` (`etsi_user`). This replaces the old `os.access(W_OK)` PERM GUARD which was unreliable on Linux/EVO (root bypasses DAC, returning True even for `r-xr-xr-x` files).
-7. **Global Junos commit lock**: all configuration-committing call sites (`install_keychain_batch`, `bind_interface_to_stable_ca`, `run_slave_install_peer_pubkey`) acquire a device-wide lock before running `cli -c "configure; ...; commit; exit"`. This prevents overlapping configuration sessions on hub devices with multiple managed links.
-8. **Platform differences (MX vs ACX EVO)**: SMACK MAC on EVO means `/var/tmp` is inaccessible to `etsi_peer_view`; mgd rebuilds authorized_keys from Junos config after every commit. See [platform_differences_mx_acx_evo.md](platform_differences_mx_acx_evo.md) for the full reference.
+1. `MACSEC_MODEL` must be `keychain`
+2. the script must run as `etsi_user`, not root
+3. all commit-bearing Junos CLI operations are serialized with a device-wide
+   commit lock
+4. peer coordination depends on SSH reachability and the peer op-script
+5. all KME operations rely on the embedded ETSI API and certificate paths
+6. ACX EVO uses Junos config as the authority for `authorized_keys`
 
-Standards reference for naming constraint context:
-
-- [RFC 5280 section 4.2.1.6](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.6)
-- [RFC 1123 section 2.1](https://www.rfc-editor.org/rfc/rfc1123#section-2.1)
-- [RFC 1035 section 2.3.1](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.1)
+For platform details see
+[platform_differences_mx_acx_evo.md](platform_differences_mx_acx_evo.md).

@@ -73,11 +73,6 @@ QKD = {
     # Inventory may override this, but the default must match the lab baseline.
     "SCRIPT_USER_CLASS": "super-user",
 
-    # Dedicated low-privilege SSH transport identity used by qkd_onbox
-    # for peer status reads and queue batch delivery.
-    "PEER_CMD_USER": "etsi_peer_view",
-    "PEER_CMD_USER_CLASS": "qkd-peer-cmd-class",
-
     # Privileged deploy/cleanup user.
     #
     # Used only by the offbox orchestrator for:
@@ -109,7 +104,6 @@ QKD = {
     "SSH_HOME_BASE": "/var/home",
     "SSH_KEY_NAME": "qkd_id_ed25519",
     "RPC_SSH_KEY_NAME": "qkd_rpc_id_ed25519",
-    "PEER_SSH_KEY_NAME": "qkd_peer_cmd_ed25519",
     "SSH_KEY_TYPE": "ed25519",
     "SSH_KEY_BITS": 4096,
     "SSH_KEY_COMMENT": "qkd-orchestrator-andrea.terren@hpe.com",

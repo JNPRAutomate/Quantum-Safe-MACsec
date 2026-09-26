@@ -1,119 +1,86 @@
-# Two-Node QKD Rotation Model: script_user and peer_cmd_user Split
+# Two-Node QKD Rotation Model: Single Runtime User + Per-Router RPC Identity
 
 ## Scope
 
-This document describes the execution model for a two-router back-to-back link where key rotation runs every 60 seconds and responsibilities are strictly split between:
+This document describes the current two-router execution model for a
+back-to-back link.
 
-- `script_user`: runtime controller for QKD/MACsec logic
-- `peer_cmd_user` (SSH user): restricted destination identity for rotated keys
+The live design no longer splits transport into a second login. Both local
+runtime work and direct peer RPC run under `etsi_user`, while the SSH key
+material is split by purpose:
 
-The objective is to keep `script_user` non-superuser and keep `peer_cmd_user` even more restricted.
+- `qkd_id_ed25519` for orchestrator/bootstrap access
+- `qkd_rpc_id_ed25519` for router-to-router runtime RPC
 
-## Functional Flow (Every 60 Seconds)
+## Functional Flow
 
 For router1 -> router2, per event cycle:
 
 1. `event()` starts the cycle on router1
-2. `enc()` on router1 calls KME1 and receives key identifiers (single key or batch)
-3. `send` invokes the peer Junos op-script over JSSH/RPC with the batch
-4. `dec()` on router2 calls KME2 and resolves each transported key identifier
-5. `op()` logic on router2 installs keys in keychain with activation start-time
+2. `enc()` on router1 calls KME1 and receives a batch of key identifiers
+3. router1 invokes the peer op script over direct SSH RPC
+4. router2 runs `dec()` and installs the batch locally
+5. both sides advance state only after synchronous success and later MKA
+   confirmation
 
-This repeats every 60 seconds.
+## Runtime responsibilities of `etsi_user`
 
-## Batch Behavior
+`etsi_user` owns all runtime responsibilities:
 
-Instead of transporting only one `key-id X`, router1 can transport an array of key identifiers in one operation (example: 5 entries).
+- master cycle trigger
+- KME `enc()` and `dec()` calls
+- local state machine and scheduling
+- peer `status` RPC
+- peer `install-key-batch` RPC
+- local keychain installation and interface binding
+- local RPC public-key prepare/finalize actions
 
-- The full batch is sent together in step 3.
-- Router2 consumes one key at a time according to scheduled start-times.
-- The active/pending state machine keeps ordering and convergence.
+## RPC transport model
 
-## Responsibility Split
+Router-to-router coordination is direct and synchronous:
 
-### script_user (non-superuser runtime identity)
+1. **Status RPC**
+   - router1 invokes `op qkd_onbox.py action status ...` on router2
+   - returned JSON is used immediately for strict-sync decisions
 
-`script_user` owns and executes only runtime responsibilities:
+2. **Batch delivery RPC**
+   - router1 invokes `op qkd_onbox.py action install-key-batch ...`
+   - remote op-script exit status is the immediate acknowledgement
 
-- Master cycle trigger (`event()`)
-- `enc()` calls to local KME
-- Local state machine and scheduling
-- Slave-side `dec()`
-- Slave-side keychain installation (`op()` behavior)
+3. **RPC-key authorization rotation**
+   - router1 invokes `prepare-rpc-pubkey` on each direct peer
+   - router1 verifies the candidate key against each peer
+   - router1 activates locally only after every prepare/verify succeeds
+   - router1 invokes `finalize-rpc-pubkey` on each direct peer
 
-`script_user` is not intended for router configuration shell/admin tasks outside QKD runtime scope.
+## Runtime artifacts
 
-### peer_cmd_user (least-privilege destination identity)
+Default runtime paths under `/var/home/etsi_user`:
 
-`peer_cmd_user` remains a Junos login identity without a Unix shell.
+- state DB: `qkd_db_<peer>_<iface>.json`
+- peer status export: `peer_status/qkd_peer_status_<device>_<iface>.json`
+- RPC key state: `qkd_rpc_key_rotation.json`
+- RPC transaction state: persisted transaction metadata for prepare/verify/
+  activate/finalize recovery
 
-- No remote `op qkd_onbox.py action install-key...` execution
-- No configuration commands
-- No KME operations
-- Its authorized public keys are updated by the explicitly authorized
-  `install-peer-pubkey` op-script RPC.
+## Configuration knobs
 
-## Implementation in qkd_onbox.py
+- `qkd_policy.execution_interval_seconds`
+- `qkd_policy.key_activation_interval_seconds`
+- `qkd_policy.key_batch_size`
+- `qkd_policy.strict_sync_enabled`
+- `qkd_policy.rpc_key_rotation_interval_seconds`
+- `qkd_policy.peer_batch_ack_timeout_seconds`
 
-The runtime now supports this split as follows:
+## Why this prevents stalls
 
-1. **JSSH/RPC peer status**
-   - Router1 invokes `op qkd_onbox.py action status ...` as `script_user`.
-   - The returned JSON is used directly; no SCP snapshot transfer or
-     `peer_cmd_user` fallback is attempted.
+The transport path now has one source of truth:
 
-2. **JSSH/RPC batch delivery**
-   - In `rpc` mode, router1 invokes
-     `op qkd_onbox.py action install-key-batch ...` as `script_user`.
-   - The remote op-script exit status is the synchronous acknowledgement.
-   - Batch upload requires no `scp -t`, SFTP subsystem, or Unix shell account.
+- one runtime user
+- one direct RPC channel
+- one synchronous acknowledgement model
+- one transactional per-router RPC identity rotation flow
 
-3. **Slave execution by script_user**
-   - JSSH dispatches the op-script directly under the configured Junos
-     `script_user`.
-   - `run_slave_install_key_batch(...)`, `dec()`, and keychain installation
-     remain under `script_user`.
-
-4. **Retry safety**
-   - A nonzero op-script exit status or RPC timeout leaves the master inflight
-     transaction available for a bounded retry.
-   - A successful response finalizes the bilateral transaction immediately.
-
-## Runtime Artifacts
-
-Default runtime paths (derived from `state_dir`):
-
-- State DB: `qkd_db_<peer>_<iface>.json`
-- Peer status snapshot: `peer_status/qkd_peer_status_<device>_<iface>.json`
-- Peer inbox payload: `peer_inbox/qkd_peer_inbox_<device>_<iface>.b64`
-
-These are designed for runtime-only ownership by `script_user` and read/write transport usage by `peer_cmd_user` where needed.
-
-## Configuration Knobs
-
-- `qkd_policy.interval_seconds`: effective rotation cadence
-- `min_rotation_interval` fallback default: 60
-- `qkd_policy.key_batch_size`: batch size (example 5)
-- `peer_transport_mode`: `rpc`
-
-## Why This Prevents Stalls
-
-The historical stall pattern came from mixing transport and remote execution identities.
-
-With this split:
-
-- step 3 uses the existing narrowly scoped `op qkd_onbox.py` privilege
-- steps 4 and 5 execute under `script_user`
-- `peer_cmd_user` is not converted into a Unix shell/SCP account
-- transport failures are explicit RPC failures and remain retriable
-
-Peer status retrieval uses only the JSSH `action status` RPC as `script_user`.
-The legacy snapshot files may still be produced locally while queue rollback
-exists, but the master no longer transfers or reads them through SCP.
-
-The `peer_cmd_user` login class permits only `exit` and uses one combined
-`deny-commands` expression for `show`, `configure`, `op`, `request`, `file`,
-and `start shell`. Keeping these restrictions in one Junos leaf avoids relying
-on how repeated `deny-commands` assignments are merged or replaced.
-
-This keeps the control plane deterministic and easier to debug from logs every 60-second cycle.
+That removes the previous class of failures caused by maintaining a second
+login, a second transport path, and a second persistence surface for batch
+acknowledgement.

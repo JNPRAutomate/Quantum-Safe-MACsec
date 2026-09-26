@@ -195,8 +195,11 @@ def clean_device(name, device, full_macsec=False):
         secrets = device.get("secrets") or {}
         script_user = str(device.get("script_user") or secrets.get("script_user") or QKD.get("SCRIPT_USER") or "etsi_user")
         script_user_class = str(secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS") or "")
-        peer_cmd_user = str(device.get("peer_cmd_user") or secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER") or "etsi_peer_view")
-        peer_cmd_user_class = str(secrets.get("peer_cmd_user_class") or QKD.get("PEER_CMD_USER_CLASS") or "qkd-peer-cmd-class")
+        # Legacy identity from the pre-Phase-3 peer transport queue design.
+        # No longer provisioned on new deploys, but still cleaned up here so
+        # `clean` can fully wipe devices bootstrapped under the old scheme.
+        peer_cmd_user = str(device.get("peer_cmd_user") or secrets.get("peer_cmd_user") or "etsi_peer_view")
+        peer_cmd_user_class = str(secrets.get("peer_cmd_user_class") or "qkd-peer-cmd-class")
         script_dir = QKD.get("SCRIPT_DIR", "/var/db/scripts")
         op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
         event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")

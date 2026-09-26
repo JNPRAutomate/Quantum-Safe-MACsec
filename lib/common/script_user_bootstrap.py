@@ -74,9 +74,7 @@ except Exception:  # pragma: no cover
     QKD = {
         "SCRIPT_USER": "etsi_user",
         "SCRIPT_USER_CLASS": "super-user",
-        "PEER_CMD_USER": "etsi_peer_view",
         "SSH_KEY_NAME": "qkd_id_ed25519",
-        "PEER_SSH_KEY_NAME": "qkd_peer_cmd_ed25519",
         "DEPLOY_USER": "root",
     }
 
@@ -164,32 +162,6 @@ def get_script_user_class(inventory_base: Dict[str, Any], override: Optional[str
         or secrets.get("script_user_class")
         or QKD.get("SCRIPT_USER_CLASS")
         or "super-user"
-    )
-
-
-def get_peer_cmd_user(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
-    if override:
-        return override
-
-    secrets = _secrets_block(inventory_base)
-    return str(
-        os.getenv("QKD_PEER_CMD_USER")
-        or secrets.get("peer_cmd_user")
-        or QKD.get("PEER_CMD_USER")
-        or get_script_user(inventory_base)
-    )
-
-
-def get_peer_cmd_user_class(inventory_base: Dict[str, Any], override: Optional[str] = None) -> str:
-    if override:
-        return override
-
-    secrets = _secrets_block(inventory_base)
-    return str(
-        os.getenv("QKD_PEER_CMD_USER_CLASS")
-        or secrets.get("peer_cmd_user_class")
-        or QKD.get("PEER_CMD_USER_CLASS")
-        or "qkd-peer-cmd-class"
     )
 
 
@@ -290,14 +262,6 @@ def ensure_local_script_user_keypair(script_user: str) -> Tuple[str, str]:
     )
 
 
-def ensure_local_peer_cmd_user_keypair(peer_cmd_user: str) -> Tuple[str, str]:
-    return ensure_local_user_keypair(
-        peer_cmd_user,
-        str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
-        "qkd-peer-bootstrap",
-    )
-
-
 def mirror_local_user_keypair_to_ssh(local_private_key: str, destination_prefix: str) -> str:
     ssh_dir = Path.home() / ".ssh"
     ssh_dir.mkdir(parents=True, exist_ok=True)
@@ -343,17 +307,6 @@ def mirror_local_script_user_keypair_to_ssh(
     return mirror_local_user_keypair_to_ssh(
         source_private_key,
         "qkd_%s_%s" % (script_user, key_name),
-    )
-
-
-def mirror_local_peer_cmd_user_keypair_to_ssh(
-    peer_cmd_user: str,
-    source_private_key: str,
-) -> str:
-    key_name = str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519"))
-    return mirror_local_user_keypair_to_ssh(
-        source_private_key,
-        "qkd_%s_%s" % (peer_cmd_user, key_name),
     )
 
 
@@ -688,54 +641,6 @@ def build_script_user_class_commands(script_user_class: str) -> List[str]:
     ]
 
 
-def build_peer_cmd_class_commands(peer_cmd_user_class: str) -> List[str]:
-    return [
-        "set system login class %s allow-commands \"exit\"" % peer_cmd_user_class,
-        (
-            "set system login class %s deny-commands "
-            "\"(show|configure|op|request|file)( .*)?|start shell( .*)?\""
-        ) % peer_cmd_user_class,
-    ]
-
-
-def build_peer_cmd_set_commands(
-    peer_cmd_user: str,
-    peer_cmd_user_class: str,
-    public_key_line: Optional[str] = None,
-) -> List[str]:
-    commands = [
-        "set system login user %s class %s" % (peer_cmd_user, peer_cmd_user_class),
-    ]
-
-    if public_key_line:
-        parts = public_key_line.strip().split()
-        if len(parts) >= 2:
-            key_type = parts[0]
-            key_payload = public_key_line.replace('"', '\\"')
-            commands.append(
-                "set system login user %s authentication %s \"%s\""
-                % (peer_cmd_user, key_type, key_payload)
-            )
-
-    return commands
-
-
-def rewrite_public_key_comment(public_key_line: str, new_comment: str) -> str:
-    """Replace the comment (last field) of a public key line with a new comment.
-    
-    Example:
-        rewrite_public_key_comment(
-            "ssh-ed25519 AAAAC3... old_comment",
-            "etsi_peer_view@MX1"
-        ) -> "ssh-ed25519 AAAAC3... etsi_peer_view@MX1"
-    """
-    parts = public_key_line.strip().split()
-    if len(parts) < 2:
-        return public_key_line
-    # Keep type + key blob, replace the comment (last field)
-    return f"{parts[0]} {parts[1]} {new_comment}"
-
-
 def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = None) -> str:
     home = "/var/home/%s" % script_user
     ssh_dir = "%s/.ssh" % home
@@ -1036,21 +941,6 @@ def sync_script_user_keypair_from_local(
     )
 
 
-def sync_peer_transport_keypair_from_local(
-    dev: Device,
-    name: str,
-    script_user: str,
-    local_private_key_path: str,
-) -> bool:
-    return sync_user_keypair_from_local(
-        dev,
-        name,
-        script_user,
-        local_private_key_path,
-        str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Junos bootstrap
 # ---------------------------------------------------------------------------
@@ -1063,14 +953,10 @@ def bootstrap_script_user_on_device(
     deploy_password: Optional[str],
     script_user: str,
     script_user_class: str,
-    peer_cmd_user: str,
-    peer_cmd_user_class: str,
     script_password: Optional[str],
     local_private_key_path: Optional[str] = None,
-    peer_local_private_key_path: Optional[str] = None,
     script_auth_mode: str = "password",
     public_key_line: Optional[str] = None,
-    peer_public_key_line: Optional[str] = None,
     port: int = 22,
     dry_run: bool = False,
     verbose: int = 0,
@@ -1080,22 +966,18 @@ def bootstrap_script_user_on_device(
         raise ValueError("Device %s has no ip/mgmt_ip" % name)
 
     print("[%s] bootstrap SCRIPT_USER %s class=%s via deploy user %s@%s" % (name, script_user, script_user_class, deploy_user, host))
-    print("[%s] bootstrap PEER_CMD_USER %s class=%s" % (name, peer_cmd_user, peer_cmd_user_class))
 
     if dry_run:
         print("[%s] DRY-RUN check if SCRIPT_USER exists" % name)
         print("[%s] DRY-RUN create user only if missing" % name)
         print("[%s] DRY-RUN ensure SCRIPT_USER class %s" % (name, script_user_class))
-        print("[%s] DRY-RUN ensure PEER_CMD_USER class %s" % (name, peer_cmd_user_class))
         if script_auth_mode == "key-only":
             print("[%s] DRY-RUN configure SCRIPT_USER key-only authentication" % name)
         print("[%s] DRY-RUN fix /var/home/%s/.ssh ownership and permissions" % (name, script_user))
-        
-        # If verbose, show the actual config that would be applied
+
         if verbose:
             commands = []
             commands.extend(build_script_user_class_commands(script_user_class))
-            commands.extend(build_peer_cmd_class_commands(peer_cmd_user_class))
             commands.extend(build_set_commands(
                 script_user,
                 script_user_class,
@@ -1105,17 +987,11 @@ def bootstrap_script_user_on_device(
                 public_key_line=public_key_line,
                 remove_encrypted_password=False,
             ))
-            if peer_public_key_line and script_auth_mode == "key-only":
-                peer_key_for_display = rewrite_public_key_comment(
-                    peer_public_key_line,
-                    f"{peer_cmd_user}@{name}"
-                )
-                commands.extend(build_peer_cmd_set_commands(peer_cmd_user, peer_cmd_user_class, peer_key_for_display))
-            
+
             print("[%s] candidate diff (DRY-RUN):" % name)
             for cmd in commands:
                 print(cmd)
-        
+
         return True
 
     dev = Device(
@@ -1152,7 +1028,6 @@ def bootstrap_script_user_on_device(
 
         commands = []
         commands.extend(build_script_user_class_commands(script_user_class))
-        commands.extend(build_peer_cmd_class_commands(peer_cmd_user_class))
         commands.extend(build_set_commands(
             script_user,
             script_user_class,
@@ -1162,36 +1037,13 @@ def bootstrap_script_user_on_device(
             public_key_line=public_key_line,
             remove_encrypted_password=remove_encrypted_password,
         ))
-        
-        # Rewrite peer transport key comment to device-specific identifier
-        # so runtime rotation can properly track and expire old keys.
-        # Example: "ssh-ed25519 AAAAC... etsi_peer_view@qkd-peer-bootstrap"
-        #       -> "ssh-ed25519 AAAAC... etsi_peer_view@MX1"
-        peer_key_for_config = peer_public_key_line
-        if peer_key_for_config and script_auth_mode == "key-only":
-            peer_key_for_config = rewrite_public_key_comment(
-                peer_key_for_config,
-                f"{peer_cmd_user}@{name}"
-            )
-        
-        commands.extend(
-            build_peer_cmd_set_commands(
-                peer_cmd_user,
-                peer_cmd_user_class,
-                public_key_line=peer_key_for_config if script_auth_mode == "key-only" else None,
-            )
-        )
 
         cu = Config(dev, mode="private")
         try:
-            # Start from active config in this private session to avoid
-            # unrelated stale candidate fragments blocking user bootstrap.
             cu.rollback(rb_id=0)
         except Exception:
             pass
 
-        # Bootstrap is intentionally idempotent: first run may delete statements
-        # that are not present yet, which emits "statement not found" warnings.
         cu.load(
             "\n".join(commands),
             format="set",
@@ -1201,7 +1053,7 @@ def bootstrap_script_user_on_device(
         diff = cu.diff()
 
         if diff:
-            print("[%s] candidate diff:\n%s" % (name, diff))
+            print("[%s] candidate diff:\\n%s" % (name, diff))
             cu.commit(
                 comment="QKD bootstrap SCRIPT_USER %s" % script_user,
                 sync=True,
@@ -1226,17 +1078,10 @@ def bootstrap_script_user_on_device(
                 name
             )
             print(
-                "[%s] hint: predeploy/provisioning will continue with runtime checks and config-based peer SSH auth" %
+                "[%s] hint: predeploy/provisioning will continue with runtime checks and SCRIPT_USER SSH auth" %
                 name
             )
 
-        # The orchestrator private key remains off-box. Routers receive only
-        # its public key through the Junos login configuration above.
-        # NOTE: Peer transport keys MUST be unique per device for rotation to work correctly
-        # Do NOT sync from local; instead generate unique on-box keys via run_script_user_key_fix
-        # This ensures each device has its own ed25519 keypair for etsi_peer_view
-        # IMPORTANT: DO NOT force_regenerate - bootstrap must be idempotent. Only generate if missing.
-        # Runtime peer key rotation (every ~10min) handles key refresh; bootstrap is seed initialization only.
         if script_auth_mode == "key-only":
             run_script_user_key_fix(
                 dev,
@@ -1245,14 +1090,6 @@ def bootstrap_script_user_on_device(
                 deploy_user,
                 key_name=str(QKD.get("RPC_SSH_KEY_NAME", "qkd_rpc_id_ed25519")),
                 key_comment=f"qkd-rpc@{name}",
-            )
-            run_script_user_key_fix(
-                dev,
-                name,
-                script_user,
-                deploy_user,
-                key_name=str(QKD.get("PEER_SSH_KEY_NAME", "qkd_peer_cmd_ed25519")),
-                key_comment=f"{peer_cmd_user}@{name}",
             )
 
         if not run_shell_fix(dev, name, script_user, deploy_user):
@@ -1315,27 +1152,19 @@ def bootstrap_script_users(
         or QKD.get("RPC_SSH_KEY_NAME")
         or "qkd_rpc_id_ed25519"
     )
-    resolved_peer_cmd_user = get_peer_cmd_user(inventory_base)
-    resolved_peer_cmd_user_class = get_peer_cmd_user_class(inventory_base)
     resolved_script_auth_mode = get_script_user_auth_mode(inventory_base, script_auth_mode)
     if resolved_script_auth_mode == "password":
         resolved_script_password = get_script_password(inventory_base, script_password)
         local_private_key_path = None
         local_public_key_line = None
-        peer_local_private_key_path = None
-        peer_public_key_line = None
         local_ssh_config_path = None
     else:
         resolved_script_password = None
         source_private_key_path, local_public_key_line = ensure_local_script_user_keypair(resolved_script_user)
-        peer_source_private_key_path, peer_public_key_line = ensure_local_peer_cmd_user_keypair(resolved_peer_cmd_user)
         local_private_key_path = mirror_local_script_user_keypair_to_ssh(
             resolved_script_user,
             source_private_key_path,
         )
-        # Keep peer transport key material out of local ~/.ssh by default.
-        # It is only needed as a canonical source for on-device sync.
-        peer_local_private_key_path = peer_source_private_key_path
         local_ssh_config_path = None
         if write_local_ssh_config and not dry_run:
             local_ssh_config_path = write_local_ssh_alias_config(
@@ -1370,8 +1199,6 @@ def bootstrap_script_users(
     print("deploy_user  = %s" % resolved_deploy_user)
     print("script_user  = %s" % resolved_script_user)
     print("script_class = %s" % resolved_script_user_class)
-    print("peer_cmd_user= %s" % resolved_peer_cmd_user)
-    print("peer_cmd_cls = %s" % resolved_peer_cmd_user_class)
     print("auth_mode    = %s" % resolved_script_auth_mode)
     print("dry_run      = %s" % dry_run)
     print("deploy_pwd   = %s" % ("configured/prompted" if resolved_deploy_password else "none"))
@@ -1390,14 +1217,10 @@ def bootstrap_script_users(
             deploy_password=resolved_deploy_password,
             script_user=resolved_script_user,
             script_user_class=resolved_script_user_class,
-            peer_cmd_user=resolved_peer_cmd_user,
-            peer_cmd_user_class=resolved_peer_cmd_user_class,
             script_password=resolved_script_password,
             local_private_key_path=local_private_key_path,
-            peer_local_private_key_path=peer_local_private_key_path,
             script_auth_mode=resolved_script_auth_mode,
             public_key_line=local_public_key_line,
-            peer_public_key_line=peer_public_key_line,
             dry_run=dry_run,
             verbose=verbose,
         )

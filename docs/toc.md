@@ -2,7 +2,7 @@
 
 ## Document Set Scope
 
-This table of contents includes only active documents under docs.
+This table of contents includes only active documents under `docs/`.
 Archive material is in `archive/docs/`.
 
 ## Top-Level
@@ -26,8 +26,9 @@ Archive material is in `archive/docs/`.
 9. [SSH Key Architecture](qkd/ssh_key_architecture.md)
 10. [MACsec Hitless Rolling Keyring — Four Slots](qkd/hitless_rolling_keyring_ver3.3.2.1.md)
 11. [Link Master Role Requirements](qkd/link_master_role_requirements.md)
-12. [Peer SSH Key Rotation — Mesh Trust Design](qkd/peer_key_rotation_mesh_trust.md)
-13. [Release Notes v3.3.2](qkd/release_notes_ver3.3.2.md)
+12. [Two-Node RPC Identity Model](qkd/script_user_peer_ssh_split_two_node.md)
+13. [Strict Sync + Synchronous RPC Acknowledgement LLD](qkd/qkd_onbox_strict_sync_ack_lld.md)
+14. [Release Notes v3.3.2](qkd/release_notes_ver3.3.2.md)
 
 ## KME Ordered Set
 

@@ -11,4 +11,5 @@
 !INCLUDE "ssh_key_architecture.md"
 !INCLUDE "hitless_rolling_keyring_ver3.3.2.1.md"
 !INCLUDE "link_master_role_requirements.md"
-!INCLUDE "peer_key_rotation_mesh_trust.md"
+!INCLUDE "script_user_peer_ssh_split_two_node.md"
+!INCLUDE "qkd_onbox_strict_sync_ack_lld.md"

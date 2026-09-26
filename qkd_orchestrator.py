@@ -44,7 +44,6 @@ from lib.common.config import (
 )
 from lib.common.script_user_bootstrap import (
     bootstrap_script_users,
-    ensure_local_peer_cmd_user_keypair,
     ensure_local_script_user_keypair,
     mirror_local_script_user_keypair_to_ssh,
     write_local_ssh_alias_config,
@@ -332,9 +331,9 @@ def parse_args():
 
     bootstrap = subparsers.add_parser(
         "bootstrap",
-        help="Bootstrap SCRIPT_USER and PEER_CMD_USER on devices",
+        help="Bootstrap SCRIPT_USER on devices",
         description=(
-            "Bootstrap SCRIPT_USER (etsi_user) and PEER_CMD_USER (etsi_peer_view) on managed devices.\n\n"
+            "Bootstrap SCRIPT_USER (etsi_user) on managed devices.\n\n"
             "This includes:\n"
             "  - Creating users with appropriate Junos class and login method\n"
             "  - Generating and syncing SSH public keys\n"
@@ -486,13 +485,10 @@ def run_ssh_cmd(log, name, ip, user, cmds):
 def print_identity_plan():
     print("=== QKD identity plan ===")
     script_user = QKD.get("SCRIPT_USER", "etsi_user")
-    peer_cmd_user = QKD.get("PEER_CMD_USER", script_user)
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
     runtime_home = f"{ssh_home_base}/{script_user}"
     print(f"deploy_user       = {QKD['DEPLOY_USER']}")
     print(f"script_user       = {script_user}")
-    print(f"peer_cmd_user     = {peer_cmd_user}")
-    print("peer_cmd_source   = inventory.devices.<name>.peer_cmd_user | inventory.secrets.peer_cmd_user | QKD.PEER_CMD_USER")
     print(f"script_name       = {ONBOX_SCRIPT_NAME}")
     print(f"remote_op_script  = {QKD['REMOTE_OP_SCRIPT_PATH']}")
     print(f"ssh_home          = {runtime_home}")
@@ -537,7 +533,6 @@ def deploy_onbox(
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
-    resolved_peer_cmd_user = QKD.get("PEER_CMD_USER", resolved_script_user)
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
@@ -704,13 +699,12 @@ def deploy_onbox(
         if sidecar_harden:
             sidecar_harden = sidecar_harden + "; "
 
-        shared_dirs = "/var/tmp/qkd_peer_status /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_ack"
+        shared_dirs = "/var/tmp/qkd_peer_status"
         shared_dir_setup = (
-            f"peer_group=$(id -gn {resolved_peer_cmd_user}); "
             f"mkdir -p {shared_dirs}; "
-            f"chown {resolved_script_user}:\"$peer_group\" {shared_dirs}; "
-            f"chmod 2770 {shared_dirs}; "
-            f"find {shared_dirs} -type f -exec chgrp \"$peer_group\" {{}} \\; "
+            f"chown {resolved_script_user} {shared_dirs}; "
+            f"chmod 750 {shared_dirs}; "
+            f"find {shared_dirs} -type f -exec chown {resolved_script_user} {{}} \\; "
             f"-exec chmod 640 {{}} \\; ; "
         )
 
@@ -1283,7 +1277,7 @@ def handle_bootstrap(args):
     print_step_banner(
         "SCRIPT_USER",
         "START",
-        "Bootstrap etsi_user and etsi_peer_view on all managed devices.",
+        "Bootstrap etsi_user on all managed devices.",
     )
     
     print(f"Bootstrap credentials resolved for user={bootstrap_user}")
@@ -1360,12 +1354,6 @@ def handle_deploy(args):
         or QKD.get("SCRIPT_USER")
         or "etsi_user"
     )
-    peer_cmd_user = (
-        os.getenv("QKD_PEER_CMD_USER")
-        or secrets.get("peer_cmd_user")
-        or QKD.get("PEER_CMD_USER")
-        or script_user
-    )
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
@@ -1432,7 +1420,6 @@ def handle_deploy(args):
         # script_user private key available for direct SSH access.
         try:
             source_private_key_path, _ = ensure_local_script_user_keypair(script_user)
-            ensure_local_peer_cmd_user_keypair(peer_cmd_user)
             local_private_key_path = mirror_local_script_user_keypair_to_ssh(
                 script_user,
                 source_private_key_path,

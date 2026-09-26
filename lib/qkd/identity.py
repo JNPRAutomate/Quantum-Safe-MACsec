@@ -23,15 +23,6 @@ def qkd_script_user():
     return QKD.get("SCRIPT_USER", "etsi_user")
 
 
-def qkd_peer_cmd_user():
-    return QKD.get("PEER_CMD_USER", qkd_script_user())
-
-
-def qkd_peer_cmd_user_for_device(device):
-    device = normalize_device(device)
-    return str(device.get("peer_cmd_user") or qkd_peer_cmd_user())
-
-
 def qkd_deploy_user():
     return QKD.get("DEPLOY_USER", "root")
 
@@ -60,28 +51,8 @@ def qkd_rpc_public_key():
     return f"{qkd_rpc_private_key()}.pub"
 
 
-def qkd_peer_transport_private_key():
-    return f"{qkd_ssh_dir()}/{QKD.get('PEER_SSH_KEY_NAME', 'qkd_peer_cmd_ed25519')}"
-
-
-def qkd_peer_transport_public_key():
-    return f"{qkd_peer_transport_private_key()}.pub"
-
-
 def qkd_authorized_keys():
     return f"{qkd_ssh_dir()}/authorized_keys"
-
-
-def qkd_peer_cmd_ssh_home(peer_cmd_user):
-    return f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{peer_cmd_user}"
-
-
-def qkd_peer_cmd_ssh_dir(peer_cmd_user):
-    return f"{qkd_peer_cmd_ssh_home(peer_cmd_user)}/.ssh"
-
-
-def qkd_peer_cmd_authorized_keys(peer_cmd_user):
-    return f"{qkd_peer_cmd_ssh_dir(peer_cmd_user)}/authorized_keys"
 
 
 def qkd_remote_op_script():
@@ -370,13 +341,10 @@ def check_validation_plan():
     print("=== QKD validation plan ===")
     print(f"deploy_user_fallback = {qkd_deploy_user()}")
     print(f"script_user          = {qkd_script_user()}")
-    print(f"peer_cmd_user        = {qkd_peer_cmd_user()}")
     print(f"ssh_home             = {qkd_ssh_home()}")
     print(f"ssh_dir              = {qkd_ssh_dir()}")
     print(f"ssh_key              = {qkd_ssh_private_key()}")
-    print(f"peer_ssh_key         = {qkd_peer_transport_private_key()}")
     print(f"ssh_pub              = {qkd_ssh_public_key()}")
-    print(f"peer_ssh_pub         = {qkd_peer_transport_public_key()}")
     print(f"authorized_keys      = {qkd_authorized_keys()}")
     print(f"op_script_path       = {qkd_remote_op_script()}")
     print(f"cert_dir             = {qkd_remote_cert_dir()}")
@@ -620,36 +588,6 @@ def check_script_user_authorized_keys(device):
     print(result.stdout)
 
 
-def check_peer_cmd_user_presence(device):
-    device = normalize_device(device)
-    name = device_name(device)
-    peer_cmd_user = qkd_peer_cmd_user_for_device(device)
-    result = ssh_deploy_cmd(device, f"id {peer_cmd_user}", timeout=30, include_failed_marker=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"peer_cmd_user missing on {name}: user={peer_cmd_user}\n"
-            f"stdout={result.stdout}\n"
-            f"stderr={result.stderr}"
-        )
-    print(result.stdout)
-
-
-def check_peer_cmd_authorized_keys(device):
-    device = normalize_device(device)
-    name = device_name(device)
-    peer_cmd_user = qkd_peer_cmd_user_for_device(device)
-    auth_path = qkd_peer_cmd_authorized_keys(peer_cmd_user)
-    cmd = f"ls -l {auth_path}; wc -l {auth_path}"
-    result = ssh_deploy_cmd(device, cmd, timeout=30, include_failed_marker=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"peer_cmd_user authorized_keys missing on {name}: user={peer_cmd_user} path={auth_path}\n"
-            f"stdout={result.stdout}\n"
-            f"stderr={result.stderr}"
-        )
-    print(result.stdout)
-
-
 def check_script_user_can_read_private_key(device):
     device = normalize_device(device)
     name = device_name(device)
@@ -673,64 +611,6 @@ def check_script_user_atomic_write(device):
     if result.returncode != 0:
         raise RuntimeError(f"SCRIPT_USER atomic write failed on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(result.stdout)
-
-
-def collect_script_user_public_keys(devices):
-    devices = normalize_devices(devices)
-    pub_keys = {}
-    pub_path = qkd_ssh_public_key()
-    for device in devices:
-        name = device_name(device)
-        result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
-        if result.returncode != 0:
-            print(
-                f"[WARN] skipping SCRIPT_USER public key on {name}: "
-                f"stdout={result.stdout}\nstderr={result.stderr}"
-            )
-            continue
-        key = None
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
-                key = line
-                break
-        if not key:
-            print(
-                f"[WARN] invalid SCRIPT_USER public key on {name} "
-                f"path={pub_path}\nraw_output={result.stdout}"
-            )
-            continue
-        pub_keys[name] = key
-    return pub_keys
-
-
-def collect_peer_transport_public_keys(devices):
-    devices = normalize_devices(devices)
-    pub_keys = {}
-    pub_path = qkd_peer_transport_public_key()
-    for device in devices:
-        name = device_name(device)
-        result = ssh_deploy_cmd(device, f"cat {pub_path}", timeout=20)
-        if result.returncode != 0:
-            print(
-                f"[WARN] skipping peer transport public key on {name}: "
-                f"stdout={result.stdout}\nstderr={result.stderr}"
-            )
-            continue
-        key = None
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if line.startswith("ssh-rsa ") or line.startswith("ssh-ed25519 ") or line.startswith("ecdsa-sha2-"):
-                key = line
-                break
-        if not key:
-            print(
-                f"[WARN] invalid peer transport public key on {name} "
-                f"path={pub_path}\nraw_output={result.stdout}"
-            )
-            continue
-        pub_keys[name] = key
-    return pub_keys
 
 
 def collect_rpc_public_keys(devices):
@@ -764,197 +644,6 @@ def collect_rpc_public_keys(devices):
             continue
         pub_keys[name] = key
     return pub_keys
-
-
-def install_peer_authorized_keys(devices):
-    devices = normalize_devices(devices)
-    auth_path = qkd_authorized_keys()
-    pub_keys = collect_script_user_public_keys(devices)
-    for device in devices:
-        target = device_name(device)
-        for source_name, pub_key in pub_keys.items():
-            quoted_key = shlex.quote(pub_key)
-            cmd = (
-                f"touch {auth_path}; "
-                f"grep -q -F {quoted_key} {auth_path} || echo {quoted_key} >> {auth_path}; "
-                f"chmod 600 {auth_path}; "
-                f"echo AUTHORIZED_KEY_OK source={source_name} target={target}"
-            )
-            result = ssh_deploy_cmd(device, cmd, timeout=30)
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"failed to install peer authorized key source={source_name} target={target}\n"
-                    f"stdout={result.stdout}\n"
-                    f"stderr={result.stderr}"
-                )
-        print("[OK] peer authorized_keys synchronized")
-
-
-def check_peer_ssh_from_device(device):
-    device = normalize_device(device)
-    name = device_name(device)
-    script_user = qkd_script_user()
-    peer_cmd_user = str(device.get("peer_cmd_user") or qkd_peer_cmd_user())
-    key_path = qkd_peer_transport_private_key()
-    peer_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_TIMEOUT", 10))
-    pyez_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_PYEZ_TIMEOUT", 5))
-    max_timeouts = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE", 0))
-    connect_timeout = int(QKD.get("POSTDEPLOY_PEER_SSH_CONNECT_TIMEOUT", 2))
-    alive_interval = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_INTERVAL", 2))
-    alive_max = int(QKD.get("POSTDEPLOY_PEER_SSH_ALIVE_COUNT_MAX", 1))
-    # Full-link scan by default to avoid missing broken peer trust on non-sampled links.
-    max_peers = int(QKD.get("POSTDEPLOY_PEER_SSH_MAX_PEERS", 0))
-    links = []
-    for link in device.get("links", []):
-        peer_ip = link.get("peer_ip")
-        if not peer_ip:
-            print(f"[WARN] skipping peer SSH check device={name} reason=missing_peer_ip")
-            continue
-
-        peer_name = str(link.get("peer") or link.get("peer_name") or peer_ip)
-        links.append((link, peer_name, peer_ip))
-
-    if not links:
-        return
-
-    if max_peers > 0 and len(links) > max_peers:
-        print(
-            f"[INFO] peer SSH check on {name}: sampling {max_peers}/{len(links)} peers "
-            "(set POSTDEPLOY_PEER_SSH_MAX_PEERS=0 for full scan)"
-        )
-        links = links[:max_peers]
-
-    started = time.perf_counter()
-
-    def probe_peer_ssh(peer_link, peer_name, peer_ip):
-        # Transport-auth probe for peer_cmd_user: simple SSH connection test.
-        # Try both current and previous peer SSH keys to tolerate rotation lag.
-        # Run 'exit' command which is explicitly allowed by the peer login class.
-        
-        # Build list of key paths to try
-        key_paths_to_try = [key_path]
-        prev_key = f"{key_path}.prev"
-        if os.path.exists(prev_key):
-            key_paths_to_try.append(prev_key)
-        
-        # Try each key with -i option
-        key_options = " ".join([f"-i {shlex.quote(kp)}" for kp in key_paths_to_try])
-        
-        cmd = (
-            f"ssh -T {key_options} "
-            f"-o IdentitiesOnly=yes "
-            f"-o StrictHostKeyChecking=no "
-            f"-o UserKnownHostsFile=/var/home/{script_user}/.ssh/known_hosts "
-            f"-o BatchMode=yes "
-            f"-o PasswordAuthentication=no "
-            f"-o ConnectTimeout={connect_timeout} "
-            f"-o ServerAliveInterval={alive_interval} "
-            f"-o ServerAliveCountMax={alive_max} "
-            f"-o LogLevel=ERROR "
-            f"{peer_cmd_user}@{peer_ip} exit"
-        )
-        result = ssh_script_user_onbox_cmd(device, cmd, timeout=pyez_timeout)
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        combined = f"{stdout}\n{stderr}"
-        combined_low = combined.lower()
-        restricted_session_seen = "restricted user session" in combined_low
-
-        if restricted_session_seen and "permission denied" not in combined_low and "authentication failed" not in combined_low:
-            return {"peer_ip": peer_ip, "peer_name": peer_name, "ok": True}
-
-        if result.returncode == 0 and "permission denied" not in combined_low and "authentication failed" not in combined_low:
-            return {"peer_ip": peer_ip, "peer_name": peer_name, "ok": True}
-
-        hard_fail_markers = [
-            "permission denied",
-            "publickey,password",
-            "authentication failed",
-            "no such identity",
-            "bad permissions",
-            "private key",
-        ]
-        if any(m in combined_low for m in hard_fail_markers):
-            return {
-                "peer_ip": peer_ip,
-                "peer_name": peer_name,
-                "warning": True,
-                "reason": "authentication_failed",
-                "stdout": stdout,
-                "stderr": stderr,
-            }
-
-        if "rpctimeouterror" in combined_low or "timeout" in combined_low:
-            return {
-                "peer_ip": peer_ip,
-                "peer_name": peer_name,
-                "timeout": True,
-                "stdout": stdout,
-                "stderr": stderr,
-            }
-
-        return {
-            "peer_ip": peer_ip,
-            "peer_name": peer_name,
-            "warning": True,
-            "reason": "probe_not_confirmed",
-            "stdout": stdout,
-            "stderr": stderr,
-        }
-
-    peer_results = []
-    failures = []
-    with ThreadPoolExecutor(max_workers=postdeploy_worker_limit(len(links))) as executor:
-        futures = {
-            executor.submit(probe_peer_ssh, link, peer_name, peer_ip): (peer_name, peer_ip)
-            for link, peer_name, peer_ip in links
-        }
-        for future in as_completed(futures):
-            peer_name, peer_ip = futures[future]
-            try:
-                peer_results.append(future.result())
-            except Exception as exc:
-                failures.append((peer_name, peer_ip, exc))
-
-    if failures:
-        peer_name, peer_ip, exc = failures[0]
-        raise RuntimeError(f"peer SSH validation failed on {name} peer={peer_name} ({peer_ip})\n{exc}")
-
-    timeout_count = 0
-    for result in peer_results:
-        peer_ip = result["peer_ip"]
-        peer_name = result.get("peer_name", peer_ip)
-        if result.get("ok"):
-            print(f"[OK] peer SSH {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}")
-            continue
-        if result.get("timeout"):
-            timeout_count += 1
-            print(
-                f"[WARN] peer reachability check timed out: {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}; "
-                f"PyEZ timeout={pyez_timeout}s (SSH probe timed out during NETCONF communication)"
-            )
-            print_if_verbose(result.get("stdout", ""))
-            print_if_verbose(result.get("stderr", ""))
-            if max_timeouts > 0 and timeout_count >= max_timeouts:
-                print(
-                    f"[WARN] peer reachability checks on {name}: timeout threshold reached "
-                    f"({timeout_count}/{max_timeouts}); continuing with remaining peers"
-                )
-            continue
-
-        if result.get("warning"):
-            print(
-                f"[WARN] peer SSH check inconclusive: {name} -> {peer_name} ({peer_ip}) as {peer_cmd_user}; "
-                f"reason={result.get('reason', 'unknown')}"
-            )
-            print_if_verbose(result.get("stdout", ""))
-            print_if_verbose(result.get("stderr", ""))
-            continue
-
-        raise RuntimeError(f"unexpected peer SSH result state on {name} peer={peer_name} ({peer_ip}): {result}")
-
-    elapsed = time.perf_counter() - started
-    print(f"[TIMER] peer SSH checks on {name}: {elapsed:.2f}s for {len(links)} peers")
 
 
 # -------------------------------------------------
@@ -1039,13 +728,12 @@ def check_onbox_embedded_config(device):
     name = device_name(device)
     script_user = qkd_script_user()
     expected_key = qkd_ssh_private_key()
-    expected_peer_key = qkd_peer_transport_private_key()
     config_path = qkd_remote_onbox_config_json()
     inventory_path = qkd_remote_onbox_inventory_json()
     cmd = (
         f"test -s {config_path} && test -s {inventory_path}; "
         f"grep -n 'script_user\\|ssh_key' {config_path}; "
-        f"grep -n 'script_user\\|ssh_key\\|peer_ssh_key' {inventory_path}"
+        f"grep -n 'script_user\\|ssh_key' {inventory_path}"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if (
@@ -1054,14 +742,11 @@ def check_onbox_embedded_config(device):
         or script_user not in result.stdout
         or "ssh_key" not in result.stdout
         or expected_key not in result.stdout
-        or "peer_ssh_key" not in result.stdout
-        or expected_peer_key not in result.stdout
     ):
         raise RuntimeError(
             f"qkd_onbox runtime JSON identity mismatch on {name}\n"
             f"expected script_user={script_user}\n"
             f"expected ssh_key={expected_key}\n"
-            f"expected peer_ssh_key={expected_peer_key}\n"
             f"config_json={config_path}\n"
             f"inventory_json={inventory_path}\n"
             f"stdout={result.stdout}\n"
@@ -1312,14 +997,11 @@ def validate_device_identity_predeploy(device):
         return
 
     print(f"=== QKD pre-deploy validation: {name} ===")
-    print(f"peer_cmd_user={qkd_peer_cmd_user_for_device(device)}")
     check_script_user_exists(device)
     check_script_user_home_simple(device)
     check_script_dirs_simple(device)
     check_script_user_ssh_identity(device)
     check_script_user_authorized_keys(device)
-    check_peer_cmd_user_presence(device)
-    check_peer_cmd_authorized_keys(device)
     check_runtime_cleanup_simple(device)
     print(f"[OK] QKD pre-deploy validation passed: {name}")
 
@@ -1350,7 +1032,6 @@ def validate_device_identity_postdeploy(device):
 
         runtime_started = time.perf_counter()
         check_keychain_slot_limit(device)
-        check_peer_ssh_from_device(device)
         check_qkd_status_as_script_user(device)
         check_no_state_save_errors(device)
         print(f"[TIMER] runtime checks on {name}: {time.perf_counter() - runtime_started:.2f}s")
@@ -1374,7 +1055,6 @@ def validate_all_devices_predeploy(devices, raise_on_failure=True):
         print(f"[{index}/{len(devices)}] {name}")
         print(f"  host        : {host}")
         print(f"  script_user : {qkd_script_user()}")
-        print(f"  peer_cmd_user : {qkd_peer_cmd_user_for_device(device)}")
         print("")
         try:
             validate_device_identity_predeploy(device)
@@ -1420,7 +1100,6 @@ def validate_all_devices_postdeploy(devices):
         print(f"[{index}/{len(devices)}] {name}")
         print(f"  host        : {host}")
         print(f"  script_user : {qkd_script_user()}")
-        print(f"  peer_cmd_user : {qkd_peer_cmd_user_for_device(device)}")
         print("")
         try:
             validate_device_identity_postdeploy(device)

@@ -45,7 +45,6 @@ if "--help" in _EARLY_ARGS or "-h" in _EARLY_ARGS:
     print("  op qkd_onbox.py action status iface <iface>")
     print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
     print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
-    print("  op qkd_onbox.py action install-peer-pubkey device <device> pubkey-b64 <payload>")
     print("  op qkd_onbox.py --version")
     raise SystemExit(0)
 import time
@@ -53,7 +52,6 @@ import datetime
 import requests
 import base64
 import re
-import shlex
 import subprocess
 import urllib3
 from pathlib import Path
@@ -61,7 +59,6 @@ import json
 import os
 import hashlib
 import pwd
-import signal
 import shutil
 import stat
 
@@ -79,7 +76,6 @@ def _print_cli_usage():
     print("  op qkd_onbox.py action status iface <iface>")
     print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
     print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
-    print("  op qkd_onbox.py action install-peer-pubkey device <device> pubkey-b64 <payload>")
     print("  op qkd_onbox.py action prepare-rpc-pubkey device <device> pubkey-b64 <payload>")
     print("  op qkd_onbox.py action finalize-rpc-pubkey device <device> pubkey-b64 <payload>")
     print("  op qkd_onbox.py --version")
@@ -124,7 +120,6 @@ def _validate_runtime_contract_or_die(config):
         "script_user",
         "script_dir",
         "ssh_key",
-        "peer_ssh_key",
         "log_file",
         "log_max_bytes",
         "log_backup_count",
@@ -187,12 +182,9 @@ CA_CERT = CONFIG["ca_cert"]
 LINKS = CONFIG.get("links", [])
 
 SCRIPT_USER = CONFIG["script_user"]
-PEER_CMD_USER = str(CONFIG.get("peer_cmd_user", SCRIPT_USER) or SCRIPT_USER)
 SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
 RPC_SSH_KEY = str(CONFIG.get("rpc_ssh_key", SSH_KEY) or SSH_KEY)
-PEER_SSH_KEY = str(CONFIG.get("peer_ssh_key", SSH_KEY) or SSH_KEY)
-SCP_BINARY = str(CONFIG.get("scp_binary", "/usr/bin/scp") or "/usr/bin/scp")
 OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
 
 LOG_FILE = CONFIG["log_file"]
@@ -201,8 +193,6 @@ LOG_BACKUP_COUNT = int(CONFIG["log_backup_count"])
 STATE_DIR = CONFIG.get("state_dir", f"/var/home/{SCRIPT_USER}")
 LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
 PEER_STATUS_DIR = CONFIG.get("peer_status_dir", f"{STATE_DIR}/peer_status")
-PEER_INBOX_DIR = CONFIG.get("peer_inbox_dir", f"{STATE_DIR}/peer_inbox")
-PEER_ACK_DIR = CONFIG.get("peer_ack_dir", f"{STATE_DIR}/peer_ack")
 PIPELINE_TIMING_DIR = CONFIG.get("pipeline_timing_dir", f"{LOG_DIR}/pipeline_timing")
 PIPELINE_TIMING_FILE = CONFIG.get(
     "pipeline_timing_file",
@@ -247,8 +237,6 @@ def ensure_runtime_dirs():
         STATE_DIR,
         LOG_DIR,
         PEER_STATUS_DIR,
-        PEER_INBOX_DIR,
-        PEER_ACK_DIR,
         PIPELINE_TIMING_DIR,
     ):
         try:
@@ -256,10 +244,9 @@ def ensure_runtime_dirs():
         except Exception:
             pass
 
-    # Queue transport uses a different SSH identity than runtime user.
-    # Keep shared exchange directories writable/readable across both users
-    # without granting access to unrelated local users.
-    for shared_dir in (PEER_STATUS_DIR, PEER_INBOX_DIR, PEER_ACK_DIR):
+    # Keep the shared peer-status directory writable/readable across
+    # runtime users without granting access to unrelated local users.
+    for shared_dir in (PEER_STATUS_DIR,):
         try:
             current_mode = stat.S_IMODE(Path(shared_dir).stat().st_mode)
             if current_mode & 0o007 or current_mode & 0o770 != 0o770:
@@ -824,11 +811,6 @@ def db_state_file(peer, iface):
     return f"{STATE_DIR}/qkd_db_{peer}_{iface.replace('/','_')}.json"
 
 
-def peer_key_rotation_state_file():
-    """Path to global peer SSH key rotation state."""
-    return f"{STATE_DIR}/qkd_peer_key_rotation.json"
-
-
 def format_epoch_human(epoch_seconds):
     try:
         value = int(epoch_seconds)
@@ -878,65 +860,6 @@ def format_timing_fields_hhmmss_mmm(value):
     if isinstance(value, list):
         return [format_timing_fields_hhmmss_mmm(item) for item in value]
     return value
-
-
-def load_peer_key_rotation_state():
-    """Load peer SSH key rotation state from disk."""
-    defaults = {
-        "last_rotation_timestamp": 0,
-        "last_rotation_time": "None",
-        "rotation_count": 0,
-    }
-    path = Path(peer_key_rotation_state_file())
-    if not path.exists():
-        return defaults
-    try:
-        raw = json.loads(path.read_text())
-    except Exception:
-        return defaults
-
-    if not isinstance(raw, dict):
-        return defaults
-
-    try:
-        last_rotation = int(raw.get("last_rotation_timestamp", 0))
-    except Exception:
-        last_rotation = 0
-    try:
-        rotation_count = int(raw.get("rotation_count", 0))
-    except Exception:
-        rotation_count = 0
-    if rotation_count < 0:
-        rotation_count = 0
-
-    return {
-        "last_rotation_timestamp": last_rotation,
-        "last_rotation_time": format_epoch_human(last_rotation),
-        "rotation_count": rotation_count,
-    }
-
-
-def save_peer_key_rotation_state(state):
-    """Save peer SSH key rotation state to disk."""
-    state = dict(state or {})
-    try:
-        last_rotation = int(state.get("last_rotation_timestamp", 0))
-    except Exception:
-        last_rotation = 0
-    try:
-        rotation_count = int(state.get("rotation_count", 0))
-    except Exception:
-        rotation_count = 0
-    if rotation_count < 0:
-        rotation_count = 0
-
-    state["last_rotation_timestamp"] = last_rotation
-    state["last_rotation_time"] = format_epoch_human(last_rotation)
-    state["rotation_count"] = rotation_count
-
-    path = Path(peer_key_rotation_state_file())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2))
 
 
 def rpc_key_rotation_state_file():
@@ -1018,243 +941,19 @@ def save_rpc_key_rotation_state(state):
     os.replace(str(tmp), str(path))
 
 
-# ---------------------------------------------------------------------------
-# PEER SSH KEY ROTATION (inlined - lib/ package is NOT deployed to routers,
-# only this single qkd_onbox.py file is shipped, so this logic must be
-# self-contained here rather than imported from lib.qkd.peer_key_rotation)
-#
-# Design notes (see docs/qkd/PEER_KEY_ROTATION.md for full write-up):
-#   - The PEER_CMD_USER (etsi_peer_view) keypair lives under SCRIPT_USER's
-#     home (matches PEER_SSH_KEY / onbox_builder.py "peer_ssh_key" convention)
-#     because SCRIPT_USER (etsi_user) is the OS user this script runs as and
-#     is the only one it has filesystem write permission for.
-#   - Distribution avoids the chicken-and-egg trust problem: the NEW
-#     PEER_CMD_USER public key is pushed to peers over SSH using SCRIPT_USER's
-#     own PERMANENT identity (SSH_KEY), which is the SAME keypair on every
-#     device (see script_user_bootstrap.py sync_script_user_keypair_from_local)
-#     and therefore already mutually trusted - no rotation, no bootstrap gap.
-#   - Each peer installs the received key into ITS OWN Junos config for its
-#     OWN PEER_CMD_USER account (op-script action "install-peer-pubkey"),
-#     running locally as its own SCRIPT_USER (qkd-script-class now allows
-#     "set/delete system login user {peer_cmd_user} authentication ...").
-#   - The local device swaps its own PEER_SSH_KEY files to the new keypair
-#     once at least one peer confirms. Peers that are down or temporarily
-#     unreachable are skipped for that cycle and remain reachable through the
-#     retained `.prev` private key during the grace window.
-# ---------------------------------------------------------------------------
 
-def peer_known_pubkeys_state_file():
-    """Path to local state tracking the last two PEER_CMD_USER public keys we
-    received from each peer: {"current": <key>, "previous": <key-or-None>}.
-
-    We deliberately keep TWO generations of key valid on Junos at once (never
-    delete the just-superseded key in the SAME commit as adding the new one).
-    This closes a race where the peer revokes the source device's old key
-    before the source device itself has finished swapping over to the new
-    one (the source only swaps locally after ALL peers have confirmed, which
-    can take a few seconds while other unrelated SSH/SCP calls - e.g. the
-    MACsec keychain install loop - are still using the old key). Deferring
-    the delete of the truly-obsolete (two-rotations-old) key to the NEXT
-    rotation cycle guarantees at least one full rotation interval of grace,
-    which is always far longer than the source device needs to complete its
-    swap."""
-    return f"{STATE_DIR}/qkd_peer_known_pubkeys.json"
-
-
-def load_peer_known_pubkeys():
-    path = Path(peer_known_pubkeys_state_file())
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return {}
-
-
-def save_peer_known_pubkeys(state):
-    path = Path(peer_known_pubkeys_state_file())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2))
-
-
-def _peer_generate_new_keypair(device_name, temp_suffix="new"):
-    """Generate a new ED25519 keypair for PEER_CMD_USER to a TEMP path under
-    SCRIPT_USER's home, leaving the currently-active PEER_SSH_KEY untouched
-    until the new public key has been accepted by every peer."""
-    key_path = f"{PEER_SSH_KEY}.{temp_suffix}"
-    pub_path = f"{key_path}.pub"
-
-    try:
-        os.makedirs(os.path.dirname(key_path), mode=0o700, exist_ok=True)
-
-        for stale in (key_path, pub_path):
-            if os.path.exists(stale):
-                os.remove(stale)
-
-        comment = f"{PEER_CMD_USER}@{DEVICE_NAME}"
-        subprocess.run(
-            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", key_path],
-            check=True,
-            timeout=10,
-        )
-
-        os.chmod(key_path, 0o600)
-        os.chmod(pub_path, 0o640)
-
-        with open(pub_path) as f:
-            pubkey_line = f.read().strip()
-
-        log(f"PEER-KEY generated new peer SSH keypair path={key_path}", "INFO", mode="PEER-KEY-ROTATION")
-        return key_path, pub_path, pubkey_line
-
-    except subprocess.TimeoutExpired:
-        log("PEER-KEY ERROR ssh-keygen timeout generating peer key", "ERROR", mode="PEER-KEY-ROTATION")
-        return None, None, None
-    except subprocess.CalledProcessError as exc:
-        log(f"PEER-KEY ERROR ssh-keygen failed: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return None, None, None
-    except Exception as exc:
-        log(f"PEER-KEY ERROR generating peer SSH keypair: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return None, None, None
-
-
-def _peer_distribute_pubkey_to_peer(device_name, peer_name, peer_ip, new_pubkey_line, timeout=20):
-    """Push this device's new PEER_CMD_USER public key to a peer device, using
-    SCRIPT_USER's permanent/common SSH identity (SSH_KEY) - not the rotating
-    PEER_SSH_KEY - so the push always succeeds regardless of rotation state."""
-    if not peer_ip:
-        log(f"PEER-KEY ERROR no peer_ip for {peer_name}, skipping distribution", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    pubkey_b64 = base64.urlsafe_b64encode(new_pubkey_line.encode()).decode()
-    remote_cmd = (
-        f"op qkd_onbox.py action install-peer-pubkey "
-        f"device {device_name} pubkey-b64 {pubkey_b64}"
-    )
-    ssh_cmd = [
-        "ssh", *ssh_transport_options(SSH_KEY),
-        f"{SCRIPT_USER}@{peer_ip}",
-        remote_cmd,
-    ]
-
-    try:
-        result = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        log(f"PEER-KEY DISTRIBUTE TIMEOUT peer={peer_name}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-    except Exception as exc:
-        log(f"PEER-KEY DISTRIBUTE ERROR peer={peer_name} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    if result.returncode == 0:
-        log(f"PEER-KEY distributed new pubkey to peer={peer_name}", "INFO", mode="PEER-KEY-ROTATION")
-        return True
-
-    stderr = result.stderr.decode(errors="ignore").strip()
-    stdout = result.stdout.decode(errors="ignore").strip()
-    log(
-        f"PEER-KEY ERROR distribute failed peer={peer_name} rc={result.returncode} stderr={stderr} stdout={stdout}",
-        "ERROR",
-        mode="PEER-KEY-ROTATION",
-    )
-    return False
-
-
-def run_peer_key_rotation_cycle(device_name, local_devices_dict, send_command_func=None, peer_cmd_user=None, ssh_home_base=None):
-    """Execute one peer SSH key rotation cycle on this device.
-
-    send_command_func/peer_cmd_user/ssh_home_base are accepted (and ignored
-    beyond defaulting) for call-site compatibility; the module globals
-    PEER_CMD_USER/PEER_SSH_KEY/SSH_KEY are used directly.
-
-    device_name is accepted for call-site compatibility but DEVICE_NAME (canonical
-    orchestrator name, e.g. "MX2") is always used for keypair comments and peer
-    distribution so that key comments remain consistent with provisioning.
-    """
-    canonical_name = DEVICE_NAME
-    log(f"PEER-KEY starting peer SSH key rotation cycle for {canonical_name}", "INFO", mode="PEER-KEY-ROTATION")
-
-    new_key_path, new_pub_path, new_pubkey = _peer_generate_new_keypair(canonical_name)
-    if not new_pubkey:
-        log("PEER-KEY ERROR failed to generate new peer SSH keypair", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    peer_names = [name for name in local_devices_dict.keys() if name != device_name and name != canonical_name]
-    failed_peers = []
-
-    for peer_name in peer_names:
-        peer_ip = (local_devices_dict.get(peer_name) or {}).get("ip")
-        if not _peer_distribute_pubkey_to_peer(canonical_name, peer_name, peer_ip, new_pubkey):
-            failed_peers.append(peer_name)
-
-    if failed_peers:
-        log(
-            f"PEER-KEY ROTATION WARN partial_peer_acceptance failed={failed_peers} "
-            "-> continuing rotation for reachable peers",
-            "WARN",
-            mode="PEER-KEY-ROTATION",
-        )
-
-    if len(failed_peers) == len(peer_names):
-        log(
-            "PEER-KEY ROTATION ABORTED all_peers_rejected_or_unreachable "
-            "-> discarding new temp keypair and keeping current PEER_SSH_KEY active",
-            "ERROR",
-            mode="PEER-KEY-ROTATION",
-        )
-        for stale in (new_key_path, new_pub_path):
-            try:
-                os.remove(stale)
-            except Exception:
-                pass
-        return False
-
-    prev_key_path = f"{PEER_SSH_KEY}.prev"
-    prev_pub_path = f"{PEER_SSH_KEY}.pub.prev"
-
-    try:
-        if os.path.exists(PEER_SSH_KEY):
-            if os.path.exists(prev_key_path):
-                os.remove(prev_key_path)
-            os.replace(PEER_SSH_KEY, prev_key_path)
-        if os.path.exists(f"{PEER_SSH_KEY}.pub"):
-            if os.path.exists(prev_pub_path):
-                os.remove(prev_pub_path)
-            os.replace(f"{PEER_SSH_KEY}.pub", prev_pub_path)
-
-        os.replace(new_key_path, PEER_SSH_KEY)
-        os.replace(new_pub_path, f"{PEER_SSH_KEY}.pub")
-    except Exception as exc:
-        log(f"PEER-KEY ERROR activating new keypair: {exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    if failed_peers:
-        log(
-            "PEER-KEY rotation cycle completed with partial peer sync - new key activated locally",
-            "INFO",
-            mode="PEER-KEY-ROTATION",
-        )
-    else:
-        log(
-            "PEER-KEY rotation cycle completed successfully - all peers accepted new key",
-            "INFO",
-            mode="PEER-KEY-ROTATION",
-        )
-    return True
-
-
-def _get_all_junos_auth_keys_for_user(peer_cmd_user):
-    """Return ALL authentication key lines configured for peer_cmd_user in Junos.
+def _get_all_junos_auth_keys_for_user(username):
+    """Return ALL authentication key lines configured for username in Junos.
     Used for blob-based matching to catch keys installed with non-canonical comments.
     """
-    cmd = f"show configuration system login user {peer_cmd_user} | display set"
+    cmd = f"show configuration system login user {username} | display set"
     try:
         result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     except Exception:
         return []
     if result.returncode != 0:
         return []
-    prefix = f"set system login user {peer_cmd_user} authentication "
+    prefix = f"set system login user {username} authentication "
     found = []
     for line in result.stdout.decode(errors="ignore").splitlines():
         line = line.strip()
@@ -1265,180 +964,6 @@ def _get_all_junos_auth_keys_for_user(peer_cmd_user):
         if m:
             found.append(m.group(2))
     return found
-
-
-def _get_junos_auth_keys_for_peer_device(peer_cmd_user, source_device, extra_tags=None):
-    """Query Junos config for all authentication keys configured for peer_cmd_user
-    that have a comment matching '@<source_device>' or any of the extra_tags.
-    Returns list of full key lines.
-
-    Used to detect and clean up provisioning-installed keys that are not tracked
-    in qkd_peer_known_pubkeys.json state, preventing duplicates when runtime
-    key rotation runs for the first time after deploy.
-
-    extra_tags: additional comment substrings to match (e.g. SAE alias of the same device).
-    """
-    cmd = f"show configuration system login user {peer_cmd_user} | display set"
-    try:
-        result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    except Exception:
-        return []
-    if result.returncode != 0:
-        return []
-    comment_tags = {f"@{source_device}"}
-    for t in (extra_tags or []):
-        if t:
-            comment_tags.add(f"@{t}")
-    prefix = f"set system login user {peer_cmd_user} authentication "
-    found = []
-    for line in result.stdout.decode(errors="ignore").splitlines():
-        line = line.strip()
-        if not line.startswith(prefix):
-            continue
-        # Extract the quoted key payload: ssh-TYPE "full-key-line"
-        key_part = line[len(prefix):].strip()
-        m = re.match(r'^(ssh-\S+)\s+"(.+)"$', key_part)
-        if m:
-            key_line = m.group(2)  # full key line: "ssh-TYPE base64 comment"
-            if any(tag in key_line for tag in comment_tags):
-                found.append(key_line)
-    return found
-
-
-def run_slave_install_peer_pubkey(source_device, pubkey_b64):
-    """Install a peer device's newly-rotated PEER_CMD_USER public key into
-    THIS device's own Junos config, replacing any previously known key for
-    that specific peer. Runs entirely locally via the Junos CLI as SCRIPT_USER
-    - no cross-user filesystem access, no elevated permissions beyond what
-    qkd-script-class already grants for '{PEER_CMD_USER} authentication'."""
-    try:
-        pubkey_line = base64.urlsafe_b64decode(pubkey_b64.encode()).decode().strip()
-    except Exception as exc:
-        log(f"PEER-PUBKEY INSTALL ERROR bad base64 from={source_device} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    parts = pubkey_line.split()
-    if len(parts) < 2 or not parts[0].startswith("ssh-"):
-        log(f"PEER-PUBKEY INSTALL ERROR malformed key from={source_device} value={pubkey_line[:80]}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    key_algo = parts[0]
-    # NOTE: Junos requires the COMPLETE key line (including the "ssh-ed25519"
-    # type prefix) inside the quoted value - not just the base64+comment tail.
-    # This is the same Junos quirk documented as "Bug 1" in the historical
-    # SSH_KEY_ROTATION_DESIGN.md: stripping the prefix causes Junos to reject
-    # the key with "Key format must be 'ssh-ed25519 <base64-encoded-key> <comment>'"
-    # and the set/delete silently fails, leaving the peer's authorized key
-    # list unchanged (hence subsequent SSH as PEER_CMD_USER gets Permission denied).
-    key_payload = pubkey_line.replace('"', '\\"')
-
-    known = load_peer_known_pubkeys()
-    entry = known.get(source_device) or {}
-    if not isinstance(entry, dict):
-        # Migrate from the old flat {source_device: pubkey_line} format.
-        entry = {"current": entry, "previous": None}
-    current_pubkey_line = entry.get("current")
-    previous_pubkey_line = entry.get("previous")
-
-    if current_pubkey_line == pubkey_line:
-        # Idempotent retry/duplicate distribution of a key we already trust -
-        # nothing to do, avoid an unnecessary commit.
-        log(f"PEER-PUBKEY INSTALL SKIP already-current source_device={source_device}", "INFO", mode="PEER-KEY-ROTATION")
-        return True
-
-    cli_cmds = ["configure"]
-
-    # If no state is tracked for this peer, the previous provisioning run may have
-    # installed one or more keys in Junos that are invisible to our state tracker.
-    # Query Junos directly and delete ALL stale provisioned keys for this device
-    # (identified by comment "@<source_device>") except the new key being installed.
-    # This prevents duplicates accumulating when runtime rotation first fires after deploy.
-    # Also search by the key blob itself to catch keys installed with a different comment
-    # format (e.g. "@sae-002" vs "@MX2" from pre-fix provisioning).
-    if current_pubkey_line is None:
-        new_key_blob = pubkey_line.split()[1] if len(pubkey_line.split()) >= 2 else None
-        stale_keys = _get_junos_auth_keys_for_peer_device(PEER_CMD_USER, source_device)
-        # Expand search: collect every auth key and check by blob match to catch
-        # keys installed with a different comment format (e.g. "@sae-002" vs "@MX2").
-        all_configured_keys = _get_all_junos_auth_keys_for_user(PEER_CMD_USER)
-        if new_key_blob:
-            for k in all_configured_keys:
-                k_parts = k.split()
-                if len(k_parts) >= 2 and k_parts[1] == new_key_blob and k not in stale_keys:
-                    # Same blob, different comment — also a stale version of this key
-                    stale_keys.append(k)
-        for stale_key in stale_keys:
-            if stale_key == pubkey_line:
-                continue  # Do not delete the key we're about to set
-            stale_parts = stale_key.split()
-            if len(stale_parts) >= 2:
-                stale_algo = stale_parts[0]
-                stale_payload = stale_key.replace('"', '\\"')
-                cli_cmds.append(
-                    f'delete system login user {PEER_CMD_USER} authentication {stale_algo} "{stale_payload}"'
-                )
-                log(
-                    f"PEER-PUBKEY STALE PROVISIONED KEY REMOVED source_device={source_device} key={stale_key[:80]}",
-                    "WARN",
-                    mode="PEER-KEY-ROTATION",
-                )
-
-    # Only retire the key that is now TWO generations old (the "previous"
-    # slot). The "current" slot (what the source device was using up until
-    # this rotation) is deliberately left valid for one more cycle so the
-    # source device has a full rotation interval to finish swapping over
-    # before its old key is ever revoked - see peer_known_pubkeys_state_file().
-    if previous_pubkey_line and previous_pubkey_line != pubkey_line:
-        previous_parts = previous_pubkey_line.split()
-        if len(previous_parts) >= 2:
-            previous_algo = previous_parts[0]
-            previous_payload = previous_pubkey_line.replace('"', '\\"')
-            cli_cmds.append(
-                f'delete system login user {PEER_CMD_USER} authentication {previous_algo} "{previous_payload}"'
-            )
-    cli_cmds.append(
-        f'set system login user {PEER_CMD_USER} authentication {key_algo} "{key_payload}"'
-    )
-    cli_cmds.append(f'commit comment "QKD: peer-key rotation source_device={source_device}"')
-    cli_cmds.append("exit")
-    cmd = "; ".join(cli_cmds)
-
-    if not acquire_junos_commit_lock():
-        log(f"PEER-PUBKEY INSTALL DEFERRED reason=junos_commit_lock_busy source_device={source_device}", "ERROR", mode="PEER-KEY-ROTATION")
-        return False
-
-    try:
-        try:
-            result = subprocess.run([CLI_PATH, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-        except subprocess.TimeoutExpired:
-            log(f"PEER-PUBKEY INSTALL TIMEOUT source_device={source_device}", "ERROR", mode="PEER-KEY-ROTATION")
-            return False
-        except Exception as exc:
-            log(f"PEER-PUBKEY INSTALL ERROR source_device={source_device} error={exc}", "ERROR", mode="PEER-KEY-ROTATION")
-            return False
-
-        stdout = result.stdout.decode(errors="ignore").strip()
-        stderr = result.stderr.decode(errors="ignore").strip()
-
-        if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-            log(
-                f"PEER-PUBKEY INSTALL FAIL source_device={source_device} rc={result.returncode} stderr={stderr} stdout={stdout}",
-                "ERROR",
-                mode="PEER-KEY-ROTATION",
-            )
-            try:
-                subprocess.run([CLI_PATH, "-c", "configure; rollback 0; exit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-            except Exception:
-                pass
-            return False
-    finally:
-        release_junos_commit_lock()
-
-    known[source_device] = {"current": pubkey_line, "previous": current_pubkey_line}
-    save_peer_known_pubkeys(known)
-
-    log(f"PEER-PUBKEY INSTALLED source_device={source_device} key={pubkey_line[:80]}...", "INFO", mode="PEER-KEY-ROTATION")
-    return True
 
 
 def _decode_rpc_pubkey(source_device, pubkey_b64):
@@ -1887,71 +1412,8 @@ def remote_peer_status_file(peer_sae, iface):
     return f"{PEER_STATUS_DIR}/qkd_peer_status_{peer_device}_{safe_iface}.json"
 
 
-def peer_inbox_file(device_name, iface):
-    safe_iface = str(iface or "unknown").replace("/", "_")
-    safe_device = str(device_name or "unknown")
-    return f"{PEER_INBOX_DIR}/qkd_peer_inbox_{safe_device}_{safe_iface}.b64"
-
-
-def peer_inbox_file_for_ack(device_name, iface, ack_id):
-    base = peer_inbox_file(device_name, iface)
-    token = str(ack_id or "").strip()
-    if not token:
-        return base
-    if token.endswith(".b64"):
-        token = token[:-4]
-    return base[:-4] + f"_{token}.b64"
-
-
-def local_peer_inbox_file(iface):
-    return peer_inbox_file(DEVICE, iface)
-
-
-def local_peer_inbox_candidates(iface):
-    safe_iface = str(iface or "unknown").replace("/", "_")
-    pattern = f"qkd_peer_inbox_{DEVICE}_{safe_iface}*.b64"
-    try:
-        candidates = [p for p in Path(PEER_INBOX_DIR).glob(pattern) if p.is_file()]
-    except Exception:
-        candidates = []
-
-    if not candidates:
-        legacy = Path(local_peer_inbox_file(iface))
-        if legacy.exists() and legacy.is_file():
-            return [legacy]
-        return []
-
-    def _candidate_key(path_obj):
-        try:
-            return (path_obj.stat().st_mtime, str(path_obj))
-        except Exception:
-            return (0, str(path_obj))
-
-    candidates.sort(key=_candidate_key)
-    return candidates
-
-
-def peer_ack_file(device_name, iface):
-    safe_iface = str(iface or "unknown").replace("/", "_")
-    safe_device = str(device_name or "unknown")
-    return f"{PEER_ACK_DIR}/qkd_peer_ack_{safe_device}_{safe_iface}.json"
-
-
-def remote_peer_ack_file(peer_sae, iface):
-    return peer_ack_file(peer_sae, iface)
-
-
-def local_peer_ack_file(iface):
-    return peer_ack_file(DEVICE, iface)
-
-
 def qkd_policy():
     return CONFIG.get("qkd_policy", {})
-
-
-def peer_transport_mode():
-    value = qkd_policy().get("peer_transport_mode", CONFIG.get("peer_transport_mode", "rpc"))
-    return str(value or "rpc").strip().lower()
 
 
 def strict_sync_enabled():
@@ -1985,17 +1447,6 @@ def peer_batch_ack_timeout_seconds():
     # covers install/lock/SCP/poll overhead (independent of tick length).
     default_value = max(20, script_execution_interval_seconds() + 90)
     value = int(qkd_policy().get("peer_batch_ack_timeout_seconds", default_value))
-    if value < 1:
-        return 1
-    return value
-
-
-def peer_batch_ack_poll_interval_seconds():
-    # Avoid per-second SSH churn on peer_cmd_user during ACK waits. Scale the
-    # default with the timeout so a longer timeout doesn't imply hundreds of
-    # SCP polls (each poll forks a new SSH/SCP process).
-    default_value = max(3, min(15, peer_batch_ack_timeout_seconds() // 20))
-    value = int(qkd_policy().get("peer_batch_ack_poll_interval_seconds", default_value))
     if value < 1:
         return 1
     return value
@@ -3143,133 +2594,6 @@ def peer_states_aligned_strict(local_state, peer_state):
             return False
 
     return True
-
-
-def write_peer_batch_ack(
-    iface,
-    ack_id,
-    status="ok",
-    message=None,
-    reason_code=None,
-    reason_stage=None,
-    reason_detail=None,
-    timings_ms=None,
-):
-    if not ack_id:
-        return False
-
-    path = Path(local_peer_ack_file(iface))
-    tmp = Path(f"{path}.{os.getpid()}.tmp")
-    payload = {
-        "ack_id": str(ack_id),
-        "status": str(status),
-        "iface": str(iface or ""),
-        "device": DEVICE,
-        "message": str(message or ""),
-        "processed_at": int(time.time()),
-        "processed_at_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-    }
-    if reason_code:
-        payload["reason_code"] = str(reason_code)
-    if reason_stage:
-        payload["reason_stage"] = str(reason_stage)
-    if reason_detail:
-        payload["reason_detail"] = str(reason_detail)
-    if isinstance(timings_ms, dict) and timings_ms:
-        payload["timings_ms"] = format_timing_fields_hhmmss_mmm(timings_ms)
-
-    try:
-        ensure_runtime_dirs()
-        tmp.write_text(json.dumps(payload, indent=2))
-        try:
-            if path.exists():
-                path.unlink()
-        except Exception:
-            pass
-        tmp.replace(path)
-        try:
-            os.chmod(str(path), 0o640)
-        except Exception:
-            pass
-        log(f"BATCH ACK WRITTEN file={path} ack_id={ack_id} status={status}", "INFO", iface, "SLAVE")
-        return True
-    except Exception as e:
-        log(f"BATCH ACK WRITE FAIL file={path} ack_id={ack_id} status={status} error={str(e)}", "ERROR", iface, "SLAVE")
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except Exception:
-            pass
-        return False
-
-
-def read_remote_peer_batch_ack(link, iface):
-    if not validate_link_runtime(link, require_peer_transport=True):
-        return None
-
-    peer_ip = link.get("peer_ip")
-    peer_iface = link.get("peer_interface")
-    if not peer_ip or not peer_iface:
-        return None
-
-    ack_path = remote_peer_ack_file(link.get("peer_sae"), peer_iface)
-    stdout = scp_download_text(PEER_CMD_USER, peer_ip, ack_path)
-    if not stdout:
-        return None
-
-    try:
-        payload = json.loads(stdout)
-    except Exception:
-        return None
-
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-def wait_for_peer_batch_ack_payload(link, iface, ack_id):
-    if not ack_id:
-        return None
-
-    timeout_seconds = peer_batch_ack_timeout_seconds()
-    poll_interval_seconds = peer_batch_ack_poll_interval_seconds()
-    deadline = time.time() + timeout_seconds
-
-    while time.time() < deadline:
-        ack = read_remote_peer_batch_ack(link, iface)
-        if isinstance(ack, dict):
-            if str(ack.get("ack_id")) == str(ack_id):
-                status = str(ack.get("status", "")).lower()
-                if status == "ok":
-                    log(f"PEER BATCH ACK OK ack_id={ack_id}", "INFO", iface, "MASTER")
-                    return ack
-                log(
-                    f"PEER BATCH ACK FAIL ack_id={ack_id} status={ack.get('status')} "
-                    f"reason_code={ack.get('reason_code')} reason_stage={ack.get('reason_stage')} "
-                    f"message={ack.get('message')} reason_detail={ack.get('reason_detail')}",
-                    "ERROR",
-                    iface,
-                    "MASTER",
-                )
-                return ack
-        time.sleep(poll_interval_seconds)
-
-    log(
-        f"PEER BATCH ACK TIMEOUT ack_id={ack_id} timeout_seconds={timeout_seconds} poll_interval_seconds={poll_interval_seconds}",
-        "ERROR",
-        iface,
-        "MASTER",
-    )
-    return {
-        "ack_id": str(ack_id),
-        "status": "timeout",
-        "message": "peer batch ack timeout",
-    }
-
-
-def wait_for_peer_batch_ack(link, iface, ack_id):
-    ack = wait_for_peer_batch_ack_payload(link, iface, ack_id)
-    return isinstance(ack, dict) and str(ack.get("status", "")).lower() == "ok"
 
 
 def save_db_state(peer, iface, state):
@@ -4954,10 +4278,7 @@ def runtime_has_config_privilege():
 def ssh_transport_options(key_path=None):
     key_path = key_path or RPC_SSH_KEY
     key_paths = [key_path]
-    if os.path.abspath(key_path) in {
-        os.path.abspath(RPC_SSH_KEY),
-        os.path.abspath(PEER_SSH_KEY),
-    }:
+    if os.path.abspath(key_path) == os.path.abspath(RPC_SSH_KEY):
         prev_key_path = f"{key_path}.prev"
         if os.path.exists(prev_key_path):
             key_paths.append(prev_key_path)
@@ -4973,111 +4294,8 @@ def ssh_transport_options(key_path=None):
     ]
 
 
-def run_scp_command(cmd, timeout=10):
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.communicate()
-        raise
-    return process.returncode, stdout, stderr
-
-
-def scp_upload_text(peer_user, peer_ip, remote_path, payload_text, iface=None, mode_ctx="MASTER"):
-    local_tmp = Path(f"/tmp/qkd_scp_upload_{os.getpid()}_{int(time.time()*1000)}.tmp")
-    try:
-        local_tmp.write_text(str(payload_text), encoding="utf-8")
-        try:
-            os.chmod(str(local_tmp), 0o600)
-        except Exception:
-            pass
-        cmd = [
-            SCP_BINARY,
-            "-O",
-            *ssh_transport_options(PEER_SSH_KEY),
-            str(local_tmp),
-            f"{peer_user}@{peer_ip}:{remote_path}",
-        ]
-        local_stat = local_tmp.stat()
-        log(
-            f"SCP UPLOAD EXEC binary={SCP_BINARY} argv={' '.join(shlex.quote(arg) for arg in cmd)} "
-            f"runtime_user={runtime_user()} uid={os.geteuid()} gid={os.getegid()} cwd={os.getcwd()} "
-            f"home={os.environ.get('HOME', '')} path_env={os.environ.get('PATH', '')} "
-            f"source_mode={stat.S_IMODE(local_stat.st_mode):04o} "
-            f"source_uid={local_stat.st_uid} source_gid={local_stat.st_gid}",
-            "INFO",
-            iface,
-            mode_ctx,
-        )
-        returncode, stdout_bytes, stderr_bytes = run_scp_command(cmd)
-        if returncode != 0:
-            stderr = stderr_bytes.decode(errors="ignore").strip()
-            stdout = stdout_bytes.decode(errors="ignore").strip()
-            log(
-                f"SCP UPLOAD FAIL binary={SCP_BINARY} path_env={os.environ.get('PATH', '')} "
-                f"user={peer_user} peer={peer_ip} path={remote_path} stderr={stderr} stdout={stdout}",
-                "ERROR",
-                iface,
-                mode_ctx,
-            )
-            return False
-        return True
-    except subprocess.TimeoutExpired:
-        log(f"SCP UPLOAD TIMEOUT user={peer_user} peer={peer_ip} path={remote_path}", "ERROR", iface, mode_ctx)
-        return False
-    except Exception as e:
-        log(f"SCP UPLOAD ERROR user={peer_user} peer={peer_ip} path={remote_path} error={str(e)}", "ERROR", iface, mode_ctx)
-        return False
-    finally:
-        try:
-            if local_tmp.exists():
-                local_tmp.unlink()
-        except Exception:
-            pass
-
-
-def scp_download_text(peer_user, peer_ip, remote_path):
-    local_tmp = Path(f"/tmp/qkd_scp_download_{os.getpid()}_{int(time.time()*1000)}.tmp")
-    try:
-        cmd = [
-            SCP_BINARY,
-            "-O",
-            *ssh_transport_options(PEER_SSH_KEY),
-            f"{peer_user}@{peer_ip}:{remote_path}",
-            str(local_tmp),
-        ]
-        returncode, _, _ = run_scp_command(cmd)
-        if returncode != 0:
-            return None
-        return local_tmp.read_text(encoding="utf-8").strip()
-    except Exception:
-        return None
-    finally:
-        try:
-            if local_tmp.exists():
-                local_tmp.unlink()
-        except Exception:
-            pass
-
-
 def validate_ssh_runtime_for_master():
     user = runtime_user()
-    if PEER_CMD_USER != SCRIPT_USER:
-        log(
-            f"PEER CMD USER CONFIGURED peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER} "
-            f"status=ACTIVE_FOR_READONLY_STATUS_COMPATIBILITY",
-            "INFO",
-            mode="MASTER",
-        )
     if not RPC_SSH_KEY:
         log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=RPC_SSH_KEY_EMPTY", "ERROR", mode="MASTER")
         return False
@@ -5095,29 +4313,6 @@ def validate_ssh_runtime_for_master():
             "ERROR",
             mode="MASTER",
         )
-        return False
-
-    if not PEER_SSH_KEY:
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} reason=PEER_SSH_KEY_EMPTY", "ERROR", mode="MASTER")
-        return False
-    if PEER_CMD_USER != SCRIPT_USER and os.path.abspath(PEER_SSH_KEY) == os.path.abspath(SSH_KEY):
-        log(
-            f"SSH RUNTIME CHECK FAIL runtime_user={user} peer_cmd_user={PEER_CMD_USER} script_user={SCRIPT_USER} "
-            f"ssh_key={SSH_KEY} peer_ssh_key={PEER_SSH_KEY} reason=COUPLED_KEYS_NOT_ALLOWED",
-            "ERROR",
-            mode="MASTER",
-        )
-        return False
-    if not Path(PEER_SSH_KEY).exists():
-        log(f"SSH RUNTIME CHECK FAIL runtime_user={user} peer_ssh_key={PEER_SSH_KEY} reason=KEY_NOT_FOUND", "ERROR", mode="MASTER")
-        return False
-    if not os.access(PEER_SSH_KEY, os.R_OK):
-        log(
-            f"SSH RUNTIME CHECK FAIL runtime_user={user} script_user={SCRIPT_USER} peer_ssh_key={PEER_SSH_KEY} reason=KEY_NOT_READABLE_BY_RUNTIME_USER",
-            "ERROR",
-            mode="MASTER",
-        )
-        print(f"ERROR PEER_SSH_KEY_NOT_READABLE runtime_user={user} script_user={SCRIPT_USER} peer_ssh_key={PEER_SSH_KEY}")
         return False
 
     runtime_files = [
@@ -5160,7 +4355,7 @@ def validate_ssh_runtime_for_master():
 
     log(
         f"SSH RUNTIME CHECK OK runtime_user={user} script_user={SCRIPT_USER} "
-        f"rpc_ssh_key={RPC_SSH_KEY} peer_ssh_key={PEER_SSH_KEY}",
+        f"rpc_ssh_key={RPC_SSH_KEY}",
         "INFO",
         mode="MASTER",
     )
@@ -5240,34 +4435,6 @@ def send_command(
                     "MASTER",
                 )
                 return False
-
-    if action == "install-key-batch" and batch_b64 and peer_transport_mode() == "queue":
-        peer_user = PEER_CMD_USER
-        if not ack_id:
-            ack_id = compute_batch_ack_id(batch_b64)
-        remote_inbox = peer_inbox_file_for_ack(link.get("peer_sae"), peer_iface, ack_id)
-
-        envelope = {
-            "kind": "install-key-batch",
-            "ack_id": ack_id,
-            "batch_b64": batch_b64,
-            "source_device": DEVICE,
-            "source_iface": iface,
-            "target_iface": peer_iface,
-            "created_at": int(time.time()),
-        }
-        if isinstance(trace_context, dict) and trace_context:
-            envelope["trace_context"] = trace_context
-        transport_payload = json.dumps(envelope, separators=(",", ":"))
-        log(
-            f"SCP PUT {peer_user}@{peer_ip} action=enqueue-batch local_iface={iface} peer_iface={peer_iface} "
-            f"scheduled_start_time={start_time_human} inbox={remote_inbox} ack_id={ack_id}",
-            "INFO",
-            iface,
-            "MASTER",
-        )
-
-        return scp_upload_text(peer_user, peer_ip, remote_inbox, transport_payload, iface=iface, mode_ctx="MASTER")
 
     peer_user = SCRIPT_USER
     ssh_options = [
@@ -5982,158 +5149,6 @@ def run_slave_status(iface):
     return True
 
 
-def process_inbound_transport_for_slave(link):
-    iface = link.get("interface")
-    if not iface:
-        return False
-
-    inbox_candidates = local_peer_inbox_candidates(iface)
-    if not inbox_candidates:
-        return False
-    inbox_path = inbox_candidates[0]
-
-    processing_path = Path(f"{inbox_path}.processing.{os.getpid()}")
-    try:
-        inbox_path.replace(processing_path)
-    except Exception:
-        return False
-
-    try:
-        raw_payload = processing_path.read_text(encoding="utf-8").strip()
-    except Exception as e:
-        log(f"INBOUND BATCH READ FAIL file={processing_path} error={str(e)}", "ERROR", iface, "SLAVE")
-        try:
-            processing_path.replace(inbox_path)
-        except Exception:
-            pass
-        return False
-
-    if not raw_payload:
-        log(f"INBOUND BATCH EMPTY file={processing_path}", "WARN", iface, "SLAVE")
-        try:
-            processing_path.unlink()
-        except Exception:
-            pass
-        return False
-
-    ack_id = None
-    ack_context = {}
-    batch_b64 = raw_payload
-    try:
-        decoded_payload = json.loads(raw_payload)
-        if isinstance(decoded_payload, dict) and decoded_payload.get("kind") == "install-key-batch":
-            ack_id = decoded_payload.get("ack_id")
-            batch_b64 = str(decoded_payload.get("batch_b64") or "")
-            created_at = decoded_payload.get("created_at")
-            if created_at is not None:
-                ack_context["source_created_at"] = created_at
-            trace_context = decoded_payload.get("trace_context")
-            if isinstance(trace_context, dict):
-                ack_context["trace_context"] = trace_context
-    except Exception:
-        pass
-
-    if not batch_b64:
-        log(f"INBOUND BATCH INVALID envelope missing batch_b64 file={processing_path}", "ERROR", iface, "SLAVE")
-        if ack_id:
-            write_peer_batch_ack(
-                iface,
-                ack_id,
-                status="fail",
-                message="missing batch_b64",
-                reason_code="MISSING_BATCH_PAYLOAD",
-                reason_stage="INPUT",
-                reason_detail="envelope missing batch_b64",
-            )
-        try:
-            processing_path.unlink()
-        except Exception:
-            pass
-        return False
-
-    if not acquire_action_lock(iface, "install-key-batch"):
-        log(f"INBOUND BATCH LOCK BUSY iface={iface}", "WARN", iface, "LOCK")
-        try:
-            processing_path.replace(inbox_path)
-        except Exception:
-            pass
-        return False
-
-    try:
-        log(f"INBOUND BATCH PROCESS START file={processing_path} ack_id={ack_id}", "INFO", iface, "SLAVE")
-        ok = run_slave_install_key_batch(batch_b64, iface, ack_context=ack_context)
-    finally:
-        release_action_lock(iface, "install-key-batch")
-
-    if ok:
-        if ack_id:
-            ack_timings = dict(ack_context.get("timings_ms") or {})
-            write_peer_batch_ack(
-                iface,
-                ack_id,
-                status="ok",
-                message="batch installed",
-                timings_ms=ack_timings,
-            )
-        try:
-            processing_path.unlink()
-        except Exception:
-            pass
-        log(f"INBOUND BATCH PROCESS OK iface={iface} ack_id={ack_id}", "INFO", iface, "SLAVE")
-        return True
-
-    if ack_id:
-        write_peer_batch_ack(
-            iface,
-            ack_id,
-            status="fail",
-            message="batch processing failed",
-            reason_code=str(ack_context.get("reason_code") or "BATCH_PROCESSING_FAILED"),
-            reason_stage=str(ack_context.get("reason_stage") or "SLAVE"),
-            reason_detail=str(ack_context.get("reason_detail") or "batch processing failed"),
-            timings_ms=ack_context.get("timings_ms"),
-        )
-    try:
-        processing_path.replace(inbox_path)
-    except Exception:
-        pass
-    log(f"INBOUND BATCH PROCESS FAIL iface={iface} ack_id={ack_id} action=RETRY_NEXT_CYCLE", "ERROR", iface, "SLAVE")
-    return False
-
-
-def process_slave_inbound_transports():
-    processed_any = False
-    processed_count = 0
-    max_drain = int(qkd_policy().get("peer_inbox_drain_max_per_cycle", 8))
-    if max_drain < 1:
-        max_drain = 1
-    reached_drain_limit = False
-
-    for _ in range(max_drain):
-        processed_this_pass = False
-        for link in managed_links():
-            if link.get("role") != "slave":
-                continue
-            if process_inbound_transport_for_slave(link):
-                processed_any = True
-                processed_count += 1
-                processed_this_pass = True
-
-        if not processed_this_pass:
-            break
-    else:
-        reached_drain_limit = True
-
-    if processed_any:
-        log(
-            f"INBOUND DRAIN SUMMARY processed={processed_count} max_per_cycle={max_drain} reached_limit={reached_drain_limit}",
-            "INFO",
-            mode="SLAVE",
-        )
-
-    return processed_any
-
-
 def bootstrap_keychain_link(link, force=False):
     peer = link["peer"]
     iface = link["interface"]
@@ -6216,11 +5231,6 @@ def bootstrap_keychain_link(link, force=False):
     ):
         log("KEYCHAIN BOOTSTRAP FAILED peer install-key-batch AFTER LOCAL INSTALL", "ERROR", iface, "BOOTSTRAP")
         return False
-
-    if peer_transport_mode() == "queue":
-        if not wait_for_peer_batch_ack(link, iface, bootstrap_ack_id):
-            log("KEYCHAIN BOOTSTRAP FAILED peer ACK timeout/fail AFTER enqueue", "ERROR", iface, "BOOTSTRAP")
-            return False
 
     time.sleep(0.5)
 
@@ -6494,23 +5504,16 @@ def resume_inflight_install(link, state):
         )
         return state, False
 
-    transport_mode = peer_transport_mode()
-    ack = read_remote_peer_batch_ack(link, iface) if transport_mode == "queue" else None
-    ack_ok = (
-        isinstance(ack, dict)
-        and str(ack.get("ack_id")) == str(ack_id)
-        and str(ack.get("status") or "").lower() == "ok"
-    )
-    if transport_mode == "rpc":
-        peer_state = get_peer_status(link, iface)
-        ack_ok = _state_records_match(peer_state, records)
-        if ack_ok:
-            log(
-                f"{operation} INFLIGHT RPC PEER STATE CONFIRMED ack_id={ack_id}",
-                "INFO",
-                iface,
-                "MASTER",
-            )
+    ack = None
+    peer_state = get_peer_status(link, iface)
+    ack_ok = _state_records_match(peer_state, records)
+    if ack_ok:
+        log(
+            f"{operation} INFLIGHT RPC PEER STATE CONFIRMED ack_id={ack_id}",
+            "INFO",
+            iface,
+            "MASTER",
+        )
     wrote_timing_record = False
     if not ack_ok:
         try:
@@ -6544,7 +5547,6 @@ def resume_inflight_install(link, state):
             transaction["t2_peer_send_ms"] = int(time.time() * 1000)
             if not save_db_state(peer, iface, state):
                 return state, False
-        peer_send_start_ms = now_ms()
         if not send_command(
             link,
             "install-key-batch",
@@ -6563,28 +5565,6 @@ def resume_inflight_install(link, state):
                 operation=operation,
             )
             return state, False
-        if peer_transport_mode() == "queue":
-            ack_wait_start_ms = now_ms()
-            ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
-            ack_status_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
-            timing_snapshot = _inflight_timing_snapshot()
-            timing_snapshot["master_send_to_ack_ms"] = int(elapsed_ms(peer_send_start_ms))
-            timing_snapshot["master_ack_to_ack_ms"] = int(elapsed_ms(ack_wait_start_ms))
-            if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
-                timing_snapshot.update(ack_payload.get("timings_ms"))
-            append_rolling_pipeline_timing_record(
-                iface,
-                ack_id,
-                status=str(ack_payload.get("status", "timeout") if isinstance(ack_payload, dict) else "timeout"),
-                timings_ms=timing_snapshot,
-                reason_code=(ack_payload or {}).get("reason_code") if isinstance(ack_payload, dict) else "PEER_ACK_TIMEOUT",
-                reason_stage=(ack_payload or {}).get("reason_stage") if isinstance(ack_payload, dict) else "MASTER_ACK_WAIT",
-                reason_detail=(ack_payload or {}).get("reason_detail") if isinstance(ack_payload, dict) else "peer ack timeout",
-                operation=operation,
-            )
-            wrote_timing_record = True
-            if not ack_status_ok:
-                return state, False
 
     # A pre-existing ACK was received during an earlier process lifetime.
     # Its local receipt time is unavailable, so do not mix the peer clock or
@@ -7003,52 +5983,19 @@ def run_master_rolling_link(link):
             "MASTER",
         )
         return False
-    if peer_transport_mode() == "queue":
-        ack_wait_start_ms = now_ms()
-        ack_payload = wait_for_peer_batch_ack_payload(link, iface, ack_id)
-        ack_ok = isinstance(ack_payload, dict) and str(ack_payload.get("status", "")).lower() == "ok"
-        timing_snapshot = {
+    append_rolling_pipeline_timing_record(
+        iface,
+        ack_id,
+        status="ok",
+        timings_ms={
             "master_enc_total_ms": int(enc_total_ms),
             "master_commit_to_ack_ms": int(elapsed_ms(local_commit_start_ms)),
             "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
-            "master_ack_to_ack_ms": int(elapsed_ms(ack_wait_start_ms)),
             "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
-        }
-        if isinstance(ack_payload, dict) and isinstance(ack_payload.get("timings_ms"), dict):
-            timing_snapshot.update(ack_payload.get("timings_ms"))
-        append_rolling_pipeline_timing_record(
-            iface,
-            ack_id,
-            status=str(ack_payload.get("status", "timeout") if isinstance(ack_payload, dict) else "timeout"),
-            timings_ms=timing_snapshot,
-            reason_code=(ack_payload or {}).get("reason_code") if isinstance(ack_payload, dict) else "PEER_ACK_TIMEOUT",
-            reason_stage=(ack_payload or {}).get("reason_stage") if isinstance(ack_payload, dict) else "MASTER_ACK_WAIT",
-            reason_detail=(ack_payload or {}).get("reason_detail") if isinstance(ack_payload, dict) else "peer ack timeout",
-            operation=operation,
-        )
-        if not ack_ok:
-            log(
-                f"{operation} ABORTED reason=PEER_ACK_FAILED state_not_advanced=1 "
-                "active_and_next_unchanged=1",
-                "ERROR",
-                iface,
-                "MASTER",
-            )
-            return False
-    else:
-        append_rolling_pipeline_timing_record(
-            iface,
-            ack_id,
-            status="ok",
-            timings_ms={
-                "master_enc_total_ms": int(enc_total_ms),
-                "master_commit_to_ack_ms": int(elapsed_ms(local_commit_start_ms)),
-                "master_send_to_ack_ms": int(elapsed_ms(peer_send_start_ms)),
-                "master_total_enc_to_ack_ms": int(elapsed_ms(enc_batch_start_ms)),
-            },
-            reason_stage="MASTER_RPC_RESPONSE",
-            operation=operation,
-        )
+        },
+        reason_stage="MASTER_RPC_RESPONSE",
+        operation=operation,
+    )
 
     state = record_successful_transaction_timing(
         state,
@@ -7211,22 +6158,6 @@ def main():
                 release_action_lock(iface, action)
             sys.exit(0 if ok else 1)
 
-        if action == "install-peer-pubkey":
-            if not source_device or not pubkey_b64:
-                log("INVALID INSTALL-PEER-PUBKEY ARGUMENTS", "ERROR", mode="SLAVE")
-                print("ERROR INVALID INSTALL-PEER-PUBKEY ARGUMENTS")
-                sys.exit(1)
-            lock_scope = "peer-pubkey"
-            if not acquire_action_lock(lock_scope, action):
-                log(f"ACTION LOCK BUSY action={action} iface={lock_scope}", "ERROR", mode="LOCK")
-                print(f"ERROR ACTION LOCK BUSY action={action}")
-                sys.exit(1)
-            try:
-                ok = run_slave_install_peer_pubkey(source_device, pubkey_b64)
-            finally:
-                release_action_lock(lock_scope, action)
-            sys.exit(0 if ok else 1)
-
         if action in ("prepare-rpc-pubkey", "finalize-rpc-pubkey"):
             if not source_device or not pubkey_b64:
                 log(f"INVALID {action.upper()} ARGUMENTS", "ERROR", mode="RPC-KEY-ROTATION")
@@ -7255,7 +6186,6 @@ def main():
         sys.exit(1)
 
 
-    process_slave_inbound_transports()
     refresh_peer_status_snapshots()
 
     if not validate_ssh_runtime_for_master():

@@ -205,7 +205,6 @@ def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_pa
                 "2026-07-31 19:00:00 [INFO] [MACSEC][sae-004][et-0/0/8] KEYCHAIN INSTALL OK ca=CA_MX4_ACX3 keychain=QKD_CA_MX4_ACX3 entries=2 installed_indices=[1,2]",
                 "2026-07-31 19:04:00 [INFO] [MACSEC][sae-004][et-0/0/8] KEYCHAIN INSTALL OK ca=CA_MX4_ACX3 keychain=QKD_CA_MX4_ACX3 entries=2 installed_indices=[1,2]",
                 "2026-07-31 19:05:00 [INFO] [MACSEC][sae-004][et-0/0/8] INTERFACE BIND OK ca=CA_MX4_ACX3",
-                "2026-07-31 19:08:00 [INFO] [PEER-KEY-ROTATION][sae-004] PEER-PUBKEY INSTALLED source_device=MX2 key=ssh-ed25519 AAAA...",
             ]
         )
         + "\n",
@@ -227,7 +226,7 @@ def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_pa
     observation = build_device_commit_observation(snapshot, calculate_schedule(policy()))
 
     assert observation["device_count"] == 2
-    assert observation["total_commit_events"] == 6
+    assert observation["total_commit_events"] == 5
     assert observation["total_commit_failures"] == 1
     mx4 = next(item for item in observation["device_reports"] if item["device"] == "MX4")
     assert mx4["commit_events_by_purpose"]["KEY_ROTATION_KEYCHAIN_COMMIT"] == 2

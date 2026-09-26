@@ -371,15 +371,13 @@ class TestRollingKeyringPlan:
             if isinstance(node, ast.FunctionDef) and node.name == "send_command"
         )
         source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), send_command)
-        queue_end = source.index("return scp_upload_text")
-        rpc_source = source[queue_end:]
 
-        assert "peer_user = SCRIPT_USER" in rpc_source
-        assert 'ssh_transport_options(RPC_SSH_KEY)' in rpc_source
-        assert 'f"SSH RPC EXEC {peer_user}@{peer_ip}' in rpc_source
-        assert 'timeout = peer_batch_ack_timeout_seconds()' in rpc_source
-        assert '"OK INSTALL-KEY-BATCH" not in stdout' in rpc_source
-        assert '"ConnectTimeout=10"' in rpc_source
+        assert "peer_user = SCRIPT_USER" in source
+        assert 'ssh_transport_options(RPC_SSH_KEY)' in source
+        assert 'f"SSH RPC EXEC {peer_user}@{peer_ip}' in source
+        assert 'timeout = peer_batch_ack_timeout_seconds()' in source
+        assert '"OK INSTALL-KEY-BATCH" not in stdout' in source
+        assert '"ConnectTimeout=10"' in source
 
     def test_rpc_recovery_does_not_read_scp_ack(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
@@ -390,8 +388,8 @@ class TestRollingKeyringPlan:
         )
         source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), resume)
 
-        assert 'transport_mode = peer_transport_mode()' in source
-        assert 'read_remote_peer_batch_ack(link, iface) if transport_mode == "queue" else None' in source
+        assert 'peer_state = get_peer_status(link, iface)' in source
+        assert "read_remote_peer_batch_ack" not in source
         assert "_state_records_match(peer_state, records)" in source
 
     def test_rpc_success_is_recorded_before_bilateral_finalize(self):
@@ -721,35 +719,6 @@ class TestBilateralSlotMetadata:
         assert not self.functions["_slot_metadata_matches"](local_state, peer_state, {1})
 
 
-class TestScpTimeout:
-    def test_timeout_kills_entire_scp_process_group(self):
-        functions = load_functions("run_scp_command")
-        killed = []
-
-        class Process:
-            pid = 4321
-
-            def communicate(self, timeout=None):
-                if timeout is not None:
-                    raise subprocess.TimeoutExpired(["scp"], timeout)
-                return b"", b""
-
-        functions["subprocess"] = SimpleNamespace(
-            PIPE=object(),
-            TimeoutExpired=subprocess.TimeoutExpired,
-            Popen=lambda *args, **kwargs: Process(),
-        )
-        functions["os"] = SimpleNamespace(
-            killpg=lambda pid, signal: killed.append((pid, signal))
-        )
-        functions["signal"] = SimpleNamespace(SIGKILL=9)
-
-        with pytest.raises(subprocess.TimeoutExpired):
-            functions["run_scp_command"](["scp"], timeout=10)
-
-        assert killed == [(4321, 9)]
-
-
 class TestRpcBatchDelivery:
     def setup_method(self):
         self.functions = load_functions("send_command")
@@ -769,7 +738,6 @@ class TestRpcBatchDelivery:
                 "validate_link_runtime": lambda link, require_peer_transport: True,
                 "format_next_start_time_with_millis": lambda value: value,
                 "epoch_from_junos_start_time": lambda value: 2_000_000_000,
-                "peer_transport_mode": lambda: "rpc",
                 "peer_enqueue_min_margin_seconds": lambda: 60,
                 "SCRIPT_USER": "etsi_user",
                 "RPC_SSH_KEY": "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",

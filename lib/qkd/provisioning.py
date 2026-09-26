@@ -721,7 +721,6 @@ def configure_qkd_scripts(dev, name, base):
     script_name = ONBOX_SCRIPT_NAME
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
-    peer_cmd_user = secrets.get("peer_cmd_user") or QKD.get("PEER_CMD_USER", script_user)
     script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "super-user")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
@@ -736,7 +735,6 @@ def configure_qkd_scripts(dev, name, base):
 
     print(f"[{name}] Rendering event/op templates")
     print(f"[{name}] Using script_user={script_user}")
-    print(f"[{name}] Using peer_cmd_user(default)={peer_cmd_user}")
 
     context = {
         "script_name": script_name,
@@ -752,17 +750,15 @@ def configure_qkd_scripts(dev, name, base):
         # Build class config with single allow-commands regex covering all operations
         # Junos only supports one allow-commands entry with regex patterns separated by |
         # Simplified and proven working pattern
-        # Narrowly scoped to the peer_cmd_user account only (not all system login
-        # users) so etsi_user can rotate/commit etsi_peer_view's SSH public key
-        # (see script_user_bootstrap.py peer key rotation) without granting
+        # Narrowly scoped to the script_user account only so etsi_user can
+        # rotate/commit its own RPC identity SSH public key (see
+        # script_user_bootstrap.py RPC key rotation) without granting
         # broader system-control permissions.
         allow_cmds_regex = (
             "(configure.*)|(commit.*)|(rollback.*)|"
             "(set security.*)|(delete security.*)|"
             f"(set system login user {script_user} authentication.*)|"
             f"(delete system login user {script_user} authentication.*)|"
-            f"(set system login user {peer_cmd_user} authentication.*)|"
-            f"(delete system login user {peer_cmd_user} authentication.*)|"
             "(show configuration.*)|(show security.*)|"
             "(op qkd_onbox.*)|(start shell.*)|"
             "exit"
@@ -814,281 +810,6 @@ def configure_qkd_scripts(dev, name, base):
     # NOTE: script_user SSH keys are static and should NOT be modified here
     # They are provisioned separately via bootstrap/manual process
     # Attempting to sync them causes data loss of existing keys on device
-
-
-def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
-    class_cfg = (
-        "replace:\n"
-        "system {\n"
-        "  login {\n"
-        f"    class {peer_cmd_user_class} {{\n"
-        "      allow-commands \"exit\";\n"
-        "      deny-commands \"(show|configure|op|request|file)( .*)?|start shell( .*)?\";\n"
-        "    }\n"
-        "  }\n"
-        "}\n"
-    )
-    with Config(dev) as cu:
-        cu.load(class_cfg, format="text", merge=True)
-        if cu.diff():
-            print(f"[{device_name}] Applying peer_cmd_user class policy class={peer_cmd_user_class}")
-            commit_safely(
-                dev,
-                cu,
-                device_name,
-                sync=True,
-                phase="PEER_CMD_USER_CLASS_POLICY",
-                detail=f"class={peer_cmd_user_class}",
-            )
-        else:
-            print(f"[{device_name}] peer_cmd_user class policy already aligned class={peer_cmd_user_class}")
-
-
-def ensure_peer_cmd_user_login(dev, device_name, peer_cmd_user, peer_cmd_user_class="qkd-peer-cmd-class", public_key_lines=None):
-    if not peer_cmd_user:
-        raise ValueError("peer_cmd_user is required")
-
-    # Normalize: accept a single string or a list of key lines.
-    if isinstance(public_key_lines, str):
-        public_key_lines = [public_key_lines] if public_key_lines else []
-    public_key_lines = [k for k in (public_key_lines or []) if k and k.strip()]
-
-    with Config(dev) as cu:
-        # Clean bootstrap: remove old user config first (deletes all old SSH keys)
-        cu.load(
-            f"delete system login user {peer_cmd_user}",
-            format="set",
-            ignore_warning=["statement not found"],
-        )
-
-        # Then create fresh user config
-        cu.load(
-            f"set system login user {peer_cmd_user} class {peer_cmd_user_class}",
-            format="set",
-            ignore_warning=["statement not found"],
-        )
-
-        # Configure ALL peer transport keys in the Junos login config so that
-        # mgd writes the complete authorized_keys on any platform (including
-        # Junos EVO / ACX where mgd periodically regenerates authorized_keys
-        # from config, overwriting any shell-level edits).
-        for key_line in public_key_lines:
-            parts = key_line.strip().split()
-            if len(parts) >= 2:
-                key_type = parts[0]
-                key_payload = key_line.replace('"', '\\"')
-                cu.load(
-                    f"set system login user {peer_cmd_user} authentication {key_type} \"{key_payload}\"",
-                    format="set",
-                    ignore_warning=["statement not found"],
-                )
-
-        if cu.diff():
-            key_count = len(public_key_lines)
-            print(f"[{device_name}] Applying peer_cmd_user login bootstrap user={peer_cmd_user} class={peer_cmd_user_class} keys={key_count}")
-            commit_safely(
-                dev,
-                cu,
-                device_name,
-                sync=True,
-                phase="PEER_CMD_USER_BOOTSTRAP",
-                detail=f"user={peer_cmd_user} class={peer_cmd_user_class} keys={key_count}",
-            )
-        else:
-            print(f"[{device_name}] peer_cmd_user login already aligned user={peer_cmd_user}")
-
-
-def apply_peer_ssh_authorized_keys_config(dev, device_name, device_dict, all_devices_dict, base):
-    from lib.qkd.identity import (
-        collect_peer_transport_public_keys,
-        qkd_script_user,
-        ssh_deploy_cmd,
-    )
-
-    secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
-    if not isinstance(secrets, dict):
-        secrets = {}
-
-    peer_cmd_user = str(
-        secrets.get("peer_cmd_user")
-        or device_dict.get("peer_cmd_user")
-        or qkd_script_user()
-    ).strip()
-    all_devices_list = [all_devices_dict[name] for name in sorted(all_devices_dict.keys())]
-
-    try:
-        pub_keys = collect_peer_transport_public_keys(all_devices_list)
-    except Exception as exc:
-        print(f"[{device_name}] WARN failed to collect peer SSH keys: {exc}")
-        return
-
-    # Prefer direct link peers to keep payload small and deterministic.
-    # Fall back to all runtime peers only when link metadata is incomplete.
-    ip_to_name = {}
-    for n, d in (all_devices_dict or {}).items():
-        ip = d.get("ip") or d.get("mgmt_ip") or d.get("host")
-        if ip:
-            ip_to_name[str(ip)] = n
-
-    direct_peer_names = []
-    for link in device_dict.get("links", []) or []:
-        peer_name = link.get("peer")
-        if not peer_name:
-            peer_ip = link.get("peer_ip")
-            if peer_ip:
-                peer_name = ip_to_name.get(str(peer_ip))
-        if peer_name and peer_name in pub_keys and peer_name not in direct_peer_names:
-            direct_peer_names.append(peer_name)
-
-    source_names = sorted(direct_peer_names) if direct_peer_names else sorted(pub_keys.keys())
-
-    # Always include the target device own peer transport key as explicit
-    # bootstrap/self-auth entry in peer_cmd_user authorized_keys.
-    if device_name in pub_keys and device_name not in source_names:
-        source_names.append(device_name)
-
-    if not source_names:
-        print(f"[{device_name}] No peer sources for SSH authorized-keys sync")
-        return
-
-    key_lines = []
-
-    for source_name in source_names:
-        pub_key = pub_keys.get(source_name)
-        if not pub_key:
-            print(f"[{device_name}] WARN missing peer SSH key from {source_name}")
-            continue
-        parts = pub_key.strip().split()
-        if len(parts) < 2:
-            print(f"[{device_name}] WARN malformed peer SSH key from {source_name}: {pub_key}")
-            continue
-        key_type = parts[0]
-        key_blob = parts[1]
-        # Enforce deterministic, device-aware comments so operators can map
-        # each key line to its source device quickly.
-        key_comment = f"{peer_cmd_user}@{source_name}"
-
-        # Junos expects the SSH public key in full format inside the key payload:
-        #   <key-type> <base64> <comment>
-        key_payload = f"{key_type} {key_blob} {key_comment}"
-        # Keep only a canonical SSH public key line for file-based synchronization.
-        key_lines.append(key_payload)
-
-    if not key_lines:
-        print(f"[{device_name}] No valid peer SSH keys to configure")
-        return
-
-    peer_cmd_user_class = (
-        secrets.get("peer_cmd_user_class")
-        or device_dict.get("peer_cmd_user_class")
-        or QKD.get("PEER_CMD_USER_CLASS", "qkd-peer-cmd-class")
-    )
-    try:
-        ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class)
-    except Exception as exc:
-        raise RuntimeError(
-            f"peer_cmd_user class policy bootstrap failed on {device_name} class={peer_cmd_user_class}: {exc}"
-        )
-    try:
-        ensure_peer_cmd_user_login(
-            dev,
-            device_name,
-            peer_cmd_user,
-            peer_cmd_user_class=peer_cmd_user_class,
-            public_key_lines=key_lines,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            f"peer_cmd_user login bootstrap failed on {device_name} user={peer_cmd_user} class={peer_cmd_user_class}: {exc}"
-        )
-
-    ssh_home_base = str(QKD.get("SSH_HOME_BASE", "/var/home")).strip() or "/var/home"
-    ssh_dir = f"{ssh_home_base}/{peer_cmd_user}/.ssh"
-    auth_path = f"{ssh_dir}/authorized_keys"
-    tmp_auth_path = f"{auth_path}.new"
-
-    def _run_or_raise(step_label, command):
-        result = ssh_deploy_cmd(device_dict, command, timeout=60)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"peer SSH authorized_keys sync failed on {device_name} step={step_label}\n"
-                f"cmd={command}\n"
-                f"stdout={result.stdout}\n"
-                f"stderr={result.stderr}"
-            )
-        return result
-
-    print(f"[{device_name}] Applying peer SSH authorized_keys sync")
-    quoted_user = shlex.quote(peer_cmd_user)
-    quoted_ssh_dir = shlex.quote(ssh_dir)
-    quoted_auth_path = shlex.quote(auth_path)
-    quoted_tmp_auth_path = shlex.quote(tmp_auth_path)
-
-    key_args = " ".join(shlex.quote(line) for line in key_lines)
-    if key_args:
-        append_expr = (
-            f"set -- {key_args}; "
-            f"for key in \"$@\"; do echo \"$key\" >> {quoted_tmp_auth_path}; done"
-        )
-    else:
-        append_expr = f": > {quoted_tmp_auth_path}"
-
-    # Build sed pattern to remove old keys with matching comments before adding new ones.
-    # This prevents duplicate SSH key entries when provisioning runs multiple times.
-    # Also remove legacy bootstrap keys to clean up old naming conventions.
-    if source_names:
-        import re as re_module
-        pattern_parts = []
-        for name in source_names:
-            comment = f"{peer_cmd_user}@{name}"
-            # Escape special regex characters for sed
-            escaped = re_module.escape(comment)
-            pattern_parts.append(escaped)
-        # Also remove old bootstrap keys with @qkd-peer-bootstrap suffix
-        pattern_parts.append(r".*@qkd-peer-bootstrap")
-        filter_pattern = "|".join(pattern_parts)
-        # Use an if/fi block so the entire block's stdout is redirected to the
-        # tmp file.  The previous pattern "[ -f ] && cat | sed || true >> file"
-        # only redirected "true"'s (empty) stdout to the file because ">>" binds
-        # to the last simple command in the AND-OR list, not to the sed pipeline.
-        filter_block = (
-            f"if [ -f {quoted_auth_path} ]; then "
-            f"cat {quoted_auth_path} | sed -E '/({filter_pattern})$/d'; "
-            f"fi"
-        )
-    else:
-        filter_block = (
-            f"if [ -f {quoted_auth_path} ]; then "
-            f"cat {quoted_auth_path}; "
-            f"fi"
-        )
-
-    sync_payload = (
-        "set -e; "
-        f"id {quoted_user}; "
-        f"mkdir -p {quoted_ssh_dir}; "
-        f"touch {quoted_auth_path}; "
-        f"chown {quoted_user} {quoted_ssh_dir} {quoted_auth_path}; "
-        f"chmod 700 {quoted_ssh_dir}; "
-        f"chmod 600 {quoted_auth_path}; "
-        f"rm -f {quoted_tmp_auth_path}; "
-        f"touch {quoted_tmp_auth_path}; "
-        f"{filter_block} >> {quoted_tmp_auth_path}; "
-        f"{append_expr}; "
-        f"mv {quoted_tmp_auth_path} {quoted_auth_path}; "
-        f"chown {quoted_user} {quoted_ssh_dir} {quoted_auth_path}; "
-        f"chmod 700 {quoted_ssh_dir}; "
-        f"chmod 600 {quoted_auth_path}; "
-        f"echo AUTHORIZED_KEYS_SYNC_OK user={peer_cmd_user} target={device_name} key_count={len(key_lines)}"
-    )
-    sync_cmd = f"/bin/sh -c {shlex.quote(sync_payload)}"
-    _run_or_raise("authorized-keys-sync", sync_cmd)
-
-    _run_or_raise(
-        "verify",
-        f"ls -ld {quoted_ssh_dir}; ls -l {quoted_auth_path}; wc -l {quoted_auth_path}",
-    )
-    print(f"[{device_name}] Peer SSH authorized_keys synchronized OK (keys={len(key_lines)} peers={source_names})")
 
 
 def direct_rpc_peer_names(device_name, device_dict, all_devices_dict):
@@ -1396,7 +1117,6 @@ def push_config(device_name, device, commands, base, devices_dict=None):
                 devices_dict,
                 base,
             )
-            apply_peer_ssh_authorized_keys_config(dev, device_name, device, devices_dict, base)
 
     finally:
         dev.close()

@@ -30,10 +30,6 @@ from tools.collect_device_logs import (
     SAFE_NAME_RE,
 )  # noqa: E402
 from tools.qkd_link_rotation_report import generate_reports  # noqa: E402
-from tools.qkd_peer_key_rotation_report import (  # noqa: E402
-    build_peer_key_observation,
-    generate_peer_key_report,
-)
 
 
 DEFAULT_POLICY = ROOT / "config" / "inventory" / "qkd_policy.yaml"
@@ -78,19 +74,10 @@ COMMIT_EVENT_PATTERNS = (
         "comment_template": "QKD: INTERFACE BIND iface=<iface> ca=<ca>",
         "description": "Binds (or re-binds) the interface to the target MACsec CA.",
     },
-    {
-        "purpose": "PEER_SSH_KEY_ROTATION_COMMIT",
-        "marker": "PEER-PUBKEY INSTALLED",
-        "comment_template": "QKD: peer-key rotation source_device=<device>",
-        "description": (
-            "Rotates the dedicated peer SSH transport key used by etsi_peer_view."
-        ),
-    },
 )
 COMMIT_FAILURE_MARKERS = (
     "KEYCHAIN INSTALL FAIL",
     "INTERFACE BIND FAIL",
-    "PEER-PUBKEY INSTALL FAIL",
 )
 KEYCHAIN_ENTRIES_RE = re.compile(r"\bentries=(?P<entries>\d+)\b")
 
@@ -926,7 +913,6 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
     manifest_path = observation_dir / "observation_manifest.json"
     snapshots: Dict[str, Path] = {}
     reports: Dict[str, Dict[str, Any]] = {}
-    peer_key_reports: Dict[str, Dict[str, Any]] = {}
     start_monotonic = time.monotonic()
     offsets = {
         "t1": schedule["t1_offset_seconds"],
@@ -951,11 +937,6 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
             snapshot = run_collection(args, observation_dir, snapshot_name)
             snapshots[stage] = snapshot
             _, _, reports[stage] = generate_reports(snapshot, args.inventory)
-            _, peer_key_reports[stage] = generate_peer_key_report(
-                snapshot,
-                args.inventory,
-                args.base_inventory,
-            )
             write_observation_manifest(manifest_path, "running", schedule, snapshots)
             print("[%s] snapshot and link report complete: %s" % (stage.upper(), snapshot))
             print()
@@ -966,15 +947,6 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
         json_path.write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
         markdown_path.write_text(
             render_comparison_markdown(comparison) + "\n",
-            encoding="utf-8",
-        )
-        peer_key_observation = build_peer_key_observation(
-            peer_key_reports["t1"],
-            peer_key_reports["final"],
-        )
-        peer_key_path = observation_dir / "qkd_peer_key_rotation_observation.json"
-        peer_key_path.write_text(
-            json.dumps(peer_key_observation, indent=2) + "\n",
             encoding="utf-8",
         )
         device_commit_observation = build_device_commit_observation(
