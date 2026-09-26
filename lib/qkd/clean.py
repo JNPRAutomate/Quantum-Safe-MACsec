@@ -136,6 +136,52 @@ def collect_qkd_clean_candidates(device):
 
     return iface_candidates, ca_candidates, keychain_candidates
 
+
+# ----------------------------------------
+# PARSE ORPHAN CONNECTIVITY-ASSOCIATIONS
+# ----------------------------------------
+def parse_orphan_connectivity_associations(display_set_output, target_keychains, known_ca_names):
+    """Parse `show ... | display set` output for connectivity-associations
+    that reference one of target_keychains but are not already accounted
+    for in known_ca_names.
+
+    These are "orphans" relative to our inventory: legacy/renamed CAs left
+    over on the device (e.g. from earlier lab iterations) that still
+    reference a keychain we are about to delete. If left alone, Junos
+    rejects the delete-keychain commit with
+    "authentication-key-chains not defined !!" (statements constraint
+    check failed), causing clean() to fail on an otherwise healthy device.
+
+    Pure/parsing-only so it can be unit tested without a device connection.
+    """
+    target_keychains = set(target_keychains or [])
+    known_ca_names = set(known_ca_names or [])
+
+    if not target_keychains:
+        return []
+
+    orphans = []
+    for line in (display_set_output or "").splitlines():
+        parts = line.strip().split()
+        # set security macsec connectivity-association <NAME> pre-shared-key-chain <KEYCHAIN>
+        if (
+            len(parts) >= 7
+            and parts[0] == "set"
+            and parts[1] == "security"
+            and parts[2] == "macsec"
+            and parts[3] == "connectivity-association"
+            and parts[5] == "pre-shared-key-chain"
+        ):
+            ca_name = parts[4]
+            keychain_name = parts[6].strip('"')
+            if (
+                keychain_name in target_keychains
+                and ca_name not in known_ca_names
+                and ca_name not in orphans
+            ):
+                orphans.append(ca_name)
+    return orphans
+
 # ----------------------------------------
 # CLEAN ONE REMOTE DEVICE
 # ----------------------------------------
@@ -165,6 +211,53 @@ def clean_device(name, device, full_macsec=False):
         iface_candidates, ca_candidates, keychain_candidates = (
             collect_qkd_clean_candidates(device)
         )
+
+        def discover_orphan_connectivity_associations(target_keychains):
+            """Detect connectivity-associations already configured on the
+            device that reference a keychain we are about to delete, but
+            that are not present in our own inventory-derived ca_candidates
+            (e.g. renamed/legacy CAs left over from earlier lab iterations
+            or manual testing).
+
+            Without this, deleting the keychain while an orphan CA still
+            references it makes Junos reject the commit with
+            "authentication-key-chains not defined !!" (statements
+            constraint check failed), and clean() fails fail-closed on an
+            otherwise unrelated device.
+            """
+            if not target_keychains:
+                return []
+
+            probe = Device(host=ip, user=user, passwd=passwd, port=22)
+            try:
+                probe.open()
+                rsp = probe.rpc.cli(
+                    "show configuration security macsec connectivity-association | display set",
+                    format="text",
+                )
+                output = etree.tostring(rsp, encoding="unicode", method="text").strip()
+            except Exception as exc:
+                print(f"[{name}] WARN could not probe existing connectivity-associations: {exc}", flush=True)
+                return []
+            finally:
+                try:
+                    probe.close()
+                except Exception:
+                    pass
+
+            return parse_orphan_connectivity_associations(
+                output, target_keychains, ca_candidates
+            )
+
+        if not full_macsec:
+            orphan_cas = discover_orphan_connectivity_associations(keychain_candidates)
+            if orphan_cas:
+                print(
+                    f"[{name}] Found orphan connectivity-association(s) referencing "
+                    f"target keychain(s), adding to cleanup: {orphan_cas}",
+                    flush=True,
+                )
+                ca_candidates.extend(orphan_cas)
 
         def safe_iface_name(iface):
             return iface.replace("/", "_")
