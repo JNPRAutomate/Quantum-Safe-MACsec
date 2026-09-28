@@ -10,6 +10,7 @@ import shlex
 import re
 import time
 import os
+from pathlib import Path
 
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 
@@ -53,6 +54,11 @@ def qkd_rpc_public_key():
 
 def qkd_authorized_keys():
     return f"{qkd_ssh_dir()}/authorized_keys"
+
+
+def qkd_orchestrator_private_key():
+    key_name = QKD.get("SSH_KEY_NAME", "qkd_id_ed25519")
+    return Path.home() / ".ssh" / f"qkd_{qkd_script_user()}_{key_name}"
 
 
 def qkd_remote_op_script():
@@ -297,8 +303,15 @@ def ssh_cmd(device, command, user, timeout=30):
 def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker=True):
     device = normalize_device(device)
     script_user = qkd_script_user()
-    key_path = qkd_ssh_private_key()
-    self_ssh_host = device_host(device)
+    key_path = qkd_orchestrator_private_key()
+    host = device_host(device)
+
+    if not key_path.is_file():
+        return CommandResult(
+            1,
+            "",
+            f"missing orchestrator SCRIPT_USER private key: {key_path}",
+        )
 
     if command.startswith("op "):
         remote_payload = command
@@ -307,21 +320,44 @@ def ssh_script_user_onbox_cmd(device, command, timeout=30, include_failed_marker
     else:
         remote_payload = "start shell command " + junos_cli_quote(command)
 
-    remote_cmd = (
-        f"ssh -i {key_path} "
-        f"-o IdentitiesOnly=yes "
-        f"-o StrictHostKeyChecking=no "
-        f"-o BatchMode=yes "
-        f"{script_user}@{self_ssh_host} "
-        f"{shlex.quote(remote_payload)}"
-    )
+    remote_cmd = [
+        "ssh",
+        "-i",
+        str(key_path),
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{script_user}@{host}",
+        remote_payload,
+    ]
     if validate_verbose():
         print("REMOTE_CMD=", remote_cmd)
-    return ssh_deploy_cmd(
-        device=device,
-        command=remote_cmd,
-        timeout=timeout,
+    try:
+        result = subprocess.run(
+            remote_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return CommandResult(
+            1,
+            exc.stdout or "",
+            exc.stderr or f"SSH command timed out after {timeout}s",
+        )
+
+    has_error = shell_output_has_error(
+        result.stdout,
         include_failed_marker=include_failed_marker,
+    )
+    return CommandResult(
+        result.returncode or (1 if has_error else 0),
+        result.stdout.strip(),
+        result.stderr.strip(),
     )
 
 
