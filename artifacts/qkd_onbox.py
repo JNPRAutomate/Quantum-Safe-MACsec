@@ -5147,9 +5147,12 @@ def _status_payload_for_link(link):
     state["batch_enabled"] = batch_mode_enabled()
     state["effective_batch_size"] = effective_batch
     state["configured_slots"] = sorted(configured_entries.keys())
+    status_epoch = int(time.time())
+    state["status_epoch"] = status_epoch
     state["configured_next_slot"] = get_configured_next_pending_slot(
         stable_keychain_name(link),
         iface=iface,
+        now_epoch=status_epoch,
     )
     state["configured_active_slot"] = active_slot_index(
         state,
@@ -5179,9 +5182,12 @@ def export_peer_status_snapshot(link, state=None):
         if configured_entries is None:
             configured_entries = {}
         payload["configured_slots"] = sorted(configured_entries.keys())
+        status_epoch = int(time.time())
+        payload["status_epoch"] = status_epoch
         payload["configured_next_slot"] = get_configured_next_pending_slot(
             keychain_name,
             iface=iface,
+            now_epoch=status_epoch,
         )
         payload["configured_active_slot"] = active_slot_index(
             payload,
@@ -5870,7 +5876,20 @@ def run_master_rolling_link(link):
 
     local_next_slot = get_configured_next_pending_slot(keychain, iface=iface)
     peer_next_slot = peer_state.get("configured_next_slot")
-    if local_next_slot != peer_next_slot:
+    local_next_slot_at_peer_time = local_next_slot
+    try:
+        peer_status_epoch = int(peer_state.get("status_epoch"))
+    except (TypeError, ValueError):
+        peer_status_epoch = None
+    if peer_status_epoch is not None and local_next_slot != peer_next_slot:
+        # A key start-time can pass between the peer status snapshot and
+        # this read; compare both views at the peer's snapshot instant.
+        local_next_slot_at_peer_time = get_configured_next_pending_slot(
+            keychain,
+            iface=iface,
+            now_epoch=peer_status_epoch,
+        )
+    if local_next_slot_at_peer_time != peer_next_slot:
         log(
             f"ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED "
             f"local_next_slot={local_next_slot} peer_next_slot={peer_next_slot}",

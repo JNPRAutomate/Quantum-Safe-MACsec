@@ -330,6 +330,22 @@ class TestRollingKeyringPlan:
             "macsec_has_inuse_sa(iface, expected_ca=ca_name)"
         )
 
+    def test_next_slot_check_compares_at_peer_snapshot_instant(self):
+        text = ONBOX.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        sources = {
+            node.name: ast.get_source_segment(text, node)
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in ("run_master_rolling_link", "_status_payload_for_link", "export_peer_status_snapshot")
+        }
+        for name in ("_status_payload_for_link", "export_peer_status_snapshot"):
+            assert '["status_epoch"] = status_epoch' in sources[name]
+            assert "now_epoch=status_epoch" in sources[name]
+        rolling = sources["run_master_rolling_link"]
+        assert "now_epoch=peer_status_epoch" in rolling
+        assert "if local_next_slot_at_peer_time != peer_next_slot:" in rolling
+
     def test_slave_batch_reconciles_seed_reset_before_install(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
         slave_batch = next(
