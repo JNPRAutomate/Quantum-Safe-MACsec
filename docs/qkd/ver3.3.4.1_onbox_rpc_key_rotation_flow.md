@@ -379,10 +379,18 @@ Per ogni link con ruolo master, `run_master_rolling_link()`:
 7. verifica che MACsec abbia una SA `in-use`;
 8. richiede al peer lo stato live con RPC `status`;
 9. confronta active Key ID e active slot;
-10. confronta insieme degli slot, metadati e next pending slot;
-11. seleziona gli slot sostituibili senza toccare active e next;
-12. applica intervallo minimo, grace adattivo e margine di attivazione;
-13. procede solo se `rekey_enabled` è attivo.
+10. confronta insieme degli slot, metadati e next pending slot; il next
+    pending slot locale viene ricalcolato all'istante `status_epoch`
+    pubblicato dal peer, così una start-time che scade tra le due letture non
+    produce un falso `NEXT_KEY_NOT_BILATERALLY_CONFIRMED`;
+11. se lo slot successivo all'active ha già raggiunto la start-time ma MKA non
+    lo ha ancora confermato (`next_slot == active_slot + 2`), registra
+    `ROTATION DEFER reason=KEY_TRANSITION_IN_PROGRESS` (INFO) e rimanda al
+    ciclo successivo invece di bloccare con
+    `ACTIVE_PENDING_PAIR_NOT_ADJACENT`;
+12. seleziona gli slot sostituibili senza toccare active e next;
+13. applica intervallo minimo, grace adattivo e margine di attivazione;
+14. procede solo se `rekey_enabled` è attivo.
 
 Con `strict_sync_enabled: true`, qualsiasi divergenza blocca la creazione di
 un nuovo batch. Il runtime privilegia la consistenza bilaterale rispetto
@@ -786,3 +794,102 @@ qkd_onbox.py come etsi_user su ogni router
 Il risultato è una rotazione MACsec coordinata senza trasferimento del
 materiale QKD e con una seconda rotazione indipendente dell'identità SSH che
 protegge le RPC router-to-router.
+
+---
+
+## 20. Lettura di `qkd_debug.log`: sequenza reale EVO1 ↔ EVO2
+
+Esempio ricavato dai log di EVO1 (`sae-001`, master su `et-0/0/1`) ed EVO2
+(`sae-002`, slave) del 2026-09-28, ora router PDT. Le start-time nei marker
+batch sono in UTC (`16:43:04 +0000` = `09:43:04 PDT`). Log:
+`/var/home/etsi_user/logs/qkd_debug.log`; stato RPC:
+`/var/home/etsi_user/qkd_rpc_key_rotation.json`.
+
+Ring di 4 slot, una nuova chiave MACsec entra in uso ogni 5 minuti (secondo
+`:04`), batch di sostituzione ogni ~10 minuti.
+
+### 20.1 Dopo un deploy: reset al seed e `RING_COMPLETION`
+
+Ogni `deploy` riscrive la keychain con il solo seed dell'orchestratore
+(slot 0). Il primo ciclo successivo riconosce il reset e ripopola gli slot
+1-3 con chiavi QKD:
+
+| Ora | Router | Marker | Significato |
+|---|---|---|---|
+| 09:40:01 | EVO1 | `ORCHESTRATOR SEED RESET RECONCILED ... new_active_key_id=QKD_CA_EVO1_EVO2:bootstrap:key-name:0` | stato locale riallineato al seed del deploy |
+| 09:40:03 | EVO2 | `ORCHESTRATOR SEED RESET RECONCILED` | idem sul peer |
+| 09:40:04 | EVO1 | `RING_COMPLETION START slots=[1, 2, 3] active_slot=0 first_start_time=... 16:43:04 +0000` | ENC dal KME, commit locale di 3 chiavi |
+| 09:40:06 | EVO2 | `INSTALL-KEY-BATCH REQUEST count=3` | RPC dal master con i soli Key ID; DEC dal KME e commit |
+| 09:40:09 | EVO1 | `RING_COMPLETION DONE key_count=3 ring_phase=ready` | ACK ricevuto, verifica post-commit OK |
+
+`RING_COMPLETION` dopo ogni deploy è quindi atteso, non un errore.
+
+### 20.2 Regime: attivazioni e `ROLLING_REPLACEMENT`
+
+| Ora | Router | Marker | Significato |
+|---|---|---|---|
+| 09:43:04 | EVO1 | `ROTATION DEFER reason=KEY_TRANSITION_IN_PROGRESS active_slot=0 starting_slot=1` | slot 1 entra in uso in questo secondo; MKA non lo ha ancora confermato, si attende il ciclo successivo |
+| 09:48:04 | EVO1 | `ROTATION DEFER ... active_slot=1 starting_slot=2` | idem per lo slot 2 |
+| 09:49:04 | EVO1 | `ROLLING_REPLACEMENT START slots=[0, 1] active_slot=2 next_slot=3 first_start_time=... 16:58:04 +0000` | gli slot già consumati (0, 1) vengono sostituiti; active e next non vengono toccati |
+| 09:49:06 | EVO2 | `INSTALL-KEY-BATCH REQUEST count=2` | il peer installa le stesse 2 chiavi; elimina solo le pending degli slot sovrascritti |
+| 09:49:08 | EVO1 | `ROLLING_REPLACEMENT DONE slots=[0, 1] key_count=2 ring_phase=ready` | batch bilaterale completato |
+
+Nelle build fino a `da98585` inclusa, gli istanti `hh:mm:04` producevano invece
+`ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED` oppure
+`ROTATION BLOCKED reason=ACTIVE_PENDING_PAIR_NOT_ADJACENT` (ERROR): erano la
+stessa finestra di transizione letta da un solo lato o prima della conferma
+MKA; costavano un ciclo senza compromettere la sessione. Anche
+`ROTATION SKIP reason=N_MINUS_TWO_TARGETS_NOT_CONSUMED` (INFO) è normale:
+significa che gli slot da sostituire non sono ancora stati consumati.
+
+### 20.3 Rotazione della chiave SSH RPC (ogni 600 s)
+
+Ogni router ruota la propria `qkd_rpc_id_ed25519` verso tutti i peer diretti.
+Il marker `source_device=X` sul router ricevente indica il router che sta
+pubblicando la sua nuova chiave.
+
+| Ora | Router | Marker | Significato |
+|---|---|---|---|
+| 09:40:11 | EVO2 | `OK PREPARE-RPC-PUBKEY source_device=EVO1` | EVO1 aggiunge la sua nuova pubkey accanto a quella attiva |
+| 09:40:16 | EVO2 | `OK FINALIZE-RPC-PUBKEY source_device=EVO1` | dopo verify e activate, EVO1 rimuove la vecchia pubkey |
+| 09:40:18 | EVO1 | `RPC KEY ROTATION COMPLETED rotation_count=4` | transazione chiusa, `transaction: null` |
+| 09:41:21 | EVO1 | `OK PREPARE-RPC-PUBKEY source_device=EVO2` | EVO2 prepara la sua nuova pubkey su EVO1 |
+| 09:41:26 | EVO1 | `OK FINALIZE-RPC-PUBKEY source_device=EVO2` | vecchia pubkey di EVO2 rimossa |
+| 09:41:27 | EVO2 | `RPC KEY ROTATION COMPLETED rotation_count=4` | rotazione EVO2 completata |
+
+Storico del giorno: EVO1 completa alle 08:29, 08:40, 09:29, 09:40; EVO2 alle
+08:30, 08:41, 09:30, 09:41. Il buco 08:51-09:28 non riguarda il link
+EVO1-EVO2: una transazione include tutti i peer diretti ed è rimasta aperta
+perché MX1 (per EVO1) e MX4 (per EVO2) rifiutavano `etsi_user`
+(`RPC-KEY PREPARE-RPC-PUBKEY FAIL ... Permission denied`, seguito da
+`RPC KEY ROTATION NOT COMPLETED this cycle -> will retry next cycle`). Dopo
+il deploy delle 09:26 con `authorized_keys` corretto sugli MX:
+
+| Ora | Router | Marker | Significato |
+|---|---|---|---|
+| 09:27:11 / 09:28:06 | EVO1 | `RPC-KEY VERIFY FAIL peer=EVO2 action=keep_current_key_and_reprepare` | il deploy aveva ripubblicato la chiave attiva sopra la `.next`; la chiave corrente resta valida |
+| 09:28:20 / 09:29:21 | EVO2 | `RPC-KEY VERIFY FAIL peer=EVO1 action=keep_current_key_and_reprepare` | idem in direzione opposta |
+| 09:29:10 | EVO1 | `RPC KEY ROTATION COMPLETED rotation_count=3` | recuperata dopo il re-prepare automatico |
+| 09:30:25 | EVO2 | `RPC KEY ROTATION COMPLETED rotation_count=3` | recuperata |
+
+`VERIFY FAIL ... keep_current_key_and_reprepare` subito dopo un deploy è
+quindi un recupero atteso; se persiste per più cicli indica un problema di
+`authorized_keys` sul peer.
+
+Nota sulla concorrenza deploy / rotazione on-box: la fase di deploy
+`SCRIPT_USER_RPC_KEYS` è solo additiva (aggiunge la chiave corrente di ogni
+peer, non cancella nulla), e `FINALIZE-RPC-PUBKEY` riafferma sempre la nuova
+chiave mentre rimuove le vecchie. Prima di questa correzione un deploy che
+cadeva tra prepare e finalize di un peer (osservato su MX1 alle 09:40:12-18)
+cancellava la nuova chiave di EVO1, e il finalize successivo cancellava la
+vecchia: EVO1 restava senza chiavi su MX1 (`Permission denied`) fino al
+deploy successivo.
+
+### 20.4 Marker da ignorare per il link EVO1-EVO2
+
+- `[et-0/0/2] ROTATION BLOCKED reason=MACSEC_NOT_INUSE`: riguarda il link
+  EVO1-MX1, non EVO1-EVO2.
+- `MKA_PARSE CAK LENGTH INVALID len=62` (WARN): artefatto di parsing del
+  nome CAK, non bloccante.
+- `MKA KEY NOT CONFIRMED ... ckn_match=False` subito dopo un batch: la
+  pending key non è ancora in uso; diventa active solo con evidenza MKA.

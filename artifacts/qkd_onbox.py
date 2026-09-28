@@ -1019,7 +1019,9 @@ def _apply_rpc_pubkey(source_device, pubkey_b64, finalize=False):
                 f'{stale_algo} "{stale_payload}"'
             )
 
-    if pubkey_line not in existing:
+    # On finalize always (re)assert the new key: a concurrent commit (e.g. an
+    # orchestrator deploy) may have removed it after it was read above.
+    if finalize or pubkey_line not in existing:
         key_algo = pubkey_line.split()[0]
         key_payload = pubkey_line.replace('"', '\\"')
         commands.append(
@@ -5894,6 +5896,26 @@ def run_master_rolling_link(link):
             f"ROTATION BLOCKED reason=NEXT_KEY_NOT_BILATERALLY_CONFIRMED "
             f"local_next_slot={local_next_slot} peer_next_slot={peer_next_slot}",
             "ERROR",
+            iface,
+            "MASTER",
+        )
+        return False
+
+    ring_size = max_installed_keys()
+    if (
+        ring_size > 2
+        and local_slots == set(range(ring_size))
+        and local_next_slot is not None
+        and int(local_next_slot) == (local_active_slot + 2) % ring_size
+    ):
+        # The slot after active has reached its start-time but MKA has not yet
+        # confirmed it as active. This is the normal key transition window,
+        # not a ring inconsistency: wait for promotion on the next cycle.
+        log(
+            f"ROTATION DEFER reason=KEY_TRANSITION_IN_PROGRESS "
+            f"active_slot={local_active_slot} starting_slot={(local_active_slot + 1) % ring_size} "
+            f"next_slot={local_next_slot}",
+            "INFO",
             iface,
             "MASTER",
         )

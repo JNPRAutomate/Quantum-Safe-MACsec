@@ -346,6 +346,18 @@ class TestRollingKeyringPlan:
         assert "now_epoch=peer_status_epoch" in rolling
         assert "if local_next_slot_at_peer_time != peer_next_slot:" in rolling
 
+    def test_key_transition_window_defers_instead_of_blocking(self):
+        text = ONBOX.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        rolling = next(
+            ast.get_source_segment(text, node)
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "run_master_rolling_link"
+        )
+        defer = rolling.index("ROTATION DEFER reason=KEY_TRANSITION_IN_PROGRESS")
+        assert "== (local_active_slot + 2) % ring_size" in rolling
+        assert defer < rolling.index("select_ring_update_slots(")
+
     def test_slave_batch_reconciles_seed_reset_before_install(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
         slave_batch = next(
@@ -600,8 +612,10 @@ class TestTransactionalRpcKeyRotation:
 
         assert functions["_apply_rpc_pubkey"]("EVO1", encoded, finalize=True)
         assert len(commands) == 1
-        assert "AAAAOLD" in commands[0]
-        assert "AAAANEW" not in commands[0]
+        assert 'delete system login user etsi_user authentication ssh-ed25519 "ssh-ed25519 AAAAOLD qkd-rpc@EVO1"' in commands[0]
+        # The new key is re-asserted so a concurrent commit cannot drop it.
+        assert 'set system login user etsi_user authentication ssh-ed25519 "ssh-ed25519 AAAANEW qkd-rpc@EVO1"' in commands[0]
+        assert "delete system login user etsi_user authentication ssh-ed25519 \"ssh-ed25519 AAAANEW" not in commands[0]
         assert "orchestrator@linux" not in commands[0]
 
     def test_verify_physically_uses_next_private_key(self):

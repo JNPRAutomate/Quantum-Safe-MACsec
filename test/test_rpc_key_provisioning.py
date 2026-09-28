@@ -113,10 +113,12 @@ def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch):
         {},
     )
 
+    # Additive only: an in-flight on-box rotation of EVO2 must not lose the
+    # key it just prepared (AAAAOLD here stands for any other EVO2 key).
     assert loaded == [
-        'delete system login user etsi_user authentication ssh-ed25519 "ssh-ed25519 AAAAOLD qkd-rpc@EVO2"',
         'set system login user etsi_user authentication ssh-ed25519 "ssh-ed25519 AAAANEW qkd-rpc@EVO2"',
     ]
+    assert all(not command.startswith("delete") for command in loaded)
     assert all("qkd-rpc@EVO3" not in command for command in loaded)
     assert all("orchestrator@linux" not in command for command in loaded)
     assert commits[0]["phase"] == "SCRIPT_USER_RPC_KEYS"

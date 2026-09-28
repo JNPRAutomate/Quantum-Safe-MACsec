@@ -874,20 +874,13 @@ def apply_script_user_rpc_keys_config(dev, device_name, device_dict, all_devices
             f"{','.join(missing_peer_keys)}"
         )
 
-    current_cfg = dev.rpc.cli(
-        f"show configuration system login user {script_user} | display set",
-        format="text",
-    )
-    current_text = rpc_text(current_cfg)
+    # Additive only: the on-box runtime may be rotating a peer's RPC key while
+    # the deploy runs. Deleting the other qkd-rpc@<source> keys here would drop
+    # the key just prepared/activated by that peer and lock it out. Stale keys
+    # are removed by the peer's next on-box FINALIZE-RPC-PUBKEY.
     commands = []
     for source_name in sorted(direct_peer_names):
         tag = f"qkd-rpc@{source_name}"
-        for line in current_text.splitlines():
-            line = line.strip()
-            prefix = f"set system login user {script_user} authentication "
-            if line.startswith(prefix) and line.endswith(f'{tag}"'):
-                commands.append("delete " + line[len("set "):])
-
         parts = pub_keys[source_name].strip().split()
         if len(parts) < 2:
             raise RuntimeError(
