@@ -592,16 +592,17 @@ def check_script_user_authorized_keys(device):
     if owner_result.returncode == 0 and owner_line:
         owner_fields = owner_line.split()
         if len(owner_fields) >= 4 and owner_fields[2] != script_user:
-            delete_result = pyez_cli_cmd(device, f"file delete {auth_path}", timeout=30, include_failed_marker=False)
-            if delete_result.returncode != 0:
-                # On some MX images this file is root-owned/immutable from historical runs.
-                # Do not hard-fail predeploy if we cannot replace it as SCRIPT_USER.
+            # Junos classic (MX) mgd rewrites authorized_keys as root from the
+            # login-user config. Never delete it: it holds the orchestrator and
+            # peer RPC keys. Only repair ownership.
+            chown_result = ssh_deploy_cmd(device, f"chown {script_user} {auth_path}", timeout=20)
+            if chown_result.returncode != 0:
                 print(
-                    f"[WARN] authorized_keys cleanup not permitted on {name}; continuing with config-based peer SSH auth\n"
+                    f"[WARN] authorized_keys ownership repair not permitted on {name}; continuing with config-based peer SSH auth\n"
                     f"expected_owner={script_user}\n"
                     f"found={owner_line}\n"
-                    f"stdout={delete_result.stdout}\n"
-                    f"stderr={delete_result.stderr}\n"
+                    f"stdout={chown_result.stdout}\n"
+                    f"stderr={chown_result.stderr}\n"
                     f"hint=optional repair with deploy/root credentials via lib/common/script_user_bootstrap.py --ask-deploy-password"
                 )
                 return

@@ -89,6 +89,11 @@ def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch):
     monkeypatch.setattr(provisioning, "Config", FakeConfig)
     monkeypatch.setattr(
         provisioning,
+        "sync_authorized_keys_from_config",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        provisioning,
         "commit_safely",
         lambda *_args, **kwargs: commits.append(kwargs),
     )
@@ -115,3 +120,80 @@ def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch):
     assert all("qkd-rpc@EVO3" not in command for command in loaded)
     assert all("orchestrator@linux" not in command for command in loaded)
     assert commits[0]["phase"] == "SCRIPT_USER_RPC_KEYS"
+
+
+MX_LOGIN_USER_TEXT = """uid 2002;
+class super-user;
+authentication {
+    ssh-ed25519 "ssh-ed25519 AAAAORCH etsi_user@qkd-script-bootstrap"; ## SECRET-DATA
+    ssh-ed25519 "ssh-ed25519 AAAAEVO1 qkd-rpc@EVO1"; ## SECRET-DATA
+}
+"""
+
+
+def _fake_sync_dev(shell_output):
+    shell_commands = []
+
+    def request_shell_execute(command):
+        shell_commands.append(command)
+        return SimpleNamespace(itertext=lambda: iter([shell_output]))
+
+    dev = SimpleNamespace(
+        rpc=SimpleNamespace(
+            cli=lambda *_args, **_kwargs: SimpleNamespace(
+                itertext=lambda: iter([MX_LOGIN_USER_TEXT])
+            ),
+            request_shell_execute=request_shell_execute,
+        )
+    )
+    return dev, shell_commands
+
+
+def test_authorized_keys_sync_appends_every_configured_key_without_truncating():
+    dev, shell_commands = _fake_sync_dev("__QKD_AUTH_KEYS_SYNC_OK__")
+
+    provisioning.sync_authorized_keys_from_config(dev, "MX1", "etsi_user")
+
+    assert len(shell_commands) == 1
+    command = shell_commands[0]
+    assert "ssh-ed25519 AAAAORCH etsi_user@qkd-script-bootstrap" in command
+    assert "ssh-ed25519 AAAAEVO1 qkd-rpc@EVO1" in command
+    assert "/var/home/etsi_user/.ssh/authorized_keys" in command
+    assert ">> /var/home/etsi_user/.ssh/authorized_keys" in command
+    assert "> /var/home/etsi_user/.ssh/authorized_keys" not in command.replace(">>", "")
+    assert "rm " not in command
+
+
+def test_authorized_keys_sync_fails_without_success_marker():
+    dev, _shell_commands = _fake_sync_dev("chown: Permission denied")
+
+    with pytest.raises(RuntimeError, match="authorized_keys sync failed on MX1"):
+        provisioning.sync_authorized_keys_from_config(dev, "MX1", "etsi_user")
+
+
+def test_predeploy_never_deletes_root_owned_authorized_keys(monkeypatch):
+    shell_commands = []
+    cli_commands = []
+
+    def fake_shell(_device, command, **_kwargs):
+        shell_commands.append(command)
+        if command.startswith("ls -l "):
+            return SimpleNamespace(
+                returncode=0,
+                stdout="-rw-------  1 root  wheel  861 Sep 28 08:51 /var/home/etsi_user/.ssh/authorized_keys",
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(identity, "ssh_deploy_cmd", fake_shell)
+    monkeypatch.setattr(
+        identity,
+        "pyez_cli_cmd",
+        lambda _device, command, **_kwargs: cli_commands.append(command),
+    )
+
+    identity.check_script_user_authorized_keys({"name": "MX1", "ip": "192.0.2.10"})
+
+    assert cli_commands == []
+    assert any(command.startswith("chown etsi_user ") for command in shell_commands)
+    assert all("file delete" not in command and "rm " not in command for command in shell_commands)

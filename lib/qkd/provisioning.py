@@ -925,6 +925,64 @@ def apply_script_user_rpc_keys_config(dev, device_name, device_dict, all_devices
                 f"user={script_user} peers={sorted(direct_peer_names)}"
             )
 
+    sync_authorized_keys_from_config(dev, device_name, script_user)
+
+
+def sync_authorized_keys_from_config(dev, device_name, script_user):
+    """Ensure every SSH key configured for script_user is in authorized_keys.
+
+    Junos classic (MX) sshd reads only ~/.ssh/authorized_keys, which mgd
+    rebuilds from the login-user config only when that config changes. If the
+    file was damaged while the config was already aligned, no commit happens
+    and peers stay locked out, so re-add the configured keys explicitly.
+    """
+    import re
+
+    cfg_text = rpc_text(
+        dev.rpc.cli(
+            f"show configuration system login user {script_user}",
+            format="text",
+        )
+    )
+    configured_keys = [
+        match.group(1).strip()
+        for match in re.finditer(r'ssh-(?:ed25519|rsa|ecdsa)\S*\s+"([^"]+)"', cfg_text)
+    ]
+    if not configured_keys:
+        print(f"[{device_name}] WARN no SSH keys configured for {script_user}; authorized_keys sync skipped")
+        return
+
+    ssh_dir = f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{script_user}/.ssh"
+    auth_path = f"{ssh_dir}/authorized_keys"
+    parts = [
+        f"mkdir -p {shlex.quote(ssh_dir)}",
+        f"touch {shlex.quote(auth_path)}",
+    ]
+    for key in configured_keys:
+        quoted = shlex.quote(key)
+        parts.append(
+            f"grep -q -F -x {quoted} {shlex.quote(auth_path)} || "
+            f"echo {quoted} >> {shlex.quote(auth_path)}"
+        )
+    parts.extend(
+        [
+            f"chown {shlex.quote(script_user)} {shlex.quote(ssh_dir)} {shlex.quote(auth_path)}",
+            f"chmod 700 {shlex.quote(ssh_dir)}",
+            f"chmod 600 {shlex.quote(auth_path)}",
+            "echo __QKD_AUTH_KEYS_SYNC_OK__",
+        ]
+    )
+    command = "/bin/sh -c " + shlex.quote("; ".join(parts))
+    output = run_shell(dev, command, name=device_name)
+    if "__QKD_AUTH_KEYS_SYNC_OK__" not in output:
+        raise RuntimeError(
+            f"authorized_keys sync failed on {device_name} user={script_user}\n{output}"
+        )
+    print(
+        f"[{device_name}] OK authorized_keys synced from config "
+        f"user={script_user} configured_keys={len(configured_keys)}"
+    )
+
 
 # ----------------------------------------
 # PUSH CONFIG
