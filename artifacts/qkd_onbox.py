@@ -4584,7 +4584,7 @@ def send_command(
         log(
             f"SENDING KEY-ID BATCH TO PEER {peer_user}@{peer_ip} "
             f"local_iface={iface} peer_iface={peer_iface} "
-            f"{summarize_batch_b64(batch_b64)} start_times={start_time_human} "
+            f"{summarize_batch_b64(batch_b64)} start_times={start_time_human.split(' count=')[0]} "
             f"(key-ids only, peer fetches the keys from its own KME)",
             "INFO",
             iface,
