@@ -4487,6 +4487,18 @@ def validate_ssh_runtime_for_master():
     return True
 
 
+def summarize_batch_b64(batch_b64):
+    """Readable log form of an install-key-batch payload (no base64 blob)."""
+    try:
+        batch = json.loads(base64.urlsafe_b64decode(batch_b64.encode()).decode())
+        items = [item for item in batch if isinstance(item, dict)]
+        slots = ",".join(str(item.get("slot")) for item in items)
+        key_ids = ",".join(str(item.get("key_id")) for item in items)
+        return f"count={len(items)} slots={slots} key_ids={key_ids}"
+    except Exception:
+        return f"undecodable bytes={len(batch_b64 or '')}"
+
+
 def send_command(
     link,
     action,
@@ -4568,13 +4580,24 @@ def send_command(
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=4",
     ]
-    log(
-        f"SSH RPC EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
-        f"scheduled_start_time={start_time_human} cmd=\"{cmd}\"",
-        "INFO",
-        iface,
-        "MASTER",
-    )
+    if action == "install-key-batch" and batch_b64:
+        log(
+            f"SENDING KEY-ID BATCH TO PEER {peer_user}@{peer_ip} "
+            f"local_iface={iface} peer_iface={peer_iface} "
+            f"{summarize_batch_b64(batch_b64)} start_times={start_time_human} "
+            f"(key-ids only, peer fetches the keys from its own KME)",
+            "INFO",
+            iface,
+            "MASTER",
+        )
+    else:
+        log(
+            f"SSH RPC EXEC {peer_user}@{peer_ip} action={action} local_iface={iface} peer_iface={peer_iface} "
+            f"scheduled_start_time={start_time_human} cmd=\"{cmd}\"",
+            "INFO",
+            iface,
+            "MASTER",
+        )
 
     ssh_cmd = [
         *ssh_options,

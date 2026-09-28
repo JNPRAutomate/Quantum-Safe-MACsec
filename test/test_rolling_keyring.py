@@ -1069,7 +1069,7 @@ class TestBilateralSlotMetadata:
 
 class TestRpcBatchDelivery:
     def setup_method(self):
-        self.functions = load_functions("send_command")
+        self.functions = load_functions("send_command", "summarize_batch_b64")
         self.calls = []
         payload = json.dumps(
             [{
@@ -1310,3 +1310,33 @@ class TestRpcKeyRotationDue:
         due = self._due()
         assert not due(1000 + 29, 1000, 60, 600)
         assert due(1000 + 30, 1000, 60, 600)
+
+
+class TestBatchLogSummary:
+    def test_summary_lists_slots_and_key_ids_without_blob(self):
+        functions = load_functions("summarize_batch_b64")
+        functions.update({"base64": base64, "json": json})
+        batch = [
+            {"generation": 1, "slot": 1, "start_time": "x", "key_id": "aaaa-1"},
+            {"generation": 2, "slot": 2, "start_time": "y", "key_id": "bbbb-2"},
+        ]
+        encoded = base64.urlsafe_b64encode(json.dumps(batch).encode()).decode()
+        summary = functions["summarize_batch_b64"](encoded)
+        assert summary == "count=2 slots=1,2 key_ids=aaaa-1,bbbb-2"
+        assert encoded not in summary
+
+    def test_summary_handles_garbage(self):
+        functions = load_functions("summarize_batch_b64")
+        functions.update({"base64": base64, "json": json})
+        assert functions["summarize_batch_b64"]("!!!").startswith("undecodable")
+
+    def test_send_command_logs_summary_not_blob(self):
+        text = ONBOX.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        source = next(
+            ast.get_source_segment(text, node)
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "send_command"
+        )
+        assert "SENDING KEY-ID BATCH TO PEER" in source
+        assert "{summarize_batch_b64(batch_b64)}" in source
