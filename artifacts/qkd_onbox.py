@@ -6216,6 +6216,23 @@ def run_master_rolling_link(link):
     return True
 
 
+def rpc_key_rotation_due(now, last_rotation, rotation_interval, execution_interval):
+    """Return True when the RPC identity rotation should run on this tick.
+
+    last_rotation is stamped when the cycle completes, a few seconds after the
+    tick that started it. A strict "elapsed >= interval" test therefore misses
+    the tick exactly one interval later by those few seconds and rotates one
+    execution tick late (11 min instead of 10). Accept the tick that lands
+    within half an execution interval of the deadline.
+    """
+    last_rotation = int(last_rotation or 0)
+    if last_rotation <= 0:
+        return True
+    rotation_interval = int(rotation_interval)
+    tolerance = min(max(0, int(execution_interval)) // 2, rotation_interval // 2)
+    return int(now) - last_rotation >= rotation_interval - tolerance
+
+
 def run_master():
     # Complete all MACsec work before rotating the independent SSH transport
     # key, so credentials cannot change in the middle of a keyring transaction.
@@ -6233,7 +6250,14 @@ def run_master():
         last_rotation = rotation_state.get("last_rotation_timestamp", 0)
         rotation_count = rotation_state.get("rotation_count", 0)
         seconds_since_last = None if int(last_rotation or 0) <= 0 else max(0, now - int(last_rotation))
-        seconds_until_next = 0 if seconds_since_last is None else max(0, rotation_interval - seconds_since_last)
+        rotation_due = rpc_key_rotation_due(
+            now, last_rotation, rotation_interval, script_execution_interval_seconds()
+        )
+        seconds_until_next = (
+            0
+            if seconds_since_last is None or rotation_due
+            else max(0, rotation_interval - seconds_since_last)
+        )
 
         # Log current peer key rotation state
         log(
@@ -6250,7 +6274,7 @@ def run_master():
             mode="RPC-KEY-ROTATION",
         )
 
-        if rotation_state.get("transaction") or now - last_rotation >= rotation_interval:
+        if rotation_state.get("transaction") or rotation_due:
             try:
                 if not run_rpc_key_rotation_cycle():
                     log(

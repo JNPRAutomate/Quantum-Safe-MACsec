@@ -605,6 +605,12 @@ rpc_key_rotation_interval_seconds: 600
 deve avviare o riprendere la rotazione di `qkd_rpc_id_ed25519`. In questo modo
 l'identità SSH non cambia nel mezzo di una transazione keyring.
 
+La rotazione è considerata scaduta quando mancano meno di metà
+`execution_interval_seconds` (30 s con il timer a 60 s) ai 600 s. Il
+`last_rotation_timestamp` viene infatti scritto a fine ciclo, qualche secondo
+dopo il tick che l'ha avviata: senza tolleranza il tick dopo 10 minuti troverebbe
+ancora `next_rotation_in_seconds=7` e la rotazione slitterebbe a 11 minuti.
+
 ### 15.1 Generate
 
 Il router genera:

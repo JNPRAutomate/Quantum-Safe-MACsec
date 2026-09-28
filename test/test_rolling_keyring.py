@@ -1287,3 +1287,26 @@ def test_qkd_policy_accepts_safe_rpc_rotation_intervals(interval):
 def test_qkd_policy_rejects_unsafe_rpc_rotation_intervals(interval):
     with pytest.raises(ValueError, match="rpc_key_rotation_interval_seconds"):
         validate_qkd_policy(_valid_policy_with_rpc_rotation(interval))
+
+
+class TestRpcKeyRotationDue:
+    def _due(self):
+        return load_functions("rpc_key_rotation_due")["rpc_key_rotation_due"]
+
+    def test_tick_just_before_deadline_is_due(self):
+        due = self._due()
+        # Completed at 10:31:11, next tick at 10:41:04 -> 593 s elapsed.
+        assert due(1000 + 593, 1000, 600, 60)
+
+    def test_early_ticks_are_not_due(self):
+        due = self._due()
+        assert not due(1000 + 533, 1000, 600, 60)
+        assert not due(1000 + 569, 1000, 600, 60)
+
+    def test_first_rotation_is_due(self):
+        assert self._due()(1000, 0, 600, 60)
+
+    def test_tolerance_never_exceeds_half_interval(self):
+        due = self._due()
+        assert not due(1000 + 29, 1000, 60, 600)
+        assert due(1000 + 30, 1000, 60, 600)
