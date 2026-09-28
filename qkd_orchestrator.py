@@ -395,9 +395,17 @@ def parse_args():
     deploy.add_argument(
         "--bootstrap-user",
         help=(
-            "Administrative transport user used for validation, upload, and "
-            "installation. Overrides QKD_BOOTSTRAP_USER and inventory defaults; "
-            "its password is requested interactively when needed."
+            "Privileged user used for validation and installation. Overrides "
+            "QKD_BOOTSTRAP_USER and inventory defaults; its password is "
+            "requested interactively when needed."
+        ),
+    )
+    deploy.add_argument(
+        "--upload-user",
+        help=(
+            "User used only to upload artifacts into /var/tmp. Defaults to the "
+            "bootstrap user. When different, set QKD_UPLOAD_PASSWORD or enter "
+            "its password at the separate interactive prompt."
         ),
     )
     deploy.add_argument("--ssh-key")
@@ -535,17 +543,19 @@ def deploy_onbox(
     devices,
     artifacts,
     script_user=None,
-    script_password=None,
     bootstrap_user=None,
     bootstrap_password=None,
+    upload_user=None,
+    upload_password=None,
     shipment_preload=False,
 ):
     """
-    Deploy qkd_onbox.py to Junos devices using SCRIPT_USER/admin as source of truth.
+    Upload qkd_onbox.py through the selected transport user, then install it
+    through the privileged bootstrap user.
 
     Critical behavior:
-      - Do NOT use device["auth"]["username"] for ONBOX deployment.
-      - Use QKD["SCRIPT_USER"] / admin for SCP, install, and dual-RE file sync.
+      - The upload user writes only to /var/tmp.
+      - The bootstrap user performs privileged install and dual-RE file sync.
       - On dual-RE MX, copy qkd_onbox.py to re1:/var/db/scripts/op and event.
       - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
     """
@@ -557,7 +567,8 @@ def deploy_onbox(
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
 
-    remote_tmp = f"{tmp_dir}/{script_name}"
+    upload_suffix = f"qkd-upload-{os.getpid()}"
+    remote_tmp = f"{tmp_dir}/{script_name}.{upload_suffix}"
     remote_op = f"{op_script_dir}/{script_name}"
     remote_event = f"{event_script_dir}/{script_name}"
 
@@ -566,15 +577,6 @@ def deploy_onbox(
 
     if not isinstance(secrets, dict):
         secrets = {}
-
-    resolved_script_password = (
-        script_password
-        or os.getenv("QKD_SCRIPT_PASSWORD")
-        or secrets.get("script_password")
-        or secrets.get("admin_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-        or secrets.get("default_password")
-    )
 
     resolved_bootstrap_user = (
         bootstrap_user
@@ -592,11 +594,30 @@ def deploy_onbox(
         or os.getenv("QKD_DEFAULT_PASSWORD")
         or secrets.get("default_password")
     )
+    resolved_upload_user = (
+        upload_user
+        or os.getenv("QKD_UPLOAD_USER")
+        or resolved_bootstrap_user
+    )
+    resolved_upload_password = (
+        upload_password
+        or os.getenv("QKD_UPLOAD_PASSWORD")
+        or (
+            resolved_bootstrap_password
+            if resolved_upload_user == resolved_bootstrap_user
+            else None
+        )
+    )
 
-    if not resolved_script_password and not (resolved_bootstrap_user and resolved_bootstrap_password):
+    if not (resolved_bootstrap_user and resolved_bootstrap_password):
         raise RuntimeError(
-            "Cannot deploy ONBOX: missing both SCRIPT_USER password and bootstrap credentials. "
-            "Provide SCRIPT_USER password or bootstrap credentials in inventory/env."
+            "Cannot install ONBOX: missing privileged bootstrap credentials. "
+            "Provide QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD or use the interactive prompt."
+        )
+    if not (resolved_upload_user and resolved_upload_password):
+        raise RuntimeError(
+            "Cannot upload ONBOX: missing upload credentials. "
+            "Provide QKD_UPLOAD_USER/QKD_UPLOAD_PASSWORD or use --upload-user interactively."
         )
 
     def rpc_text(rsp):
@@ -646,56 +667,43 @@ def deploy_onbox(
         low = (output or "").lower()
         return low.count("routing engine") >= 2
 
-    def open_device_as_script_user(host):
-        """
-        Open PyEZ session as SCRIPT_USER/admin.
-        Try NETCONF 830 first, then fallback to SSH/netconf over 22.
-        """
+    def open_device(host, user, password, role):
         last_error = None
 
-        credential_candidates = []
-        # Prefer bootstrap/admin transport when available to avoid noisy
-        # script_user password failures on platforms where account propagation
-        # can lag during redeploy windows.
-        if (
-            resolved_bootstrap_user
-            and resolved_bootstrap_password
-        ):
-            credential_candidates.append((resolved_bootstrap_user, resolved_bootstrap_password))
-        if resolved_script_user and resolved_script_password:
-            credential_candidates.append((resolved_script_user, resolved_script_password))
+        for port in (830, 22):
+            dev = Device(
+                host=host,
+                user=user,
+                passwd=str(password),
+                port=port,
+                gather_facts=False,
+            )
 
-        for candidate_user, candidate_password in credential_candidates:
-            if not candidate_user or not candidate_password:
-                continue
-
-            for port in (830, 22):
-                dev = Device(
-                    host=host,
-                    user=candidate_user,
-                    passwd=str(candidate_password),
-                    port=port,
-                    gather_facts=False,
-                )
+            try:
+                dev.open()
+                return dev
+            except Exception as exc:
+                last_error = exc
 
                 try:
-                    dev.open()
-                    if str(candidate_user) != str(resolved_script_user):
-                        log.warning(
-                            f"[{host}] script_user auth failed; ONBOX deploy fallback to bootstrap user {candidate_user}"
-                        )
-                    return dev
-                except Exception as exc:
-                    last_error = exc
-
-                    try:
-                        dev.close()
-                    except Exception:
-                        pass
+                    dev.close()
+                except Exception:
+                    pass
 
         raise RuntimeError(
-            f"Unable to open device {host} as {resolved_script_user}: {last_error}"
+            f"Unable to open device {host} as {role} user {user}: {last_error}"
         )
+
+    def upload_artifacts(dev, name, script, sidecar_paths, remote_sidecar_tmps):
+        with SCP(dev) as scp:
+            log.info(
+                f"[{name}] SCP script to {remote_tmp} as upload user "
+                f"{resolved_upload_user}"
+            )
+            scp.put(str(script), remote_path=remote_tmp)
+            for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
+                scp.put(str(local_sidecar), remote_path=remote_sidecar)
+                log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
 
     def install_on_active_re(dev, remote_tmp_script, sidecar_remote_tmps, sidecar_remote_ops):
         """
@@ -862,21 +870,43 @@ def deploy_onbox(
                     placeholder_path.write_text("{}\n", encoding="utf-8")
                     sidecar_paths.append(placeholder_path)
 
-                remote_sidecar_tmps = [f"{tmp_dir}/{p.name}" for p in sidecar_paths]
+                remote_sidecar_tmps = [
+                    f"{tmp_dir}/{p.name}.{upload_suffix}" for p in sidecar_paths
+                ]
                 remote_sidecar_ops = [f"{op_script_dir}/{p.name}" for p in sidecar_paths]
 
-                log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
-
-                dev = open_device_as_script_user(ip)
+                log.info(
+                    f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} "
+                    f"upload={resolved_upload_user} install={resolved_bootstrap_user} ====="
+                )
+                upload_dev = open_device(
+                    ip,
+                    resolved_upload_user,
+                    resolved_upload_password,
+                    "upload",
+                )
 
                 try:
-                    with SCP(dev) as scp:
-                        log.info(f"[{name}] SCP script to {remote_tmp}")
-                        scp.put(str(script), remote_path=remote_tmp)
-                        for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
-                            scp.put(str(local_sidecar), remote_path=remote_sidecar)
-                            log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
+                    upload_artifacts(
+                        upload_dev,
+                        name,
+                        script,
+                        sidecar_paths,
+                        remote_sidecar_tmps,
+                    )
+                finally:
+                    try:
+                        upload_dev.close()
+                    except Exception:
+                        pass
 
+                dev = open_device(
+                    ip,
+                    resolved_bootstrap_user,
+                    resolved_bootstrap_password,
+                    "bootstrap/install",
+                )
+                try:
                     log.info(f"[{name}] Installing onbox script into op/event directories")
                     output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
 
@@ -903,21 +933,43 @@ def deploy_onbox(
             if local_path.exists():
                 sidecar_paths.append(local_path)
 
-        remote_sidecar_tmps = [f"{tmp_dir}/{p.name}" for p in sidecar_paths]
+        remote_sidecar_tmps = [
+            f"{tmp_dir}/{p.name}.{upload_suffix}" for p in sidecar_paths
+        ]
         remote_sidecar_ops = [f"{op_script_dir}/{p.name}" for p in sidecar_paths]
 
-        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
-
-        dev = open_device_as_script_user(ip)
+        log.info(
+            f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} "
+            f"upload={resolved_upload_user} install={resolved_bootstrap_user} ====="
+        )
+        upload_dev = open_device(
+            ip,
+            resolved_upload_user,
+            resolved_upload_password,
+            "upload",
+        )
 
         try:
-            with SCP(dev) as scp:
-                log.info(f"[{name}] SCP script to {remote_tmp}")
-                scp.put(str(script), remote_path=remote_tmp)
-                for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
-                    scp.put(str(local_sidecar), remote_path=remote_sidecar)
-                    log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
+            upload_artifacts(
+                upload_dev,
+                name,
+                script,
+                sidecar_paths,
+                remote_sidecar_tmps,
+            )
+        finally:
+            try:
+                upload_dev.close()
+            except Exception:
+                pass
 
+        dev = open_device(
+            ip,
+            resolved_bootstrap_user,
+            resolved_bootstrap_password,
+            "bootstrap/install",
+        )
+        try:
             log.info(f"[{name}] Installing onbox script into op/event directories")
             output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
 
@@ -1029,6 +1081,33 @@ def resolve_interactive_bootstrap_credentials(
             raise RuntimeError("Bootstrap password cannot be empty")
 
     return str(bootstrap_user), str(bootstrap_password)
+
+
+def resolve_interactive_upload_credentials(
+    upload_user: str,
+    *,
+    bootstrap_user: str,
+    bootstrap_password: str,
+    password_fn: Callable[[str], str] = getpass.getpass,
+    interactive: Optional[bool] = None,
+) -> Tuple[str, str]:
+    if upload_user == bootstrap_user:
+        return upload_user, bootstrap_password
+
+    upload_password = os.getenv("QKD_UPLOAD_PASSWORD")
+    if not upload_password:
+        if interactive is None:
+            interactive = sys.stdin.isatty()
+        if not interactive:
+            raise RuntimeError(
+                "Missing upload password and no interactive terminal is available. "
+                "Set QKD_UPLOAD_PASSWORD or omit --upload-user to use the bootstrap identity."
+            )
+        upload_password = password_fn(f"Upload password for {upload_user}: ")
+        if not upload_password:
+            raise RuntimeError("Upload password cannot be empty")
+
+    return str(upload_user), str(upload_password)
 
 
 def handle_create(args):
@@ -1427,9 +1506,7 @@ def handle_deploy(args):
         print_step_banner("0/5", "PREVIEW OR DRY-RUN", "END")
         return
 
-    if script_auth_mode == "key-only" and not (
-        bootstrap_user and bootstrap_password
-    ):
+    if not (bootstrap_user and bootstrap_password):
         bootstrap_user, bootstrap_password = (
             resolve_interactive_bootstrap_credentials(
                 inventory_base,
@@ -1437,6 +1514,21 @@ def handle_deploy(args):
             )
         )
         print(f"Deploy credentials resolved for user={bootstrap_user}")
+
+    upload_user = (
+        getattr(args, "upload_user", None)
+        or os.getenv("QKD_UPLOAD_USER")
+        or bootstrap_user
+    )
+    upload_user, upload_password = resolve_interactive_upload_credentials(
+        upload_user,
+        bootstrap_user=bootstrap_user,
+        bootstrap_password=bootstrap_password,
+    )
+    print(
+        f"Deploy roles resolved: upload_user={upload_user} "
+        f"bootstrap_user={bootstrap_user} runtime_user={script_user}"
+    )
 
     print_step_banner(
         "1/5",
@@ -1575,9 +1667,10 @@ def handle_deploy(args):
         devices,
         artifacts,
         script_user=script_user,
-        script_password=script_password,
         bootstrap_user=bootstrap_user,
         bootstrap_password=bootstrap_password,
+        upload_user=upload_user,
+        upload_password=upload_password,
         shipment_preload=args.shipment_preload,
     )
     print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")

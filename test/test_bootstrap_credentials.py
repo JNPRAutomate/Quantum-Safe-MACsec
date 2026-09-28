@@ -15,6 +15,8 @@ ENVIRONMENT_VARIABLES = (
     "QKD_DEFAULT_PASSWORD",
     "QKD_BOOTSTRAP_USER",
     "QKD_BOOTSTRAP_PASSWORD",
+    "QKD_UPLOAD_USER",
+    "QKD_UPLOAD_PASSWORD",
 )
 
 
@@ -121,6 +123,48 @@ def test_bootstrap_credentials_fail_without_tty(monkeypatch):
         )
 
 
+def test_upload_credentials_reuse_bootstrap_identity(monkeypatch):
+    clear_credential_environment(monkeypatch)
+
+    credentials = qkd_orchestrator.resolve_interactive_upload_credentials(
+        "root",
+        bootstrap_user="root",
+        bootstrap_password="bootstrap-secret",
+        password_fn=lambda _: pytest.fail("upload prompt was not expected"),
+        interactive=False,
+    )
+
+    assert credentials == ("root", "bootstrap-secret")
+
+
+def test_upload_credentials_prompt_separately_for_different_user(monkeypatch):
+    clear_credential_environment(monkeypatch)
+    prompts = []
+
+    credentials = qkd_orchestrator.resolve_interactive_upload_credentials(
+        "labuser",
+        bootstrap_user="root",
+        bootstrap_password="bootstrap-secret",
+        password_fn=lambda prompt: prompts.append(prompt) or "upload-secret",
+        interactive=True,
+    )
+
+    assert credentials == ("labuser", "upload-secret")
+    assert prompts == ["Upload password for labuser: "]
+
+
+def test_upload_credentials_fail_without_tty(monkeypatch):
+    clear_credential_environment(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="Missing upload password"):
+        qkd_orchestrator.resolve_interactive_upload_credentials(
+            "labuser",
+            bootstrap_user="root",
+            bootstrap_password="bootstrap-secret",
+            interactive=False,
+        )
+
+
 def test_bootstrap_dry_run_does_not_prompt(monkeypatch):
     clear_credential_environment(monkeypatch)
     calls = []
@@ -195,7 +239,6 @@ def test_deploy_prompts_after_dry_run_and_preview_return():
     )
 
     assert dry_run_return < prompt
-    assert 'script_auth_mode == "key-only"' in source[dry_run_return:prompt]
     assert "bootstrap_user_override=bootstrap_user" in source[prompt:]
 
 
@@ -220,6 +263,91 @@ def test_deploy_passes_prompted_bootstrap_credentials_to_onbox():
 
     assert "bootstrap_user=bootstrap_user" in deploy_call
     assert "bootstrap_password=bootstrap_password" in deploy_call
+    assert "upload_user=upload_user" in deploy_call
+    assert "upload_password=upload_password" in deploy_call
+
+
+def test_deploy_onbox_separates_upload_and_install_sessions(
+    monkeypatch,
+    tmp_path,
+):
+    clear_credential_environment(monkeypatch)
+    monkeypatch.setattr(qkd_orchestrator, "load_inventory_base", lambda: {})
+    opened_users = []
+    upload_users = []
+    shell_users = []
+
+    class Response:
+        def __init__(self, text):
+            self._text = text
+
+        def itertext(self):
+            return iter([self._text])
+
+    class Rpc:
+        def __init__(self, user):
+            self.user = user
+
+        def cli(self, _command, format=None):
+            return Response("Routing Engine 0")
+
+        def request_shell_execute(self, command):
+            shell_users.append(self.user)
+            return Response("__QKD_ONBOX_INSTALL_OK__")
+
+    class Device:
+        def __init__(self, *, host, user, passwd, port, gather_facts):
+            self.user = user
+            self.rpc = Rpc(user)
+
+        def open(self):
+            opened_users.append(self.user)
+
+        def close(self):
+            pass
+
+    class Scp:
+        def __init__(self, dev):
+            self.dev = dev
+
+        def __enter__(self):
+            upload_users.append(self.dev.user)
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def put(self, _source, remote_path):
+            pass
+
+    class Log:
+        def info(self, _message):
+            pass
+
+        def debug(self, _message):
+            pass
+
+        def error(self, _message):
+            pass
+
+    script = tmp_path / "qkd_onbox.py"
+    script.write_text("# test\n", encoding="utf-8")
+    monkeypatch.setattr(qkd_orchestrator, "Device", Device)
+    monkeypatch.setattr(qkd_orchestrator, "SCP", Scp)
+
+    qkd_orchestrator.deploy_onbox(
+        log=Log(),
+        devices={"EVO1": {"ip": "192.0.2.1", "hostname": "evo1"}},
+        artifacts={"EVO1": {"script": script}},
+        bootstrap_user="root",
+        bootstrap_password="root-secret",
+        upload_user="labuser",
+        upload_password="lab-secret",
+    )
+
+    assert opened_users == ["labuser", "root"]
+    assert upload_users == ["labuser"]
+    assert shell_users == ["root"]
 
 
 def test_validate_uses_interactive_fallback_when_all_passwords_are_missing():

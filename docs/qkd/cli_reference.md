@@ -58,10 +58,15 @@ Examples:
 
 ```bash
 python3 qkd_orchestrator.py deploy
-python3 qkd_orchestrator.py deploy --bootstrap-user labuser
+python3 qkd_orchestrator.py deploy --bootstrap-user root --upload-user labuser
 python3 qkd_orchestrator.py deploy --preview
 python3 qkd_orchestrator.py deploy --dry-run
 ```
+
+`--upload-user` is used only for SCP into `/var/tmp`. The privileged
+`--bootstrap-user` performs pre-deploy ownership checks and installs files
+under `/var/db/scripts`; Junos `class super-user` does not grant another login
+user Unix ownership of `etsi_user` files.
 
 ## validate
 

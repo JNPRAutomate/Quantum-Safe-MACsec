@@ -8,9 +8,11 @@ This is a low-level operator procedure with deterministic shell steps and post-c
 
 ## runtime model
 
-1. deploy step 1 runs script-user bootstrap and may require privileged credentials.
-2. deploy steps 4 and 5 execute using script-user credentials for onbox delivery and runtime config.
-3. post-deploy validation confirms qkd runtime health.
+1. bootstrap and pre-deploy ownership checks use privileged credentials.
+2. artifact upload may use a separate account and writes only to `/var/tmp`.
+3. privileged installation writes under `/var/db/scripts`.
+4. runtime execution uses `etsi_user`.
+5. post-deploy validation confirms qkd runtime health.
 
 ## preconditions
 
@@ -26,9 +28,13 @@ This is a low-level operator procedure with deterministic shell steps and post-c
 : privileged account for bootstrap actions (typically root)
 2. QKD_BOOTSTRAP_PASSWORD
 : password for QKD_BOOTSTRAP_USER
-3. QKD_SCRIPT_USER
+3. QKD_UPLOAD_USER
+: optional account used only for SCP into `/var/tmp`
+4. QKD_UPLOAD_PASSWORD
+: password for QKD_UPLOAD_USER when it differs from QKD_BOOTSTRAP_USER
+5. QKD_SCRIPT_USER
 : runtime user on Junos (typically admin)
-4. QKD_SCRIPT_PASSWORD
+6. QKD_SCRIPT_PASSWORD
 : password for QKD_SCRIPT_USER
 
 ## secure input sequence (recommended)
@@ -60,6 +66,17 @@ Full workflow:
 python3 qkd_orchestrator.py deploy
 ```
 
+To upload as an unprivileged administrative user while retaining root for
+filesystem installation:
+
+```bash
+python3 qkd_orchestrator.py deploy --bootstrap-user root --upload-user labuser
+```
+
+Junos `class super-user` grants CLI/NETCONF permissions, not Unix ownership of
+another user's home or `/var/db/scripts`. Therefore `labuser` can upload into
+`/var/tmp`, while the privileged bootstrap identity performs installation.
+
 Faster iterative workflow (skip validations):
 
 ```bash
@@ -78,8 +95,8 @@ python3 qkd_orchestrator.py deploy --skip-pre-validation --skip-post-validation
 Always clear shell secrets after deploy:
 
 ```bash
-unset QKD_BOOTSTRAP_PASSWORD QKD_SCRIPT_PASSWORD
-unset QKD_BOOTSTRAP_USER QKD_SCRIPT_USER
+unset QKD_BOOTSTRAP_PASSWORD QKD_UPLOAD_PASSWORD QKD_SCRIPT_PASSWORD
+unset QKD_BOOTSTRAP_USER QKD_UPLOAD_USER QKD_SCRIPT_USER
 ```
 
 ## failure modes and low-level troubleshooting
