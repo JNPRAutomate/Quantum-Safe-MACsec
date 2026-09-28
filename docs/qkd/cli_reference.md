@@ -68,6 +68,10 @@ python3 qkd_orchestrator.py deploy --dry-run
 under `/var/db/scripts`; Junos `class super-user` does not grant another login
 user Unix ownership of `etsi_user` files.
 
+Script-user bootstrap prints one `OK`/`FAIL` line per SSH setup step. Raw
+router shell output is shown only on failure, or always when
+`QKD_BOOTSTRAP_VERBOSE=1` is set.
+
 ## validate
 
 Validate runtime readiness/state from runtime inventory.

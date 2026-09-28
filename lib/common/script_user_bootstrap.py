@@ -700,6 +700,15 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
     )
 
 
+def _bootstrap_verbose() -> bool:
+    return str(os.environ.get("QKD_BOOTSTRAP_VERBOSE", "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _print_shell_output(name: str, label: str, text: str) -> None:
+    if text:
+        print("[%s] %s shell output:\n%s" % (name, label, text))
+
+
 def run_shell_fix(
     dev: Device,
     name: str,
@@ -707,12 +716,13 @@ def run_shell_fix(
     deploy_user: str,
     public_key_line: Optional[str] = None,
 ) -> bool:
+    label = "ssh home setup" if public_key_line else "ssh permissions check"
     # Non-privileged bootstrap users cannot reliably repair another user's
     # home/.ssh ownership on all Junos variants.
     if deploy_user not in ("root", script_user):
         print(
-            "[%s] INFO ssh home fix skipped: deploy user %s is not privileged for %s home ownership repair" %
-            (name, deploy_user, script_user)
+            "[%s] INFO %s skipped: deploy user %s is not privileged for %s home ownership" %
+            (name, label, deploy_user, script_user)
         )
         return True
 
@@ -722,8 +732,8 @@ def run_shell_fix(
     try:
         result = dev.rpc.request_shell_execute(command=command)
         text = _rpc_text(result).strip()
-        if text:
-            print("[%s] ssh home fix output:\n%s" % (name, text))
+        if _bootstrap_verbose():
+            _print_shell_output(name, label, text)
 
         low = text.lower()
         error_markers = [
@@ -736,26 +746,34 @@ def run_shell_fix(
             "cannot touch",
         ]
         if any(marker in low for marker in error_markers):
+            if not _bootstrap_verbose():
+                _print_shell_output(name, label, text)
             print(
-                "[%s] FAIL ssh home fix: insufficient privileges or invalid runtime user state for %s" %
-                (name, script_user)
+                "[%s] FAIL %s: insufficient privileges or invalid runtime user state for %s" %
+                (name, label, script_user)
             )
             print(
-                "[%s] hint: bootstrap user must be able to repair %s/.ssh ownership and permissions" %
+                "[%s] hint: bootstrap user must be able to set %s/.ssh ownership and permissions" %
                 (name, script_user)
             )
             return False
 
         if "__QKD_SSH_HOME_FIX_OK__" not in text:
+            if not _bootstrap_verbose():
+                _print_shell_output(name, label, text)
             print(
-                "[%s] FAIL ssh home fix: ownership and permission verification did not complete for %s"
-                % (name, script_user)
+                "[%s] FAIL %s: ownership and permission verification did not complete for %s"
+                % (name, label, script_user)
             )
             return False
 
+        if public_key_line:
+            print("[%s] OK %s: authorized_keys installed, owner=%s mode=700/600" % (name, label, script_user))
+        else:
+            print("[%s] OK %s: owner=%s mode=700/600" % (name, label, script_user))
         return True
     except Exception as exc:
-        print("[%s] FAIL ssh home fix: %s" % (name, exc))
+        print("[%s] FAIL %s: %s" % (name, label, exc))
         return False
 
 
@@ -775,19 +793,28 @@ def run_script_user_key_fix(
 
     if deploy_user not in ("root", script_user):
         print(
-            "[%s] INFO ssh key fix skipped: deploy user %s is not privileged for %s ownership repair" %
-            (name, deploy_user, script_user)
+            "[%s] INFO key %s setup skipped: deploy user %s is not privileged for %s ownership" %
+            (name, key_name, deploy_user, script_user)
         )
         return True
 
     key_comment = key_comment or f"{script_user}@{name}"
 
+    label = "key %s" % key_name
+    transcript: List[str] = []
+
     def _run(command: str) -> str:
         result = dev.rpc.request_shell_execute(command=command)
         text = _rpc_text(result).strip()
         if text:
-            print("[%s] ssh key fix output:\n%s" % (name, text))
+            transcript.append(text)
+            if _bootstrap_verbose():
+                _print_shell_output(name, label, text)
         return text
+
+    def _dump_transcript() -> None:
+        if transcript and not _bootstrap_verbose():
+            _print_shell_output(name, label, "\n".join(transcript))
 
     try:
         ssh_dir = f"{ssh_home_base}/{script_user}/.ssh"
@@ -799,7 +826,9 @@ def run_script_user_key_fix(
         )
 
         key_probe = _run(f"ls -l {shlex.quote(key_path)}")
+        generated = False
         if force_regenerate or "no such file or directory" in key_probe.lower() or not key_probe:
+            generated = True
             _run(
                 f"rm -f {shlex.quote(key_path)} {shlex.quote(pub_path)}; "
                 f"ssh-keygen -q -t ed25519 -N '' -C {shlex.quote(key_comment)} -f {shlex.quote(key_path)}"
@@ -834,24 +863,31 @@ def run_script_user_key_fix(
             "no such file or directory",
         ]
         if any(marker in low for marker in error_markers):
+            _dump_transcript()
             print(
-                "[%s] FAIL ssh key fix: insufficient privileges or invalid runtime user state for %s" %
-                (name, script_user)
+                "[%s] FAIL %s: insufficient privileges or invalid runtime user state for %s" %
+                (name, label, script_user)
             )
             print(
-                "[%s] hint: bootstrap user must be able to repair %s key ownership and permissions" %
+                "[%s] hint: bootstrap user must be able to set %s key ownership and permissions" %
                 (name, script_user)
             )
             return False
 
         wc_sizes = [int(m.group(1)) for m in re.finditer(r"(?m)^\s*(\d+)\s+", verify)]
         if len(wc_sizes) >= 2 and (wc_sizes[-2] <= 0 or wc_sizes[-1] <= 0):
-            print("[%s] FAIL ssh key fix: key files are empty after repair" % name)
+            _dump_transcript()
+            print("[%s] FAIL %s: key files are empty" % (name, label))
             return False
 
+        print(
+            "[%s] OK %s %s owner=%s mode=600/644"
+            % (name, label, "generated" if generated else "present", script_user)
+        )
         return True
     except Exception as exc:
-        print("[%s] FAIL ssh key fix: %s" % (name, exc))
+        _dump_transcript()
+        print("[%s] FAIL %s: %s" % (name, label, exc))
         return False
 
 
@@ -905,7 +941,8 @@ def sync_user_keypair_from_local(
         )
         text = _rpc_text(result).strip()
         if text:
-            print("[%s] canonical key sync output:\n%s" % (name, text))
+            if _bootstrap_verbose():
+                print("[%s] canonical key sync output:\n%s" % (name, text))
 
         low = text.lower()
         error_markers = [
@@ -917,6 +954,8 @@ def sync_user_keypair_from_local(
             "error:",
         ]
         if any(marker in low for marker in error_markers):
+            if text and not _bootstrap_verbose():
+                print("[%s] canonical key sync output:\n%s" % (name, text))
             print("[%s] FAIL canonical key sync detected shell errors" % name)
             return False
 
@@ -1053,7 +1092,7 @@ def bootstrap_script_user_on_device(
         diff = cu.diff()
 
         if diff:
-            print("[%s] candidate diff:\\n%s" % (name, diff))
+            print("[%s] candidate diff:\n%s" % (name, diff.strip()))
             cu.commit(
                 comment="QKD bootstrap SCRIPT_USER %s" % script_user,
                 sync=True,
@@ -1074,7 +1113,7 @@ def bootstrap_script_user_on_device(
             public_key_line=public_key_line,
         ):
             print(
-                "[%s] WARN ssh home fix did not complete; continuing because this can be platform-specific on Junos" %
+                "[%s] WARN ssh home setup did not complete; continuing because this can be platform-specific on Junos" %
                 name
             )
             print(

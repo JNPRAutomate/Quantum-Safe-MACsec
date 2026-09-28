@@ -2170,6 +2170,77 @@ def purge_pending_older_than_start_time(state, incoming_start_time, iface=None, 
     return state
 
 
+def purge_pending_in_replaced_slots(state, install_entries, iface=None, mode_ctx="STATE"):
+    """Drop pending entries whose keychain slot is overwritten by a batch.
+
+    Rolling batches append after the surviving pending tail, so a pending key
+    in an untouched slot is still configured on the router and must be kept to
+    stay aligned with the master queue. Entries without a known slot fall back
+    to the start-time rule.
+    """
+    replaced_slots = set()
+    batch_start_times = []
+    for entry in install_entries or []:
+        slot = entry.get("slot")
+        try:
+            if slot is not None:
+                replaced_slots.add(int(slot))
+        except Exception:
+            pass
+        if epoch_from_junos_start_time(entry.get("start_time")) is not None:
+            batch_start_times.append(entry.get("start_time"))
+
+    if not replaced_slots:
+        if batch_start_times:
+            incoming = min(batch_start_times, key=lambda value: epoch_from_junos_start_time(value))
+            return purge_pending_older_than_start_time(state, incoming, iface=iface, mode_ctx=mode_ctx)
+        return state
+
+    state = normalize_pending_keys(state)
+    pending = state.get("pending_keys", [])
+    if not pending:
+        return state
+
+    incoming_epoch = None
+    if batch_start_times:
+        incoming_epoch = min(epoch_from_junos_start_time(value) for value in batch_start_times)
+
+    kept = []
+    dropped = []
+    for item in pending:
+        slot = item.get("slot")
+        if slot is None:
+            slot = find_slot_for_key_id_in_installed(state, item.get("key_id"))
+        try:
+            slot = int(slot) if slot is not None else None
+        except Exception:
+            slot = None
+
+        if slot is None:
+            item_epoch = epoch_from_junos_start_time(item.get("start_time"))
+            if incoming_epoch is not None and item_epoch is not None and int(item_epoch) < int(incoming_epoch):
+                dropped.append(item)
+                continue
+        elif slot in replaced_slots:
+            dropped.append(item)
+            continue
+        kept.append(item)
+
+    if dropped:
+        state["pending_keys"] = kept
+        state = sync_pending_legacy_fields(state)
+        log(
+            f"PENDING KEYS REPLACED(slot) replaced_slots={sorted(replaced_slots)} "
+            f"dropped={len(dropped)} dropped_slots={[item.get('slot') for item in dropped]} "
+            f"dropped_generations={[item.get('generation') for item in dropped]}",
+            "WARN",
+            iface,
+            mode_ctx,
+        )
+
+    return state
+
+
 def trim_installed_keys_preserve_active(state):
     """Trim installed_keys while keeping active key metadata available.
 
@@ -4917,9 +4988,8 @@ def run_slave_install_key_batch(batch_b64, iface, ack_context=None):
         print(f"ERROR INTERFACE BIND FAIL ca={ca_name}")
         return False
 
-    # Purge stale queue heads once per incoming batch, not per-entry.
-    # If we purge on every generation in the same batch, we collapse the
-    # pending queue to the last key and delay activation unnecessarily.
+    # Purge once per incoming batch, not per-entry. Only pending keys whose
+    # slot is overwritten by this batch are stale; surviving slots stay queued.
     batch_start_times = []
     batch_generations = []
     for entry in install_entries:
@@ -4933,11 +5003,10 @@ def run_slave_install_key_batch(batch_b64, iface, ack_context=None):
         except Exception:
             pass
 
-    if batch_start_times:
-        incoming_start_time = min(batch_start_times, key=lambda value: epoch_from_junos_start_time(value))
-        state = purge_pending_older_than_start_time(
+    if batch_start_times or any(entry.get("slot") is not None for entry in install_entries):
+        state = purge_pending_in_replaced_slots(
             state,
-            incoming_start_time,
+            install_entries,
             iface=iface,
             mode_ctx="SLAVE",
         )

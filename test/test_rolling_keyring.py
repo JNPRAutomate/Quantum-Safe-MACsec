@@ -926,6 +926,54 @@ class TestTransactionalRpcKeyRotation:
         assert commands == []
 
 
+class TestSlaveBatchPendingPurge:
+    @classmethod
+    def setup_class(cls):
+        cls.functions = load_functions(
+            "purge_pending_in_replaced_slots",
+            "purge_pending_older_than_start_time",
+            "normalize_pending_keys",
+            "sync_pending_legacy_fields",
+            "find_slot_for_key_id_in_installed",
+            "epoch_from_junos_start_time",
+            "pending_sort_key",
+        )
+        cls.functions["calendar"] = calendar
+        cls.functions["time"] = time
+        cls.functions["max_installed_keys"] = lambda: 4
+        cls.logs = []
+        cls.functions["log"] = lambda msg, *args, **kwargs: cls.logs.append(msg)
+
+    def test_rolling_batch_keeps_pending_key_in_untouched_slot(self):
+        # EVO2 2026-09-28 08:38: batch for slots [0, 1] must not drop slot 3.
+        state = {
+            "pending_keys": [
+                {"generation": 3, "key_id": "b69a", "start_time": "2026-09-28.15:42:04 +0000", "slot": 3},
+            ],
+        }
+        batch = [
+            {"key_id": "4e6b", "generation": 4, "slot": 0, "start_time": "2026-09-28.15:47:04 +0000"},
+            {"key_id": "00e8", "generation": 5, "slot": 1, "start_time": "2026-09-28.15:52:04 +0000"},
+        ]
+        result = self.functions["purge_pending_in_replaced_slots"](state, batch)
+        assert [item["key_id"] for item in result["pending_keys"]] == ["b69a"]
+        assert result.get("pending_key_id", "b69a") == "b69a"
+
+    def test_pending_key_in_overwritten_slot_is_dropped(self):
+        state = {
+            "pending_keys": [
+                {"generation": 1, "key_id": "old0", "start_time": "2026-09-28.15:32:04 +0000", "slot": 0},
+                {"generation": 3, "key_id": "keep3", "start_time": "2026-09-28.15:42:04 +0000", "slot": 3},
+            ],
+        }
+        batch = [
+            {"key_id": "new0", "generation": 4, "slot": 0, "start_time": "2026-09-28.15:47:04 +0000"},
+        ]
+        result = self.functions["purge_pending_in_replaced_slots"](state, batch)
+        assert [item["key_id"] for item in result["pending_keys"]] == ["keep3"]
+        assert result["pending_key_id"] == "keep3"
+
+
 class TestTimezoneSafeStartTimes:
     @classmethod
     def setup_class(cls):
