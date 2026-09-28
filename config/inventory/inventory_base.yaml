@@ -7,8 +7,8 @@ secrets:
   script_user_class: super-user
   rpc_ssh_key_name: qkd_rpc_id_ed25519
   script_user_auth_mode: key-only
-  default_password: lab123
-  bootstrap_password: lab123
-  script_password: lab123
+  # Passwords are intentionally absent. Supply them at runtime through
+  # QKD_BOOTSTRAP_PASSWORD / QKD_SCRIPT_PASSWORD / QKD_DEFAULT_PASSWORD, or
+  # let the orchestrator prompt for them interactively.
 kme:
   port: 8443
