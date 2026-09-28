@@ -355,6 +355,14 @@ def parse_args():
     bootstrap.add_argument(
         "-v", "--verbose", action="count", default=0
     )
+    bootstrap.add_argument(
+        "--bootstrap-user",
+        help=(
+            "Administrative user used to bootstrap etsi_user. Overrides "
+            "QKD_BOOTSTRAP_USER and inventory defaults; its password is "
+            "requested interactively when not supplied through the environment."
+        ),
+    )
     bootstrap.add_argument("--ssh-key")
     bootstrap.add_argument("--debug", action="store_true")
 
@@ -384,6 +392,14 @@ def parse_args():
         help="Render and display generated Junos configuration without pushing it.",
     )
     deploy.add_argument("-v", "--verbose", action="count", default=0)
+    deploy.add_argument(
+        "--bootstrap-user",
+        help=(
+            "Administrative transport user used for validation, upload, and "
+            "installation. Overrides QKD_BOOTSTRAP_USER and inventory defaults; "
+            "its password is requested interactively when needed."
+        ),
+    )
     deploy.add_argument("--ssh-key")
     deploy.add_argument("--debug", action="store_true")
     deploy.add_argument(
@@ -520,6 +536,8 @@ def deploy_onbox(
     artifacts,
     script_user=None,
     script_password=None,
+    bootstrap_user=None,
+    bootstrap_password=None,
     shipment_preload=False,
 ):
     """
@@ -559,13 +577,15 @@ def deploy_onbox(
     )
 
     resolved_bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
+        bootstrap_user
+        or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
         or secrets.get("default_user")
     )
     resolved_bootstrap_password = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        bootstrap_password
+        or os.getenv("QKD_BOOTSTRAP_PASSWORD")
         or secrets.get("bootstrap_password")
         or secrets.get("deploy_password")
         or secrets.get("root_password")
@@ -950,6 +970,7 @@ def reset_local_runtime_for_create():
 def resolve_interactive_bootstrap_credentials(
     inventory_base: Dict[str, Any],
     *,
+    bootstrap_user_override: Optional[str] = None,
     input_fn: Callable[[str], str] = input,
     password_fn: Callable[[str], str] = getpass.getpass,
     interactive: Optional[bool] = None,
@@ -963,7 +984,8 @@ def resolve_interactive_bootstrap_credentials(
         secrets = {}
 
     bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
+        bootstrap_user_override
+        or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
         or os.getenv("QKD_DEFAULT_USER")
@@ -1238,7 +1260,8 @@ def handle_bootstrap(args):
 
     if args.dry_run:
         bootstrap_user = (
-            os.getenv("QKD_BOOTSTRAP_USER")
+            getattr(args, "bootstrap_user", None)
+            or os.getenv("QKD_BOOTSTRAP_USER")
             or secrets.get("bootstrap_user")
             or secrets.get("deploy_user")
             or os.getenv("QKD_DEFAULT_USER")
@@ -1271,7 +1294,10 @@ def handle_bootstrap(args):
         return
 
     bootstrap_user, bootstrap_password = (
-        resolve_interactive_bootstrap_credentials(inventory_base)
+        resolve_interactive_bootstrap_credentials(
+            inventory_base,
+            bootstrap_user_override=getattr(args, "bootstrap_user", None),
+        )
     )
 
     print_step_banner(
@@ -1332,7 +1358,8 @@ def handle_deploy(args):
         secrets = {}
 
     bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
+        getattr(args, "bootstrap_user", None)
+        or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
         or secrets.get("default_user")
@@ -1404,7 +1431,10 @@ def handle_deploy(args):
         bootstrap_user and bootstrap_password
     ):
         bootstrap_user, bootstrap_password = (
-            resolve_interactive_bootstrap_credentials(inventory_base)
+            resolve_interactive_bootstrap_credentials(
+                inventory_base,
+                bootstrap_user_override=bootstrap_user,
+            )
         )
         print(f"Deploy credentials resolved for user={bootstrap_user}")
 
@@ -1546,6 +1576,8 @@ def handle_deploy(args):
         artifacts,
         script_user=script_user,
         script_password=script_password,
+        bootstrap_user=bootstrap_user,
+        bootstrap_password=bootstrap_password,
         shipment_preload=args.shipment_preload,
     )
     print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")

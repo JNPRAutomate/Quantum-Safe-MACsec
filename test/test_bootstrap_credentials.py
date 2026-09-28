@@ -59,6 +59,27 @@ def test_bootstrap_credentials_prompt_only_for_missing_password(monkeypatch):
     assert prompts == ["Bootstrap password for root: "]
 
 
+def test_bootstrap_user_override_precedes_environment_and_inventory(monkeypatch):
+    monkeypatch.setenv("QKD_BOOTSTRAP_USER", "env-bootstrap")
+    monkeypatch.delenv("QKD_BOOTSTRAP_PASSWORD", raising=False)
+    prompts = []
+
+    credentials = qkd_orchestrator.resolve_interactive_bootstrap_credentials(
+        {
+            "secrets": {
+                "bootstrap_user": "inventory-bootstrap",
+            }
+        },
+        bootstrap_user_override="labuser",
+        input_fn=lambda _: pytest.fail("username prompt was not expected"),
+        password_fn=lambda prompt: prompts.append(prompt) or "lab-secret",
+        interactive=True,
+    )
+
+    assert credentials == ("labuser", "lab-secret")
+    assert prompts == ["Bootstrap password for labuser: "]
+
+
 def test_bootstrap_credentials_fall_back_to_default_identity(monkeypatch):
     clear_credential_environment(monkeypatch)
 
@@ -170,11 +191,35 @@ def test_deploy_prompts_after_dry_run_and_preview_return():
         'print_step_banner("0/5", "PREVIEW OR DRY-RUN", "END")'
     )
     prompt = source.index(
-        "resolve_interactive_bootstrap_credentials(inventory_base)"
+        "resolve_interactive_bootstrap_credentials("
     )
 
     assert dry_run_return < prompt
     assert 'script_auth_mode == "key-only"' in source[dry_run_return:prompt]
+    assert "bootstrap_user_override=bootstrap_user" in source[prompt:]
+
+
+def test_deploy_onbox_accepts_prompted_bootstrap_credentials(monkeypatch):
+    clear_credential_environment(monkeypatch)
+    monkeypatch.setattr(qkd_orchestrator, "load_inventory_base", lambda: {})
+
+    qkd_orchestrator.deploy_onbox(
+        log=None,
+        devices={},
+        artifacts={},
+        bootstrap_user="root",
+        bootstrap_password="prompted-secret",
+    )
+
+
+def test_deploy_passes_prompted_bootstrap_credentials_to_onbox():
+    source = function_source("handle_deploy")
+    call_start = source.index("deploy_onbox(")
+    call_end = source.index(")", call_start)
+    deploy_call = source[call_start:call_end]
+
+    assert "bootstrap_user=bootstrap_user" in deploy_call
+    assert "bootstrap_password=bootstrap_password" in deploy_call
 
 
 def test_validate_uses_interactive_fallback_when_all_passwords_are_missing():

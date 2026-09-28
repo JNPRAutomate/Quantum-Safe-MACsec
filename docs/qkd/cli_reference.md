@@ -58,6 +58,7 @@ Examples:
 
 ```bash
 python3 qkd_orchestrator.py deploy
+python3 qkd_orchestrator.py deploy --bootstrap-user labuser
 python3 qkd_orchestrator.py deploy --preview
 python3 qkd_orchestrator.py deploy --dry-run
 ```
