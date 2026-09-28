@@ -23,22 +23,23 @@ observability design.
 11. [Link Master Role Requirements](link_master_role_requirements.md)
 12. [Two-Node RPC Identity Model](script_user_peer_ssh_split_two_node.md)
 13. [Strict Sync + Synchronous RPC Acknowledgement LLD](qkd_onbox_strict_sync_ack_lld.md)
+14. [Flusso operativo ver3.3.4.1: QKD on-box, RPC e rotazione chiavi](ver3.3.4.1_onbox_rpc_key_rotation_flow.md)
 
 ## Troubleshooting
 
-14. [key 0 bootstrap realignment without MACsec flap](troubleshooting/key0_bootstrap_realignment.md)
-15. [SSH identity realignment for runtime RPC](troubleshooting/ssh_identity_realignment.md)
-16. [On-box JSON state DB inspection and safe reset](troubleshooting/state_db_json_inspection.md)
-17. [On-box lock directories](troubleshooting/lock_directories.md)
+15. [key 0 bootstrap realignment without MACsec flap](troubleshooting/key0_bootstrap_realignment.md)
+16. [SSH identity realignment for runtime RPC](troubleshooting/ssh_identity_realignment.md)
+17. [On-box JSON state DB inspection and safe reset](troubleshooting/state_db_json_inspection.md)
+18. [On-box lock directories](troubleshooting/lock_directories.md)
 
 ## Release Information
 
-18. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
-19. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
+19. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
+20. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
 
 ## Runtime Policies
 
-20. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
+21. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
 
 ## Historical / Archive
 
