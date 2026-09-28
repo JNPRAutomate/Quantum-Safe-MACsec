@@ -392,6 +392,93 @@ class TestRollingKeyringPlan:
         assert "read_remote_peer_batch_ack" not in source
         assert "_state_records_match(peer_state, records)" in source
 
+    @staticmethod
+    def inflight_recovery(age_seconds, *, peer_confirmed=False, save_succeeds=True):
+        functions = load_functions("resume_inflight_install")
+        calls = {"saves": [], "sends": [], "logs": []}
+        transaction = {
+            "operation": "RING_REARM",
+            "records": [{"key_id": "key-1", "slot": 1, "start_time": "expired"}],
+            "payload_b64": "payload",
+            "ack_id": "ack-1",
+            "created_at": 1000 - age_seconds,
+            "t2_peer_send_ms": 1,
+        }
+        state = {"inflight_install": transaction}
+
+        def save(_peer, _iface, current_state):
+            calls["saves"].append(json.loads(json.dumps(current_state)))
+            return save_succeeds
+
+        def send(*args, **kwargs):
+            calls["sends"].append((args, kwargs))
+            return False
+
+        functions.update(
+            {
+                "INFLIGHT_STUCK_SECONDS": 600,
+                "time": SimpleNamespace(time=lambda: 1000),
+                "stable_keychain_name": lambda _link: "QKD_CA_TEST",
+                "_configured_records_match": lambda *_args: True,
+                "get_peer_status": lambda *_args: {"confirmed": peer_confirmed},
+                "_state_records_match": lambda peer_state, _records: peer_state["confirmed"],
+                "save_db_state": save,
+                "send_command": send,
+                "log": lambda *args, **kwargs: calls["logs"].append(args[0]),
+                "format_epoch_human": lambda value: str(value),
+                "format_duration_human": lambda value: str(value),
+                "append_rolling_pipeline_timing_record": lambda *_args, **_kwargs: None,
+                "record_successful_transaction_timing": lambda current, *_args: current,
+                "_finalize_bilateral_install": lambda current, *_args: {
+                    **current, "inflight_install": None
+                },
+                "clear_kme_failure": lambda _peer, _iface, current: current,
+                "reconcile_state_with_router": lambda _link, _iface, current: current,
+                "promote_pending_key_if_mka_confirmed": lambda _peer, _iface, current: (current, False),
+            }
+        )
+        result, finalized = functions["resume_inflight_install"](
+            {"peer": "EVO2", "interface": "et-0/0/1"}, state
+        )
+        return result, finalized, transaction, calls
+
+    def test_stuck_rpc_inflight_is_persisted_and_not_resent(self):
+        state, finalized, _, calls = self.inflight_recovery(601)
+
+        assert not finalized
+        assert state["inflight_install"] is None
+        assert calls["saves"] == [{"inflight_install": None}]
+        assert calls["sends"] == []
+        assert any("action=AUTO_RING_RESET" in message for message in calls["logs"])
+        assert any("INFLIGHT ABANDONED" in message for message in calls["logs"])
+
+    def test_unconfirmed_inflight_at_threshold_keeps_retrying(self):
+        state, finalized, transaction, calls = self.inflight_recovery(600)
+
+        assert not finalized
+        assert state["inflight_install"] is transaction
+        assert len(calls["sends"]) == 1
+        assert calls["saves"] == []
+
+    def test_failed_stuck_reset_save_keeps_inflight_for_retry(self):
+        state, finalized, transaction, calls = self.inflight_recovery(
+            601, save_succeeds=False
+        )
+
+        assert not finalized
+        assert state["inflight_install"] is transaction
+        assert calls["saves"] == [{"inflight_install": None}]
+        assert calls["sends"] == []
+        assert any("INFLIGHT ABANDON STATE SAVE FAILED" in message for message in calls["logs"])
+
+    def test_confirmed_rpc_inflight_finalizes_even_after_threshold(self):
+        state, finalized, _, calls = self.inflight_recovery(601, peer_confirmed=True)
+
+        assert finalized
+        assert state["inflight_install"] is None
+        assert calls["sends"] == []
+        assert not any("INFLIGHT ABANDONED" in message for message in calls["logs"])
+
     def test_rpc_success_is_recorded_before_bilateral_finalize(self):
         tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
         rolling_link = next(

@@ -55,7 +55,12 @@ scheduled activation.
 
 Automatic pending eviction remains disabled by default. Recovery is performed
 through explicit state reconciliation, persisted inflight metadata, and future
-retry cycles.
+retry cycles. An unconfirmed inflight batch older than
+`inflight_stuck_seconds` (default 600) is abandoned and the reset is persisted
+instead of resending a batch whose activation time has expired. The next
+master cycle may create a fresh batch; a peer-confirmed inflight batch is
+finalized normally even when old. If persisting the reset fails, rotation
+remains blocked.
 
 ## 4. Master flow
 
