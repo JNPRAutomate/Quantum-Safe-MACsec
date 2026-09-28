@@ -29,7 +29,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import calendar
-EARLY_SCRIPT_VERSION = "ver3.3.4"
+EARLY_SCRIPT_VERSION = "ver3.3.4.1"
 TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
@@ -997,6 +997,17 @@ def _apply_rpc_pubkey(source_device, pubkey_b64, finalize=False):
 
     existing = _rpc_keys_for_source(source_device)
     commands = []
+    if finalize and not any(_public_keys_match(key, pubkey_line) for key in existing):
+        # Finalize removes every other key of this source. Accepting a key that
+        # was never prepared here would silently replace the working one.
+        log(
+            f"RPC-PUBKEY FINALIZE REFUSED source_device={source_device} "
+            "reason=KEY_NOT_PREPARED action=keep_existing_keys",
+            "ERROR",
+            mode="RPC-KEY-ROTATION",
+        )
+        print(f"ERROR FINALIZE-RPC-PUBKEY KEY NOT PREPARED source_device={source_device}")
+        return False
     if finalize:
         for stale_key in existing:
             if stale_key == pubkey_line:
@@ -1278,6 +1289,26 @@ def _activate_rpc_next_keypair():
         return False
 
 
+def _rpc_transaction_stale_reason(transaction):
+    """Return why a persisted transaction no longer matches the on-disk keys.
+
+    A transaction may only continue when its public key is either the active
+    RPC key (activated/finalizing) or the pending .next key (not activated).
+    Anything else means the keys were replaced out-of-band (for example by a
+    bootstrap/redeploy); resuming would push an obsolete key to the peers.
+    """
+    pubkey = transaction.get("pubkey")
+    if not pubkey:
+        return "MISSING_TRANSACTION_PUBKEY"
+    if _public_keys_match(_public_key_from_private(RPC_SSH_KEY), pubkey):
+        return None
+    if transaction.get("activated"):
+        return "ACTIVE_KEY_MISMATCH"
+    if not _public_keys_match(_public_key_from_private(f"{RPC_SSH_KEY}.next"), pubkey):
+        return "NEXT_KEY_MISMATCH"
+    return None
+
+
 def run_rpc_key_rotation_cycle():
     state = load_rpc_key_rotation_state()
     peers = _rpc_rotation_peers()
@@ -1286,6 +1317,21 @@ def run_rpc_key_rotation_cycle():
         return False
 
     transaction = state.get("transaction")
+    if isinstance(transaction, dict):
+        stale_reason = _rpc_transaction_stale_reason(transaction)
+        if stale_reason:
+            log(
+                f"RPC-KEY TRANSACTION DISCARDED id={transaction.get('id')} "
+                f"phase={transaction.get('phase')} reason={stale_reason} "
+                f"created_at={format_epoch_human(transaction.get('created_at'))} "
+                "action=start_new_transaction",
+                "WARN",
+                mode="RPC-KEY-ROTATION",
+            )
+            state["transaction"] = None
+            save_rpc_key_rotation_state(state)
+            transaction = None
+
     if not isinstance(transaction, dict):
         pubkey = _generate_rpc_next_keypair()
         if not pubkey:
@@ -1351,8 +1397,13 @@ def run_rpc_key_rotation_cycle():
             if peer_name in verified:
                 continue
             if not _verify_rpc_next_key(peers[peer_name]):
+                # The peer may have lost the prepared key (e.g. a redeploy
+                # rewrote its RPC keys); prepare it again on the next cycle.
+                prepared.discard(peer_name)
+                transaction["prepared_peers"] = sorted(prepared)
+                save_rpc_key_rotation_state(state)
                 log(
-                    f"RPC-KEY VERIFY FAIL peer={peer_name} action=keep_current_key",
+                    f"RPC-KEY VERIFY FAIL peer={peer_name} action=keep_current_key_and_reprepare",
                     "ERROR",
                     mode="RPC-KEY-ROTATION",
                 )

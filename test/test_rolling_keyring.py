@@ -547,7 +547,9 @@ class TestTransactionalRpcKeyRotation:
         ]
 
     def test_finalize_deletes_only_old_key_for_source(self):
-        functions = load_functions("_decode_rpc_pubkey", "_apply_rpc_pubkey")
+        functions = load_functions(
+            "_decode_rpc_pubkey", "_apply_rpc_pubkey", "_public_keys_match"
+        )
         commands = []
         new_key = "ssh-ed25519 AAAANEW qkd-rpc@EVO1"
         functions.update(
@@ -638,7 +640,10 @@ class TestTransactionalRpcKeyRotation:
         )
 
     def test_missing_peer_blocks_activation(self):
-        functions = load_functions("run_rpc_key_rotation_cycle")
+        functions = load_functions(
+            "run_rpc_key_rotation_cycle",
+            "_rpc_transaction_stale_reason",
+        )
         activated = []
         state = {
             "last_rotation_timestamp": 0,
@@ -663,7 +668,11 @@ class TestTransactionalRpcKeyRotation:
                     "EVO2": {"name": "EVO2"},
                     "MX1": {"name": "MX1"},
                 },
-                "_public_key_from_private": lambda _path: "ssh-ed25519 AAAAOLD",
+                "_public_key_from_private": lambda path: (
+                    "ssh-ed25519 AAAANEW"
+                    if path.endswith(".next")
+                    else "ssh-ed25519 AAAAOLD"
+                ),
                 "_public_keys_match": lambda left, right: left in right,
                 "_write_active_rpc_public_key": lambda _pubkey: True,
                 "_run_rpc_key_action": lambda peer, *_args: peer["name"] != "MX1",
@@ -678,7 +687,10 @@ class TestTransactionalRpcKeyRotation:
         assert state["transaction"]["prepared_peers"] == ["EVO2"]
 
     def test_recovery_after_activation_resumes_finalize(self):
-        functions = load_functions("run_rpc_key_rotation_cycle")
+        functions = load_functions(
+            "run_rpc_key_rotation_cycle",
+            "_rpc_transaction_stale_reason",
+        )
         saved = []
         activated = []
         pubkey = "ssh-ed25519 AAAANEW qkd-rpc@EVO1"
@@ -741,6 +753,177 @@ class TestTransactionalRpcKeyRotation:
         assert Path(f"{active}.pub").read_text() == "new-public"
         assert Path(f"{active}.prev").read_text() == "old-private"
         assert Path(f"{active}.pub.prev").read_text() == "old-public"
+
+    def _cycle_functions(self, state, keys, calls, saved):
+        functions = load_functions(
+            "run_rpc_key_rotation_cycle",
+            "_rpc_transaction_stale_reason",
+            "_public_keys_match",
+        )
+        functions.update(
+            {
+                "RPC_SSH_KEY": "/tmp/rpc",
+                "time": SimpleNamespace(time=lambda: 500),
+                "load_rpc_key_rotation_state": lambda: state,
+                "save_rpc_key_rotation_state": lambda value: saved.append(
+                    json.loads(json.dumps(value))
+                ),
+                "_rpc_rotation_peers": lambda: {"EVO2": {"name": "EVO2"}},
+                "_public_key_from_private": lambda path: keys.get(path),
+                "_generate_rpc_next_keypair": lambda: (
+                    keys.__setitem__("/tmp/rpc.next", "ssh-ed25519 AAAAFRESH")
+                    or "ssh-ed25519 AAAAFRESH qkd-rpc@EVO1"
+                ),
+                "_write_active_rpc_public_key": lambda _value: True,
+                "_run_rpc_key_action": lambda peer, action, pubkey, _key: (
+                    calls.append((action, pubkey)) or False
+                ),
+                "_verify_rpc_next_key": lambda _peer: True,
+                "_activate_rpc_next_keypair": lambda: True,
+                "format_epoch_human": lambda value: str(value),
+                "hashlib": __import__("hashlib"),
+                "log": lambda *_args, **_kwargs: None,
+            }
+        )
+        return functions
+
+    def test_stale_activated_transaction_never_finalizes_obsolete_key(self):
+        # Regression: a transaction left over from an earlier deployment was
+        # resumed after bootstrap regenerated the RPC key; its finalize replaced
+        # the working key on the peer with the obsolete one and locked RPC out.
+        state = {
+            "last_rotation_timestamp": 0,
+            "rotation_count": 30,
+            "transaction": {
+                "id": "stale",
+                "phase": "finalizing",
+                "pubkey": "ssh-ed25519 AAAAOBSOLETE qkd-rpc@EVO1",
+                "peers": ["EVO2"],
+                "prepared_peers": ["EVO2"],
+                "verified_peers": ["EVO2"],
+                "activated": True,
+                "finalized_peers": [],
+            },
+        }
+        keys = {"/tmp/rpc": "ssh-ed25519 AAAACURRENT"}
+        calls, saved = [], []
+        functions = self._cycle_functions(state, keys, calls, saved)
+
+        assert not functions["run_rpc_key_rotation_cycle"]()
+        assert all("AAAAOBSOLETE" not in pubkey for _action, pubkey in calls)
+        assert calls == [("prepare-rpc-pubkey", "ssh-ed25519 AAAAFRESH qkd-rpc@EVO1")]
+        assert state["transaction"]["id"] != "stale"
+        assert state["transaction"]["activated"] is False
+        assert state["rotation_count"] == 30
+
+    def test_unactivated_transaction_without_matching_next_key_is_discarded(self):
+        state = {
+            "last_rotation_timestamp": 0,
+            "rotation_count": 1,
+            "transaction": {
+                "id": "stale",
+                "phase": "prepared",
+                "pubkey": "ssh-ed25519 AAAAOBSOLETE qkd-rpc@EVO1",
+                "peers": ["EVO2"],
+                "prepared_peers": ["EVO2"],
+                "verified_peers": [],
+                "activated": False,
+                "finalized_peers": [],
+            },
+        }
+        keys = {"/tmp/rpc": "ssh-ed25519 AAAACURRENT"}
+        calls, saved = [], []
+        functions = self._cycle_functions(state, keys, calls, saved)
+
+        assert not functions["run_rpc_key_rotation_cycle"]()
+        assert calls == [("prepare-rpc-pubkey", "ssh-ed25519 AAAAFRESH qkd-rpc@EVO1")]
+        assert state["transaction"]["prepared_peers"] == []
+
+    def test_consistent_pending_transaction_is_resumed(self):
+        state = {
+            "last_rotation_timestamp": 0,
+            "rotation_count": 1,
+            "transaction": {
+                "id": "current",
+                "phase": "generated",
+                "pubkey": "ssh-ed25519 AAAANEXT qkd-rpc@EVO1",
+                "peers": ["EVO2"],
+                "prepared_peers": [],
+                "verified_peers": [],
+                "activated": False,
+                "finalized_peers": [],
+            },
+        }
+        keys = {
+            "/tmp/rpc": "ssh-ed25519 AAAACURRENT",
+            "/tmp/rpc.next": "ssh-ed25519 AAAANEXT",
+        }
+        calls, saved = [], []
+        functions = self._cycle_functions(state, keys, calls, saved)
+
+        assert not functions["run_rpc_key_rotation_cycle"]()
+        assert state["transaction"]["id"] == "current"
+        assert calls == [("prepare-rpc-pubkey", "ssh-ed25519 AAAANEXT qkd-rpc@EVO1")]
+
+    def test_verify_failure_forces_prepare_again(self):
+        state = {
+            "last_rotation_timestamp": 0,
+            "rotation_count": 1,
+            "transaction": {
+                "id": "current",
+                "phase": "prepared",
+                "pubkey": "ssh-ed25519 AAAANEXT qkd-rpc@EVO1",
+                "peers": ["EVO2"],
+                "prepared_peers": ["EVO2"],
+                "verified_peers": [],
+                "activated": False,
+                "finalized_peers": [],
+            },
+        }
+        keys = {
+            "/tmp/rpc": "ssh-ed25519 AAAACURRENT",
+            "/tmp/rpc.next": "ssh-ed25519 AAAANEXT",
+        }
+        calls, saved = [], []
+        functions = self._cycle_functions(state, keys, calls, saved)
+        functions["_verify_rpc_next_key"] = lambda _peer: False
+
+        assert not functions["run_rpc_key_rotation_cycle"]()
+        assert state["transaction"]["prepared_peers"] == []
+
+    def test_finalize_refuses_key_that_was_never_prepared(self):
+        functions = load_functions(
+            "_decode_rpc_pubkey",
+            "_apply_rpc_pubkey",
+            "_public_keys_match",
+        )
+        commands = []
+        functions.update(
+            {
+                "base64": base64,
+                "re": __import__("re"),
+                "SCRIPT_USER": "etsi_user",
+                "CLI_PATH": "/usr/sbin/cli",
+                "_rpc_keys_for_source": lambda _source: [
+                    "ssh-ed25519 AAAAWORKING qkd-rpc@EVO1",
+                ],
+                "acquire_junos_commit_lock": lambda: True,
+                "release_junos_commit_lock": lambda: None,
+                "junos_output_has_error": lambda _out, _err: False,
+                "log": lambda *_args, **_kwargs: None,
+                "subprocess": SimpleNamespace(
+                    PIPE=object(),
+                    run=lambda argv, **_kwargs: commands.append(argv[-1]),
+                    TimeoutExpired=subprocess.TimeoutExpired,
+                ),
+            }
+        )
+        encoded = base64.urlsafe_b64encode(
+            b"ssh-ed25519 AAAAOBSOLETE qkd-rpc@EVO1"
+        ).decode()
+
+        assert not functions["_apply_rpc_pubkey"]("EVO1", encoded, finalize=True)
+        assert commands == []
 
 
 class TestTimezoneSafeStartTimes:

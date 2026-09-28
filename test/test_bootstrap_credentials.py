@@ -229,6 +229,61 @@ def function_source(name):
     return ast.get_source_segment(source_text, function)
 
 
+def test_remote_clean_resolves_interactive_credentials(monkeypatch):
+    clear_credential_environment(monkeypatch)
+    received = {}
+    monkeypatch.setattr(
+        qkd_orchestrator, "load_inventory_base", lambda: {"secrets": {}}
+    )
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "resolve_interactive_bootstrap_credentials",
+        lambda _base, bootstrap_user_override=None: (
+            bootstrap_user_override or "root",
+            "prompted",
+        ),
+    )
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "handle_clean",
+        lambda args: received.update(vars(args)),
+    )
+    monkeypatch.setattr(
+        qkd_orchestrator.sys,
+        "argv",
+        ["qkd_orchestrator.py", "clean", "--bootstrap-user", "admin"],
+    )
+
+    qkd_orchestrator.main()
+
+    assert received["clean_user"] == "admin"
+    assert received["clean_password"] == "prompted"
+
+
+def test_local_only_clean_never_prompts(monkeypatch):
+    received = {}
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "resolve_interactive_bootstrap_credentials",
+        lambda *_args, **_kwargs: pytest.fail("local clean must not prompt"),
+    )
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "handle_clean",
+        lambda args: received.update(vars(args)),
+    )
+    monkeypatch.setattr(
+        qkd_orchestrator.sys,
+        "argv",
+        ["qkd_orchestrator.py", "clean", "--local-only"],
+    )
+
+    qkd_orchestrator.main()
+
+    assert received["local_only"] is True
+    assert "clean_password" not in received
+
+
 def test_deploy_prompts_after_dry_run_and_preview_return():
     source = function_source("handle_deploy")
     dry_run_return = source.index(

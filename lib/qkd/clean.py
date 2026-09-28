@@ -856,14 +856,16 @@ def handle_clean(args):
         secrets = {}
 
     clean_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
+        getattr(args, "clean_user", None)
+        or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
         or "root"
     )
 
     clean_password = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        getattr(args, "clean_password", None)
+        or os.getenv("QKD_BOOTSTRAP_PASSWORD")
         or secrets.get("bootstrap_password")
         or secrets.get("deploy_password")
         or secrets.get("root_password")

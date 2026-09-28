@@ -93,6 +93,12 @@ Options:
 - `--local-only`
 - `--pki`
 - `--full-macsec`
+- `--continue-on-failure`
+- `--bootstrap-user <user>`: privileged user for remote cleanup
+
+Remote cleanup (without `--local-only`) resolves credentials like `deploy`:
+`--bootstrap-user`, then `QKD_BOOTSTRAP_USER`/`QKD_BOOTSTRAP_PASSWORD`, then
+inventory secrets. Any missing value is requested interactively.
 
 Examples:
 
@@ -100,6 +106,7 @@ Examples:
 python3 qkd_orchestrator.py clean --local-only
 python3 qkd_orchestrator.py clean --pki
 python3 qkd_orchestrator.py clean --full-macsec
+python3 qkd_orchestrator.py clean --bootstrap-user root
 ```
 
 ## Auxiliary Tool: Certificate Manager

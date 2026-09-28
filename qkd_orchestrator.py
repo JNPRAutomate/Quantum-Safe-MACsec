@@ -9,6 +9,10 @@
 from __future__ import annotations
 
 import warnings
+
+# cryptography emits its Python-version deprecation warning while it is being
+# imported, so the filter must be installed before the import below.
+warnings.filterwarnings("ignore", message=r".*Python 3\.\d+ is no longer supported.*")
 from cryptography.utils import CryptographyDeprecationWarning
 
 warnings.filterwarnings("ignore", message=".*TripleDES.*")
@@ -64,7 +68,7 @@ from lib.kme.instructions import print_manual_kme_copy_instructions
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
-SCRIPT_VERSION = "ver3.3.4"
+SCRIPT_VERSION = "ver3.3.4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +464,14 @@ def parse_args():
         "--continue-on-failure",
         action="store_true",
         help="Continue local cleanup even if some remote devices fail.",
+    )
+    clean.add_argument(
+        "--bootstrap-user",
+        default=None,
+        help=(
+            "Privileged user used for remote cleanup. Overrides QKD_BOOTSTRAP_USER "
+            "and inventory defaults; its password is requested interactively when needed."
+        ),
     )
 
     validate = subparsers.add_parser(
@@ -1839,6 +1851,15 @@ def main():
             elif args.command == "deploy":
                 handle_deploy(args)
             elif args.command == "clean":
+                if not args.local_only:
+                    # Remote cleanup needs privileged credentials; prompt like
+                    # deploy/bootstrap instead of failing when none are stored.
+                    args.clean_user, args.clean_password = (
+                        resolve_interactive_bootstrap_credentials(
+                            load_inventory_base(),
+                            bootstrap_user_override=args.bootstrap_user,
+                        )
+                    )
                 handle_clean(args)
             elif args.command == "validate":
                 handle_validate(args)
