@@ -30,6 +30,18 @@ ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_SCRIPT = ROOT / "tools" / "collect_device_logs.py"
 DEFAULT_INVENTORY = ROOT / "config" / "inventory" / "input" / "ring_mx_acx_unified_link_driven.yml"
 DEFAULT_BASE_INVENTORY = ROOT / "config" / "inventory" / "inventory_base.yaml"
+TIMING_STAT_KEYS = (
+    "master_enc_step_ms",
+    "master_commit_step_ms",
+    "master_scp_step_ms",
+    "master_ack_poll_ms",
+    "master_total_ms",
+    "slave_dec_ms",
+    "slave_commit_ms",
+    "slave_total_ms",
+    "slave_elapsed_from_enqueue_ms",
+    "enc_to_dec_ms",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -369,6 +381,62 @@ def calc_summary(values: List[int]) -> Dict[str, Any]:
         'p50': sorted_vals[n // 2],
         'p95': sorted_vals[int(n * 0.95)] if n > 20 else sorted_vals[-1],
         'p99': sorted_vals[int(n * 0.99)] if n > 100 else sorted_vals[-1],
+    }
+
+
+def summarize_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
+    summary = {
+        "total_records": stats.get("total_records", 0),
+        "success_records": stats.get("success_records", 0),
+        "failed_records": stats.get("failed_records", 0),
+        "success_rate": stats.get("success_rate", 0),
+    }
+    timing_statistics = {
+        key: calc_summary(stats.get(key, []))
+        for key in TIMING_STAT_KEYS
+    }
+    enc_to_dec = timing_statistics["enc_to_dec_ms"]
+    if enc_to_dec:
+        recommended_ttl_seconds = (int(enc_to_dec["p99"]) + 999) // 1000 + 1
+        ttl_budget = {
+            "status": "available",
+            "recommended_ttl_seconds": recommended_ttl_seconds,
+            "enc_to_dec_ms": enc_to_dec,
+        }
+    else:
+        ttl_budget = {
+            "status": "unavailable",
+            "reason": (
+                "No records contain the slave timing fields required to "
+                "calculate ENC-to-DEC retention."
+            ),
+            "recommended_ttl_seconds": None,
+            "enc_to_dec_ms": {},
+        }
+    return {
+        "summary": summary,
+        "timing_statistics_ms": timing_statistics,
+        "kme_ttl_budget": ttl_budget,
+        "enc_to_dec_samples": stats.get("enc_to_dec_samples", []),
+    }
+
+
+def build_json_report(
+    records: List[Dict[str, Any]],
+    grouped_records: Dict[str, List[Dict[str, Any]]],
+    inventory_path: Path,
+    collection_dir: Path,
+    generated_at: str,
+) -> Dict[str, Any]:
+    return {
+        "timestamp": generated_at,
+        "inventory": str(inventory_path.resolve()),
+        "collection_dir": str(collection_dir.resolve()),
+        "overall": summarize_stats(analyze_records(records)),
+        "platforms": {
+            platform: summarize_stats(analyze_records(platform_records))
+            for platform, platform_records in sorted(grouped_records.items())
+        },
     }
 
 
@@ -956,16 +1024,13 @@ def main() -> None:
     output_path = Path(args.output)
     
     if args.json:
-        stats = analyze_records(all_records)
-        output_data = {
-            'timestamp': datetime.now().isoformat(),
-            'summary': {
-                'total_records': stats.get('total_records', 0),
-                'success_records': stats.get('success_records', 0),
-                'failed_records': stats.get('failed_records', 0),
-                'success_rate': stats.get('success_rate', 0),
-            },
-        }
+        output_data = build_json_report(
+            all_records,
+            grouped_records,
+            args.inventory,
+            collection_dir,
+            datetime.now().isoformat(),
+        )
         output_path.write_text(json.dumps(output_data, indent=2))
         print(f"✓ JSON: {output_path}")
     else:

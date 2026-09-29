@@ -30,6 +30,26 @@ python3 tools/qkd_pipeline_analytics.py --skip-collect
 
 Automatically selects the most recent local snapshot. Use this to regenerate the report after the tool is updated.
 
+### Generate a machine-readable JSON report
+
+```bash
+python3 tools/qkd_pipeline_analytics.py \
+  --json \
+  --output qkd_pipeline_stats.json
+```
+
+The JSON report contains:
+
+- overall success and failure counts
+- min/average/p50/p95/p99/max timing statistics in milliseconds
+- KME ENC-to-DEC retention statistics and recommended TTL when slave timing
+  fields are present
+- an explicit `unavailable` TTL status when the source records do not contain
+  the required slave timing fields
+- the worst ENC-to-DEC samples
+- the same statistics grouped by device platform
+- source inventory and snapshot paths
+
 ### Options
 
 | Option | Default | Description |
