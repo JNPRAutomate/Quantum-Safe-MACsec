@@ -40,3 +40,8 @@ Archive material is in `archive/docs/`.
 
 1. [PQC Theory and Standards](pqc/theory_and_standards.md)
 2. [PQC Glossary](pqc/glossary.md)
+
+## Tools Ordered Set
+
+1. [QKD Post-Check Observation Tools](tools/qkd_post_check_observation_tools.md)
+2. [Remote Linux Full-Suite Workflow with tmux](tools/remote_linux_tmux_full_suite.md)
