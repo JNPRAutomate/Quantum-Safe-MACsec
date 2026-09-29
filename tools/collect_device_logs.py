@@ -258,6 +258,44 @@ def build_junos_file_show_command(
     remote_path: str,
     connect_timeout: int,
     identity_file: Optional[Path] = None,
+    file_name: str = "qkd_debug.log",
+) -> List[str]:
+    if not SAFE_NAME_RE.fullmatch(file_name):
+        raise RuntimeError("Unsafe remote file name: %r" % file_name)
+    command = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=%d" % connect_timeout,
+    ]
+    if identity_file is not None:
+        command.extend(
+            [
+                "-o",
+                "IdentitiesOnly=yes",
+                "-i",
+                str(identity_file),
+            ]
+        )
+    command.extend(
+        [
+            "%s@%s" % (user, device.address),
+            "file show %s/%s | no-more"
+            % (remote_path.rstrip("/"), file_name),
+        ]
+    )
+    return command
+
+
+def build_junos_file_list_command(
+    device: Device,
+    user: str,
+    remote_path: str,
+    connect_timeout: int,
+    identity_file: Optional[Path] = None,
 ) -> List[str]:
     command = [
         "ssh",
@@ -280,10 +318,86 @@ def build_junos_file_show_command(
     command.extend(
         [
             "%s@%s" % (user, device.address),
-            "file show %s/qkd_debug.log | no-more" % remote_path.rstrip("/"),
+            "file list %s detail | no-more" % remote_path.rstrip("/"),
         ]
     )
     return command
+
+
+def parse_junos_file_list(output: str) -> List[str]:
+    file_names: List[str] = []
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("-"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 2:
+            continue
+        file_name = parts[-1]
+        if SAFE_NAME_RE.fullmatch(file_name) and file_name not in file_names:
+            file_names.append(file_name)
+    return file_names
+
+
+def collect_with_junos_file_show(
+    device: Device,
+    user: str,
+    remote_path: str,
+    destination: Path,
+    connect_timeout: int,
+    identity_file: Optional[Path],
+) -> str:
+    listing = subprocess.run(
+        build_junos_file_list_command(
+            device,
+            user,
+            remote_path,
+            connect_timeout,
+            identity_file,
+        ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        return (
+            listing.stderr
+            or listing.stdout
+            or "Junos file-list fallback failed"
+        ).strip()
+
+    file_names = parse_junos_file_list(listing.stdout)
+    if not file_names:
+        return "Junos file-list fallback found no regular files"
+
+    destination.mkdir(parents=True, exist_ok=True)
+    for file_name in file_names:
+        shown = subprocess.run(
+            build_junos_file_show_command(
+                device,
+                user,
+                remote_path,
+                connect_timeout,
+                identity_file,
+                file_name,
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if shown.returncode != 0:
+            return (
+                shown.stderr
+                or shown.stdout
+                or "Junos file-show fallback failed for %s" % file_name
+            ).strip()
+        (destination / file_name).write_text(
+            shown.stdout,
+            encoding="utf-8",
+        )
+    return ""
 
 
 def collect_device(
@@ -343,28 +457,18 @@ def collect_device(
     error = (completed.stderr or completed.stdout or "SCP failed").strip()
     if "cli: invalid file specification:" in error:
         print(
-            "[%s] legacy SCP rejected; collecting qkd_debug.log via Junos CLI"
+            "[%s] legacy SCP rejected; collecting regular files via Junos CLI"
             % device.name
         )
-        fallback = subprocess.run(
-            build_junos_file_show_command(
-                device,
-                user,
-                remote_path,
-                connect_timeout,
-                identity_file,
-            ),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
+        fallback_error = collect_with_junos_file_show(
+            device,
+            user,
+            remote_path,
+            destination,
+            connect_timeout,
+            identity_file,
         )
-        if fallback.returncode == 0 and fallback.stdout:
-            destination.mkdir(parents=True, exist_ok=True)
-            (destination / "qkd_debug.log").write_text(
-                fallback.stdout,
-                encoding="utf-8",
-            )
+        if not fallback_error:
             return CollectionResult(
                 device.name,
                 device.hostname,
@@ -372,9 +476,6 @@ def collect_device(
                 str(destination),
                 "ok",
             )
-        fallback_error = (
-            fallback.stderr or fallback.stdout or "Junos file-show fallback failed"
-        ).strip()
         error = "%s; fallback failed: %s" % (error, fallback_error)
     return CollectionResult(
         device.name,

@@ -109,9 +109,12 @@ Each stage snapshot contains `qkd_link_rotation_report.json` and
 
 The collector normally copies the complete remote log directory with legacy
 SCP. If a Junos device routes the SCP server command to the CLI and returns
-`cli: invalid file specification`, the collector automatically retrieves the
-combined `qkd_debug.log` through the read-only Junos `file show` command. The
-link report supports this combined-log layout and still filters events by
+`cli: invalid file specification`, the collector uses read-only Junos CLI
+commands instead. It lists regular files in the requested directory with
+`file list ... detail | no-more`, then retrieves each file with
+`file show ... | no-more`, preserving the original file names. This supports
+both the combined `qkd_debug.log` layout and specialized directories such as
+`logs/pipeline_timing`. The link report still filters combined-log events by
 interface.
 
 ## 6. Health classifications

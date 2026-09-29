@@ -3,6 +3,7 @@ from pathlib import Path
 
 from tools.collect_device_logs import (
     Device,
+    build_junos_file_list_command,
     build_junos_file_show_command,
     build_scp_command,
     collect_device,
@@ -10,6 +11,7 @@ from tools.collect_device_logs import (
     discover_identity_file,
     load_devices,
     load_script_user,
+    parse_junos_file_list,
     validate_remote_path,
 )
 
@@ -75,6 +77,36 @@ def test_junos_file_show_command_is_noninteractive(tmp_path):
     )
 
 
+def test_junos_file_list_command_is_noninteractive(tmp_path):
+    command = build_junos_file_list_command(
+        Device("MX1", "mx301-p1", "100.123.113.151"),
+        "etsi_user",
+        "/var/home/etsi_user/logs/pipeline_timing",
+        15,
+        Path("/tmp/qkd_id_ed25519"),
+    )
+    assert command[0] == "ssh"
+    assert "BatchMode=yes" in command
+    assert "IdentitiesOnly=yes" in command
+    assert command[-1] == (
+        "file list /var/home/etsi_user/logs/pipeline_timing detail | no-more"
+    )
+
+
+def test_parse_junos_file_list_returns_only_safe_regular_files():
+    output = """/var/home/etsi_user/logs/pipeline_timing:
+total blocks: 24
+-rw-r--r--  1 etsi_user 20 746 Sep 29 20:27 qkd_rolling_pipeline_timing.jsonl
+drwxr-xr-x  2 etsi_user 20 512 Sep 29 20:27 archived
+-rw-r--r--  1 etsi_user 20 123 Sep 29 20:27 qkd_batch_pipeline_timing.jsonl
+total files: 3
+"""
+    assert parse_junos_file_list(output) == [
+        "qkd_rolling_pipeline_timing.jsonl",
+        "qkd_batch_pipeline_timing.jsonl",
+    ]
+
+
 def test_collect_device_falls_back_to_junos_file_show(monkeypatch, tmp_path):
     class Completed:
         def __init__(self, returncode, stdout="", stderr=""):
@@ -94,7 +126,19 @@ def test_collect_device_falls_back_to_junos_file_show(monkeypatch, tmp_path):
                     "scp -r -p -f /var/home/etsi_user/logs"
                 ),
             )
-        return Completed(0, stdout="2026-09-29 12:57:22 [INFO] rotation done\n")
+        if command[-1].startswith("file list "):
+            return Completed(
+                0,
+                stdout=(
+                    "/var/home/etsi_user/logs:\n"
+                    "-rw-r--r--  1 etsi_user 20 52 Sep 29 12:57 qkd_debug.log\n"
+                    "total files: 1\n"
+                ),
+            )
+        return Completed(
+            0,
+            stdout="2026-09-29 12:57:22 [INFO] rotation done\n",
+        )
 
     monkeypatch.setattr("tools.collect_device_logs.subprocess.run", fake_run)
     result = collect_device(
@@ -108,10 +152,66 @@ def test_collect_device_falls_back_to_junos_file_show(monkeypatch, tmp_path):
     )
 
     assert result.status == "ok"
-    assert [command[0] for command in calls] == ["scp", "ssh"]
+    assert [command[0] for command in calls] == ["scp", "ssh", "ssh"]
     assert (tmp_path / "MX304-P1" / "qkd_debug.log").read_text(
         encoding="utf-8"
     ) == "2026-09-29 12:57:22 [INFO] rotation done\n"
+
+
+def test_collect_device_fallback_preserves_multiple_file_names(
+    monkeypatch,
+    tmp_path,
+):
+    class Completed:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(command, **kwargs):
+        if command[0] == "scp":
+            return Completed(
+                1,
+                stderr=(
+                    "cli: invalid file specification: "
+                    "scp -r -p -f /var/home/etsi_user/logs/pipeline_timing"
+                ),
+            )
+        if command[-1].startswith("file list "):
+            return Completed(
+                0,
+                stdout=(
+                    "/var/home/etsi_user/logs/pipeline_timing:\n"
+                    "-rw-r--r-- 1 etsi_user 20 10 Sep 29 12:57 "
+                    "qkd_rolling_pipeline_timing.jsonl\n"
+                    "-rw-r--r-- 1 etsi_user 20 11 Sep 29 12:57 "
+                    "qkd_batch_pipeline_timing.jsonl\n"
+                    "total files: 2\n"
+                ),
+            )
+        file_name = command[-1].split()[-3].rsplit("/", 1)[-1]
+        return Completed(0, stdout='{"source":"%s"}\n' % file_name)
+
+    monkeypatch.setattr("tools.collect_device_logs.subprocess.run", fake_run)
+    result = collect_device(
+        Device("MX304-P1", "mx304-p1", "100.123.113.1"),
+        "etsi_user",
+        "/var/home/etsi_user/logs/pipeline_timing",
+        tmp_path,
+        15,
+        Path("/tmp/qkd_id_ed25519"),
+        False,
+    )
+
+    assert result.status == "ok"
+    destination = tmp_path / "MX304-P1"
+    assert sorted(path.name for path in destination.iterdir()) == [
+        "qkd_batch_pipeline_timing.jsonl",
+        "qkd_rolling_pipeline_timing.jsonl",
+    ]
+    assert "qkd_rolling_pipeline_timing.jsonl" in (
+        destination / "qkd_rolling_pipeline_timing.jsonl"
+    ).read_text(encoding="utf-8")
 
 
 def test_remote_path_rejects_scp_remote_shell_metacharacters():

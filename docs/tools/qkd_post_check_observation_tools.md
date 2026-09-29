@@ -18,8 +18,9 @@ raw text diffs of append-only log files.
 
 - [tools/collect_device_logs.py](../../tools/collect_device_logs.py)
   - inventory-driven log snapshot collection from all devices
-  - automatically falls back to a read-only Junos `file show` collection of
-    `qkd_debug.log` when a device rejects the legacy SCP server command
+  - automatically falls back to read-only Junos `file list` and `file show`
+    collection of the requested directory's regular files when a device
+    rejects the legacy SCP server command
 - [tools/qkd_link_rotation_report.py](../../tools/qkd_link_rotation_report.py)
   - per-snapshot link health and rotation status report
 - [tools/observe_qkd_rotation.py](../../tools/observe_qkd_rotation.py)
