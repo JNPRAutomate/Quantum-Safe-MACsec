@@ -10,5 +10,6 @@
 !INCLUDE "platform_differences_mx_acx_evo.md"
 !INCLUDE "ssh_key_architecture.md"
 !INCLUDE "hitless_rolling_keyring_ver3.3.2.1.md"
+!INCLUDE "macsec_batch_and_ssh_key_rotation.md"
 !INCLUDE "link_master_role_requirements.md"
 !INCLUDE "peer_key_rotation_mesh_trust.md"

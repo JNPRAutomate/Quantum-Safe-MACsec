@@ -437,6 +437,82 @@ class TestRollingKeyringPlan:
 
         assert send_index < rpc_success_index < finalize_index
 
+    def test_master_finalize_purges_stale_pending_before_appending_batch(self):
+        finalize = load_functions("_finalize_bilateral_install")[
+            "_finalize_bilateral_install"
+        ]
+        calls = []
+
+        finalize.__globals__.update(
+            {
+                "epoch_from_junos_start_time": lambda value: {
+                    "old": 100,
+                    "new-1": 200,
+                    "new-2": 300,
+                }.get(value),
+                "purge_pending_older_than_start_time": (
+                    lambda state, start_time, **kwargs: (
+                        calls.append((start_time, kwargs)),
+                        {**state, "pending_keys": []},
+                    )[1]
+                ),
+                "append_pending_key": (
+                    lambda state, generation, key_id, start_time, slot=None: {
+                        **state,
+                        "pending_keys": state.get("pending_keys", [])
+                        + [
+                            {
+                                "generation": generation,
+                                "key_id": key_id,
+                                "start_time": start_time,
+                                "slot": slot,
+                            }
+                        ],
+                    }
+                ),
+                "record_installed_key": lambda state, *args, **kwargs: state,
+                "max_installed_keys": lambda: 4,
+                "time": SimpleNamespace(time=lambda: 123),
+            }
+        )
+
+        result = finalize(
+            {
+                "pending_keys": [
+                    {
+                        "generation": 1,
+                        "key_id": "old-key",
+                        "start_time": "old",
+                        "slot": 1,
+                    }
+                ],
+                "installed_keys": [{"slot": slot} for slot in range(4)],
+                "inflight_install": {"ack_id": "test"},
+            },
+            [
+                {
+                    "generation": 2,
+                    "key_id": "new-key-1",
+                    "start_time": "new-1",
+                    "slot": 2,
+                },
+                {
+                    "generation": 3,
+                    "key_id": "new-key-2",
+                    "start_time": "new-2",
+                    "slot": 3,
+                },
+            ],
+            "ROLLING_REPLACEMENT",
+        )
+
+        assert calls == [("new-1", {"mode_ctx": "MASTER"})]
+        assert [item["key_id"] for item in result["pending_keys"]] == [
+            "new-key-1",
+            "new-key-2",
+        ]
+        assert result["inflight_install"] is None
+
 
 class TestTimezoneSafeStartTimes:
     @classmethod

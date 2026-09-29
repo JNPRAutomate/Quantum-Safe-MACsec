@@ -19,27 +19,28 @@ QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and obser
 8. [Platform Differences: MX vs ACX EVO](platform_differences_mx_acx_evo.md)
 9. [SSH Key Architecture](ssh_key_architecture.md)
 10. [MACsec Hitless Rolling Keyring — Four Slots (ver3.3.2.1)](hitless_rolling_keyring_ver3.3.2.1.md)
-11. [Link Master Role Requirements](link_master_role_requirements.md)
-12. [Peer SSH Key Rotation — Mesh Trust Design (current)](peer_key_rotation_mesh_trust.md)
-13. [Two-Node script_user / peer_cmd_user Split](script_user_peer_ssh_split_two_node.md)
-14. [Strict Sync + Queue ACK LLD](qkd_onbox_strict_sync_ack_lld.md)
+11. [MACsec Batch Rotation and SSH Transport-Key Rotation (ver3.3.4)](macsec_batch_and_ssh_key_rotation.md)
+12. [Link Master Role Requirements](link_master_role_requirements.md)
+13. [Peer SSH Key Rotation — Mesh Trust Design (current)](peer_key_rotation_mesh_trust.md)
+14. [Two-Node script_user / peer_cmd_user Split](script_user_peer_ssh_split_two_node.md)
+15. [Strict Sync + Queue ACK LLD](qkd_onbox_strict_sync_ack_lld.md)
 
 ## Troubleshooting
 
-15. [key 0 bootstrap realignment without MACsec flap](troubleshooting/key0_bootstrap_realignment.md)
-16. [SSH identity realignment for etsi_user and etsi_peer_view](troubleshooting/ssh_identity_realignment.md)
-17. [On-box JSON state DB inspection and safe reset](troubleshooting/state_db_json_inspection.md)
-18. [On-box lock directories](troubleshooting/lock_directories.md)
-19. [Peer transport directories: status, inbox, ACK](troubleshooting/peer_transport_directories.md)
+16. [key 0 bootstrap realignment without MACsec flap](troubleshooting/key0_bootstrap_realignment.md)
+17. [SSH identity realignment for etsi_user and etsi_peer_view](troubleshooting/ssh_identity_realignment.md)
+18. [On-box JSON state DB inspection and safe reset](troubleshooting/state_db_json_inspection.md)
+19. [On-box lock directories](troubleshooting/lock_directories.md)
+20. [Peer transport directories: status, inbox, ACK](troubleshooting/peer_transport_directories.md)
 
 ## Release Information
 
-20. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
-21. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
+21. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
+22. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
 
 ## Runtime Policies
 
-22. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
+23. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
 
 ## Historical / Archive
 
