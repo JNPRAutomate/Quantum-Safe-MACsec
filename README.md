@@ -206,9 +206,10 @@ Recommended QKD reading flow:
 5. [docs/qkd/platform_differences_mx_acx_evo.md](docs/qkd/platform_differences_mx_acx_evo.md)
 6. [docs/qkd/ssh_key_architecture.md](docs/qkd/ssh_key_architecture.md)
 7. [docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md](docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md)
-8. [docs/qkd/link_master_role_requirements.md](docs/qkd/link_master_role_requirements.md)
-9. [docs/qkd/peer_key_rotation_mesh_trust.md](docs/qkd/peer_key_rotation_mesh_trust.md)
-10. [docs/qkd/logging_and_customer_reporting.md](docs/qkd/logging_and_customer_reporting.md)
+8. [docs/qkd/macsec_batch_and_ssh_key_rotation.md](docs/qkd/macsec_batch_and_ssh_key_rotation.md)
+9. [docs/qkd/link_master_role_requirements.md](docs/qkd/link_master_role_requirements.md)
+10. [docs/qkd/peer_key_rotation_mesh_trust.md](docs/qkd/peer_key_rotation_mesh_trust.md)
+11. [docs/qkd/logging_and_customer_reporting.md](docs/qkd/logging_and_customer_reporting.md)
 
 Supporting references:
 

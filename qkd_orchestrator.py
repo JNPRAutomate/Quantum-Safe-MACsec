@@ -1657,6 +1657,8 @@ def main():
                 handle_validate(args)
             else:
                 print("Use: create | bootstrap | deploy | validate | clean")
+        except SystemExit:
+            raise
         except BaseException:
             traceback.print_exc()
             raise

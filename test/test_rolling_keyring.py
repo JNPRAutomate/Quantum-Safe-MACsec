@@ -1,10 +1,13 @@
 import ast
+import base64
 import calendar
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import time
 
 import pytest
+import subprocess
 
 from lib.qkd.inventory_builder import validate_qkd_policy
 
@@ -359,6 +362,157 @@ class TestRollingKeyringPlan:
         save_index = source.index("if not save_db_state(peer, iface, state):", reconcile_index)
         assert finalize_index < reconcile_index < save_index
 
+    def test_rpc_batch_transport_uses_script_user_identity(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        send_command = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "send_command"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), send_command)
+        queue_end = source.index("return scp_upload_text")
+        rpc_source = source[queue_end:]
+
+        assert "peer_user = SCRIPT_USER" in rpc_source
+        assert 'ssh_transport_options(SSH_KEY)' in rpc_source
+        assert 'f"SSH RPC EXEC {peer_user}@{peer_ip}' in rpc_source
+        assert 'timeout = peer_batch_ack_timeout_seconds()' in rpc_source
+        assert '"OK INSTALL-KEY-BATCH" not in stdout' in rpc_source
+        assert '"ConnectTimeout=10"' in rpc_source
+
+    def test_rpc_recovery_does_not_read_scp_ack(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        resume = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "resume_inflight_install"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), resume)
+
+        assert 'transport_mode = peer_transport_mode()' in source
+        assert 'read_remote_peer_batch_ack(link, iface) if transport_mode == "queue" else None' in source
+        assert "_state_records_match(peer_state, records)" in source
+
+    def test_stuck_inflight_transaction_is_auto_reset_not_retried_forever(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        resume = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "resume_inflight_install"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), resume)
+
+        stuck_index = source.index("if age_seconds > INFLIGHT_STUCK_SECONDS:")
+        stuck_block = source[stuck_index:]
+
+        # A transaction whose scheduled start_time is far in the past can
+        # never be delivered (send_command's own margin check will always
+        # reject it), so once the stuck threshold is exceeded the code must
+        # abandon it locally instead of retrying it forever and requiring
+        # manual intervention.
+        assert 'action=AUTO_RING_RESET' in stuck_block
+        assert 'action=MANUAL_INTERVENTION_OR_RING_RESET_REQUIRED' not in stuck_block
+        reset_index = stuck_block.index('state["inflight_install"] = None')
+        return_index = stuck_block.index("return state, False", reset_index)
+        send_retry_index = stuck_block.find('if not send_command(')
+        # The reset (and its early return) must happen before any resend of
+        # the doomed stale payload is attempted.
+        assert send_retry_index == -1 or return_index < send_retry_index
+
+    def test_rpc_success_is_recorded_before_bilateral_finalize(self):
+        tree = ast.parse(ONBOX.read_text(encoding="utf-8"))
+        rolling_link = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "run_master_rolling_link"
+        )
+        source = ast.get_source_segment(ONBOX.read_text(encoding="utf-8"), rolling_link)
+        send_index = source.index('if not send_command(')
+        rpc_success_index = source.index('reason_stage="MASTER_RPC_RESPONSE"', send_index)
+        finalize_index = source.index(
+            "state = _finalize_bilateral_install(state, peer_payload, operation)",
+            rpc_success_index,
+        )
+
+        assert send_index < rpc_success_index < finalize_index
+
+    def test_master_finalize_purges_stale_pending_before_appending_batch(self):
+        finalize = load_functions("_finalize_bilateral_install")[
+            "_finalize_bilateral_install"
+        ]
+        calls = []
+
+        finalize.__globals__.update(
+            {
+                "epoch_from_junos_start_time": lambda value: {
+                    "old": 100,
+                    "new-1": 200,
+                    "new-2": 300,
+                }.get(value),
+                "purge_pending_older_than_start_time": (
+                    lambda state, start_time, **kwargs: (
+                        calls.append((start_time, kwargs)),
+                        {**state, "pending_keys": []},
+                    )[1]
+                ),
+                "append_pending_key": (
+                    lambda state, generation, key_id, start_time, slot=None: {
+                        **state,
+                        "pending_keys": state.get("pending_keys", [])
+                        + [
+                            {
+                                "generation": generation,
+                                "key_id": key_id,
+                                "start_time": start_time,
+                                "slot": slot,
+                            }
+                        ],
+                    }
+                ),
+                "record_installed_key": lambda state, *args, **kwargs: state,
+                "max_installed_keys": lambda: 4,
+                "time": SimpleNamespace(time=lambda: 123),
+            }
+        )
+
+        result = finalize(
+            {
+                "pending_keys": [
+                    {
+                        "generation": 1,
+                        "key_id": "old-key",
+                        "start_time": "old",
+                        "slot": 1,
+                    }
+                ],
+                "installed_keys": [{"slot": slot} for slot in range(4)],
+                "inflight_install": {"ack_id": "test"},
+            },
+            [
+                {
+                    "generation": 2,
+                    "key_id": "new-key-1",
+                    "start_time": "new-1",
+                    "slot": 2,
+                },
+                {
+                    "generation": 3,
+                    "key_id": "new-key-2",
+                    "start_time": "new-2",
+                    "slot": 3,
+                },
+            ],
+            "ROLLING_REPLACEMENT",
+        )
+
+        assert calls == [("new-1", {"mode_ctx": "MASTER"})]
+        assert [item["key_id"] for item in result["pending_keys"]] == [
+            "new-key-1",
+            "new-key-2",
+        ]
+        assert result["inflight_install"] is None
+
 
 class TestTimezoneSafeStartTimes:
     @classmethod
@@ -379,6 +533,146 @@ class TestTimezoneSafeStartTimes:
         assert parse("2026-09-23.14:38:26 +0200") == parse(
             "2026-09-23.12:38:26 +0000"
         )
+
+
+class TestBilateralSlotMetadata:
+    @classmethod
+    def setup_class(cls):
+        cls.functions = load_functions("_slot_metadata_matches")
+        cls.functions["epoch_from_junos_start_time"] = lambda value: {
+            "one": 1,
+            "two": 2,
+        }.get(value, value)
+
+    def test_accepts_bootstrap_seed_with_platform_timezone_difference(self):
+        local_state = {
+            "slots": [{
+                "key_id": "QKD_CA:bootstrap:key-name:0",
+                "start_time": "2026-1-1.00:01:00 +0100",
+            }],
+        }
+        peer_state = {
+            "slots": [{
+                "key_id": "QKD_CA:bootstrap:key-name:0",
+                "start_time": "2026-1-1.00:01:00 +0000",
+            }],
+        }
+
+        assert self.functions["_slot_metadata_matches"](local_state, peer_state, {0})
+
+    def test_rejects_different_timestamp_for_non_bootstrap_slot(self):
+        local_state = {
+            "slots": [
+                None,
+                {"key_id": "key-1", "start_time": "one"},
+            ],
+        }
+        peer_state = {
+            "slots": [
+                None,
+                {"key_id": "key-1", "start_time": "two"},
+            ],
+        }
+
+        assert not self.functions["_slot_metadata_matches"](local_state, peer_state, {1})
+
+
+class TestScpTimeout:
+    def test_timeout_kills_entire_scp_process_group(self):
+        functions = load_functions("run_scp_command")
+        killed = []
+
+        class Process:
+            pid = 4321
+
+            def communicate(self, timeout=None):
+                if timeout is not None:
+                    raise subprocess.TimeoutExpired(["scp"], timeout)
+                return b"", b""
+
+        functions["subprocess"] = SimpleNamespace(
+            PIPE=object(),
+            TimeoutExpired=subprocess.TimeoutExpired,
+            Popen=lambda *args, **kwargs: Process(),
+        )
+        functions["os"] = SimpleNamespace(
+            killpg=lambda pid, signal: killed.append((pid, signal))
+        )
+        functions["signal"] = SimpleNamespace(SIGKILL=9)
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            functions["run_scp_command"](["scp"], timeout=10)
+
+        assert killed == [(4321, 9)]
+
+
+class TestRpcBatchDelivery:
+    def setup_method(self):
+        self.functions = load_functions("send_command")
+        self.calls = []
+        payload = json.dumps(
+            [{
+                "slot": 1,
+                "key_id": "key-1",
+                "generation": 1,
+                "start_time": "2026-09-24.15:00:00 +0000",
+            }],
+            separators=(",", ":"),
+        )
+        self.payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode()
+        self.functions.update(
+            {
+                "validate_link_runtime": lambda link, require_peer_transport: True,
+                "format_next_start_time_with_millis": lambda value: value,
+                "epoch_from_junos_start_time": lambda value: 2_000_000_000,
+                "peer_transport_mode": lambda: "rpc",
+                "peer_enqueue_min_margin_seconds": lambda: 60,
+                "SCRIPT_USER": "etsi_user",
+                "SSH_KEY": "/var/home/etsi_user/.ssh/qkd_id_ed25519",
+                "ssh_transport_options": lambda key: ["-i", key],
+                "peer_batch_ack_timeout_seconds": lambda: 150,
+                "log": lambda *args, **kwargs: None,
+                "base64": base64,
+                "json": json,
+                "time": SimpleNamespace(time=lambda: 1_000_000_000),
+            }
+        )
+
+    def run_rpc(self, stdout=b"OK INSTALL-KEY-BATCH count=1\n"):
+        def run(cmd, stdout=None, stderr=None, timeout=None):
+            self.calls.append((cmd, timeout))
+            return SimpleNamespace(returncode=0, stdout=self.stdout, stderr=b"")
+
+        self.stdout = stdout
+        self.functions["subprocess"] = SimpleNamespace(
+            PIPE=object(),
+            TimeoutExpired=subprocess.TimeoutExpired,
+            run=run,
+        )
+        return self.functions["send_command"](
+            {
+                "peer_ip": "100.123.113.1",
+                "peer_interface": "et-0/0/7",
+                "peer_sae": "sae-002",
+            },
+            "install-key-batch",
+            "et-0/0/2",
+            batch_b64=self.payload_b64,
+            ack_id="ack-1",
+        )
+
+    def test_rpc_uses_script_user_identity_and_positive_ack(self):
+        assert self.run_rpc()
+        cmd, timeout = self.calls[0]
+
+        assert cmd[0] == "ssh"
+        assert "/var/home/etsi_user/.ssh/qkd_id_ed25519" in cmd
+        assert "etsi_user@100.123.113.1" in cmd
+        assert "action install-key-batch iface et-0/0/7" in cmd[-1]
+        assert timeout == 150
+
+    def test_rpc_rejects_zero_exit_without_positive_ack(self):
+        assert not self.run_rpc(stdout=b"")
 
 
 def test_qkd_policy_accepts_safe_independent_timers():

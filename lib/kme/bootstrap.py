@@ -297,7 +297,7 @@ def install_public_key(
         dry_run=dry_run,
         use_alias=False,
         batch=False,
-        include_identity=False,
+        include_identity=True,
         check=True,
     )
 

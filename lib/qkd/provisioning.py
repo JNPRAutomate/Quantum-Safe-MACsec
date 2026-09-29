@@ -166,6 +166,21 @@ def run_shell(dev, command, name=None, strict=False):
         return str(exc)
 
 
+def run_cli_only(dev, command, name=None, strict=False):
+    """
+    Run commands that Junos permits only from an interactive CLI session.
+
+    RPC <command> execution rejects file copy and commit synchronize scripts
+    on MX304, even though the same commands are accepted through cli -c.
+    """
+    return run_shell(
+        dev,
+        "cli -c " + shlex.quote(command),
+        name=name,
+        strict=strict,
+    )
+
+
 def has_dual_re(dev, name):
     """
     Detect dual RE robustly.
@@ -190,22 +205,46 @@ def has_dual_re(dev, name):
 
 def copy_file_to_other_re(dev, name, src_path, dst_name=None):
     """
-    Best-effort copy of a local file to the other Routing Engine.
+    Copy a local file to the peer Routing Engine.
 
-    Tries both re0: and re1: targets because the active RE identity may vary.
-    On single-RE systems this function should not be called.
+    The peer destination directory must exist before Junos file copy runs.
+    This is normally true for script directories, but a clean deployment
+    removes the certificate directory from both routing engines.
     """
     dst_path = str(Path(src_path).parent / (dst_name or Path(src_path).name))
-    ok = False
+    peer_dir = str(Path(dst_path).parent)
+    mkdir_command = (
+        "request routing-engine execute command "
+        f"\"mkdir -p {shlex.quote(peer_dir)}\" routing-engine other"
+    )
+    mkdir_output = run_cli_only(dev, mkdir_command, name=name, strict=False)
+    if "error:" in (mkdir_output or "").lower():
+        return False
 
+    copy_outputs = []
     for re_name in ("re0", "re1"):
         cmd = f"file copy {src_path} {re_name}:{dst_path}"
-        out = run_cli(dev, cmd, name=name, strict=False)
+        out = run_cli_only(dev, cmd, name=name, strict=False)
+        copy_outputs.append(f"{re_name}: {out}")
         low = (out or "").lower()
-        if "error" not in low and "failed" not in low and "no such" not in low:
-            ok = True
+        if "operation allowed only from cli" in low:
+            return False
 
-    return ok
+    verify_command = (
+        "request routing-engine execute command "
+        f"\"ls -l {shlex.quote(dst_path)}\" routing-engine other"
+    )
+    verify_output = run_cli_only(dev, verify_command, name=name, strict=False)
+    if dst_path in verify_output and "No such file or directory" not in verify_output:
+        return True
+
+    if DEBUG:
+        print(
+            f"[{name}] Peer RE copy verification failed for {dst_path}\n"
+            f"copy_outputs={copy_outputs}\n"
+            f"verify_output={verify_output}"
+        )
+    return False
 
 
 def sync_qkd_scripts_dual_re(dev, name, script_name):
@@ -239,7 +278,7 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
         copy_file_to_other_re(dev, name, path)
 
     # Ask Junos to push scripts too. Ignore failure here; file copy above is the primary sync.
-    run_cli(dev, "commit synchronize scripts", name=name, strict=False)
+    run_cli_only(dev, "commit synchronize scripts", name=name, strict=False)
 
 
 def sync_certs_dual_re(dev, name, remote_dir, filenames):
@@ -248,7 +287,22 @@ def sync_certs_dual_re(dev, name, remote_dir, filenames):
 
     print(f"[{name}] Dual-RE detected - syncing certs to peer RE")
     for filename in filenames:
-        copy_file_to_other_re(dev, name, f"{remote_dir}/{filename}")
+        remote_path = f"{remote_dir}/{filename}"
+        if not copy_file_to_other_re(dev, name, remote_path):
+            raise RuntimeError(
+                f"[{name}] Failed to copy certificate to peer RE: {remote_path}"
+            )
+
+        verify_command = (
+            "request routing-engine execute command "
+            f"\"ls -l {shlex.quote(remote_path)}\" routing-engine other"
+        )
+        output = run_cli_only(dev, verify_command, name=name, strict=False)
+        if "No such file or directory" in output or remote_path not in output:
+            raise RuntimeError(
+                f"[{name}] Peer RE certificate verification failed: {remote_path}\n"
+                f"output={output}"
+            )
 
 
 def commit_safely(dev, cu, name, sync=True, phase="CONFIG_APPLY", detail=None):
@@ -766,9 +820,8 @@ def ensure_peer_cmd_user_class_policy(dev, device_name, peer_cmd_user_class):
         "system {\n"
         "  login {\n"
         f"    class {peer_cmd_user_class} {{\n"
-        "      permissions [ shell view ];\n"
-        "      allow-commands \"(exit|scp -(f|t) /var/tmp/qkd_peer_(status|inbox|ack)/qkd_peer_(status|inbox|ack)_[A-Za-z0-9._-]+|op qkd_onbox.py action status iface [A-Za-z0-9./_-]+)\";\n"
-        "      deny-commands \"file .*\";\n"
+        "      allow-commands \"exit\";\n"
+        "      deny-commands \"(show|configure|op|request|file)( .*)?|start shell( .*)?\";\n"
         "    }\n"
         "  }\n"
         "}\n"

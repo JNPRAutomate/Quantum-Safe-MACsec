@@ -690,15 +690,11 @@ def build_script_user_class_commands(script_user_class: str) -> List[str]:
 
 def build_peer_cmd_class_commands(peer_cmd_user_class: str) -> List[str]:
     return [
-        "set system login class %s permissions shell" % peer_cmd_user_class,
-        "set system login class %s permissions view" % peer_cmd_user_class,
+        "set system login class %s allow-commands \"exit\"" % peer_cmd_user_class,
         (
-            "set system login class %s allow-commands "
-            "\"(exit|scp -(f|t) /var/tmp/qkd_peer_(status|inbox|ack)/"
-            "qkd_peer_(status|inbox|ack)_[A-Za-z0-9._-]+|"
-            "op qkd_onbox.py action status iface [A-Za-z0-9./_-]+)\""
+            "set system login class %s deny-commands "
+            "\"(show|configure|op|request|file)( .*)?|start shell( .*)?\""
         ) % peer_cmd_user_class,
-        "set system login class %s deny-commands \"file .*\"" % peer_cmd_user_class,
     ]
 
 
@@ -773,15 +769,24 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
             ).format(q=quoted, ak=shlex.quote(authorized_keys))
 
     return (
+        "set -e; "
         "mkdir -p {ssh_dir}; "
         "touch {authorized_keys}; "
         "{append_public_key}"
-        "chown -R {user} {ssh_dir}; "
         "chown {user} {authorized_keys}; "
+        "chown {user} {ssh_dir}; "
         "chmod 700 {ssh_dir}; "
         "chmod 600 {authorized_keys}; "
+        "for path in {ssh_dir}/qkd_*; do "
+        "[ -e \"$path\" ] || continue; "
+        "chown {user} \"$path\"; "
+        "case \"$path\" in *.pub) chmod 644 \"$path\" ;; *) chmod 600 \"$path\" ;; esac; "
+        "done; "
+        "test \"$(ls -ld {ssh_dir} | awk '{{print $3}}')\" = {user}; "
+        "test \"$(ls -l {authorized_keys} | awk '{{print $3}}')\" = {user}; "
         "ls -ld {ssh_dir}; "
-        "ls -l {authorized_keys}"
+        "ls -l {authorized_keys}; "
+        "echo __QKD_SSH_HOME_FIX_OK__"
     ).format(
         user=shlex.quote(script_user),
         ssh_dir=shlex.quote(ssh_dir),
@@ -806,7 +811,9 @@ def run_shell_fix(
         )
         return True
 
-    command = build_ssh_fix_command(script_user, public_key_line=public_key_line)
+    command = "/bin/sh -c " + shlex.quote(
+        build_ssh_fix_command(script_user, public_key_line=public_key_line)
+    )
     try:
         result = dev.rpc.request_shell_execute(command=command)
         text = _rpc_text(result).strip()
@@ -831,6 +838,13 @@ def run_shell_fix(
             print(
                 "[%s] hint: bootstrap user must be able to repair %s/.ssh ownership and permissions" %
                 (name, script_user)
+            )
+            return False
+
+        if "__QKD_SSH_HOME_FIX_OK__" not in text:
+            print(
+                "[%s] FAIL ssh home fix: ownership and permission verification did not complete for %s"
+                % (name, script_user)
             )
             return False
 
@@ -1188,18 +1202,10 @@ def bootstrap_script_user_on_device(
 
         if diff:
             print("[%s] candidate diff:\n%s" % (name, diff))
-            commit_comment = "QKD bootstrap SCRIPT_USER %s" % script_user
-            try:
-                cu.commit(comment=commit_comment, sync=True)
-            except Exception as exc:
-                error_text = str(exc)
-                if "remote commit-configuration failed" not in error_text.lower():
-                    raise
-                print(
-                    "[%s] WARN synchronized bootstrap commit failed on remote RE; "
-                    "retrying local commit" % name
-                )
-                cu.commit(comment=commit_comment + " fallback=local")
+            cu.commit(
+                comment="QKD bootstrap SCRIPT_USER %s" % script_user,
+                sync=True,
+            )
             print("[%s] OK SCRIPT_USER bootstrap committed" % name)
         else:
             print("[%s] no SCRIPT_USER config change required" % name)
@@ -1270,6 +1276,12 @@ def bootstrap_script_user_on_device(
                 "[%s] hint: the script user private key must remain owned by %s for runtime SSH checks" %
                 (name, script_user)
             )
+
+        if not run_shell_fix(dev, name, script_user, deploy_user):
+            print(
+                "[%s] FAIL final ssh ownership hardening did not complete" % name
+            )
+            return False
 
         return True
 
