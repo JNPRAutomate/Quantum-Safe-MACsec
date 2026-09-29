@@ -343,6 +343,13 @@ link report for every snapshot:
 3. `FINAL` captures the fleet after all N-2 replacement activations and one
    additional reconciliation tick.
 
+The collector normally copies the complete remote log directory with legacy
+SCP. If a Junos device routes the SCP server command to the CLI and returns
+`cli: invalid file specification`, the collector automatically retrieves the
+combined `qkd_debug.log` through the read-only Junos `file show` command. The
+link report supports this combined-log layout and still filters events by
+interface.
+
 No observation timer is hard-coded. The script reads:
 
 - `execution_interval_seconds`;

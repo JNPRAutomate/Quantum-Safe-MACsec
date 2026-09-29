@@ -3,7 +3,9 @@ from pathlib import Path
 
 from tools.collect_device_logs import (
     Device,
+    build_junos_file_show_command,
     build_scp_command,
+    collect_device,
     default_snapshot_name,
     discover_identity_file,
     load_devices,
@@ -52,6 +54,64 @@ def test_scp_command_is_noninteractive_and_copies_log_contents(tmp_path):
     assert command[-2] == (
         "etsi_user@100.123.113.151:/var/home/etsi_user/logs"
     )
+
+
+def test_junos_file_show_command_is_noninteractive(tmp_path):
+    command = build_junos_file_show_command(
+        Device("MX1", "mx301-p1", "100.123.113.151"),
+        "etsi_user",
+        "/var/home/etsi_user/logs",
+        15,
+        Path("/tmp/qkd_id_ed25519"),
+    )
+    assert command[0] == "ssh"
+    assert "BatchMode=yes" in command
+    assert "StrictHostKeyChecking=accept-new" in command
+    assert "IdentitiesOnly=yes" in command
+    assert "/tmp/qkd_id_ed25519" in command
+    assert command[-2] == "etsi_user@100.123.113.151"
+    assert command[-1] == (
+        "file show /var/home/etsi_user/logs/qkd_debug.log | no-more"
+    )
+
+
+def test_collect_device_falls_back_to_junos_file_show(monkeypatch, tmp_path):
+    class Completed:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0] == "scp":
+            return Completed(
+                1,
+                stderr=(
+                    "cli: invalid file specification: "
+                    "scp -r -p -f /var/home/etsi_user/logs"
+                ),
+            )
+        return Completed(0, stdout="2026-09-29 12:57:22 [INFO] rotation done\n")
+
+    monkeypatch.setattr("tools.collect_device_logs.subprocess.run", fake_run)
+    result = collect_device(
+        Device("MX304-P1", "mx304-p1", "100.123.113.1"),
+        "etsi_user",
+        "/var/home/etsi_user/logs",
+        tmp_path,
+        15,
+        Path("/tmp/qkd_id_ed25519"),
+        False,
+    )
+
+    assert result.status == "ok"
+    assert [command[0] for command in calls] == ["scp", "ssh"]
+    assert (tmp_path / "MX304-P1" / "qkd_debug.log").read_text(
+        encoding="utf-8"
+    ) == "2026-09-29 12:57:22 [INFO] rotation done\n"
 
 
 def test_remote_path_rejects_scp_remote_shell_metacharacters():

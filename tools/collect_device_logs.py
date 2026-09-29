@@ -252,6 +252,40 @@ def build_scp_command(
     return command
 
 
+def build_junos_file_show_command(
+    device: Device,
+    user: str,
+    remote_path: str,
+    connect_timeout: int,
+    identity_file: Optional[Path] = None,
+) -> List[str]:
+    command = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=%d" % connect_timeout,
+    ]
+    if identity_file is not None:
+        command.extend(
+            [
+                "-o",
+                "IdentitiesOnly=yes",
+                "-i",
+                str(identity_file),
+            ]
+        )
+    command.extend(
+        [
+            "%s@%s" % (user, device.address),
+            "file show %s/qkd_debug.log | no-more" % remote_path.rstrip("/"),
+        ]
+    )
+    return command
+
+
 def collect_device(
     device: Device,
     user: str,
@@ -307,6 +341,41 @@ def collect_device(
         )
 
     error = (completed.stderr or completed.stdout or "SCP failed").strip()
+    if "cli: invalid file specification:" in error:
+        print(
+            "[%s] legacy SCP rejected; collecting qkd_debug.log via Junos CLI"
+            % device.name
+        )
+        fallback = subprocess.run(
+            build_junos_file_show_command(
+                device,
+                user,
+                remote_path,
+                connect_timeout,
+                identity_file,
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if fallback.returncode == 0 and fallback.stdout:
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "qkd_debug.log").write_text(
+                fallback.stdout,
+                encoding="utf-8",
+            )
+            return CollectionResult(
+                device.name,
+                device.hostname,
+                device.address,
+                str(destination),
+                "ok",
+            )
+        fallback_error = (
+            fallback.stderr or fallback.stdout or "Junos file-show fallback failed"
+        ).strip()
+        error = "%s; fallback failed: %s" % (error, fallback_error)
     return CollectionResult(
         device.name,
         device.hostname,
@@ -351,6 +420,9 @@ def main() -> int:
         return 2
     if shutil.which("scp") is None:
         print("ERROR: scp is not installed or not in PATH", file=sys.stderr)
+        return 2
+    if shutil.which("ssh") is None:
+        print("ERROR: ssh is not installed or not in PATH", file=sys.stderr)
         return 2
 
     try:
