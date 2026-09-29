@@ -113,8 +113,6 @@ def collect_credentials() -> Dict[str, str]:
         "bootstrap_user": ask_required("Bootstrap/deploy user", "root"),
         "script_user": ask_required("QKD script user", "etsi_user"),
         "script_user_class": ask("QKD script user class", "super-user"),
-        "peer_cmd_user": ask("QKD peer command user", "etsi_peer_view"),
-        "peer_cmd_user_class": ask("QKD peer command user class", "qkd-peer-cmd-class"),
         "script_user_auth_mode": ask("QKD script authentication (key-only/password)", "key-only"),
     }
     credentials["default_password"] = ask_secret("Default password")

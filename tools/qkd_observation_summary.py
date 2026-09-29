@@ -110,7 +110,6 @@ def stage_summary(observation_dir: Path, stage_dir: str) -> Dict[str, Any]:
 def build_summary(observation_dir: Path) -> Dict[str, Any]:
     manifest = load_json(observation_dir / "observation_manifest.json")
     fleet = load_json(observation_dir / "qkd_fleet_comparison_report.json")
-    peer = load_json(observation_dir / "qkd_peer_key_rotation_observation.json")
     commit = load_json(observation_dir / "qkd_device_commit_observation.json")
 
     stages = [
@@ -130,17 +129,6 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
             "final_health": (((item.get("observations") or {}).get("final") or {}).get("health_category")),
         }
         for item in (((fleet.get("attention_required") or {}).get("links")) or [])
-    ]
-
-    peer_device_statuses = [
-        {
-            "device": item.get("device"),
-            "status": item.get("status"),
-            "authorized_keys_status": ((item.get("authorized_keys_health") or {}).get("status")),
-            "scp_transport_status": ((item.get("scp_transport_health") or {}).get("status")),
-            "rotations_during_observation": int(item.get("rotations_during_observation", 0)),
-        }
-        for item in (peer.get("devices") or [])
     ]
 
     # Only flag devices with real commit failures or WARNING-level compatibility
@@ -164,11 +152,6 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
         (
             manifest_status != "complete",
             int(((fleet.get("attention_required") or {}).get("count")) or 0) > 0,
-            bool(peer.get("authorized_keys_issues_by_device")),
-            bool(peer.get("scp_transport_issues_by_device")),
-            # missing_peer_renewals is a point-in-time signal: within the short
-            # observation window not all peers complete a full renewal cycle.
-            # It is informational only and does not drive ATTENTION_REQUIRED.
             bool(commit_devices_with_issues),
         )
     )
@@ -194,26 +177,6 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
             ),
             "attention_links": attention_links,
         },
-        "peer_keys": {
-            "all_devices_rotated_successfully": bool(
-                peer.get("all_devices_rotated_successfully", False)
-            ),
-            "all_links_rotated_successfully": bool(
-                peer.get("all_links_rotated_successfully", False)
-            ),
-            "device_status_counts": dict(peer.get("device_status_counts") or {}),
-            "link_status_counts": dict(peer.get("link_status_counts") or {}),
-            "authorized_keys_issues_by_device": list(
-                peer.get("authorized_keys_issues_by_device") or []
-            ),
-            "scp_transport_issues_by_device": list(
-                peer.get("scp_transport_issues_by_device") or []
-            ),
-            "missing_peer_renewals_by_device": list(
-                peer.get("missing_peer_renewals_by_device") or []
-            ),
-            "device_statuses": peer_device_statuses,
-        },
         "commit_health": {
             "device_count": int(commit.get("device_count", 0)),
             "devices_with_commit_activity": int(
@@ -230,7 +193,6 @@ def build_summary(observation_dir: Path) -> Dict[str, Any]:
 def render_text(summary: Dict[str, Any]) -> str:
     manifest = summary["manifest"]
     fleet = summary["fleet"]
-    peer = summary["peer_keys"]
     commit = summary["commit_health"]
     lines = [
         "QKD observation summary",
@@ -255,14 +217,10 @@ def render_text(summary: Dict[str, Any]) -> str:
         ]
     )
     if fleet["attention_links"]:
-        _delivery_lag_outcomes = {"REGRESSION", "FINAL_DEGRADED"}
         for item in fleet["attention_links"]:
             outcome = item.get("outcome") or "unknown"
-            hint = ""
-            if outcome in _delivery_lag_outcomes and item.get("final_health") in {"PROBLEMATIC", "DEGRADED"}:
-                hint = " [check: SCP delivery lag may cause transient divergence]"
             lines.append(
-                "- %s %s | outcome=%s | rotated=%s | t1=%s t2=%s final=%s%s"
+                "- %s %s | outcome=%s | rotated=%s | t1=%s t2=%s final=%s"
                 % (
                     item.get("badge") or "[ATTENTION]",
                     item.get("link_id") or "unknown-link",
@@ -271,42 +229,8 @@ def render_text(summary: Dict[str, Any]) -> str:
                     item.get("t1_health") or "N/A",
                     item.get("t2_health") or "N/A",
                     item.get("final_health") or "N/A",
-                    hint,
                 )
             )
-
-    lines.extend(
-        [
-            "",
-            "Peer SSH key / transport health",
-            "--------------------------------",
-            "Device status counts: %s" % format_counts(peer["device_status_counts"]),
-            "Link status counts: %s" % format_counts(peer["link_status_counts"]),
-            "authorized_keys issues: %s"
-            % len(peer["authorized_keys_issues_by_device"]),
-            "SCP transport issues: %s" % len(peer["scp_transport_issues_by_device"]),
-            "Missing peer renewals: %s (informational — point-in-time snapshot)"
-            % len(peer["missing_peer_renewals_by_device"]),
-        ]
-    )
-    for item in peer["authorized_keys_issues_by_device"]:
-        lines.append(
-            "- authorized_keys %s: %s"
-            % (item.get("device") or "unknown-device", item.get("reason") or "issue")
-        )
-    for item in peer["scp_transport_issues_by_device"]:
-        lines.append(
-            "- scp_transport %s: %s (errors may be transient within the delivery window)"
-            % (item.get("device") or "unknown-device", item.get("reason") or "issue")
-        )
-    for item in peer["missing_peer_renewals_by_device"]:
-        lines.append(
-            "- missing_peer_renewals %s: %s"
-            % (
-                item.get("device") or "unknown-device",
-                ", ".join(item.get("missing_peer_renewals") or []) or "none",
-            )
-        )
 
     lines.extend(
         [

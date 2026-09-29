@@ -9,6 +9,10 @@
 from __future__ import annotations
 
 import warnings
+
+# cryptography emits its Python-version deprecation warning while it is being
+# imported, so the filter must be installed before the import below.
+warnings.filterwarnings("ignore", message=r".*Python 3\.\d+ is no longer supported.*")
 from cryptography.utils import CryptographyDeprecationWarning
 
 warnings.filterwarnings("ignore", message=".*TripleDES.*")
@@ -16,6 +20,7 @@ warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 
 import argparse
 import copy
+import getpass
 import json
 import os
 import shlex
@@ -25,7 +30,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from jnpr.junos import Device
 from jnpr.junos.utils.scp import SCP
@@ -43,7 +48,6 @@ from lib.common.config import (
 )
 from lib.common.script_user_bootstrap import (
     bootstrap_script_users,
-    ensure_local_peer_cmd_user_keypair,
     ensure_local_script_user_keypair,
     mirror_local_script_user_keypair_to_ssh,
     write_local_ssh_alias_config,
@@ -64,7 +68,7 @@ from lib.kme.instructions import print_manual_kme_copy_instructions
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
-SCRIPT_VERSION = "ver3.3.4"
+SCRIPT_VERSION = "ver3.3.4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -331,16 +335,17 @@ def parse_args():
 
     bootstrap = subparsers.add_parser(
         "bootstrap",
-        help="Bootstrap SCRIPT_USER and PEER_CMD_USER on devices",
+        help="Bootstrap SCRIPT_USER on devices",
         description=(
-            "Bootstrap SCRIPT_USER (etsi_user) and PEER_CMD_USER (etsi_peer_view) on managed devices.\n\n"
+            "Bootstrap SCRIPT_USER (etsi_user) on managed devices.\n\n"
             "This includes:\n"
             "  - Creating users with appropriate Junos class and login method\n"
             "  - Generating and syncing SSH public keys\n"
             "  - Setting up .ssh directory permissions\n\n"
             "Bootstrap must run before deploy or predeploy validation.\n\n"
+            "Missing bootstrap credentials are requested interactively.\n"
+            "Passwords are entered without terminal echo and are not persisted.\n\n"
             "Example:\n"
-            "  export QKD_BOOTSTRAP_PASSWORD='<root-password>'\n"
             "  python3 qkd_orchestrator.py bootstrap\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -353,6 +358,14 @@ def parse_args():
     )
     bootstrap.add_argument(
         "-v", "--verbose", action="count", default=0
+    )
+    bootstrap.add_argument(
+        "--bootstrap-user",
+        help=(
+            "Administrative user used to bootstrap etsi_user. Overrides "
+            "QKD_BOOTSTRAP_USER and inventory defaults; its password is "
+            "requested interactively when not supplied through the environment."
+        ),
     )
     bootstrap.add_argument("--ssh-key")
     bootstrap.add_argument("--debug", action="store_true")
@@ -383,6 +396,22 @@ def parse_args():
         help="Render and display generated Junos configuration without pushing it.",
     )
     deploy.add_argument("-v", "--verbose", action="count", default=0)
+    deploy.add_argument(
+        "--bootstrap-user",
+        help=(
+            "Privileged user used for validation and installation. Overrides "
+            "QKD_BOOTSTRAP_USER and inventory defaults; its password is "
+            "requested interactively when needed."
+        ),
+    )
+    deploy.add_argument(
+        "--upload-user",
+        help=(
+            "User used only to upload artifacts into /var/tmp. Defaults to the "
+            "bootstrap user. When different, set QKD_UPLOAD_PASSWORD or enter "
+            "its password at the separate interactive prompt."
+        ),
+    )
     deploy.add_argument("--ssh-key")
     deploy.add_argument("--debug", action="store_true")
     deploy.add_argument(
@@ -436,6 +465,14 @@ def parse_args():
         action="store_true",
         help="Continue local cleanup even if some remote devices fail.",
     )
+    clean.add_argument(
+        "--bootstrap-user",
+        default=None,
+        help=(
+            "Privileged user used for remote cleanup. Overrides QKD_BOOTSTRAP_USER "
+            "and inventory defaults; its password is requested interactively when needed."
+        ),
+    )
 
     validate = subparsers.add_parser(
         "validate",
@@ -484,13 +521,10 @@ def run_ssh_cmd(log, name, ip, user, cmds):
 def print_identity_plan():
     print("=== QKD identity plan ===")
     script_user = QKD.get("SCRIPT_USER", "etsi_user")
-    peer_cmd_user = QKD.get("PEER_CMD_USER", script_user)
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
     runtime_home = f"{ssh_home_base}/{script_user}"
     print(f"deploy_user       = {QKD['DEPLOY_USER']}")
     print(f"script_user       = {script_user}")
-    print(f"peer_cmd_user     = {peer_cmd_user}")
-    print("peer_cmd_source   = inventory.devices.<name>.peer_cmd_user | inventory.secrets.peer_cmd_user | QKD.PEER_CMD_USER")
     print(f"script_name       = {ONBOX_SCRIPT_NAME}")
     print(f"remote_op_script  = {QKD['REMOTE_OP_SCRIPT_PATH']}")
     print(f"ssh_home          = {runtime_home}")
@@ -521,28 +555,32 @@ def deploy_onbox(
     devices,
     artifacts,
     script_user=None,
-    script_password=None,
+    bootstrap_user=None,
+    bootstrap_password=None,
+    upload_user=None,
+    upload_password=None,
     shipment_preload=False,
 ):
     """
-    Deploy qkd_onbox.py to Junos devices using SCRIPT_USER/admin as source of truth.
+    Upload qkd_onbox.py through the selected transport user, then install it
+    through the privileged bootstrap user.
 
     Critical behavior:
-      - Do NOT use device["auth"]["username"] for ONBOX deployment.
-      - Use QKD["SCRIPT_USER"] / admin for SCP, install, and dual-RE file sync.
+      - The upload user writes only to /var/tmp.
+      - The bootstrap user performs privileged install and dual-RE file sync.
       - On dual-RE MX, copy qkd_onbox.py to re1:/var/db/scripts/op and event.
       - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
     """
 
     resolved_script_user = script_user or QKD.get("SCRIPT_USER", "etsi_user")
-    resolved_peer_cmd_user = QKD.get("PEER_CMD_USER", resolved_script_user)
     script_name = ONBOX_SCRIPT_NAME
 
     tmp_dir = QKD.get("REMOTE_TMP_DIR", "/var/tmp")
     op_script_dir = QKD.get("OP_SCRIPT_DIR", "/var/db/scripts/op")
     event_script_dir = QKD.get("EVENT_SCRIPT_DIR", "/var/db/scripts/event")
 
-    remote_tmp = f"{tmp_dir}/{script_name}"
+    upload_suffix = f"qkd-upload-{os.getpid()}"
+    remote_tmp = f"{tmp_dir}/{script_name}.{upload_suffix}"
     remote_op = f"{op_script_dir}/{script_name}"
     remote_event = f"{event_script_dir}/{script_name}"
 
@@ -552,34 +590,46 @@ def deploy_onbox(
     if not isinstance(secrets, dict):
         secrets = {}
 
-    resolved_script_password = (
-        script_password
-        or os.getenv("QKD_SCRIPT_PASSWORD")
-        or secrets.get("script_password")
-        or secrets.get("admin_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-        or secrets.get("default_password")
-    )
-
     resolved_bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
+        bootstrap_user
+        or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
         or secrets.get("default_user")
     )
     resolved_bootstrap_password = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        bootstrap_password
+        or os.getenv("QKD_BOOTSTRAP_PASSWORD")
         or secrets.get("bootstrap_password")
         or secrets.get("deploy_password")
         or secrets.get("root_password")
         or os.getenv("QKD_DEFAULT_PASSWORD")
         or secrets.get("default_password")
     )
+    resolved_upload_user = (
+        upload_user
+        or os.getenv("QKD_UPLOAD_USER")
+        or resolved_bootstrap_user
+    )
+    resolved_upload_password = (
+        upload_password
+        or os.getenv("QKD_UPLOAD_PASSWORD")
+        or (
+            resolved_bootstrap_password
+            if resolved_upload_user == resolved_bootstrap_user
+            else None
+        )
+    )
 
-    if not resolved_script_password and not (resolved_bootstrap_user and resolved_bootstrap_password):
+    if not (resolved_bootstrap_user and resolved_bootstrap_password):
         raise RuntimeError(
-            "Cannot deploy ONBOX: missing both SCRIPT_USER password and bootstrap credentials. "
-            "Provide SCRIPT_USER password or bootstrap credentials in inventory/env."
+            "Cannot install ONBOX: missing privileged bootstrap credentials. "
+            "Provide QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD or use the interactive prompt."
+        )
+    if not (resolved_upload_user and resolved_upload_password):
+        raise RuntimeError(
+            "Cannot upload ONBOX: missing upload credentials. "
+            "Provide QKD_UPLOAD_USER/QKD_UPLOAD_PASSWORD or use --upload-user interactively."
         )
 
     def rpc_text(rsp):
@@ -629,56 +679,43 @@ def deploy_onbox(
         low = (output or "").lower()
         return low.count("routing engine") >= 2
 
-    def open_device_as_script_user(host):
-        """
-        Open PyEZ session as SCRIPT_USER/admin.
-        Try NETCONF 830 first, then fallback to SSH/netconf over 22.
-        """
+    def open_device(host, user, password, role):
         last_error = None
 
-        credential_candidates = []
-        # Prefer bootstrap/admin transport when available to avoid noisy
-        # script_user password failures on platforms where account propagation
-        # can lag during redeploy windows.
-        if (
-            resolved_bootstrap_user
-            and resolved_bootstrap_password
-        ):
-            credential_candidates.append((resolved_bootstrap_user, resolved_bootstrap_password))
-        if resolved_script_user and resolved_script_password:
-            credential_candidates.append((resolved_script_user, resolved_script_password))
+        for port in (830, 22):
+            dev = Device(
+                host=host,
+                user=user,
+                passwd=str(password),
+                port=port,
+                gather_facts=False,
+            )
 
-        for candidate_user, candidate_password in credential_candidates:
-            if not candidate_user or not candidate_password:
-                continue
-
-            for port in (830, 22):
-                dev = Device(
-                    host=host,
-                    user=candidate_user,
-                    passwd=str(candidate_password),
-                    port=port,
-                    gather_facts=False,
-                )
+            try:
+                dev.open()
+                return dev
+            except Exception as exc:
+                last_error = exc
 
                 try:
-                    dev.open()
-                    if str(candidate_user) != str(resolved_script_user):
-                        log.warning(
-                            f"[{host}] script_user auth failed; ONBOX deploy fallback to bootstrap user {candidate_user}"
-                        )
-                    return dev
-                except Exception as exc:
-                    last_error = exc
-
-                    try:
-                        dev.close()
-                    except Exception:
-                        pass
+                    dev.close()
+                except Exception:
+                    pass
 
         raise RuntimeError(
-            f"Unable to open device {host} as {resolved_script_user}: {last_error}"
+            f"Unable to open device {host} as {role} user {user}: {last_error}"
         )
+
+    def upload_artifacts(dev, name, script, sidecar_paths, remote_sidecar_tmps):
+        with SCP(dev) as scp:
+            log.info(
+                f"[{name}] SCP script to {remote_tmp} as upload user "
+                f"{resolved_upload_user}"
+            )
+            scp.put(str(script), remote_path=remote_tmp)
+            for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
+                scp.put(str(local_sidecar), remote_path=remote_sidecar)
+                log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
 
     def install_on_active_re(dev, remote_tmp_script, sidecar_remote_tmps, sidecar_remote_ops):
         """
@@ -702,13 +739,12 @@ def deploy_onbox(
         if sidecar_harden:
             sidecar_harden = sidecar_harden + "; "
 
-        shared_dirs = "/var/tmp/qkd_peer_status /var/tmp/qkd_peer_inbox /var/tmp/qkd_peer_ack"
+        shared_dirs = "/var/tmp/qkd_peer_status"
         shared_dir_setup = (
-            f"peer_group=$(id -gn {resolved_peer_cmd_user}); "
             f"mkdir -p {shared_dirs}; "
-            f"chown {resolved_script_user}:\"$peer_group\" {shared_dirs}; "
-            f"chmod 2770 {shared_dirs}; "
-            f"find {shared_dirs} -type f -exec chgrp \"$peer_group\" {{}} \\; "
+            f"chown {resolved_script_user} {shared_dirs}; "
+            f"chmod 750 {shared_dirs}; "
+            f"find {shared_dirs} -type f -exec chown {resolved_script_user} {{}} \\; "
             f"-exec chmod 640 {{}} \\; ; "
         )
 
@@ -846,21 +882,43 @@ def deploy_onbox(
                     placeholder_path.write_text("{}\n", encoding="utf-8")
                     sidecar_paths.append(placeholder_path)
 
-                remote_sidecar_tmps = [f"{tmp_dir}/{p.name}" for p in sidecar_paths]
+                remote_sidecar_tmps = [
+                    f"{tmp_dir}/{p.name}.{upload_suffix}" for p in sidecar_paths
+                ]
                 remote_sidecar_ops = [f"{op_script_dir}/{p.name}" for p in sidecar_paths]
 
-                log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
-
-                dev = open_device_as_script_user(ip)
+                log.info(
+                    f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} "
+                    f"upload={resolved_upload_user} install={resolved_bootstrap_user} ====="
+                )
+                upload_dev = open_device(
+                    ip,
+                    resolved_upload_user,
+                    resolved_upload_password,
+                    "upload",
+                )
 
                 try:
-                    with SCP(dev) as scp:
-                        log.info(f"[{name}] SCP script to {remote_tmp}")
-                        scp.put(str(script), remote_path=remote_tmp)
-                        for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
-                            scp.put(str(local_sidecar), remote_path=remote_sidecar)
-                            log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
+                    upload_artifacts(
+                        upload_dev,
+                        name,
+                        script,
+                        sidecar_paths,
+                        remote_sidecar_tmps,
+                    )
+                finally:
+                    try:
+                        upload_dev.close()
+                    except Exception:
+                        pass
 
+                dev = open_device(
+                    ip,
+                    resolved_bootstrap_user,
+                    resolved_bootstrap_password,
+                    "bootstrap/install",
+                )
+                try:
                     log.info(f"[{name}] Installing onbox script into op/event directories")
                     output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
 
@@ -887,21 +945,43 @@ def deploy_onbox(
             if local_path.exists():
                 sidecar_paths.append(local_path)
 
-        remote_sidecar_tmps = [f"{tmp_dir}/{p.name}" for p in sidecar_paths]
+        remote_sidecar_tmps = [
+            f"{tmp_dir}/{p.name}.{upload_suffix}" for p in sidecar_paths
+        ]
         remote_sidecar_ops = [f"{op_script_dir}/{p.name}" for p in sidecar_paths]
 
-        log.info(f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} as {resolved_script_user} =====")
-
-        dev = open_device_as_script_user(ip)
+        log.info(
+            f"[{name}/{hostname}] ===== Deploy ONBOX to {ip} "
+            f"upload={resolved_upload_user} install={resolved_bootstrap_user} ====="
+        )
+        upload_dev = open_device(
+            ip,
+            resolved_upload_user,
+            resolved_upload_password,
+            "upload",
+        )
 
         try:
-            with SCP(dev) as scp:
-                log.info(f"[{name}] SCP script to {remote_tmp}")
-                scp.put(str(script), remote_path=remote_tmp)
-                for local_sidecar, remote_sidecar in zip(sidecar_paths, remote_sidecar_tmps):
-                    scp.put(str(local_sidecar), remote_path=remote_sidecar)
-                    log.info(f"[{name}] Copied {local_sidecar.name} to {remote_sidecar}")
+            upload_artifacts(
+                upload_dev,
+                name,
+                script,
+                sidecar_paths,
+                remote_sidecar_tmps,
+            )
+        finally:
+            try:
+                upload_dev.close()
+            except Exception:
+                pass
 
+        dev = open_device(
+            ip,
+            resolved_bootstrap_user,
+            resolved_bootstrap_password,
+            "bootstrap/install",
+        )
+        try:
             log.info(f"[{name}] Installing onbox script into op/event directories")
             output = install_on_active_re(dev, remote_tmp, remote_sidecar_tmps, remote_sidecar_ops)
 
@@ -951,6 +1031,97 @@ def reset_local_runtime_for_create():
 # ---------------------------------------------------------------------------
 
 
+def resolve_interactive_bootstrap_credentials(
+    inventory_base: Dict[str, Any],
+    *,
+    bootstrap_user_override: Optional[str] = None,
+    input_fn: Callable[[str], str] = input,
+    password_fn: Callable[[str], str] = getpass.getpass,
+    interactive: Optional[bool] = None,
+) -> Tuple[str, str]:
+    secrets = (
+        inventory_base.get("secrets", {})
+        if isinstance(inventory_base, dict)
+        else {}
+    )
+    if not isinstance(secrets, dict):
+        secrets = {}
+
+    bootstrap_user = (
+        bootstrap_user_override
+        or os.getenv("QKD_BOOTSTRAP_USER")
+        or secrets.get("bootstrap_user")
+        or secrets.get("deploy_user")
+        or os.getenv("QKD_DEFAULT_USER")
+        or secrets.get("default_user")
+    )
+    bootstrap_password = (
+        os.getenv("QKD_BOOTSTRAP_PASSWORD")
+        or secrets.get("bootstrap_password")
+        or secrets.get("deploy_password")
+        or secrets.get("root_password")
+        or os.getenv("QKD_DEFAULT_PASSWORD")
+        or secrets.get("default_password")
+    )
+
+    missing = []
+    if not bootstrap_user:
+        missing.append("bootstrap user")
+    if not bootstrap_password:
+        missing.append("bootstrap password")
+
+    if missing and interactive is None:
+        interactive = sys.stdin.isatty()
+    if missing and not interactive:
+        raise RuntimeError(
+            "Missing bootstrap credentials and no interactive terminal is "
+            f"available: {', '.join(missing)}. Set "
+            "QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD or configure the "
+            "corresponding inventory secrets."
+        )
+
+    if not bootstrap_user:
+        bootstrap_user = input_fn("Bootstrap user: ").strip()
+        if not bootstrap_user:
+            raise RuntimeError("Bootstrap user cannot be empty")
+
+    if not bootstrap_password:
+        bootstrap_password = password_fn(
+            f"Bootstrap password for {bootstrap_user}: "
+        )
+        if not bootstrap_password:
+            raise RuntimeError("Bootstrap password cannot be empty")
+
+    return str(bootstrap_user), str(bootstrap_password)
+
+
+def resolve_interactive_upload_credentials(
+    upload_user: str,
+    *,
+    bootstrap_user: str,
+    bootstrap_password: str,
+    password_fn: Callable[[str], str] = getpass.getpass,
+    interactive: Optional[bool] = None,
+) -> Tuple[str, str]:
+    if upload_user == bootstrap_user:
+        return upload_user, bootstrap_password
+
+    upload_password = os.getenv("QKD_UPLOAD_PASSWORD")
+    if not upload_password:
+        if interactive is None:
+            interactive = sys.stdin.isatty()
+        if not interactive:
+            raise RuntimeError(
+                "Missing upload password and no interactive terminal is available. "
+                "Set QKD_UPLOAD_PASSWORD or omit --upload-user to use the bootstrap identity."
+            )
+        upload_password = password_fn(f"Upload password for {upload_user}: ")
+        if not upload_password:
+            raise RuntimeError("Upload password cannot be empty")
+
+    return str(upload_user), str(upload_password)
+
+
 def handle_create(args):
     inventory_path = resolve_inventory(args.inventory)
     inventory = load_inventory_file(inventory_path)
@@ -990,24 +1161,21 @@ def handle_create(args):
         raise ValueError(f"Unsupported PKI profile: {pki_profile}")
 
     base = load_inventory_base()
-    reset_local_runtime_for_create()
     script_user = QKD["SCRIPT_USER"]
 
     secrets = base.get("secrets", {}) if isinstance(base.get("secrets", {}), dict) else {}
-    global_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
-        or secrets.get("bootstrap_user")
-        or secrets.get("default_user")
-    )
-    global_pwd = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
-        or secrets.get("bootstrap_password")
-        or secrets.get("default_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-    )
-    global_auth = {"username": global_user, "password": global_pwd} if global_user and global_pwd else {}
-
     device_auth_map = base.get("devices", {})
+    requires_global_auth = any(
+        not inv_dev.get("auth")
+        and not device_auth_map.get(str(inv_dev["name"]), {}).get("auth")
+        for inv_dev in inventory_devices
+    )
+    global_auth = {}
+    if requires_global_auth:
+        global_user, global_pwd = resolve_interactive_bootstrap_credentials(base)
+        global_auth = {"username": global_user, "password": global_pwd}
+
+    reset_local_runtime_for_create()
 
     devices = []
     seen_names = set()
@@ -1031,13 +1199,6 @@ def handle_create(args):
         if not device_auth:
             device_auth = device_auth_map.get(name, {}).get("auth")
         if not device_auth:
-            if not global_auth:
-                raise RuntimeError(
-                    f"Inventory device '{name}' has no 'auth' and no bootstrap/default credentials "
-                    "were resolved. Set secrets.bootstrap_user/secrets.bootstrap_password (or "
-                    "secrets.default_user/secrets.default_password) in inventory_base.yaml, or export "
-                    "QKD_BOOTSTRAP_USER/QKD_BOOTSTRAP_PASSWORD (or QKD_DEFAULT_PASSWORD)."
-                )
             device_auth = copy.deepcopy(global_auth)
 
         kme_ip = kme_ip_from_inventory_device(inv_dev)
@@ -1188,24 +1349,25 @@ def handle_bootstrap(args):
     if not isinstance(secrets, dict):
         secrets = {}
 
-    bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
-        or secrets.get("bootstrap_user")
-        or secrets.get("deploy_user")
-        or secrets.get("default_user")
-        or None
-    )
-    bootstrap_password = (
-        os.getenv("QKD_BOOTSTRAP_PASSWORD")
-        or secrets.get("bootstrap_password")
-        or secrets.get("deploy_password")
-        or secrets.get("root_password")
-        or os.getenv("QKD_DEFAULT_PASSWORD")
-        or secrets.get("default_password")
-        or None
-    )
-
     if args.dry_run:
+        bootstrap_user = (
+            getattr(args, "bootstrap_user", None)
+            or os.getenv("QKD_BOOTSTRAP_USER")
+            or secrets.get("bootstrap_user")
+            or secrets.get("deploy_user")
+            or os.getenv("QKD_DEFAULT_USER")
+            or secrets.get("default_user")
+            or None
+        )
+        bootstrap_password = (
+            os.getenv("QKD_BOOTSTRAP_PASSWORD")
+            or secrets.get("bootstrap_password")
+            or secrets.get("deploy_password")
+            or secrets.get("root_password")
+            or os.getenv("QKD_DEFAULT_PASSWORD")
+            or secrets.get("default_password")
+            or None
+        )
         print_step_banner(
             "SCRIPT_USER DRY-RUN",
             "START",
@@ -1222,16 +1384,20 @@ def handle_bootstrap(args):
         print_step_banner("SCRIPT_USER DRY-RUN", "END")
         return
 
+    bootstrap_user, bootstrap_password = (
+        resolve_interactive_bootstrap_credentials(
+            inventory_base,
+            bootstrap_user_override=getattr(args, "bootstrap_user", None),
+        )
+    )
+
     print_step_banner(
         "SCRIPT_USER",
         "START",
-        "Bootstrap etsi_user and etsi_peer_view on all managed devices.",
+        "Bootstrap etsi_user on all managed devices.",
     )
     
-    if bootstrap_user and bootstrap_password:
-        print(f"Bootstrap auth source: inventory_base user={bootstrap_user}")
-    else:
-        print("Bootstrap auth source: unresolved")
+    print(f"Bootstrap credentials resolved for user={bootstrap_user}")
     
     ok, failed = bootstrap_script_users(
         devices=devices,
@@ -1283,7 +1449,8 @@ def handle_deploy(args):
         secrets = {}
 
     bootstrap_user = (
-        os.getenv("QKD_BOOTSTRAP_USER")
+        getattr(args, "bootstrap_user", None)
+        or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
         or secrets.get("default_user")
@@ -1305,12 +1472,6 @@ def handle_deploy(args):
         or QKD.get("SCRIPT_USER")
         or "etsi_user"
     )
-    peer_cmd_user = (
-        os.getenv("QKD_PEER_CMD_USER")
-        or secrets.get("peer_cmd_user")
-        or QKD.get("PEER_CMD_USER")
-        or script_user
-    )
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
@@ -1324,6 +1485,11 @@ def handle_deploy(args):
         or secrets.get("script_user_auth_mode")
         or "password"
     ).strip().lower()
+    QKD["RPC_SSH_KEY_NAME"] = str(
+        secrets.get("rpc_ssh_key_name")
+        or QKD.get("RPC_SSH_KEY_NAME")
+        or "qkd_rpc_id_ed25519"
+    )
 
     if args.preview or args.dry_run:
         print_step_banner(
@@ -1352,6 +1518,30 @@ def handle_deploy(args):
         print_step_banner("0/5", "PREVIEW OR DRY-RUN", "END")
         return
 
+    if not (bootstrap_user and bootstrap_password):
+        bootstrap_user, bootstrap_password = (
+            resolve_interactive_bootstrap_credentials(
+                inventory_base,
+                bootstrap_user_override=bootstrap_user,
+            )
+        )
+        print(f"Deploy credentials resolved for user={bootstrap_user}")
+
+    upload_user = (
+        getattr(args, "upload_user", None)
+        or os.getenv("QKD_UPLOAD_USER")
+        or bootstrap_user
+    )
+    upload_user, upload_password = resolve_interactive_upload_credentials(
+        upload_user,
+        bootstrap_user=bootstrap_user,
+        bootstrap_password=bootstrap_password,
+    )
+    print(
+        f"Deploy roles resolved: upload_user={upload_user} "
+        f"bootstrap_user={bootstrap_user} runtime_user={script_user}"
+    )
+
     print_step_banner(
         "1/5",
         "PRE-DEPLOY VALIDATION",
@@ -1364,7 +1554,6 @@ def handle_deploy(args):
         # script_user private key available for direct SSH access.
         try:
             source_private_key_path, _ = ensure_local_script_user_keypair(script_user)
-            ensure_local_peer_cmd_user_keypair(peer_cmd_user)
             local_private_key_path = mirror_local_script_user_keypair_to_ssh(
                 script_user,
                 source_private_key_path,
@@ -1490,7 +1679,10 @@ def handle_deploy(args):
         devices,
         artifacts,
         script_user=script_user,
-        script_password=script_password,
+        bootstrap_user=bootstrap_user,
+        bootstrap_password=bootstrap_password,
+        upload_user=upload_user,
+        upload_password=upload_password,
         shipment_preload=args.shipment_preload,
     )
     print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")
@@ -1590,15 +1782,22 @@ def handle_validate(args):
         or None
     )
 
-    # For predeploy validation, use bootstrap credentials if available, else script credentials
-    predeploy_auth_user = bootstrap_user or QKD["SCRIPT_USER"]
-    predeploy_auth_password = bootstrap_password or (
+    script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
         or secrets.get("admin_password")
         or os.getenv("QKD_DEFAULT_PASSWORD")
         or secrets.get("default_password")
     )
+    if not (bootstrap_user and bootstrap_password) and not script_password:
+        bootstrap_user, bootstrap_password = (
+            resolve_interactive_bootstrap_credentials(inventory_base)
+        )
+        print(f"Validation credentials resolved for user={bootstrap_user}")
+
+    # For predeploy validation, use bootstrap credentials if available, else script credentials
+    predeploy_auth_user = bootstrap_user or QKD["SCRIPT_USER"]
+    predeploy_auth_password = bootstrap_password or script_password
 
     if not predeploy_auth_password:
         raise RuntimeError(
@@ -1652,6 +1851,15 @@ def main():
             elif args.command == "deploy":
                 handle_deploy(args)
             elif args.command == "clean":
+                if not args.local_only:
+                    # Remote cleanup needs privileged credentials; prompt like
+                    # deploy/bootstrap instead of failing when none are stored.
+                    args.clean_user, args.clean_password = (
+                        resolve_interactive_bootstrap_credentials(
+                            load_inventory_base(),
+                            bootstrap_user_override=args.bootstrap_user,
+                        )
+                    )
                 handle_clean(args)
             elif args.command == "validate":
                 handle_validate(args)

@@ -57,8 +57,6 @@ credentials:
     bootstrap_user: labuser
     script_user: etsi_user
     script_user_class: super-user
-    peer_cmd_user: etsi_peer_view
-    peer_cmd_user_class: qkd-peer-cmd-class
     script_user_auth_mode: key-only
     # Passwords may be omitted here and supplied with --prompt-secrets.
     default_password: ""
@@ -68,16 +66,14 @@ credentials:
 
 
 CREDENTIAL_ENV_NAMES = {
-        "default_user": "QKD_DEFAULT_USER",
-        "bootstrap_user": "QKD_BOOTSTRAP_USER",
-        "script_user": "QKD_SCRIPT_USER",
-        "script_user_class": "QKD_SCRIPT_USER_CLASS",
-        "peer_cmd_user": "QKD_PEER_CMD_USER",
-        "peer_cmd_user_class": "QKD_PEER_CMD_USER_CLASS",
-        "script_user_auth_mode": "QKD_SCRIPT_USER_AUTH_MODE",
-        "default_password": "QKD_DEFAULT_PASSWORD",
-        "bootstrap_password": "QKD_BOOTSTRAP_PASSWORD",
-        "script_password": "QKD_SCRIPT_PASSWORD",
+    "default_user": "QKD_DEFAULT_USER",
+    "bootstrap_user": "QKD_BOOTSTRAP_USER",
+    "script_user": "QKD_SCRIPT_USER",
+    "script_user_class": "QKD_SCRIPT_USER_CLASS",
+    "script_user_auth_mode": "QKD_SCRIPT_USER_AUTH_MODE",
+    "default_password": "QKD_DEFAULT_PASSWORD",
+    "bootstrap_password": "QKD_BOOTSTRAP_PASSWORD",
+    "script_password": "QKD_SCRIPT_PASSWORD",
 }
 
 

@@ -58,9 +58,19 @@ Examples:
 
 ```bash
 python3 qkd_orchestrator.py deploy
+python3 qkd_orchestrator.py deploy --bootstrap-user root --upload-user labuser
 python3 qkd_orchestrator.py deploy --preview
 python3 qkd_orchestrator.py deploy --dry-run
 ```
+
+`--upload-user` is used only for SCP into `/var/tmp`. The privileged
+`--bootstrap-user` performs pre-deploy ownership checks and installs files
+under `/var/db/scripts`; Junos `class super-user` does not grant another login
+user Unix ownership of `etsi_user` files.
+
+Script-user bootstrap prints one `OK`/`FAIL` line per SSH setup step. Raw
+router shell output is shown only on failure, or always when
+`QKD_BOOTSTRAP_VERBOSE=1` is set.
 
 ## validate
 
@@ -87,6 +97,12 @@ Options:
 - `--local-only`
 - `--pki`
 - `--full-macsec`
+- `--continue-on-failure`
+- `--bootstrap-user <user>`: privileged user for remote cleanup
+
+Remote cleanup (without `--local-only`) resolves credentials like `deploy`:
+`--bootstrap-user`, then `QKD_BOOTSTRAP_USER`/`QKD_BOOTSTRAP_PASSWORD`, then
+inventory secrets. Any missing value is requested interactively.
 
 Examples:
 
@@ -94,6 +110,7 @@ Examples:
 python3 qkd_orchestrator.py clean --local-only
 python3 qkd_orchestrator.py clean --pki
 python3 qkd_orchestrator.py clean --full-macsec
+python3 qkd_orchestrator.py clean --bootstrap-user root
 ```
 
 ## Auxiliary Tool: Certificate Manager

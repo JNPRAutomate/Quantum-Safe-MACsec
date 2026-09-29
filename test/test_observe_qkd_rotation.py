@@ -22,7 +22,7 @@ def policy():
         "adaptive_grace_floor_seconds": 150,
         "adaptive_grace_safety_margin_seconds": 30,
         "adaptive_grace_rounding_seconds": 60,
-        "peer_key_rotation_interval_seconds": 300,
+        "rpc_key_rotation_interval_seconds": 300,
     }
 
 
@@ -71,8 +71,8 @@ def test_schedule_is_fully_derived_from_policy():
         "adaptive_grace_seconds": 180,
         "ring_size": 4,
         "replacement_count": 2,
-        "peer_key_rotation_interval_seconds": 300,
-        "peer_key_verification_offset_seconds": 360,
+        "rpc_key_rotation_interval_seconds": 300,
+        "rpc_key_verification_offset_seconds": 360,
         "t1_offset_seconds": 0,
         "t2_offset_seconds": 240,
         "final_offset_seconds": 420,
@@ -192,7 +192,7 @@ def test_stage_wait_reason_describes_policy_windows():
     schedule = calculate_schedule(policy())
     assert "baseline" in stage_wait_reason("t1", schedule)
     assert "execution_interval" in stage_wait_reason("t2", schedule)
-    assert "peer-key" in stage_wait_reason("final", schedule)
+    assert "RPC-key" in stage_wait_reason("final", schedule)
 
 
 def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_path):
@@ -205,7 +205,6 @@ def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_pa
                 "2026-07-31 19:00:00 [INFO] [MACSEC][sae-004][et-0/0/8] KEYCHAIN INSTALL OK ca=CA_MX4_ACX3 keychain=QKD_CA_MX4_ACX3 entries=2 installed_indices=[1,2]",
                 "2026-07-31 19:04:00 [INFO] [MACSEC][sae-004][et-0/0/8] KEYCHAIN INSTALL OK ca=CA_MX4_ACX3 keychain=QKD_CA_MX4_ACX3 entries=2 installed_indices=[1,2]",
                 "2026-07-31 19:05:00 [INFO] [MACSEC][sae-004][et-0/0/8] INTERFACE BIND OK ca=CA_MX4_ACX3",
-                "2026-07-31 19:08:00 [INFO] [PEER-KEY-ROTATION][sae-004] PEER-PUBKEY INSTALLED source_device=MX2 key=ssh-ed25519 AAAA...",
             ]
         )
         + "\n",
@@ -227,7 +226,7 @@ def test_device_commit_observation_reports_per_device_cadence_and_purpose(tmp_pa
     observation = build_device_commit_observation(snapshot, calculate_schedule(policy()))
 
     assert observation["device_count"] == 2
-    assert observation["total_commit_events"] == 6
+    assert observation["total_commit_events"] == 5
     assert observation["total_commit_failures"] == 1
     mx4 = next(item for item in observation["device_reports"] if item["device"] == "MX4")
     assert mx4["commit_events_by_purpose"]["KEY_ROTATION_KEYCHAIN_COMMIT"] == 2

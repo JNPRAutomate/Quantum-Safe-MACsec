@@ -30,10 +30,6 @@ from tools.collect_device_logs import (
     SAFE_NAME_RE,
 )  # noqa: E402
 from tools.qkd_link_rotation_report import generate_reports  # noqa: E402
-from tools.qkd_peer_key_rotation_report import (  # noqa: E402
-    build_peer_key_observation,
-    generate_peer_key_report,
-)
 
 
 DEFAULT_POLICY = ROOT / "config" / "inventory" / "qkd_policy.yaml"
@@ -78,19 +74,10 @@ COMMIT_EVENT_PATTERNS = (
         "comment_template": "QKD: INTERFACE BIND iface=<iface> ca=<ca>",
         "description": "Binds (or re-binds) the interface to the target MACsec CA.",
     },
-    {
-        "purpose": "PEER_SSH_KEY_ROTATION_COMMIT",
-        "marker": "PEER-PUBKEY INSTALLED",
-        "comment_template": "QKD: peer-key rotation source_device=<device>",
-        "description": (
-            "Rotates the dedicated peer SSH transport key used by etsi_peer_view."
-        ),
-    },
 )
 COMMIT_FAILURE_MARKERS = (
     "KEYCHAIN INSTALL FAIL",
     "INTERFACE BIND FAIL",
-    "PEER-PUBKEY INSTALL FAIL",
 )
 KEYCHAIN_ENTRIES_RE = re.compile(r"\bentries=(?P<entries>\d+)\b")
 
@@ -166,19 +153,19 @@ def calculate_schedule(policy: Dict[str, Any]) -> Dict[str, Any]:
         + max(0, replacement_count - 1) * activation
         + execution
     )
-    peer_key_interval = int(policy.get("peer_key_rotation_interval_seconds", 0))
-    peer_key_verification_offset = (
-        peer_key_interval + execution if peer_key_interval > 0 else 0
+    rpc_key_interval = int(policy.get("rpc_key_rotation_interval_seconds", 0))
+    rpc_key_verification_offset = (
+        rpc_key_interval + execution if rpc_key_interval > 0 else 0
     )
-    final_offset = max(final_offset, peer_key_verification_offset)
+    final_offset = max(final_offset, rpc_key_verification_offset)
     return {
         "execution_interval_seconds": execution,
         "key_activation_interval_seconds": activation,
         "adaptive_grace_seconds": grace,
         "ring_size": ring_size,
         "replacement_count": replacement_count,
-        "peer_key_rotation_interval_seconds": peer_key_interval,
-        "peer_key_verification_offset_seconds": peer_key_verification_offset,
+        "rpc_key_rotation_interval_seconds": rpc_key_interval,
+        "rpc_key_verification_offset_seconds": rpc_key_verification_offset,
         "t1_offset_seconds": 0,
         "t2_offset_seconds": t2_offset,
         "final_offset_seconds": final_offset,
@@ -198,10 +185,10 @@ def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
     grace = int(schedule["adaptive_grace_seconds"])
     ring = int(schedule["ring_size"])
     repl = int(schedule["replacement_count"])
-    peer_key = int(schedule["peer_key_rotation_interval_seconds"])
+    rpc_key = int(schedule["rpc_key_rotation_interval_seconds"])
     t2 = int(schedule["t2_offset_seconds"])
     final_base = t2 + max(0, repl - 1) * act + ex
-    peer_key_ver = int(schedule["peer_key_verification_offset_seconds"])
+    rpc_key_ver = int(schedule["rpc_key_verification_offset_seconds"])
     final = int(schedule["final_offset_seconds"])
 
     print("QKD fleet observation plan")
@@ -212,8 +199,8 @@ def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
         % schedule
     )
     print(
-        "  peer-key: interval=%(peer_key_rotation_interval_seconds)ss "
-        "verification=%(peer_key_verification_offset_seconds)ss"
+        "  rpc-key: interval=%(rpc_key_rotation_interval_seconds)ss "
+        "verification=%(rpc_key_verification_offset_seconds)ss"
         % schedule
     )
     for stage, _, offset_key in (
@@ -245,8 +232,8 @@ def print_plan(schedule: Dict[str, Any], start: datetime) -> None:
             act=act,
             final_base=final_base,
             peer_note=(
-                "; raised to peer-key verification(%ds)" % peer_key_ver
-                if peer_key > 0 and peer_key_ver > final_base
+                "; raised to RPC-key verification(%ds)" % rpc_key_ver
+                if rpc_key > 0 and rpc_key_ver > final_base
                 else ""
             ),
         )
@@ -262,7 +249,7 @@ def stage_wait_reason(stage: str, schedule: Dict[str, Any]) -> str:
             "(transaction + ACK settlement window)."
         )
     return (
-        "waiting post-activation horizon for N-2 replacement plus peer-key "
+        "waiting post-activation horizon for N-2 replacement plus RPC-key "
         "verification interval."
     )
 
@@ -926,7 +913,6 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
     manifest_path = observation_dir / "observation_manifest.json"
     snapshots: Dict[str, Path] = {}
     reports: Dict[str, Dict[str, Any]] = {}
-    peer_key_reports: Dict[str, Dict[str, Any]] = {}
     start_monotonic = time.monotonic()
     offsets = {
         "t1": schedule["t1_offset_seconds"],
@@ -951,11 +937,6 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
             snapshot = run_collection(args, observation_dir, snapshot_name)
             snapshots[stage] = snapshot
             _, _, reports[stage] = generate_reports(snapshot, args.inventory)
-            _, peer_key_reports[stage] = generate_peer_key_report(
-                snapshot,
-                args.inventory,
-                args.base_inventory,
-            )
             write_observation_manifest(manifest_path, "running", schedule, snapshots)
             print("[%s] snapshot and link report complete: %s" % (stage.upper(), snapshot))
             print()
@@ -966,15 +947,6 @@ def run_observation(args: argparse.Namespace) -> Tuple[Path, Path]:
         json_path.write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
         markdown_path.write_text(
             render_comparison_markdown(comparison) + "\n",
-            encoding="utf-8",
-        )
-        peer_key_observation = build_peer_key_observation(
-            peer_key_reports["t1"],
-            peer_key_reports["final"],
-        )
-        peer_key_path = observation_dir / "qkd_peer_key_rotation_observation.json"
-        peer_key_path.write_text(
-            json.dumps(peer_key_observation, indent=2) + "\n",
             encoding="utf-8",
         )
         device_commit_observation = build_device_commit_observation(

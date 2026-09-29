@@ -391,16 +391,6 @@ def analyze_endpoint(
             successful_evidence_times.append(timestamp)
             current_rotation = None
 
-        if "PEER BATCH ACK OK" in line:
-            ack_match = ACK_RE.search(line)
-            record = {
-                "timestamp": timestamp.isoformat(sep=" "),
-                "ack_id": ack_match.group("ack_id") if ack_match else None,
-            }
-            result["last_ack"] = latest_record(result["last_ack"], record)
-            counters["peer_ack_ok"] += 1
-            successful_evidence_times.append(timestamp)
-
         if "KEYCHAIN INSTALL OK" in line:
             counters["keychain_install_ok"] += 1
             successful_evidence_times.append(timestamp)
@@ -408,6 +398,12 @@ def analyze_endpoint(
             counters["peer_batch_installed"] += 1
             successful_evidence_times.append(timestamp)
         if "BATCH ACK WRITTEN" in line and "status=ok" in line:
+            ack_match = ACK_RE.search(line)
+            record = {
+                "timestamp": timestamp.isoformat(sep=" "),
+                "ack_id": ack_match.group("ack_id") if ack_match else None,
+            }
+            result["last_ack"] = latest_record(result["last_ack"], record)
             counters["ack_written_ok"] += 1
             successful_evidence_times.append(timestamp)
         if "ENC OK key_id=" in line:
@@ -587,9 +583,7 @@ def analyze_link(
         + endpoint_b["counts"].get("rotation_completed", 0)
     )
     acks = (
-        endpoint_a["counts"].get("peer_ack_ok", 0)
-        + endpoint_b["counts"].get("peer_ack_ok", 0)
-        + endpoint_a["counts"].get("ack_written_ok", 0)
+        endpoint_a["counts"].get("ack_written_ok", 0)
         + endpoint_b["counts"].get("ack_written_ok", 0)
     )
     start_records = [

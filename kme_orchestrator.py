@@ -51,7 +51,7 @@ from lib.common.command_output import capture_command_output
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "kme" / "lab.yaml"
-SCRIPT_VERSION = "ver3.3.4"
+SCRIPT_VERSION = "ver3.3.4.1"
 
 StepFunc = Callable[..., Any]
 
