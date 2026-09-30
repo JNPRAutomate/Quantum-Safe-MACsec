@@ -1,5 +1,10 @@
 # MKA SAK Rekey Flow & Keychain Slot Ordering
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 > Archived historical analysis. Its numeric slot-order requirement is not part
 > of the active `ver3.3.2.1` rolling-ring design.
 
@@ -213,14 +218,14 @@ max_installed_keys: 4              # Junos keychain slots 0-3
 
 ## Files Reference
 
-- **Runtime orchestrator**: [artifacts/qkd_onbox.py](../artifacts/qkd_onbox.py) (lines 2824-2950, `install_keychain_batch()`)
-- **Policy config**: [config/inventory/qkd_policy.yaml](../config/inventory/qkd_policy.yaml)
-- **MKA confirmation logic**: [artifacts/qkd_onbox.py](../artifacts/qkd_onbox.py) (lines 2515-2664, `promote_pending_key_if_mka_confirmed()`)
+- **Runtime orchestrator**: [artifacts/qkd_onbox.py](../../../artifacts/qkd_onbox.py) (historical line references: 2824-2950, `install_keychain_batch()`)
+- **Policy config**: [config/inventory/qkd_policy.yaml](../../../config/inventory/qkd_policy.yaml)
+- **MKA confirmation logic**: [artifacts/qkd_onbox.py](../../../artifacts/qkd_onbox.py) (historical line references: 2515-2664, `promote_pending_key_if_mka_confirmed()`)
 
 ---
 
 ## Related Documentation
 
-- [architecture.md](./architecture.md) - Overall system design
-- [lld_ver_334_latest.md](./lld_ver_334_latest.md) - Low-level design details
-- [QKD_MACsec_Link_Driven_Refactor_Update.md](./QKD_MACsec_Link_Driven_Refactor_Update.md) - Link-driven model
+- [architecture.md](../architecture.md) - Historical overall system design
+- [lld_ver_334_latest.md](../lld_ver_334_latest.md) - Historical low-level design
+- [QKD_MACsec_Link_Driven_Refactor_Update.md](../QKD_MACsec_Link_Driven_Refactor_Update.md) - Historical link-driven model

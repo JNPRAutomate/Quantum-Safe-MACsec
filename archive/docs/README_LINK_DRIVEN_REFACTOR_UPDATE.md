@@ -1,5 +1,10 @@
 # QKD/MACsec Orchestrator Refactoring Update
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 **Date:** 2026-07-14
 **Status:** Implemented and validated
 **Scope:** Migration from topology-driven orchestration to fully link-driven orchestration.

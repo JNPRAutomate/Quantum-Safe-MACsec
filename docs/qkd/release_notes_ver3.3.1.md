@@ -1,5 +1,10 @@
 # Release Notes: QKD MACsec Orchestrator v3.3.1
 
+> **Release-specific historical record:** Identities, transport paths, and
+> commands in this document describe `ver3.3.1`, not the current RPC-only
+> runtime. Use [SSH Key Architecture](ssh_key_architecture.md) for supported
+> behavior.
+
 **Release Date**: 2026-07-21  
 **Version**: 3.3.1  
 **Branch**: `ver3.3.1`

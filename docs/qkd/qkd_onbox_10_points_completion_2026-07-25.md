@@ -1,5 +1,10 @@
 # QKD On-Box Runtime Refactor Completion (10/10)
 
+> **Historical completion record:** This document describes the 2026-07-25
+> function-based runtime refactor. It is retained as delivery history, not as
+> the target architecture for the planned class-based refactor. See the
+> [QKD On-Box Roadmap](roadmap.md).
+
 Date: 2026-07-25
 Scope: artifacts/qkd_onbox.py
 

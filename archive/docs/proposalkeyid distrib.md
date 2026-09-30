@@ -1,3 +1,10 @@
+# Key-ID Distribution and Utility Refactor Proposal
+
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 This architectural request addresses a well-known technical challenge in Quantum-Safe MACsec (QS-MACsec) deployments. [1] 
 By default, the standard MACsec control plane (IEEE 802.1X / MKA) does not possess a native field or payload mechanism to share external identifiers like a Quantum Key Distribution (QKD) key-ID. Because MACsec operates strictly at Layer 2, routing standard Layer 3 IPsec IKEd (Internet Key Exchange daemon) exchanges down to provision an L2 encryption engine requires specific structural bridging. [2, 3, 4, 5] 
 Breaking down the implementation requirements reveals a clear path forward.

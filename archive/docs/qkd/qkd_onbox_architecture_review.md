@@ -1,5 +1,10 @@
 # QKD On-Box Runtime Architecture Review
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 ## Context
 This note captures a critical architecture review of the current `qkd_onbox.py` model.
 

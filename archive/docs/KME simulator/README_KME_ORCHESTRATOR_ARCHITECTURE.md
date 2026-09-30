@@ -1,5 +1,10 @@
 # KME Orchestrator Architecture Notes
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 > Working design notes captured during the KME orchestrator refactor discussion.
 >
 > Purpose: evolve `kme_orchestrator.py` from a simple certificate-copy/restart helper into a dedicated lifecycle manager for the KME host environment, while keeping PKI generation owned by `qkd_orchestrator.py`.

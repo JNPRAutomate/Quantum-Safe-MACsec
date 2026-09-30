@@ -2,6 +2,11 @@
 
 This guide describes the complete first deployment of the KME environment from a controller host to a remote Linux KME host.
 
+This is the supported `ver3.3.4.2` deployment model. The planned Junos EVO
+embedded-KME model is tracked separately in the
+[Product and Architecture Roadmap](../roadmap.md) and must not use this guide
+without a platform-specific implementation and qualification.
+
 ## 1. Identify the two hosts
 
 - **Controller host**: the machine containing this repository and running `kme_orchestrator.py`.

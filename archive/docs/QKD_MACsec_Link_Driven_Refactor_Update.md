@@ -1,5 +1,10 @@
 # QKD/MACsec Orchestrator Refactoring Update
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 **Date:** 2026-07-13  
 **Scope:** Short-term refactoring plan for the QKD/MACsec orchestrator project  
 **Decision:** Move from a topology-driven model to a link-driven model.

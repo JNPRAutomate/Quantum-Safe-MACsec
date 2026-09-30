@@ -1,5 +1,10 @@
 # QKD MACsec Lab Test — Complete Replication Guide
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 **Date:** June 2026
 **Repository:** https://github.com/JNPRAutomate/Quantum-Safe-MACsec
 

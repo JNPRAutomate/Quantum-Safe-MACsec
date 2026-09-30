@@ -1,5 +1,10 @@
 # QKD/MACsec Orchestrator Refactor README
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 **Project:** Quantum-Safe MACsec / QKD Orchestrator  
 **Refactor Topic:** Move from topology-driven deployment to link-driven deployment  
 **Target Area:** `qkd_orchestrator.py`, runtime inventory generation, MACsec link modeling, MX/ACX mixed topologies  

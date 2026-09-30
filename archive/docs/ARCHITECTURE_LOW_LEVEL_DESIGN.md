@@ -1,5 +1,10 @@
 # Quantum-Safe MACsec - Architecture Low-Level Design (LLD)
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## 1. Purpose
 
 This document consolidates architecture decisions currently spread across project README files into one publishable Low-Level Design for the `JNPRAutomate/Quantum-Safe-MACsec` repository.

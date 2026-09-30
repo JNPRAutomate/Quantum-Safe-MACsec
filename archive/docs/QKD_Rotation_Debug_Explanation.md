@@ -1,5 +1,10 @@
 # QKD MACsec Key Rotation – Human Readable Walkthrough
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## Overview
 
 This debug log shows a successful QKD-driven MACsec key rotation process running on ACX routers.

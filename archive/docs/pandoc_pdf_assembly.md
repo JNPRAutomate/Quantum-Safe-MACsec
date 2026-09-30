@@ -1,5 +1,10 @@
 # Pandoc PDF Assembly Workflow
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## Purpose
 
 Define a deterministic way to assemble active architecture and LLD documents under docs into a single PDF.

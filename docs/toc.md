@@ -8,10 +8,11 @@ Archive material is in `archive/docs/`.
 ## Top-Level
 
 1. [Documentation Index](readme.md)
-2. [QKD Documentation](qkd/toc.md)
-3. [KME Documentation](kme/toc.md)
-4. [PQC Documentation](pqc/toc.md)
-5. [Tools Documentation](tools/toc.md)
+2. [Product and Architecture Roadmap](roadmap.md)
+3. [QKD Documentation](qkd/toc.md)
+4. [KME Documentation](kme/toc.md)
+5. [PQC Documentation](pqc/toc.md)
+6. [Tools Documentation](tools/toc.md)
 
 ## QKD Ordered Set
 
@@ -29,6 +30,9 @@ Archive material is in `archive/docs/`.
 12. [Two-Node RPC Identity Model](qkd/script_user_peer_ssh_split_two_node.md)
 13. [Strict Sync + Synchronous RPC Acknowledgement LLD](qkd/qkd_onbox_strict_sync_ack_lld.md)
 14. [Release Notes v3.3.2](qkd/release_notes_ver3.3.2.md)
+15. [Release Notes v3.3.4](qkd/release_notes_ver3.3.4.md)
+16. [Release Notes v3.3.4.1](qkd/release_notes_ver3.3.4.1.md)
+17. [Release Notes v3.3.4.2](qkd/release_notes_ver3.3.4.2.md)
 
 ## KME Ordered Set
 

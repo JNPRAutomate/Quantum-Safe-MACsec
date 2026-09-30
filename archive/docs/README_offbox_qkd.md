@@ -1,5 +1,10 @@
 # QKD Offbox Builder
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## Overview
 
 This project provides an offbox automation framework to:
@@ -139,4 +144,3 @@ Implement on-box logic:
 - call KME APIs
 - retrieve keys
 - configure MACsec
-

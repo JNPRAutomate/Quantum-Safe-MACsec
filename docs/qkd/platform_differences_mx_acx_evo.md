@@ -4,6 +4,11 @@ This document describes the behavioral differences between traditional Junos
 (MX series) and Junos EVO (ACX series) that affect QKD MACsec deploy and
 runtime behavior.
 
+PTX and an embedded KME container are not part of the current qualified
+runtime matrix. Initial ACX/PTX qualification for a KME running directly on
+Junos EVO is tracked in the
+[Product and Architecture Roadmap](../roadmap.md).
+
 ---
 
 ## 1. MAC security model

@@ -1,4 +1,9 @@
 # QKD OnBox Function Refactoring Map
+
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
 ## All 142 Functions Categorized for Class-Based Refactoring
 
 ---

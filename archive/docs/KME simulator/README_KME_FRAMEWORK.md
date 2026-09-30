@@ -1,5 +1,10 @@
 # KME Orchestrator Framework
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 ## Overview
 
 KME Orchestrator is a modular framework used to deploy, build, validate and operate ETSI GS QKD 014 Key Management Entities (KME) on a remote Linux host.

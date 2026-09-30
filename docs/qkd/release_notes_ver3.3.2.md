@@ -1,5 +1,10 @@
 # Release Notes v3.3.2
 
+> **Release-specific historical record:** This document preserves the
+> `ver3.3.2` architecture, including the retired peer-view/SCP compatibility
+> paths. Use [SSH Key Architecture](ssh_key_architecture.md) for the current
+> RPC-only runtime.
+
 Date: 2026-07-30
 
 This release consolidates deploy/runtime stabilization, monitor interpretation fixes, and ACX EVO (Junos EVO / SMACK platform) compatibility fixes completed during lab validation.

@@ -1,3 +1,10 @@
+# External Helper Architecture Proposal
+
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 Sì, Andrea. Con il tree attuale io non creerei subito un nuovo file tipofs_utils.py. Hai già 12 moduli in lib/, abbastanza per ora. La cosa giusta è: prima stabilizzi, poi eventualmente estrai helper comuni quando hai duplicazione reale e stabile.
 
 Il tuo tree ora è già abbastanza pulito:

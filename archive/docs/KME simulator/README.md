@@ -1,5 +1,10 @@
 # QKD/KME Orchestrator - README aggiornato
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 Questo README riassume lo stato della chat corrente e i fix applicati al workflow KME remoto.
 
 ## Contesto
@@ -524,4 +529,3 @@ verify containers
 ```
 
 4. Sistemare DNS della VM se vuoi installare Rust sull'host invece di usare solo Docker build.
-

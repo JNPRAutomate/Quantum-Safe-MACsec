@@ -1,5 +1,10 @@
 # Architecture Deep Dive
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## Layers
 
 1. Offbox Control Plane
@@ -21,4 +26,3 @@ Data Plane:
 Strict separation:
 - KME communication interface
 - MACsec interface
-

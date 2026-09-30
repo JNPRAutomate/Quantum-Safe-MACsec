@@ -18,6 +18,11 @@ echo "IfPJiWIPmS1U6lYmXaY9o+eyqOwfl7gR/xamO1iaUGHmRm0vFdGvCy5UpnBtQuBphjXR1o/NMl
 
 
 # System
+
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
 Static MACsec + external key rotation driven by QKD or 
 QKD-assisted MACsec key rotation (static CAK mode)
 
@@ -1704,6 +1709,3 @@ qkd_debug_sae_004_et-0_0_4.log                                                  
 qkd_debug_sae_004_et-0_0_6.log                                                                                                                                                                                       100%   69KB  53.5MB/s   00:00    
 qkd_debug_sae_004_et-0_0_8.log                                                                                                                                                                                       100%   69KB  52.5MB/s   00:00    
 [OK] summary written: /tmp/qkd_customer_summary.log
-
-
-

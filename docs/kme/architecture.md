@@ -1,5 +1,17 @@
 # KME Orchestrator Architecture
 
+## Supported deployment boundary
+
+The current supported model runs Docker, PostgreSQL, and KME containers on an
+external Ubuntu or RHEL host managed over SSH.
+
+Running a KME container directly on Junos EVO ACX or PTX is a future
+enhancement tracked in
+[#39](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/issues/39). It is not
+implemented or supported by `ver3.3.4.2`. The embedded model must be added as
+an explicit deployment backend and must not silently reuse assumptions made
+for a general-purpose Linux host.
+
 ## Purpose
 
 After cloning [github etsi014 test-suite](https://github.com/cybermerqury/etsi-gs-qkd-014-testsuite) which provides the basic test environment infrastructure as per [ETSI GS QKD 014 v1.1.1](https://www.etsi.org/deliver/etsi_gs/QKD/001_099/014/01.01.01_60/gs_QKD014v010101p.pdf) standard, this repository `kme_orchestrator.py` manages the KME infrastructure lifecycle on the remote host:

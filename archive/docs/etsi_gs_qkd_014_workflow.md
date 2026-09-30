@@ -1,5 +1,10 @@
 # ETSI GS QKD 014 - Key Distribution Workflow
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## Overview
 
 According to the ETSI GS QKD 014 specification, the communication between a Secure Application Entity (SAE), such as a router, and its local Key Management Entity (KME) is standardized through a REST API.

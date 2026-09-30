@@ -1,5 +1,10 @@
 # Quantum-Safe MACsec Integration for JUNOS Devices
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 This document provides an analysis of the `JNPRAutomate/Quantum-Safe-MACsec` project, focusing on its architecture, key components, and inferred operational steps.
 
 ## 1. Project Overview

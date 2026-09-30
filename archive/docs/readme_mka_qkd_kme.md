@@ -6,6 +6,11 @@ I’ll give you a **clean, engineering-level comparison** with no fluff, focused
 
 # 🧠 1. What is MKA
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## ✅ MKA = **MACsec Key Agreement**
 
 * Part of IEEE **802.1X / 802.1AE**

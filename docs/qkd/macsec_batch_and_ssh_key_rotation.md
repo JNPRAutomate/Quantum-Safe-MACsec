@@ -2,6 +2,12 @@
 
 Version baseline: `ver3.3.4`
 
+> **Transitional release document:** This file records the mixed RPC/legacy
+> transport design in `ver3.3.4`. It is not the current runtime architecture.
+> For `ver3.3.4.1` and later, use
+> [SSH Key Architecture](ssh_key_architecture.md) and
+> [On-Box RPC Key Rotation Flow](ver3.3.4.1_onbox_rpc_key_rotation_flow.md).
+
 ## 1. Purpose
 
 This document describes the two independent rotation mechanisms implemented by
@@ -650,5 +656,5 @@ Related references:
 - [On-Box Runtime LLD](qkd_onbox_runtime_lld.md)
 - [MACsec Hitless Rolling Keyring](hitless_rolling_keyring_ver3.3.2.1.md)
 - [SSH Key Architecture](ssh_key_architecture.md)
-- [Peer SSH Key Rotation Mesh Trust](peer_key_rotation_mesh_trust.md)
+- [On-Box RPC Key Rotation Flow](ver3.3.4.1_onbox_rpc_key_rotation_flow.md)
 - [Logging and Customer Reporting](logging_and_customer_reporting.md)

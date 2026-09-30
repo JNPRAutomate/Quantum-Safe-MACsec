@@ -1,5 +1,10 @@
 # KME Framework Architecture Evolution
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 ## Purpose
 
 This document tracks the architectural decisions, implementation status, and refactoring milestones that led to the current KME Framework implementation.

@@ -1,5 +1,10 @@
 # KME Orchestrator Refactor README
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 ## Scope
 
 This document captures the architecture and implementation decisions from the KME orchestrator refactor session.

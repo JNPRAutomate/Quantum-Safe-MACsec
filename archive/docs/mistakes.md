@@ -45,6 +45,11 @@ same architecture.
 does your current qkd_onbox.py commit once per generated key, or can it preload N future keys in the same key-chain and let MKA consume them using their start-time values?
 
 # on the master
+
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
 run_master()
     -> install_keychain_key()
         -> commit
@@ -113,4 +118,3 @@ event-script frequency: 60 seconds
 key rotation interval: 60 seconds
 key batch size: 5
 commit frequency: roughly every 5 rotations
-

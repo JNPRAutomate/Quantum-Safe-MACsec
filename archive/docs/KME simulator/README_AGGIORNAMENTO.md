@@ -1,5 +1,10 @@
 # README_AGGIORNAMENTO.md
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 # KME Orchestrator - Architettura aggiornata
 
 Documento di aggiornamento dello stato corrente del KME orchestrator per il lab QKD/KME basato su ETSI GS QKD 014 Reference Implementation.

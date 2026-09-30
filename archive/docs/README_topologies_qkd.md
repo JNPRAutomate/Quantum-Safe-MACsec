@@ -43,6 +43,11 @@ There is:
 
 # TOPOLGIES 
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../docs/readme.md) for supported behavior.
+
+
 ## 2-node link
 YAMLpairs:  - [acx-1, acx-2]Show more lines
 
@@ -59,4 +64,3 @@ YAMLpairs:  - [acx-1, acx-2]  - [acx-1, acx-3]Show more lines
  acx-1 is just:
  connected to multiple peers
  not a "master"
-

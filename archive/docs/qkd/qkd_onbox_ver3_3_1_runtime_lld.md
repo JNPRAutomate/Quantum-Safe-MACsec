@@ -1,5 +1,10 @@
 # QKD On-Box Runtime LLD for ver3.3.1
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 ## Scope
 
 This document explains the low-level runtime behavior of `artifacts/qkd_onbox.py` on branch `ver3.3.1`.

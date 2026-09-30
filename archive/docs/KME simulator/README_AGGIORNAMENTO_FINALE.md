@@ -1,5 +1,10 @@
 # README_AGGIORNAMENTO_FINALE.md
 
+> **Archived historical document:** This file preserves superseded design or operational
+> context and is not authoritative for the current release. Use the
+> [active documentation](../../../docs/readme.md) for supported behavior.
+
+
 # KME Orchestrator - Aggiornamento finale architettura e stato operativo
 
 Questo documento aggiorna lo stato del `kme_orchestrator.py` e dei moduli `lib/kme/*` dopo il refactor, il troubleshooting completo e la validazione del ciclo operativo `destroy -> create -> status -> restart -> status`.
