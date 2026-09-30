@@ -30,7 +30,7 @@ tmux attach -t qkd-tests      # detach with Ctrl-b d
 
 | ID | Script | Where it runs | Touches devices | Status |
 |---|---|---|---|---|
-| T0 | `python -m pytest -q` | Runner | No | Passed (149 passed) |
+| T0 | `python -m pytest -q` | Runner | No | Passed (155 passed, 0 warnings) |
 | T1 | `tests/scripts/generate_qkd_customer_summary.sh` | Runner | No | Passed |
 | T2 | `tests/scripts/qkd_dual_pki.py` | Runner | No | Passed after fix |
 | T3 | `tests/scripts/test_double_buffer.sh` | On-box (Junos shell) | Yes: pings and show commands | Pending |
@@ -45,9 +45,19 @@ cd /root/Quantum-Safe-MACsec && . venv/bin/activate
 python -m pytest -q
 ```
 
-**Result:** 149 passed, 1 warning (the standard-library `crypt` module is
-deprecated and is removed in Python 3.13). See
-[Running the Python Suite](python_suite.md).
+**Result:** 155 passed, 0 warnings, also with `-W error::DeprecationWarning`.
+See [Running the Python Suite](python_suite.md).
+
+**Change during the campaign:** the first run gave 149 passed and 1 warning,
+because `lib/common/script_user_bootstrap.py` imported the standard-library
+`crypt` module. That module is deprecated and was removed in Python 3.13.
+It generated the SHA-512 (`$6$`) hash for the Junos `encrypted-password` of
+the script user. It is now replaced by a pure-Python `sha512_crypt()`, with no
+new dependencies. The old fallback passed the clear-text password to
+`openssl passwd` as a command-line argument, visible in `ps`; it was removed.
+`tests/test_sha512_crypt.py` (6 tests) checks the reference vector of the
+SHA-crypt specification, compares the result with `openssl passwd -6`, and
+checks the output format and random salt.
 
 ## T1 — Customer log summary
 

@@ -5,7 +5,7 @@ different environmental assumptions and must not be treated as interchangeable.
 
 ## Offline automated tests
 
-The eleven `tests/test_*.py` modules form the automated pytest suite. They test
+The twelve `tests/test_*.py` modules form the automated pytest suite. They test
 configuration rules, parsing, planning, transaction decisions, orchestration
 boundaries, and reporting with temporary directories, fixture data, and
 mocked collaborators. They do not log into routers, start KME containers, or

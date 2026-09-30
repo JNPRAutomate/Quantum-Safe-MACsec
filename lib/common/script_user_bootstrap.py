@@ -46,23 +46,20 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import os
 import subprocess
 import shlex
 import re
 import shutil
 from pathlib import Path
+from secrets import choice as _secure_choice
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 from jnpr.junos.utils.scp import SCP
-
-try:
-    import crypt  # type: ignore
-except Exception:  # pragma: no cover
-    crypt = None
 
 try:
     from lib.common.settings import CONFIG, QKD
@@ -470,35 +467,79 @@ def prompt_deploy_password_once(deploy_user: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_CRYPT_B64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+# Byte order of the final SHA-512 crypt digest encoding (Drepper spec).
+_SHA512_CRYPT_ORDER = (
+    (0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4),
+    (47, 5, 26), (6, 27, 48), (28, 49, 7), (50, 8, 29), (9, 30, 51),
+    (31, 52, 10), (53, 11, 32), (12, 33, 54), (34, 55, 13), (56, 14, 35),
+    (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19),
+    (62, 20, 41),
+)
+
+
+def _crypt_b64(value: int, length: int) -> str:
+    out = []
+    for _ in range(length):
+        out.append(_CRYPT_B64[value & 0x3F])
+        value >>= 6
+    return "".join(out)
+
+
+def sha512_crypt(plain_password: str, salt: str) -> str:
+    """
+    SHA-512 crypt (``$6$``, 5000 rounds), compatible with glibc crypt(3)
+    and ``openssl passwd -6``. Replaces the stdlib ``crypt`` module,
+    which was removed in Python 3.13.
+    """
+    pw = plain_password.encode("utf-8")
+    salt_b = salt.encode("ascii")[:16]
+    rounds = 5000
+
+    digest_b = hashlib.sha512(pw + salt_b + pw).digest()
+
+    ctx = hashlib.sha512(pw + salt_b)
+    ctx.update((digest_b * (len(pw) // 64 + 1))[: len(pw)])
+    length = len(pw)
+    while length:
+        ctx.update(digest_b if length & 1 else pw)
+        length >>= 1
+    digest_a = ctx.digest()
+
+    dp = hashlib.sha512(pw * len(pw)).digest()
+    p_bytes = (dp * (len(pw) // 64 + 1))[: len(pw)]
+
+    ds = hashlib.sha512(salt_b * (16 + digest_a[0])).digest()
+    s_bytes = ds[: len(salt_b)]
+
+    current = digest_a
+    for i in range(rounds):
+        ctx = hashlib.sha512()
+        ctx.update(p_bytes if i & 1 else current)
+        if i % 3:
+            ctx.update(s_bytes)
+        if i % 7:
+            ctx.update(p_bytes)
+        ctx.update(current if i & 1 else p_bytes)
+        current = ctx.digest()
+
+    encoded = "".join(
+        _crypt_b64((current[a] << 16) | (current[b] << 8) | current[c], 4)
+        for a, b, c in _SHA512_CRYPT_ORDER
+    )
+    encoded += _crypt_b64(current[63], 2)
+    return f"$6${salt_b.decode('ascii')}${encoded}"
+
+
 def encrypted_junos_password(plain_password: str) -> str:
     """
     Generate a SHA-512 crypt password suitable for Junos encrypted-password.
 
     Only used when SCRIPT_USER does not exist yet.
     """
-    if crypt is not None:
-        try:
-            salt = crypt.mksalt(crypt.METHOD_SHA512)
-            encrypted = crypt.crypt(plain_password, salt)
-            if encrypted:
-                return encrypted
-        except Exception:
-            pass
-
-    try:
-        result = subprocess.run(
-            ["openssl", "passwd", "-6", plain_password],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-
-    raise RuntimeError("Unable to generate encrypted password. Install Python crypt support or openssl.")
+    salt = "".join(_secure_choice(_CRYPT_B64) for _ in range(16))
+    return sha512_crypt(plain_password, salt)
 
 
 # ---------------------------------------------------------------------------
