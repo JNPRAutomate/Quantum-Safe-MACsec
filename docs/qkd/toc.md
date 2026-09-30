@@ -1,58 +1,27 @@
-# QKD Documentation TOC
+# QKD Orchestrator Documentation
 
-## Scope
+The QKD domain describes off-box configuration, artifact generation,
+bootstrap, deployment, cleanup, validation, identity, PKI, and platform
+integration. The generated runtime is documented under
+[`docs/onbox`](../onbox/toc.md).
 
-QKD/MACsec orchestrator architecture, runtime LLD, interface contract, and
-observability design.
-
-## Ordered Documents
+## Canonical reading order
 
 1. [Architecture](architecture.md)
-2. [Config Generation and Runtime Contract](config_generation.md)
-3. [On-Box Runtime LLD](qkd_onbox_runtime_lld.md)
-4. [CLI Interface Reference](cli_reference.md)
-5. [Log Collection and Link Health Reporting](logging_and_customer_reporting.md)
-6. [Certificate Manager Interface Specification](cert_manager.md)
+2. [Inventory and Link-Driven Model](inventory_and_link_model.md)
+3. [Configuration Generation and Runtime Contract](config_generation.md)
+4. [CLI Reference](cli_reference.md)
+5. [Deploy Phases and Recovery](qkd_deploy_phases.md)
+6. [Identity and Access](identity_and_access.md)
+7. [Certificates and PKI](certificates_and_pki.md)
+8. [Platform Differences: MX and ACX EVO](platform_differences_mx_acx_evo.md)
+9. [Release History and Architectural Milestones](release_history.md)
+10. [Architecture Evolution](../architecture_evolution.md)
+11. [Product Roadmap](../roadmap.md)
 
-## Deployment & Operations
+## Domain boundaries
 
-7. [QKD Deploy Phases](qkd_deploy_phases.md)
-8. [Platform Differences: MX vs ACX EVO](platform_differences_mx_acx_evo.md)
-9. [SSH Key Architecture](ssh_key_architecture.md)
-10. [MACsec Hitless Rolling Keyring — Four Slots (ver3.3.2.1)](hitless_rolling_keyring_ver3.3.2.1.md)
-11. [KME Key Retention TTL and Bilateral Commit Ordering](kme_key_retention_and_commit_ordering.md)
-12. [Pipeline Analytics](pipeline_analytics.md)
-13. [Root Bootstrap Method](root_bootstrap_method_2.md)
-14. [Link Master Role Requirements](link_master_role_requirements.md)
-15. [Two-Node RPC Identity Model](script_user_peer_ssh_split_two_node.md)
-16. [Strict Sync + Synchronous RPC Acknowledgement LLD](qkd_onbox_strict_sync_ack_lld.md)
-17. [Flusso operativo ver3.3.4.1: QKD on-box, RPC e rotazione chiavi](ver3.3.4.1_onbox_rpc_key_rotation_flow.md)
-
-## Troubleshooting
-
-18. [key 0 bootstrap realignment without MACsec flap](troubleshooting/key0_bootstrap_realignment.md)
-19. [SSH identity realignment for runtime RPC](troubleshooting/ssh_identity_realignment.md)
-20. [On-box JSON state DB inspection and safe reset](troubleshooting/state_db_json_inspection.md)
-21. [On-box lock directories](troubleshooting/lock_directories.md)
-
-## Release Information
-
-22. [Release Notes v3.3.1](release_notes_ver3.3.1.md)
-23. [Release Notes v3.3.2](release_notes_ver3.3.2.md)
-24. [Release Notes v3.3.4](release_notes_ver3.3.4.md)
-25. [Release Notes v3.3.4.1](release_notes_ver3.3.4.1.md)
-26. [Release Notes v3.3.4.2](release_notes_ver3.3.4.2.md)
-
-## Roadmap and Runtime Policies
-
-27. [QKD On-Box Roadmap](roadmap.md)
-28. [On-Box Runtime Refactor — 10 Points (2026-07-25)](qkd_onbox_10_points_completion_2026-07-25.md)
-
-## Historical / Archive
-
-- [SSH Key Rotation Design — historical (superseded)](ssh_key_rotation_design.md)
-- [MACsec Batch Rotation and SSH Transport-Key Rotation — transitional ver3.3.4](macsec_batch_and_ssh_key_rotation.md)
-- [MKA/SAK Rekey Flow — historical numeric-order model](../../archive/docs/qkd/mka_sak_rekey_flow.md)
-- [On-Box Runtime Ring Policy (2026-07-27) — superseded](../../archive/docs/qkd/qkd_onbox_runtime_ring_policy_2026-07-27.md)
-- [On-Box Runtime LLD for ver3.3.1 (archive)](../../archive/docs/qkd/qkd_onbox_ver3_3_1_runtime_lld.md)
-- [Architecture Review — pre-implementation (archive)](../../archive/docs/qkd/qkd_onbox_architecture_review.md)
+- Theory, MKA/QKD/KME, ETSI 014, and mTLS: [PQC/QKD theory](../pqc/toc.md)
+- On-box ring, state, RPC, and identity rotation: [On-box](../onbox/toc.md)
+- KME host/container lifecycle: [KME](../kme/toc.md)
+- Monitoring, checks, analytics, and runbooks: [Tools](../tools/toc.md)

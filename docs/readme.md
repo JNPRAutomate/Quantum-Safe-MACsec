@@ -1,37 +1,109 @@
 # Quantum-Safe MACsec Documentation
 
-This documentation is organized by responsibility domain:
+This is the only maintained documentation tree for `ver3.3.4.2`. It combines
+the current implementation, detailed operations, and the architectural
+evolution that explains how and why earlier models were replaced.
 
-- `docs/roadmap.md` - planned product and architecture work
-- `docs/qkd/` - QKD/MACsec orchestrator architecture and runtime behavior
-- `docs/kme/` - KME orchestrator architecture and infrastructure lifecycle
-- `docs/pqc/` - theory, standards context, and control-plane rationale
-- `docs/tools/` - post-check and operational tooling workflows
+## Documentation backbone
 
-Legacy markdown documents previously under `docs/` were analyzed and moved to:
+### 1. Theory: `docs/pqc`
 
-- [`archive/docs/`](../archive/docs/README.md)
+[Theory, QKD, and PQC](pqc/toc.md) explains:
 
-Files under `archive/docs/` are historical evidence, not current operating
-instructions. Each archived Markdown document carries a standard status
-banner. Active documentation must either describe the supported architecture
-or explicitly identify a historical release baseline.
+- MACsec, MKA, CAK, CKN, SAK, QKD, KME, and SAE;
+- ETSI GS QKD 014 ENC/DEC and key-ID correlation;
+- PKI and mTLS;
+- self-signed and hierarchical trust;
+- QKD versus PQC and the future hybrid/PQC roadmap.
 
-Use this as the starting point for GitHub readers:
+### 2. KME orchestrator: `docs/kme`
 
-1. [Product and Architecture Roadmap](roadmap.md)
-2. [QKD Architecture](qkd/architecture.md)
-3. [KME Architecture](kme/architecture.md)
-4. [PQC Theory and Standards](pqc/theory_and_standards.md)
-5. [QKD CLI Reference](qkd/cli_reference.md)
-6. [KME CLI Reference](kme/cli_reference.md)
-7. [PQC Glossary](pqc/glossary.md)
-8. [QKD On-Box Runtime LLD](qkd/qkd_onbox_runtime_lld.md)
-9. [Certificate Manager](qkd/cert_manager.md)
-10. [Root Bootstrap Method](qkd/root_bootstrap_method_2.md)
-11. [SSH Key Architecture](qkd/ssh_key_architecture.md)
-12. [MACsec Hitless Rolling Keyring](qkd/hitless_rolling_keyring_ver3.3.2.1.md)
-13. [QKD Troubleshooting](qkd/troubleshooting/key0_bootstrap_realignment.md)
-14. [Link Master Role Requirements](qkd/link_master_role_requirements.md)
-15. [Logging and Customer Reporting](qkd/logging_and_customer_reporting.md)
-16. [QKD Post-Check Observation Tools](tools/qkd_post_check_observation_tools.md)
+[KME documentation](kme/toc.md) owns:
+
+- external Linux host bootstrap;
+- Docker/Compose, image, network, and shared PostgreSQL;
+- configuration and persistent lifecycle state;
+- PKI installation, Vault, deploy/restart/status/validate/destroy;
+- operations, failure recovery, design evolution;
+- the future embedded Junos EVO ACX/PTX backend.
+
+### 3. QKD orchestrator: `docs/qkd`
+
+[QKD orchestrator documentation](qkd/toc.md) owns:
+
+- link-driven inventory;
+- runtime artifact/config generation;
+- PKI generation;
+- bootstrap, deploy, clean, validation;
+- privileged/upload/runtime identities;
+- MX and ACX EVO deployment differences;
+- CLI and release history.
+
+### 4. On-box runtime: `docs/onbox`
+
+[On-box documentation](onbox/toc.md) owns:
+
+- `qkd_onbox.py`;
+- master/slave link execution;
+- the four-slot ring and RING_REARM;
+- state, reconciliation, locks, start-times;
+- ENC/DEC and synchronous SSH-RPC;
+- inflight recovery and adaptive grace;
+- transactional RPC key rotation;
+- on-box CLI, logging, errors, and class-refactor design.
+
+### 5. Operational tools: `docs/tools`
+
+[Tools documentation](tools/toc.md) owns:
+
+- customer inventory and deployment generation;
+- log collection;
+- timed QKD rotation observation;
+- RPC private/public identity verification;
+- certificate checks;
+- MACsec/MKA/CAK/CKN/SAK/ICV monitoring;
+- pipeline and TTL analytics;
+- tmux full-suite operation;
+- troubleshooting, lab replication, and documentation assembly.
+
+## Architecture evolution
+
+[Architecture Evolution and Decision History](architecture_evolution.md)
+connects the domains and preserves the reasons for each transition:
+
+- monolithic scripts to separated QKD/KME lifecycles;
+- topology inference to explicit links;
+- simple keys to a hitless rolling ring;
+- stable SCP to rotating SCP to RPC-only SSH;
+- shared/overloaded identities to separated roles;
+- self-signed-only labs to selectable hierarchical PKI;
+- generic Junos assumptions to explicit EVO behavior;
+- raw logs to correlated health and analytics.
+
+Historical implementation is retained inside the appropriate canonical
+document. There is no separate archive tree and no second source of truth.
+
+## Current release
+
+The detailed release sequence is in
+[Release History](qkd/release_history.md). Current behavior is `ver3.3.4.2`;
+older procedures are identified as evolution or release-specific behavior.
+
+## Planned work
+
+[Product and Architecture Roadmap](roadmap.md) tracks:
+
+- class-based `qkd_onbox.py`;
+- class-based QKD/KME orchestrators;
+- embedded KME on qualified Junos EVO ACX/PTX;
+- standardized PQC adoption.
+
+## Documentation rules
+
+- One domain owns each concept.
+- Other documents cross-link rather than copying the same explanation.
+- Current procedures are distinguished from historical evolution.
+- Detailed failure rationale and migration decisions are retained.
+- Commands are verified against source/CLI.
+- Repository-relative links are used.
+- Generated state, secrets, keys, and transient reports are not documentation.

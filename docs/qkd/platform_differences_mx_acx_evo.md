@@ -105,6 +105,6 @@ be treated as a hard error even if process exit status is misleading.
 
 ## References
 
-- [ssh_key_architecture.md](ssh_key_architecture.md)
+- [Identity and Access](identity_and_access.md)
 - [qkd_deploy_phases.md](qkd_deploy_phases.md)
-- [qkd_onbox_runtime_lld.md](qkd_onbox_runtime_lld.md)
+- [On-Box Runtime Model](../onbox/runtime_model.md)

@@ -14,10 +14,9 @@ This folder contains active test tooling and representative sample outputs.
 - `cert_profiles/`, `templates/`
   - Active OpenSSL config and template files used by test PKI utilities.
 
-Historical material was archived under:
-
-- `archive/test/` (legacy scripts and placeholders)
-- `archive/test-logs/` (older timestamped run logs)
+Legacy placeholders and timestamped test logs were removed with the retired
+`archive/` tree. Reproducible fixtures and active scripts belong under
+`test/`; generated logs remain local artifacts and are not committed.
 
 ## Canonical Ring Test Usage
 

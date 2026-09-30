@@ -96,6 +96,7 @@ than replacing current ECC identities without a compatibility plan.
 - A roadmap item remains open until implementation, tests, operations,
   security considerations, and active documentation are complete.
 - Delivered behavior moves to release notes and a closed release milestone.
-- Historical proposals move to `archive/docs/` and receive an archive banner.
+- Historical proposals are integrated into the owning domain's evolution
+  section rather than maintained in a separate archive tree.
 - Active documents describe only the current supported architecture unless
   they are explicitly marked as release-specific or transitional.

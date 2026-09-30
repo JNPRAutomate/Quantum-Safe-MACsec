@@ -1,6 +1,6 @@
 # Quantum-Safe MACsec on Juniper devices - High-Level Design
 
-Release: 3.3.4
+Release: 3.3.4.2
 
 ## 1. Purpose
 
@@ -87,7 +87,7 @@ The detailed sequence below reflects how the project turns API key retrieval int
 
 For the full runtime model, including the difference between `key_batch_size`, `interval_seconds`, `pending_key_id`, and `next_start_time`, see:
 
-- [docs/qkd/qkd_onbox_runtime_lld.md](docs/qkd/qkd_onbox_runtime_lld.md)
+- [docs/onbox/runtime_model.md](docs/onbox/runtime_model.md)
 
 ![QKD-assisted key exchange sequence](docs/images/hld_qkd_key_exchange_sequence.png)
 
@@ -180,9 +180,8 @@ Customer summary utility:
 - `lib/kme/` - KME lifecycle + deployment logic
 - `config/` - inventory/runtime/kme environment config
 - `artifacts/` - on-box template(s)
-- `docs/` - architecture, CLI references, standards/theory
+- `docs/` - the single canonical architecture, theory, operations, and evolution tree
 - `test/` - active scripts and representative samples
-- `archive/` - historical materials for traceability
 
 ---
 
@@ -195,21 +194,23 @@ Start here:
 3. [docs/qkd/toc.md](docs/qkd/toc.md)
 4. [docs/kme/toc.md](docs/kme/toc.md)
 5. [docs/pqc/toc.md](docs/pqc/toc.md)
-6. [docs/tools/toc.md](docs/tools/toc.md)
+6. [docs/onbox/toc.md](docs/onbox/toc.md)
+7. [docs/tools/toc.md](docs/tools/toc.md)
+8. [docs/architecture_evolution.md](docs/architecture_evolution.md)
 
 Recommended QKD reading flow:
 
 1. [docs/qkd/architecture.md](docs/qkd/architecture.md)
 2. [docs/qkd/config_generation.md](docs/qkd/config_generation.md)
-3. [docs/qkd/qkd_onbox_runtime_lld.md](docs/qkd/qkd_onbox_runtime_lld.md)
+3. [docs/onbox/runtime_model.md](docs/onbox/runtime_model.md)
 4. [docs/qkd/qkd_deploy_phases.md](docs/qkd/qkd_deploy_phases.md)
 5. [docs/qkd/platform_differences_mx_acx_evo.md](docs/qkd/platform_differences_mx_acx_evo.md)
-6. [docs/qkd/ssh_key_architecture.md](docs/qkd/ssh_key_architecture.md)
-7. [docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md](docs/qkd/hitless_rolling_keyring_ver3.3.2.1.md)
-8. [docs/qkd/macsec_batch_and_ssh_key_rotation.md](docs/qkd/macsec_batch_and_ssh_key_rotation.md)
-9. [docs/qkd/link_master_role_requirements.md](docs/qkd/link_master_role_requirements.md)
-10. [docs/qkd/peer_key_rotation_mesh_trust.md](docs/qkd/peer_key_rotation_mesh_trust.md)
-11. [docs/qkd/logging_and_customer_reporting.md](docs/qkd/logging_and_customer_reporting.md)
+6. [docs/qkd/identity_and_access.md](docs/qkd/identity_and_access.md)
+7. [docs/onbox/rolling_keyring_reference.md](docs/onbox/rolling_keyring_reference.md)
+8. [docs/onbox/transport_evolution_ver334.md](docs/onbox/transport_evolution_ver334.md)
+9. [docs/qkd/inventory_and_link_model.md](docs/qkd/inventory_and_link_model.md)
+10. [docs/onbox/rpc_identity_rotation.md](docs/onbox/rpc_identity_rotation.md)
+11. [docs/tools/monitoring_and_health.md](docs/tools/monitoring_and_health.md)
 
 Supporting references:
 
@@ -218,4 +219,4 @@ Supporting references:
 3. [docs/kme/cli_reference.md](docs/kme/cli_reference.md)
 4. [docs/pqc/theory_and_standards.md](docs/pqc/theory_and_standards.md)
 5. [docs/pqc/glossary.md](docs/pqc/glossary.md)
-6. [docs/tools/qkd_post_check_observation_tools.md](docs/tools/qkd_post_check_observation_tools.md)
+6. [docs/tools/collection_and_analytics.md](docs/tools/collection_and_analytics.md)

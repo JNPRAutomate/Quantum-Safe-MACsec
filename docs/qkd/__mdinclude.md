@@ -1,18 +1,11 @@
-# QKD Include Order
+# QKD Orchestrator Include Order
 
 !INCLUDE "architecture.md"
+!INCLUDE "inventory_and_link_model.md"
 !INCLUDE "config_generation.md"
-!INCLUDE "qkd_onbox_runtime_lld.md"
 !INCLUDE "cli_reference.md"
-!INCLUDE "logging_and_customer_reporting.md"
-!INCLUDE "cert_manager.md"
 !INCLUDE "qkd_deploy_phases.md"
+!INCLUDE "identity_and_access.md"
+!INCLUDE "certificates_and_pki.md"
 !INCLUDE "platform_differences_mx_acx_evo.md"
-!INCLUDE "ssh_key_architecture.md"
-!INCLUDE "hitless_rolling_keyring_ver3.3.2.1.md"
-!INCLUDE "kme_key_retention_and_commit_ordering.md"
-!INCLUDE "pipeline_analytics.md"
-!INCLUDE "root_bootstrap_method_2.md"
-!INCLUDE "link_master_role_requirements.md"
-!INCLUDE "script_user_peer_ssh_split_two_node.md"
-!INCLUDE "qkd_onbox_strict_sync_ack_lld.md"
+!INCLUDE "release_history.md"

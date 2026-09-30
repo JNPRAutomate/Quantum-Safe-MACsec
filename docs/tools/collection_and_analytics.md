@@ -1,0 +1,430 @@
+# Log Collection, Rotation Observation, and Pipeline Analytics
+
+## 1. Collection
+
+`collect_device_logs.py` reads inventory and collects a requested remote path
+from each device. It supports connection/user/identity/timeout options and
+writes a timestamped snapshot.
+
+When legacy SCP retrieval is rejected, the collector:
+
+1. runs Junos `file list <directory> detail | no-more`;
+2. parses regular file names only;
+3. retrieves each through `file show <file> | no-more`;
+4. preserves the original names.
+
+The fallback is directory-generic; it must not substitute `qkd_debug.log` when
+pipeline timing was requested.
+
+## 2. Timed rotation observation
+
+`observe_qkd_rotation.py` creates:
+
+```text
+qkd_observation_<UTC>/
+  t1_baseline/
+  t2_post_transaction/
+  final_post_activation/
+  observation_manifest.json
+  qkd_fleet_comparison_report.json
+  qkd_fleet_comparison_report.md
+  qkd_device_commit_observation.json
+```
+
+T1 captures the starting state. T2 captures transaction effects before all
+scheduled activations necessarily complete. FINAL evaluates convergence after
+the activation window.
+
+Use `--plan` before collection and configure inventory, policy, output root,
+remote path, identity, and connection timeout as required.
+
+## 3. Link reports
+
+`qkd_link_rotation_report.py <snapshot>` correlates endpoints into logical
+links and writes Markdown/JSON reports. It evaluates active/pending IDs, slots,
+MKA, interface state, errors, and transaction evidence.
+
+Health categories:
+
+- **HEALTHY**: matching active state and secured endpoints; asynchronous
+  pending may be a normal pipeline state;
+- **DEGRADED**: non-critical incomplete evidence or transition requiring
+  attention;
+- **PROBLEMATIC**: active mismatch, unsecured MKA, unresolved critical error,
+  or dataplane failure.
+
+`qkd_observation_summary.py` and `qkd_rotation_log_summary.py` create
+operator/customer views without replacing raw evidence.
+
+## 4. Pipeline analytics
+
+`qkd_pipeline_analytics.py` consumes timing JSONL or collected snapshots and
+generates JSON/HTML statistics:
+
+- record and success counts;
+- min, average, p50, p95, p99, max;
+- overall and per-platform ENC, commit, peer, and total timing;
+- worst samples;
+- source inventory and snapshot paths;
+- TTL state and recommendation when slave timing exists.
+
+Master-only cumulative timing cannot prove ENC-to-peer-DEC latency. The report
+uses explicit `unavailable` rather than guessing.
+
+## 5. TTL use
+
+Retention sizing uses the worst measured valid ENC-to-DEC path plus retry and
+safety margin. Until complete slave timing is available, retain the
+conservative 600-second recommendation.
+
+## 6. Evidence preservation
+
+Do not overwrite snapshots. Preserve:
+
+- manifest;
+- raw collected logs;
+- generated per-link reports;
+- fleet comparison;
+- tool version/commit;
+- inventory and policy references;
+- collection errors.
+
+Partial collection can still produce a report, but missing sources must remain
+explicit.
+
+
+## Detailed pipeline analytics reference
+
+Tool: `tools/qkd_pipeline_analytics.py`
+
+Collects end-to-end pipeline timing data from all QKD devices in the inventory and generates an offline HTML report. The primary goal is to answer one operational question:
+
+> **What is the minimum key retention period (TTL) the KME must be configured with?**
+
+The answer comes from measuring how long a key must survive in the KME between when the master fetches it (ENC call) and when the slave retrieves it (DEC call).
+
+When run in HTML mode, the tool writes one report per device platform (for example `mx` and `acx`) so you can compare average performance by device family.
+
+---
+
+## Usage
+
+### Collect from all devices and analyze
+
+```bash
+python3 tools/qkd_pipeline_analytics.py
+```
+
+Reads the default inventory, fetches timing JSONL files from all devices via SCP, and generates `qkd_pipeline_report.html`.
+
+### Re-analyze existing data (no SCP)
+
+```bash
+python3 tools/qkd_pipeline_analytics.py --skip-collect
+```
+
+Automatically selects the most recent local snapshot. Use this to regenerate the report after the tool is updated.
+
+### Generate a machine-readable JSON report
+
+```bash
+python3 tools/qkd_pipeline_analytics.py \
+  --json \
+  --output qkd_pipeline_stats.json
+```
+
+The JSON report contains:
+
+- overall success and failure counts
+- min/average/p50/p95/p99/max timing statistics in milliseconds
+- KME ENC-to-DEC retention statistics and recommended TTL when slave timing
+  fields are present
+- an explicit `unavailable` TTL status when the source records do not contain
+  the required slave timing fields
+- the worst ENC-to-DEC samples
+- the same statistics grouped by device platform
+- source inventory and snapshot paths
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--inventory` | `ring_mx_acx_unified_link_driven.yml` | Device inventory YAML |
+| `--base-inventory` | `inventory_base.yaml` | Base inventory (SSH user/key) |
+| `--output-dir` | `./qkd_timings` | Local directory for collected files |
+| `--output` | `qkd_pipeline_report.html` | Base HTML name; HTML mode writes one file per platform |
+| `--skip-collect` | — | Skip SCP, analyze latest existing snapshot |
+| `--remote-path` | `/var/home/etsi_user/logs/pipeline_timing` | Remote log directory |
+| `--jobs` | `4` | Parallel SCP collection jobs |
+| `--identity-file` | — | SSH private key path override |
+
+---
+
+## Data Source
+
+Timing records are written by `qkd_onbox.py` on each master device after every successful key rotation:
+
+```
+/var/home/etsi_user/logs/pipeline_timing/qkd_rolling_pipeline_timing.jsonl
+/var/home/etsi_user/logs/pipeline_timing/qkd_batch_pipeline_timing.jsonl
+```
+
+Each line is a JSON record:
+
+```json
+{
+  "timestamp": "2026-08-04 13:45:55.511",
+  "device": "sae-001",
+  "iface": "et-0/0/0",
+  "status": "ok",
+  "timings_ms": {
+    "master_commit_to_ack_ms":           "00:01:09:822",
+    "master_send_to_ack_ms":        "00:01:05:429",
+    "master_ack_to_ack_ms":         "00:01:02:200",
+    "master_total_enc_to_ack_ms": "00:01:12:096",
+    "slave_dec_total_ms":         "00:00:00:130",
+    "slave_commit_ms":            "00:00:02:288",
+    "slave_total_ms":             "00:00:07:441",
+    "slave_elapsed_from_enqueue_ms": "00:00:58:822"
+  }
+}
+```
+
+All durations use `HH:MM:SS:mmm` format (hours, minutes, seconds, milliseconds).
+
+---
+
+## Understanding the Raw JSONL Fields
+
+### ⚠️ Master fields are cumulative timestamps, not individual durations
+
+This is the most important thing to understand when reading the raw log or the report.
+
+All four master fields are measured **at the same moment** (when the ACK is received) but from **different start points**. They are cumulative elapsed times that all end at ACK received — not individual step durations.
+
+```
+enc_batch_start_ms ──────────────────────────────────── ACK received
+                   │                                     │
+                   └──── master_total_enc_to_ack_ms = 72s
+
+local_install_start_ms ────────────────────────── ACK received
+                       │                           │
+                       └── master_commit_to_ack_ms = 69.8s   (COMMIT + SCP + ACK_WAIT)
+
+peer_send_start_ms ─────────────────────── ACK received
+                   │                       │
+                   └── master_send_to_ack_ms = 65.4s   (SCP + ACK_WAIT)
+
+ack_wait_start_ms ─────────── ACK received
+                  │            │
+                  └── master_ack_to_ack_ms = 62.2s   ✓ true duration (ACK poll only)
+```
+
+### Computing actual step durations (deltas)
+
+To get the real duration of each individual step, subtract adjacent cumulative values:
+
+| Step | Formula | Example |
+|------|---------|---------|
+| **ENC** (KME HTTP call) | `master_total − master_commit_to_ack_ms` | 72 − 69.8 = **2.2s** |
+| **COMMIT** (Junos keychain install) | `master_commit_to_ack_ms − master_send_to_ack_ms` | 69.8 − 65.4 = **4.4s** |
+| **SCP send** (upload to slave) | `master_send_to_ack_ms − master_ack_to_ack_ms` | 65.4 − 62.2 = **3.2s** |
+| **ACK poll** (wait for slave ACK file) | `master_ack_to_ack_ms` (no delta needed) | **62.2s** |
+| **TOTAL** | `master_total_enc_to_ack_ms` (no delta needed) | **72s** |
+
+The report computes and displays these deltas automatically. The "Computed as (JSONL delta)" column in the HTML table shows the exact formula for each row.
+
+### Slave fields are already true durations
+
+Slave-side fields are measured from the moment the slave script starts processing, so they are individual durations — no delta computation needed:
+
+| Field | What it measures | t=0 |
+|-------|-----------------|-----|
+| `slave_dec_total_ms` | KME HTTP GET calls to decrypt all key_ids | slave script start |
+| `slave_commit_ms` | Junos netconf commit on slave | after DEC complete |
+| `slave_total_ms` | DEC + COMMIT + state write + ACK write | slave script start |
+| `slave_elapsed_from_enqueue_ms` | From master SCP write to slave ACK written | master SCP write time (`created_at` in envelope) |
+
+Note: `slave_elapsed_from_enqueue_ms` has a different t=0 than the others — it starts from when the master wrote the SCP file, so it includes network transit time. It is used in the ENC→DEC formula.
+
+---
+
+## The Master Pipeline (sequential, blocking)
+
+```
+enc_batch_start
+      │
+      ├──[ENC ~2s]──► local_install_start
+      │
+      ├──[COMMIT ~4s]──► peer_send_start
+      │
+      ├──[SCP send ~3s]──► ack_wait_start
+      │
+      └──[ACK poll ~62s]──► ACK received
+```
+
+The ACK poll (~62s) is the **rotation interval** — the master polls every N seconds for the slave's written ACK file. It dominates the total time but is **not** part of the KME retention window (the slave has already called DEC before this wait ends).
+
+---
+
+## KME TTL Budget — The Critical Metric
+
+### What to ask the KME operator
+
+> *"How long does the KME keep a key after it is first fetched?"*
+
+That retention period must be ≥ the ENC→DEC time measured by this tool.
+
+### Formula
+
+```
+ENC→DEC = master_total_enc_to_ack − slave_elapsed_from_enqueue + slave_dec_total
+         = 72s − 59s + 0.13s
+         ≈ 13 seconds
+```
+
+This works because `slave_elapsed_from_enqueue` starts from the master SCP write time — subtracting it cancels out the SCP upload time and the ACK poll wait, leaving only the window from ENC call to slave DEC call.
+
+### Why the TOTAL (72s) is not the answer
+
+The 72s total includes ~62s of ACK polling, which happens **after** the slave has already decrypted. The key only needs to exist in the KME for the ~13s window shown above.
+
+### Recommended KME TTL
+
+```
+Recommended TTL = ceil(ENC→DEC 99th percentile) + 1s safety margin
+```
+
+| ENC→DEC 99% | Verdict | Action |
+|-------------|---------|--------|
+| < 8s | ✅ Green | Current KME TTL is adequate |
+| 8–10s | ⚠️ Orange | Review KME TTL, monitor closely |
+| > 10s | 🔴 Red | Increase KME TTL immediately to avoid HTTP 404 failures |
+
+### Example from real data
+
+```
+ENC→DEC Median: ~11s
+ENC→DEC 99%:    ~13s
+→ Recommended KME TTL: ≥ 14 seconds
+```
+
+---
+
+## HTML Report Sections
+
+1. **Pipeline Summary** — Total records, HTTP 200/404 counts, success rate
+2. **Master-Side Timing** — Per-step statistics with "What it measures" and "Computed as (JSONL delta)" columns
+   - Includes two SVG diagrams: the step timeline and the raw-field waterfall
+3. **Slave-Side Timing** — Per-step statistics with "JSONL field (raw)" column
+   - Includes SVG diagram showing slave t=0 and `slave_elapsed_from_enqueue` span
+4. **KME TTL Budget** — ENC→DEC statistics with combined master+slave timeline SVG
+   - Red bracket showing the actual key retention window
+   - Recommended TTL highlighted in amber banner
+5. **KME Key Validity** — HTTP 200 vs 404 breakdown with pass/warn/fail verdict
+
+---
+
+## Related Files
+
+- `tools/collect_device_logs.py` — SCP collection backend used internally
+- `artifacts/qkd_onbox.py` — Writes timing records on-device (see `write_pipeline_timing_record()`)
+- [Transport and Transactions](../onbox/transport_and_transactions.md) — KME
+  TTL design rationale
+- [Monitoring and Health](monitoring_and_health.md) — logging architecture
+  and customer-reporting overview
+
+
+## Detailed post-check observation workflow
+
+Version baseline: `ver3.3.4.1`
+
+## Purpose
+
+This guide documents the post-check tooling used after deployment/runtime
+stabilization to prove:
+
+- link-by-link MACsec/QKD health after transient rotations
+- bilateral runtime convergence across expected peers/links
+- runtime RPC-key rotation health from the live log stream
+
+The workflow is intentionally snapshot-based and semantic. It does not rely on
+raw text diffs of append-only log files.
+
+## Tools
+
+- [tools/collect_device_logs.py](../../tools/collect_device_logs.py)
+  - inventory-driven log snapshot collection from all devices
+  - automatically falls back to read-only Junos `file list` and `file show`
+    collection of the requested directory's regular files when a device
+    rejects the legacy SCP server command
+- [tools/qkd_link_rotation_report.py](../../tools/qkd_link_rotation_report.py)
+  - per-snapshot link health and rotation status report
+- [tools/observe_qkd_rotation.py](../../tools/observe_qkd_rotation.py)
+  - orchestration tool that runs T1/T2/FINAL collections and produces
+    comparison reports
+- [tools/qkd_observation_summary.py](../../tools/qkd_observation_summary.py)
+  - operator-friendly CLI summary for one `qkd_observation_*` folder
+
+## Quick start
+
+```bash
+tools/observe_qkd_rotation.py --plan
+tools/observe_qkd_rotation.py
+tools/qkd_observation_summary.py
+```
+
+The observation directory is created under `logs/` as:
+
+```text
+logs/qkd_observation_<UTC>/
+```
+
+## Observation outputs
+
+Inside one observation folder:
+
+```text
+qkd_observation_<UTC>/
+├── t1_baseline/
+├── t2_post_transaction/
+├── final_post_activation/
+├── observation_manifest.json
+├── qkd_fleet_comparison_report.json
+├── qkd_fleet_comparison_report.md
+└── qkd_device_commit_observation.json
+```
+
+Each stage snapshot also contains:
+
+- `qkd_link_rotation_report.json`
+- `qkd_link_rotation_report.md`
+
+## What to inspect first
+
+Use this order:
+
+1. `observation_manifest.json`
+2. `qkd_fleet_comparison_report.json.attention_required`
+3. direct peer-RPC failures for `status` or `install-key-batch`
+4. RPC-key rotation failures (`RPC-KEY-ROTATION`, `PREPARE`, `FINALIZE`)
+5. stage-local reports under `t1_baseline/`, `t2_post_transaction/`, and
+   `final_post_activation/`
+
+## Current interpretation model
+
+The active architecture is direct RPC-only, so the operational focus is:
+
+- did peer status RPC succeed?
+- did peer install RPC succeed?
+- did bilateral active/pending state converge?
+- did runtime RPC-key rotation remain healthy?
+
+The retired parser/report that focused on the removed transport-specific key
+rotation path is no longer part of the supported post-check workflow.
+
+## Related design/operations docs
+
+- [Monitoring and Health](monitoring_and_health.md)
+- [QKD Identity and Access](../qkd/identity_and_access.md)
+- [On-Box Runtime Model](../onbox/runtime_model.md)

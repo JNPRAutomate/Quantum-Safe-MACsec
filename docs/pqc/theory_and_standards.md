@@ -1,111 +1,157 @@
-# PQC/QKD Theory and Standards Context
+# PQC, QKD, and MACsec Theory
 
-## Why this project exists
+This is the canonical theory backbone for the quantum-safe MACsec design. It
+separates cryptographic goals from protocol responsibilities and records which
+parts are standardized, which are implementation choices, and which are
+roadmap work. The companion chapters provide the detailed flows:
 
-The project integrates MACsec with QKD-derived key material so that link encryption can use externally provided, frequently rotated secrets rather than relying only on traditional key agreement behavior.
+- [MKA, QKD, KME, and SAE](mka_qkd_kme.md) defines the component boundaries,
+  key identifiers, rotation state, and integration alternatives.
+- [ETSI GS QKD 014 workflow](etsi_gs_qkd_014.md) gives the normative
+  SAE/KME ENC/DEC sequence and its synchronization assumptions.
+- [PKI and mTLS security model](pki_mtls.md) owns trust, identity, and
+  deployment security.
 
-## Core concepts
+## 1. Why this project exists
 
-### MACsec / MKA
+MACsec protects Ethernet frames at Layer 2, but its ordinary key lifecycle is
+controlled by MKA. A QKD system instead makes symmetric key material available
+through a key-management infrastructure. The integration therefore has to
+connect an externally selected, frequently rotated key to a MACsec association
+without sending the secret between the two routers.
 
-- MACsec encrypts Ethernet frames on L2 links.
-- MKA coordinates keying state between peers.
-- Traditional MKA behavior assumes an internal key lifecycle model.
+The security objective is not to claim that QKD replaces every cryptographic
+primitive. It is to use QKD-derived symmetric material for the data-plane
+secret while retaining authenticated control channels, certificate validation,
+access control, replay protection, and safe key-state transitions.
 
-### QKD
+## 2. Terminology and responsibility boundaries
 
-- QKD produces high-entropy key material from a dedicated key infrastructure.
-- Keys are retrieved from KMEs via API flows (enc/dec semantics).
-- Key material is identified with `key_id` and must be used consistently by both peers.
+The terms are deliberately not interchangeable:
 
-### KME (ETSI context)
+| Component | Primary responsibility | Does not decide |
+| --- | --- | --- |
+| QKD system | Generates matching random key material at the two KME domains | Which application consumes a key or when it rotates |
+| KME | Stores and exposes key material and identifiers to authorized SAEs | The application’s MACsec activation schedule |
+| SAE | Secure Application Entity; requests keys, coordinates the peer, and applies policy | How the physical QKD link generates material |
+| MKA | Conventional MACsec peer/key-agreement control plane | The QKD `key_id` lifecycle unless extended by a vendor mechanism |
+| MACsec engine | Encrypts/decrypts frames using an installed SAK/association | KME synchronization or application policy |
 
-- KME is the key management endpoint exposing key retrieval APIs.
-- In this repository, KME runtime is based on ETSI GS QKD 014 reference implementation lifecycle automation.
+MACsec and MKA are specified in the IEEE 802.1AE/802.1X family. QKD/KME
+interfaces are addressed by ETSI GS QKD 014. ETSI 014 defines the SAE-to-local
+KME retrieval interface; it does **not** define the protocol by which two KMEs
+replicate or synchronize their databases. That synchronization is a QKD/KME
+implementation concern.
 
-## ETSI GS QKD 014 alignment (practical)
+## 3. The central control-plane mismatch
 
-This project aligns to a model where:
+Traditional MKA is autonomous:
 
-1. Router A requests key material (`enc_keys`) from its KME.
-2. Router A communicates `key_id` context to Router B over a control path.
-3. Router B requests the corresponding key material (`dec_keys`) from its KME.
-4. Both peers install/schedule keys for MACsec continuity.
+```text
+authenticate peers -> establish CAK/CKN -> derive/distribute SAK -> rotate
+```
 
-Design intent: **key material itself is not transferred router-to-router**; key identity and coordination metadata are.
+The QKD model is externally supplied:
 
-## Key-ID exchange rationale
+```text
+QKD generates -> KMEs store matching (key_id, key) -> SAE chooses and schedules
+```
 
-The architecture relies on deterministic key identity handling:
+They answer different ownership questions:
 
-- master side retrieves key and receives `key_id`
-- peer side receives install request including `key_id`
-- peer retrieves matching decrypt key using `key_id`
-- rotation state tracks pending/active key IDs
+| Question | Conventional MKA | QKD/KME integration |
+| --- | --- | --- |
+| Who chooses the key? | MKA/key server | SAE policy using KME inventory |
+| Who synchronizes peers? | MKA protocol | SAE control exchange plus KME correlation |
+| Who rotates? | MKA timers/state machine | SAE rotation scheduler |
+| What crosses the link? | MKA control material | `key_id` and scheduling metadata, not raw key bytes |
 
-Operational logs expose this as:
+Consequently, “MKA + QKD” must be qualified. The implementation can retain
+MKA/MACsec runtime status and hardware association semantics while externalizing
+selection, synchronization, and rotation to the SAE. It must not imply that
+ordinary MKA has learned how to retrieve an ETSI key.
 
-- `ENC OK key_id=...`
-- `DEC OK key_id=...`
-- `INSTALL-KEY SCHEDULE ... key_id=...`
-- `MKA KEY CONFIRMED key_id=...`
-- `PENDING KEY PROMOTED active_key_id=...`
+## 4. Security invariants
 
-## External MKA control pattern used in this repo
+The design preserves these invariants:
 
-This implementation effectively applies a controlled "externalized key lifecycle" above MACsec:
+1. **No router-to-router secret transfer.** The master SAE receives an
+   `(key_id, key)` pair from its local KME. The peer receives the identifier
+   over an authenticated control path and asks its own KME for the matching
+   key.
+2. **Identifier agreement precedes installation.** A peer must not install a
+   key whose identifier, peer, direction, or generation does not match the
+   transaction.
+3. **Both ends stage before activation.** A next association is installed and
+   scheduled before the old association is retired.
+4. **State is durable and reconciliable.** Active and pending identifiers,
+   transaction state, and activation times are persisted sufficiently to
+   recover after interruption.
+5. **Failures are fail-closed.** A missing key, KME mismatch, certificate
+   failure, stale transaction, or peer disagreement blocks promotion rather
+   than silently selecting another key.
 
-- orchestration logic drives key scheduling/installation
-- MKA runtime confirms active key behavior
-- controlled promotion from pending to active state supports hitless rotation
+## 5. Hitless rotation as a state transition
 
-## Hitless rotation principle
+The safe abstract sequence is:
 
-The implementation uses staged transitions:
+1. The master requests a new ENC key and records its `key_id`.
+2. The master sends only the identifier and transaction metadata to the peer.
+3. The peer requests the corresponding DEC key from its KME.
+4. Both devices install the association and schedule a future activation time.
+5. The control plane confirms peer/runtime convergence.
+6. At the agreed boundary, the new association becomes active while the
+   previous association remains available for the protocol’s transition window.
+7. Only after confirmation are obsolete pending generations purged and state
+   persisted as complete.
 
-1. schedule new key with future start time
-2. install key on both ends
-3. wait for runtime/MKA convergence
-4. promote and persist active state
+This ordering prevents an abrupt SAK replacement and gives recovery logic a
+well-defined distinction between active, pending, and inflight work. See the
+rotation-specific details in [MKA, QKD, KME, and SAE](mka_qkd_kme.md).
 
-This reduces traffic disruption and avoids abrupt key swaps.
+## 6. PQC meaning and roadmap
 
-## Security model summary
+“Quantum-safe” has two complementary meanings here:
 
-- PKI establishes trust for KME communication paths
-- mTLS artifacts are generated by QKD-side PKI workflows
-- KME runtime consumes trusted bundles and per-instance cert/key material
-- operational guardrails include hold-down and failure policies to avoid unstable flapping
+- **Symmetric data-plane protection:** QKD supplies matching symmetric
+  material, subject to the security of the QKD/KME deployment and MACsec
+  implementation.
+- **Post-quantum authentication and control:** PKI, TLS, SSH, API signing, and
+  software-update trust still require public-key algorithms and certificate
+  practices that withstand a quantum-capable adversary.
 
-## TLS certificate naming constraints (standards)
+QKD is not itself a replacement for public-key authentication, and PQC is not
+itself a replacement for an operational key-management system. A practical
+roadmap is:
 
-When certificate identity values represent DNS hostnames (for example SAN `dNSName`, and legacy CN fallback behavior), labels should follow LDH syntax: letters, digits, and hyphen.
+1. Baseline the current MACsec/QKD workflow, identity model, logging, and
+   failure recovery.
+2. Enforce modern TLS/SSH validation and inventory all classical signatures and
+   key exchanges in the SAE↔KME and orchestrator paths.
+3. Introduce hybrid classical/PQC handshakes where the endpoint and vendor
+   stacks support them; retain interoperability and downgrade detection.
+4. Select standardized NIST PQC algorithms (for example ML-KEM for key
+   establishment and ML-DSA or SLH-DSA for signatures) through supported
+   protocol profiles rather than ad-hoc algorithm identifiers.
+5. Rotate certificates and software-signing keys under a tested migration
+   process, with audit evidence and rollback.
+6. Reassess whether QKD provides measurable assurance or operational value for
+   each link; do not treat the presence of QKD as proof that endpoint,
+   implementation, or supply-chain risks disappeared.
 
-Practical guidance for this project:
+The roadmap is intentionally separate from the MACsec key-rotation mechanism:
+the latter can be tested with a simulator or conventional KME keys, while PQC
+authentication is introduced as a compatibility-controlled platform capability.
 
-- avoid underscore (`_`) in hostname-like certificate identities,
-- use hyphen (`-`) where separation is needed,
-- prefer SAN-based identity matching over CN.
+## 7. Certificate identity constraints
 
-Why:
+When a certificate identity is a DNS hostname, SAN `dNSName` values should use
+LDH syntax: letters, digits, and hyphens. Avoid underscores in endpoint
+hostnames and prefer SAN-based matching over the deprecated CN fallback.
+Underscores remain valid in some DNS owner-name uses (for example
+`_acme-challenge`) but are not appropriate as endpoint hostname identities.
 
-- RFC 5280 requires `dNSName` values to use DNS preferred name syntax (referencing RFC 1034/1123),
-- RFC 6125 defines SAN-first hostname verification and treats CN as deprecated fallback,
-- non-LDH host labels are a common source of TLS interoperability or validation failures.
-
-Notes:
-
-- underscore remains valid in specific DNS owner-name contexts such as `_acme-challenge` and SRV-style labels, but those are not endpoint hostnames used for certificate hostname identity.
-
-References:
-
-- [RFC 5280, section 4.2.1.6 (subjectAltName / dNSName)](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.6)
-- [RFC 1123, section 2.1 (host name requirements)](https://www.rfc-editor.org/rfc/rfc1123#section-2.1)
-- [RFC 1035, section 2.3.1 (preferred name syntax)](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.1)
-- [RFC 6125 (service identity verification, SAN-first model)](https://www.rfc-editor.org/rfc/rfc6125)
-
-## Reader map for deeper implementation details
-
-- QKD architecture: `docs/qkd/architecture.md`
-- KME architecture: `docs/kme/architecture.md`
-- Legacy deep notes and evolution artifacts: `archive/docs/`
+- [RFC 5280, section 4.2.1.6](https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.6)
+- [RFC 1123, section 2.1](https://www.rfc-editor.org/rfc/rfc1123#section-2.1)
+- [RFC 1035, section 2.3.1](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.1)
+- [RFC 6125](https://www.rfc-editor.org/rfc/rfc6125)

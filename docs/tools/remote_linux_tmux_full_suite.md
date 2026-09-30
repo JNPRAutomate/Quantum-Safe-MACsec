@@ -435,5 +435,5 @@ embed passwords in the remote command string.
 - [KME First-Run Guide](../kme/first_run_guide.md)
 - [QKD Deploy Phases](../qkd/qkd_deploy_phases.md)
 - [QKD CLI Reference](../qkd/cli_reference.md)
-- [QKD root bootstrap method 2](../qkd/root_bootstrap_method_2.md)
-- [QKD Post-Check Observation Tools](qkd_post_check_observation_tools.md)
+- [QKD Deploy Phases and Root Bootstrap](../qkd/qkd_deploy_phases.md)
+- [Collection and Analytics](collection_and_analytics.md)

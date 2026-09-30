@@ -1,5 +1,12 @@
 # QKD Orchestrator Architecture
 
+## Documentation boundary
+
+This document describes the off-box QKD orchestrator. The generated runtime is
+documented under [On-Box Runtime](../onbox/toc.md). Theory is under
+[PQC/QKD](../pqc/toc.md), and historical transitions are in
+[Architecture Evolution](../architecture_evolution.md).
+
 ## Purpose
 
 `qkd_orchestrator.py` owns QKD/MACsec runtime generation and Juniper deployment logic.
