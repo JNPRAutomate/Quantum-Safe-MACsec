@@ -129,5 +129,6 @@ nav:
           - Python suite: test/python_suite.md
           - Coverage map: test/coverage_map.md
           - Lab scripts: test/lab_scripts.md
+          - Test runbook: test/test_runbook.md
           - Fixtures and artifacts: test/fixtures_and_artifacts.md
           - Troubleshooting: test/troubleshooting.md

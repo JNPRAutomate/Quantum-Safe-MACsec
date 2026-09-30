@@ -121,22 +121,38 @@ authorityKeyIdentifier=keyid:always,issuer
     if not run(["openssl", "genrsa", "-out", root_key, "4096"]):
         raise RuntimeError("Root CA key generation failed")
 
+    root_csr = out_dir / f"{name}-root-ca.csr"
+
+    # `openssl req` has no -extfile option; self-sign the CSR with x509 instead.
     if not run(
         [
             "openssl",
             "req",
-            "-x509",
             "-new",
-            "-nodes",
             "-key",
             root_key,
-            "-sha256",
-            "-days",
-            str(days),
             "-out",
-            root_crt,
+            root_csr,
             "-subj",
             f"/C=IT/O=Juniper Networks Lab/CN={name} Root CA",
+        ]
+    ):
+        raise RuntimeError("Root CA CSR generation failed")
+
+    if not run(
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            root_csr,
+            "-signkey",
+            root_key,
+            "-out",
+            root_crt,
+            "-days",
+            str(days),
+            "-sha256",
             "-extfile",
             root_ext,
         ]

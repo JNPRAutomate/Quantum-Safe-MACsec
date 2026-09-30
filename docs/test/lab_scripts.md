@@ -68,6 +68,10 @@ recursively removes this generated dual-PKI output directory before
 regeneration; inspect the target path and retain anything needed before using
 that flag.
 
+The root CA is self-signed with `openssl x509 -req -signkey -extfile`;
+`openssl req` has no `-extfile` option, and earlier revisions failed at the
+root CA step.
+
 ## Before and after a device-facing run
 
 1. Confirm the exact branch/release and inspect current script contents.
@@ -84,3 +88,5 @@ that flag.
    lock changes.
 
 For automated tests, use [Running the Python Suite](python_suite.md) instead.
+For recorded lab runs and how to read each result, see the
+[Test Execution Runbook](test_runbook.md).

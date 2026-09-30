@@ -11,8 +11,9 @@ or generate private PKI material.
 2. [Running the Python suite](python_suite.md)
 3. [Coverage map](coverage_map.md)
 4. [Lab scripts and safety](lab_scripts.md)
-5. [Fixtures and generated artifacts](fixtures_and_artifacts.md)
-6. [Troubleshooting](troubleshooting.md)
+5. [Test execution runbook](test_runbook.md)
+6. [Fixtures and generated artifacts](fixtures_and_artifacts.md)
+7. [Troubleshooting](troubleshooting.md)
 
 ## Source-code location
 
