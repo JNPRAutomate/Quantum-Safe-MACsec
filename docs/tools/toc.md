@@ -1,6 +1,7 @@
 # Tools Documentation
 
-This is the canonical runbook for the scripts in [`tools/`](../../tools/).
+This is the canonical runbook for the scripts in
+[`tools/`](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/tree/ver3.3.4.2/tools).
 Commands and options below are taken from the current source, not from
 historical wrapper names. Paths in examples are relative to the repository
 root unless stated otherwise.
@@ -41,7 +42,7 @@ root unless stated otherwise.
 | `cert_manager.py`, `cert_report_filter.py` | [Certificate checks](identity_and_certificate_checks.md) |
 | `macsec_tunnel_health_monitor*.py`, `ring_macsec_qkd_rotation_probe.sh` | [MACsec/MKA checks](monitoring_and_health.md) |
 | `qkd_pipeline_analytics.py` | [Pipeline analytics](collection_and_analytics.md#4-pipeline-analytics) |
-| `refactor_analysis.py`, `acx1_testing_tool_script_analysis.md` | [Scope notes](troubleshooting_and_recovery.md#tool-scope-notes) |
+| `refactor_analysis.py`, `acx1_testing_tool_script_analysis.md` | [Tool analysis in the repository](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/tree/ver3.3.4.2/tools) |
 
 ## Related authoritative documentation
 

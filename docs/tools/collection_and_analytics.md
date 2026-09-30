@@ -353,17 +353,17 @@ raw text diffs of append-only log files.
 
 ## Tools
 
-- [tools/collect_device_logs.py](../../tools/collect_device_logs.py)
+- [tools/collect_device_logs.py](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/tools/collect_device_logs.py)
   - inventory-driven log snapshot collection from all devices
   - automatically falls back to read-only Junos `file list` and `file show`
     collection of the requested directory's regular files when a device
     rejects the legacy SCP server command
-- [tools/qkd_link_rotation_report.py](../../tools/qkd_link_rotation_report.py)
+- [tools/qkd_link_rotation_report.py](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/tools/qkd_link_rotation_report.py)
   - per-snapshot link health and rotation status report
-- [tools/observe_qkd_rotation.py](../../tools/observe_qkd_rotation.py)
+- [tools/observe_qkd_rotation.py](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/tools/observe_qkd_rotation.py)
   - orchestration tool that runs T1/T2/FINAL collections and produces
     comparison reports
-- [tools/qkd_observation_summary.py](../../tools/qkd_observation_summary.py)
+- [tools/qkd_observation_summary.py](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/tools/qkd_observation_summary.py)
   - operator-friendly CLI summary for one `qkd_observation_*` folder
 
 ## Quick start

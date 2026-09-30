@@ -1,7 +1,8 @@
 # `qkd_onbox.py` canonical documentation
 
 This is the canonical documentation backbone for the rendered
-[`artifacts/qkd_onbox.py`](../../artifacts/qkd_onbox.py) runtime in
+[`artifacts/qkd_onbox.py`](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/artifacts/qkd_onbox.py)
+runtime in
 ver3.3.4.2. Read the topic pages in this order:
 
 1. [Runtime model](runtime_model.md) — link ownership, master/slave roles,
@@ -32,8 +33,8 @@ ver3.3.4.2. Read the topic pages in this order:
 12. [Lock Reference](lock_reference.md) — lock directories, ownership, and
     stale-lock handling.
 
-The assembly order is in [__mdinclude.md](__mdinclude.md). Release history
-remains in [`docs/qkd/`](../qkd/); this domain owns normative runtime behavior,
+The documentation assembly order is maintained in the source tree. Release
+history remains in [QKD documentation](../qkd/toc.md); this domain owns normative runtime behavior,
 while QKD owns deployment, platform, and release orchestration.
 
 ## Version boundary

@@ -1,0 +1,119 @@
+site_name: Quantum-Safe MACsec
+site_description: QKD-assisted MACsec automation for Juniper devices
+site_url: https://jnprautomate.github.io/Quantum-Safe-MACsec/
+repo_url: https://github.com/JNPRAutomate/Quantum-Safe-MACsec
+repo_name: JNPRAutomate/Quantum-Safe-MACsec
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  favicon: images/quantum-safe-macsec.svg
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+exclude_docs: |
+  __mdinclude.md
+
+nav:
+  - Welcome: index.md
+  - Start here:
+      - First steps: getting_started.md
+      - Documentation map: readme.md
+      - Architecture evolution: architecture_evolution.md
+      - Roadmap: roadmap.md
+  - Domain guides:
+      - Overview: toc.md
+  - Understand the system:
+      - Theory and standards:
+          - Guide overview: pqc/toc.md
+          - Overview: pqc/theory_and_standards.md
+          - MKA, QKD, KME, and SAE: pqc/mka_qkd_kme.md
+          - ETSI GS QKD 014: pqc/etsi_gs_qkd_014.md
+          - PKI and mTLS: pqc/pki_mtls.md
+          - Glossary: pqc/glossary.md
+      - KME orchestrator:
+          - Guide overview: kme/toc.md
+          - Architecture: kme/architecture.md
+          - Configuration and lifecycle: kme/configuration_and_lifecycle.md
+          - Security and certificates: kme/security_and_certificates.md
+          - First-run guide: kme/first_run_guide.md
+          - CLI reference: kme/cli_reference.md
+          - Operations and troubleshooting: kme/operations_and_troubleshooting.md
+          - Vault integration: kme/vault_localhost_8200_setup.md
+          - Design evolution: kme/design_evolution.md
+      - QKD orchestrator:
+          - Guide overview: qkd/toc.md
+          - Architecture: qkd/architecture.md
+          - Inventory and link model: qkd/inventory_and_link_model.md
+          - Configuration generation: qkd/config_generation.md
+          - Deploy phases: qkd/qkd_deploy_phases.md
+          - Identity and access: qkd/identity_and_access.md
+          - Certificates and PKI: qkd/certificates_and_pki.md
+          - Platform differences: qkd/platform_differences_mx_acx_evo.md
+          - CLI reference: qkd/cli_reference.md
+          - Release history: qkd/release_history.md
+      - On-box runtime:
+          - Guide overview: onbox/toc.md
+          - Runtime model: onbox/runtime_model.md
+          - State and reconciliation: onbox/state_and_reconcile.md
+          - Transport and transactions: onbox/transport_and_transactions.md
+          - RPC identity rotation: onbox/rpc_identity_rotation.md
+          - Bootstrap and operations: onbox/bootstrap_and_operations.md
+          - CLI, logging, and errors: onbox/cli_logging_and_errors.md
+          - Historical and refactor notes: onbox/historical_and_refactor.md
+          - Detailed references:
+              - Rolling keyring: onbox/rolling_keyring_reference.md
+              - RPC flow: onbox/rpc_flow_reference.md
+              - Transport evolution: onbox/transport_evolution_ver334.md
+              - State inspection: onbox/state_inspection.md
+              - Lock handling: onbox/lock_reference.md
+      - Operational tools:
+          - Guide overview: tools/toc.md
+          - Inventory and customer setup: tools/inventory_and_customer_setup.md
+          - Collection and analytics: tools/collection_and_analytics.md
+          - Monitoring and health: tools/monitoring_and_health.md
+          - Identity and certificate checks: tools/identity_and_certificate_checks.md
+          - Remote full-suite workflow: tools/remote_linux_tmux_full_suite.md
+          - Troubleshooting and recovery: tools/troubleshooting_and_recovery.md
+          - Lab replication and validation: tools/lab_replication_and_validation.md
+          - Documentation assembly: tools/documentation_assembly.md

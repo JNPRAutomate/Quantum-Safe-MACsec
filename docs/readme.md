@@ -4,6 +4,11 @@ This is the only maintained documentation tree for `ver3.3.4.2`. It combines
 the current implementation, detailed operations, and the architectural
 evolution that explains how and why earlier models were replaced.
 
+For a guided, searchable web experience, the same Markdown source is built as
+a separate static HTML site with MkDocs Material. Use the root `README.md` for
+the local preview/build instructions; the generated `site/` is not stored
+inside this documentation source tree.
+
 ## Documentation backbone
 
 ### 1. Theory: `docs/pqc`

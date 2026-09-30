@@ -9,9 +9,10 @@ integrated into current domain documents and
 
 ## 2. Assembly
 
-The root [`__mdinclude.md`](../__mdinclude.md) includes the global TOC,
-evolution, roadmap, and each domain in reading order. An mdinclude/Pandoc
-workflow can expand directives and render HTML/PDF.
+The root `__mdinclude.md` source lists the global TOC, evolution, roadmap, and
+each domain in reading order. It is an assembly manifest rather than a user
+guide page. MkDocs renders the Markdown source tree into a separate static HTML
+site using the navigation in `mkdocs.yml`.
 
 Use a generated output directory; do not commit transient PDFs unless release
 policy explicitly requires it.

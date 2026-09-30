@@ -17,6 +17,8 @@ env/
 .coverage
 .coverage.*
 htmlcov/
+.venv-docs/
+site/
 
 # Packaging/build outputs
 build/

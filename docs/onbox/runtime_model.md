@@ -3,7 +3,8 @@
 ## 1. Purpose and deployment
 
 `qkd_onbox.py` is rendered per device from
-[`artifacts/qkd_onbox.py`](../../artifacts/qkd_onbox.py) and installed as a
+[`artifacts/qkd_onbox.py`](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/artifacts/qkd_onbox.py)
+and installed as a
 Junos op/event script. `event-options` invokes it periodically as `etsi_user`;
 operators and peer routers invoke defined `action` methods through the Junos
 op-script interface.

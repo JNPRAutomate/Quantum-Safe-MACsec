@@ -29,7 +29,7 @@ After generation:
 5. inspect platform and credential references;
 6. run QKD create dry-run/validation.
 
-## 4. `customer_deploy.py`
+## 4. `customer_deploy.py` {#customer-deploy}
 
 The tool requires `--name`, prints the planned KME and QKD commands, and does
 not execute them unless `--run` is provided. `--skip-kme` is valid only when
@@ -47,7 +47,7 @@ qkd postdeploy validation
 
 Reviewing the printed plan before `--run` is an intentional safety gate.
 
-## 5. Vault helper flow
+## 5. Vault helper flow {#vault-localhost-flow}
 
 `tools/vault/` contains localhost setup/deploy/demo helpers. They demonstrate:
 
