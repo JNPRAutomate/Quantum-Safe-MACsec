@@ -71,6 +71,14 @@ inside this documentation source tree.
 - tmux full-suite operation;
 - troubleshooting, lab replication, and documentation assembly.
 
+### 6. Test suite: `docs/test`
+
+[Test Guide](test/toc.md) documents the `tests/` tree, offline pytest
+coverage, manual device-facing scripts, fixture management, generated PKI
+artifacts, and troubleshooting. It also distinguishes unit tests from lab
+evidence so a successful offline run is not confused with deployment
+validation.
+
 ## Architecture evolution
 
 [Architecture Evolution and Decision History](architecture_evolution.md)

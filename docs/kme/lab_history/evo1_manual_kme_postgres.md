@@ -1,5 +1,15 @@
 # EVO1 manual KME run and PostgreSQL initialization
 
+> **Historical experiment — 2026-09-16.** This manual on-box KME/PostgreSQL
+> experiment demonstrates a lab feasibility test; it is not the supported
+> KME orchestrator lifecycle and does not establish production support for an
+> embedded KME on Junos EVO. It contains host-specific details and an
+> intentionally fake database-password example. Do not reuse its command
+> sequence or credentials. See the
+> [lab history index](index.md), current
+> [KME lifecycle](../configuration_and_lifecycle.md), and
+> [embedded-KME roadmap](../../roadmap.md) first.
+
 This document records the exact manual steps used to run the KME and PostgreSQL on EVO1, using the Docker images already loaded on the Junos EVO host.
 
 Date: 2026-09-16
@@ -168,7 +178,7 @@ Run the database container:
   --restart unless-stopped \
   --network jnpr_cntrz_net \
   -e POSTGRES_USER=db_user \
-  -e POSTGRES_PASSWORD=db_password \
+  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   -e POSTGRES_DB=key_store \
   -v /var/db/kme/postgres:/var/lib/postgresql/data \
   postgres:15
@@ -445,7 +455,7 @@ This is the exact sequence used in practice:
   --restart unless-stopped \
   --network jnpr_cntrz_net \
   -e POSTGRES_USER=db_user \
-  -e POSTGRES_PASSWORD=db_password \
+  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   -e POSTGRES_DB=key_store \
   -v /var/db/kme/postgres:/var/lib/postgresql/data \
   postgres:15

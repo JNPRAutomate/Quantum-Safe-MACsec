@@ -8,3 +8,4 @@
 6. [QKD Orchestrator](qkd/toc.md)
 7. [On-Box Runtime](onbox/toc.md)
 8. [Operational Tools](tools/toc.md)
+9. [Test Guide](test/toc.md)

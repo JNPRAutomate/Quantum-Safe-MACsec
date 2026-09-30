@@ -30,6 +30,8 @@ root unless stated otherwise.
    current automated, hierarchical-PKI, rolling-RPC model.
 10. [Documentation assembly](documentation_assembly.md) — assemble the active
    documentation set into a PDF.
+11. [Test guide](../test/toc.md) — run automated checks and understand
+   device-facing test scripts separately.
 
 ## Tool inventory
 

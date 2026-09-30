@@ -103,6 +103,16 @@ be treated as a hard error even if process exit status is misleading.
 | Root execution of runtime supported | No | No |
 | Need device-wide commit serialization | Recommended | Essential |
 
+## 8. Historical vQFX lab observations
+
+The September 2026 lab record includes a warning that a MACsec configuration
+block was ignored on `vqfx-10000`. This is a platform-capability boundary, not
+evidence that the runtime can treat every virtual or physical QFX as a
+supported Junos target. Check the exact platform and Junos release against
+the current validation matrix before generating or deploying configuration.
+The original device warning and surrounding troubleshooting are retained in
+the [lab chronology](../kme/lab_history/ubuntu_kme_qkd_lab_full_record.md#20-qfx4-macsec-platform-warning).
+
 ## References
 
 - [Identity and Access](identity_and_access.md)

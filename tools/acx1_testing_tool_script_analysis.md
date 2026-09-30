@@ -1,6 +1,7 @@
 # ACX1 Testing Tool Script Analysis
 
-Source analyzed: `test/acx1_testing_tool_shell_script.log`
+Source analyzed: `tests/acx1_testing_tool_shell_script.log` (historical
+transcript; this source file is not present in the current repository).
 
 ## Scripts found in the log
 

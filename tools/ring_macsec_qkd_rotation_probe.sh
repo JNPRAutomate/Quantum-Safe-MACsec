@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Consolidated evolution of test2.sh, test3.sh, test4.sh, and mka_test2.sh
-# from test/acx1_testing_tool_shell_script.log.
+# from tests/acx1_testing_tool_shell_script.log (historical transcript).
 #
 # Purpose:
 # - Exercise ring reachability while QKD/MACsec rotates keys.

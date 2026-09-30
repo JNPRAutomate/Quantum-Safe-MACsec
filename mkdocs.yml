@@ -81,6 +81,12 @@ nav:
           - Operations and troubleshooting: kme/operations_and_troubleshooting.md
           - Vault integration: kme/vault_localhost_8200_setup.md
           - Design evolution: kme/design_evolution.md
+          - Lab and migration history:
+              - Index: kme/lab_history/index.md
+              - Ubuntu KME/QKD lab full record: kme/lab_history/ubuntu_kme_qkd_lab_full_record.md
+              - Ubuntu KME/QKD lab progress record: kme/lab_history/ubuntu_kme_qkd_lab_progress_record.md
+              - Manual KME/PostgreSQL on EVO1: kme/lab_history/evo1_manual_kme_postgres.md
+              - FreeBSD 11.2 host notes: kme/lab_history/freebsd11_host_notes_it.md
       - QKD orchestrator:
           - Guide overview: qkd/toc.md
           - Architecture: qkd/architecture.md
@@ -117,3 +123,11 @@ nav:
           - Troubleshooting and recovery: tools/troubleshooting_and_recovery.md
           - Lab replication and validation: tools/lab_replication_and_validation.md
           - Documentation assembly: tools/documentation_assembly.md
+      - Test guide:
+          - Overview: test/toc.md
+          - Test levels: test/overview.md
+          - Python suite: test/python_suite.md
+          - Coverage map: test/coverage_map.md
+          - Lab scripts: test/lab_scripts.md
+          - Fixtures and artifacts: test/fixtures_and_artifacts.md
+          - Troubleshooting: test/troubleshooting.md

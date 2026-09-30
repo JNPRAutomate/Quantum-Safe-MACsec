@@ -14,4 +14,6 @@ KME orchestration architecture, interface contract, and Vault integration design
 6. [Operations and Troubleshooting](operations_and_troubleshooting.md)
 7. [Vault Integration LLD](vault_localhost_8200_setup.md)
 8. [Design Evolution](design_evolution.md)
-9. [Product and Architecture Roadmap](../roadmap.md)
+9. [KME and QKD Lab History](lab_history/index.md) — detailed historical
+   records, including the manual EVO1 KME experiment.
+10. [Product and Architecture Roadmap](../roadmap.md)

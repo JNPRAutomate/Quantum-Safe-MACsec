@@ -80,7 +80,7 @@ attempting a deployment.
 - `config/` — inventory, policy, and KME configuration inputs
 - `tools/` — deployment, monitoring, collection, reporting, and analysis
 - `docs/` — canonical theory, component guides, operations, and evolution
-- `test/` — automated tests and representative fixtures
+- `tests/` — automated pytest suite, lab scripts, and representative fixtures
 
 ## Project status and roadmap
 
@@ -88,3 +88,6 @@ The documentation describes `ver3.3.4.2`. Planned work, including class-based
 orchestrator/runtime refactoring and embedded KME deployment on Junos EVO
 ACX/PTX devices, is tracked in the
 [product and architecture roadmap](docs/roadmap.md).
+
+Test procedures and coverage are documented in the
+[Test Guide](docs/test/toc.md).

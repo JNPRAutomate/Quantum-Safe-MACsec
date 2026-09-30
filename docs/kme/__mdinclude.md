@@ -8,3 +8,8 @@
 !INCLUDE "operations_and_troubleshooting.md"
 !INCLUDE "vault_localhost_8200_setup.md"
 !INCLUDE "design_evolution.md"
+!INCLUDE "lab_history/index.md"
+!INCLUDE "lab_history/ubuntu_kme_qkd_lab_full_record.md"
+!INCLUDE "lab_history/ubuntu_kme_qkd_lab_progress_record.md"
+!INCLUDE "lab_history/evo1_manual_kme_postgres.md"
+!INCLUDE "lab_history/freebsd11_host_notes_it.md"

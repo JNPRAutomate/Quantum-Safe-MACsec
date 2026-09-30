@@ -27,6 +27,8 @@ SAE](pqc/mka_qkd_kme.md) for the terminology used throughout the guide.
   keyring behavior, and how the router maintains key state.
 - [Operational tools](tools/toc.md): observe rotation, inspect MACsec/MKA and
   ICV health, check certificates and identities, and collect evidence.
+- [Test guide](test/toc.md): select offline pytest coverage or controlled
+  device/lab checks, and understand what their results do and do not prove.
 
 ### I am diagnosing a problem
 

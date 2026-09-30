@@ -1,5 +1,16 @@
 # KME and MACsec Lab Setup Progress
 
+> **Historical progress record — 2026-09-16.** This record is preserved as
+> evidence of the lab setup sequence and its intermediate failures. The
+> detailed chronological transcript is
+> [available separately](ubuntu_kme_qkd_lab_full_record.md); repeated
+> commands and observations are not repeated in the maintained component
+> guides. This is not the current deployment procedure. Use the
+> [KME guide](../toc.md) and
+> [QKD deploy phases](../../qkd/qkd_deploy_phases.md). The broad
+> passwordless-sudo example is historical, not a production least-privilege
+> recommendation.
+
 Date: 2026-09-16
 
 This note summarizes the troubleshooting and configuration work performed during the lab bring-up for Quantum-Safe MACsec version 3.3.3.

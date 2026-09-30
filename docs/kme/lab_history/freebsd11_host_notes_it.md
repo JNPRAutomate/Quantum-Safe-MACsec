@@ -1,8 +1,19 @@
+# Note storiche: installazione su FreeBSD 11.2
+
+> **Contesto storico, non procedura supportata.** FreeBSD 11.2 è fuori
+> supporto. Questo appunto è stato conservato come traccia del troubleshooting
+> iniziale e non deve essere usato come runbook corrente. La parte relativa a
+> `NOPASSWD:ALL` è una nota legacy troppo permissiva: applicare solo policy
+> sudo a privilegio minimo approvate dall'amministratore. Per il lifecycle
+> attuale consultare la [guida KME](../toc.md).
+
+```text
 root@freebsd11:~ # freebsd-version
 11.2-RELEASE
 root@freebsd11:~ # uname -a 
 FreeBSD freebsd11 11.2-RELEASE FreeBSD 11.2-RELEASE #0 r335510: Fri Jun 22 04:32:14 UTC 2018     root@releng2.nyi.freebsd.org:/usr/obj/usr/src/sys/GENERIC  amd64
-root@freebsd11:~ #   
+root@freebsd11:~ #
+```
 
 
 

@@ -33,6 +33,7 @@ errata/
 
 # KME runtime
 certs/
+/tests/certs/
 
 # Generated QKD runtime artifacts (local only)
 config/runtime/

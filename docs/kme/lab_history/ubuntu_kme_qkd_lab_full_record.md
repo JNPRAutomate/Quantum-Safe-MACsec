@@ -1,5 +1,15 @@
 # Full KME and MACsec Lab Chat Notes
 
+> **Historical lab record — 2026-09-16.** This is a preserved chronological
+> record, not a current deployment recipe. It contains old host, inventory,
+> network, and lifecycle assumptions, plus deliberately simplified example
+> credentials. Do not copy commands or values directly into production. Use
+> the current [KME guide](../toc.md),
+> [QKD deploy phases](../../qkd/qkd_deploy_phases.md), and the specific
+> diagnosis links from the [lab history index](index.md). In particular, the
+> broad passwordless-sudo examples below are historical and are not a
+> least-privilege recommendation.
+
 Date: 2026-09-16
 
 This document preserves the full technical flow of the chat so far. It is written in English and keeps the actual commands, observed outputs, configuration snippets, errors, fixes, and decisions in chronological order.
@@ -280,7 +290,7 @@ database:
   service_ip: 10.10.10.40
   image: postgres:15
   username: db_user
-  password: db_password
+  password: "<supply-through-approved-secret-management>"
   db_name: key_store
   port: 5432
   init_host_dir: ./db-init
@@ -472,7 +482,7 @@ root
 
 ---
 
-## 7. `scp -O` compatibility failure on Ubuntu 20
+## 7. `scp -O` compatibility failure on Ubuntu 20 {#scp-o-ubuntu-20}
 
 During KME `build-env`, the orchestrator cloned or updated the ETSI reference implementation and created remote directories:
 

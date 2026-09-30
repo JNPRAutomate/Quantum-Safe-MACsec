@@ -8,3 +8,4 @@
 !INCLUDE "qkd/__mdinclude.md"
 !INCLUDE "onbox/__mdinclude.md"
 !INCLUDE "tools/__mdinclude.md"
+!INCLUDE "test/__mdinclude.md"
