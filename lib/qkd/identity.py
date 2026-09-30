@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-from lib.common.settings import QKD, PKI
+from lib.common.settings import CONFIG, QKD, PKI
 from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import ast
 import json
 import subprocess
 import shlex
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 # -------------------------------------------------
@@ -731,6 +733,75 @@ def check_op_script_permissions(device):
     print(f"[OK] op script permissions set: {path}")
 
 
+def expected_onbox_timestamp_protocol(device):
+    device = normalize_device(device)
+    runtime_script = (
+        BASE_DIR
+        / CONFIG["runtime_dir"]
+        / device_name(device)
+        / ONBOX_SCRIPT_NAME
+    )
+    try:
+        module = ast.parse(
+            runtime_script.read_text(encoding="utf-8"),
+            filename=str(runtime_script),
+        )
+    except (OSError, SyntaxError) as exc:
+        raise RuntimeError(
+            f"Cannot read timestamp protocol from runtime artifact "
+            f"{runtime_script}: {exc}"
+        ) from exc
+
+    for statement in module.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name)
+            and target.id == "TIMESTAMP_PROTOCOL_VERSION"
+            for target in statement.targets
+        ):
+            continue
+        if (
+            isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, str)
+            and statement.value.value
+        ):
+            return statement.value.value
+        break
+
+    raise RuntimeError(
+        "Runtime artifact does not define a literal "
+        f"TIMESTAMP_PROTOCOL_VERSION: {runtime_script}"
+    )
+
+
+def check_onbox_timestamp_protocol(device):
+    device = normalize_device(device)
+    name = device_name(device)
+    protocol = expected_onbox_timestamp_protocol(device)
+    path = qkd_remote_op_script()
+    declaration = f'TIMESTAMP_PROTOCOL_VERSION = "{protocol}"'
+    result = ssh_deploy_cmd(
+        device,
+        f"grep -F -x {shlex.quote(declaration)} {shlex.quote(path)} "
+        ">/dev/null 2>&1",
+        timeout=20,
+        include_failed_marker=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"qkd_onbox timestamp protocol mismatch on {name}; "
+            f"expected=timestamp_protocol={protocol}\n"
+            f"path={path}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+    print(
+        f"[OK] qkd_onbox timestamp protocol on {name}: "
+        f"timestamp_protocol={protocol}"
+    )
+
+
 def check_system_scripts_python3(device):
     device = normalize_device(device)
     name = device_name(device)
@@ -1059,6 +1130,7 @@ def validate_device_identity_postdeploy(device):
         setup_started = time.perf_counter()
         check_op_script_path(device)
         check_op_script_permissions(device)
+        check_onbox_timestamp_protocol(device)
         check_event_script_path(device)
         check_event_script_permissions(device)
         check_system_scripts_python3(device)
