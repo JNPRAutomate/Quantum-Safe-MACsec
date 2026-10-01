@@ -32,6 +32,8 @@ ver3.3.4.2. Read the topic pages in this order:
     interpretation.
 12. [Lock Reference](lock_reference.md) — lock directories, ownership, and
     stale-lock handling.
+13. [Runtime log and state guide](../qkd/logs/runtime_log_guide.md) —
+    severity, event families, and state/timing artifacts.
 
 The documentation assembly order is maintained in the source tree. Release
 history remains in [QKD documentation](../qkd/toc.md); this domain owns normative runtime behavior,

@@ -89,3 +89,6 @@ Use:
 - [Monitoring and health](../tools/monitoring_and_health.md);
 - [Collection and analytics](../tools/collection_and_analytics.md);
 - [Troubleshooting](../tools/troubleshooting_and_recovery.md).
+
+For explanations of runtime severity/context tags and event families, see the
+[Runtime log and state guide](../qkd/logs/runtime_log_guide.md).

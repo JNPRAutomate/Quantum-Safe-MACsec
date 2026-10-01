@@ -18,6 +18,7 @@ integration. The generated runtime is documented under
 9. [Release History and Architectural Milestones](release_history.md)
 10. [Architecture Evolution](../architecture_evolution.md)
 11. [Product Roadmap](../roadmap.md)
+12. [Runtime log and state guide](logs/runtime_log_guide.md)
 
 ## Domain boundaries
 
