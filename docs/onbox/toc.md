@@ -32,7 +32,7 @@ ver3.3.4.2. Read the topic pages in this order:
     interpretation.
 12. [Lock Reference](lock_reference.md) — lock directories, ownership, and
     stale-lock handling.
-13. [Runtime log and state guide](../qkd/logs/runtime_log_guide.md) —
+13. [Runtime Logs and State Files](../qkd/logs/runtime_logs_and_state_files.md) —
     severity, event families, and state/timing artifacts.
 
 The documentation assembly order is maintained in the source tree. Release

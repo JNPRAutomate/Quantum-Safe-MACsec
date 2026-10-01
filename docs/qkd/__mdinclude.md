@@ -9,4 +9,4 @@
 !INCLUDE "certificates_and_pki.md"
 !INCLUDE "platform_differences_mx_acx_evo.md"
 !INCLUDE "release_history.md"
-!INCLUDE "logs/runtime_log_guide.md"
+!INCLUDE "logs/runtime_logs_and_state_files.md"
