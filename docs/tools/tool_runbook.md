@@ -39,8 +39,8 @@ To watch a run: `tmux attach -t qkd-tests`, then `Ctrl-b w` to pick the window.
 | A, offline | `cert_manager.py`, `cert_report_filter.py`, `qkd_rotation_log_summary.py`, `generate_lab_config.py`, `customer_deploy.py` (dry run) | No | Run, results below |
 | A, offline | `qkd_observation_summary.py` | No | Run with B4; results below |
 | B, device-facing, inventory-driven | `collect_device_logs.py`, `observe_qkd_rotation.py`, `qkd_link_rotation_report.py`, `qkd_pipeline_analytics.py` | Yes, read only | Run, results below. Pass `--inventory config/inventory/input/lab_vmm.yaml`; the default inventory is an older ring file |
-| C, device-facing, hard-coded | `macsec_tunnel_health_monitor.py`, `macsec_tunnel_health_monitor_link_correlation.py` | Yes | Pending. The device list is fixed in the source (`DEVICES`); it must become inventory-driven |
-| E, interactive or Vault | `customer_setup.py`, `vault/*.sh` | No (Vault for `vault/*.sh`) | Pending |
+| C, device-facing, inventory-driven | `macsec_tunnel_health_monitor.py`, `macsec_tunnel_health_monitor_link_correlation.py` | Yes | Run, results below. Explicit inventory and `--link` scope |
+| E, interactive or Vault | `generate_customer_lab_config_interactive.py`, `vault/*.sh` | No (Vault for `vault/*.sh`) | Interactive generator tested in scratch; Vault demo tested with a mock CLI; host-changing setup/deploy not executed |
 
 Removed in this release (development leftovers): `refactor_analysis.py`
 (did not run), `acx1_testing_tool_script_analysis.md`, and
@@ -105,7 +105,8 @@ environment file from an inventory or a spec.
 - updated `inventory_base.yaml`, removed its header comment, and wrote the
   passwords into it, although that file is tracked by Git.
 
-`customer_setup.py` wrote `inventory_base.yaml` in the same way.
+`generate_customer_lab_config_interactive.py` wrote `inventory_base.yaml` in
+the same way.
 
 **Fix.** Both tools follow the [rule](#1-rule-tools-never-modify-existing-files):
 
@@ -134,8 +135,9 @@ The generated inventories contain no password. Use a generated set with
 **KME database password.** The tracked KME profiles (`config/kme/lab.yaml`,
 `lab.orig.yaml`, `live.yaml`, `live1.yaml`) carry the reference
 implementation default `db_password`. They are in use and are not changed
-here. Set a different value for customer deployments; `customer_setup.py`
-asks for it and writes it only into the new, ignored KME file.
+here. Set a different value for customer deployments;
+`generate_customer_lab_config_interactive.py` asks for it and writes it only
+into the new, ignored KME file.
 
 ### A5: deployment dry run
 
@@ -213,3 +215,84 @@ The policy-derived offsets were T1 at +0 s, T2 at +600 s, and FINAL at
 and B3's fleet timing collection are retained as separate read-only tool
 checks; the rotation verdict for this run is the scoped, one-link B4/B5
 result.
+
+## 6. Group C results
+
+The two MACsec monitors previously contained a fixed device/IP dictionary
+for another lab. They now load names, management IPs, SAE IDs, and link
+interfaces from the selected inventory. Both accept `--inventory`, `--link`,
+and `--dry-run`. `--link EVO1-EVO2` selects only the endpoints and interfaces
+from that inventory link.
+
+MKA statistics were previously cleared automatically at monitor startup.
+That device-changing operation now requires the explicit
+`--reset-statistics` option; the default monitor path is read-only.
+
+```sh
+python tools/macsec_tunnel_health_monitor.py \
+  --inventory config/inventory/input/lab_vmm.yaml \
+  --link EVO1-EVO2 --dry-run
+python tools/macsec_tunnel_health_monitor_link_correlation.py \
+  --inventory config/inventory/input/lab_vmm.yaml \
+  --link EVO1-EVO2 --dry-run
+```
+
+The dry-runs listed only EVO1 (`sae-001`, `10.38.97.218`) and EVO2
+(`sae-002`, `10.38.97.228`). Offline parser tests verify that link filtering
+keeps only the selected interface in MACsec, MKA, and MKA-statistics results.
+The inventory loader rejects missing/duplicate SAE IDs, invalid addresses,
+and unknown or malformed links.
+
+**Live check (2026-10-01).** Ran both monitors from a server-side scratch copy
+for one round against EVO1–EVO2, with no `--reset-statistics` option:
+
+| Tool | Result |
+|---|---|
+| `macsec_tunnel_health_monitor.py` | rc 0; only `et-0/0/1` shown on both endpoints; MACsec 2/2 in use; MKA 2/2 secured; `ALL TUNNELS HEALTHY` |
+| `macsec_tunnel_health_monitor_link_correlation.py` | rc 0; same selected-interface health; one correlated link, `Match: 1`, no mismatch |
+
+Both reported zero ICV mismatches and no stale keys. The selected-link CAK
+mismatch counter was 991 (cumulative); the monitors only read the counter.
+No inventory or router configuration was changed. The earlier run before
+interface filtering showed other links attached to the same devices; that
+finding led to the link-interface filter exercised by the successful run.
+
+## 7. Group E results
+
+### Interactive customer configuration
+
+`customer_setup.py` was renamed to
+`generate_customer_lab_config_interactive.py`: it interactively collects
+topology, credentials and KME settings, then generates inventory, KME and
+environment files. `customer_deploy.py`, the tools catalogue, and the setup
+documentation now reference the descriptive filename.
+
+The renamed tool was exercised in a temporary repository copy with a
+two-device/one-link topology and dummy passwords. It returned rc 0 and
+created one timestamped file of each type. The existing `inventory_base.yaml`
+in the scratch copy was byte-for-byte unchanged; the generated inventory
+contained no password; the `.env` had mode 0600; the database password was
+present only in the generated KME profile. No repository inventory was
+modified. A real password must be entered at an interactive terminal; the
+test's piped dummy input caused Python's expected `getpass` warning about
+echo fallback.
+
+### Vault shell helpers
+
+| Script | Function | Execution status |
+|---|---|---|
+| `deploy_vault_localhost_8200.sh` | RHEL-family (`dnf`) package installation, writes `/etc/vault.d/vault.hcl`, enables/restarts the system service, checks loopback API | Syntax checked only; not run because it changes the host and restarts Vault |
+| `setup_vault_localhost_8200.sh` | Initializes/unseals Vault as needed, stores QKD secrets, creates a read-only AppRole policy/role and local role/secret ID files | Syntax checked only; not run because it mutates Vault state and may store placeholder defaults |
+| `demo_qkd_vault_env_flow.sh` | AppRole login, optionally prompt/write secrets, retrieve QKD passwords, export them, and optionally run QKD create | Syntax checked and exercised using a fake Vault CLI with `--skip-create`; rc 0, no real Vault or orchestrator invoked |
+
+Operational cautions:
+
+- `setup_vault_localhost_8200.sh` defaults to `YOUR_*_PASSWORD_HERE` values.
+  Replace them through the environment before use; do not store the
+  placeholders or real credentials in Git.
+- The deploy helper binds Vault to `127.0.0.1` over HTTP and is explicitly
+  lab/development oriented, not a production TLS deployment.
+- The demo defaults to running `qkd_orchestrator create`; always pass
+  `--skip-create` unless a deployment is intentionally requested. It also
+  defaults to the legacy ring inventory name, so any intentional create must
+  pass the correct inventory and PKI profile explicitly.

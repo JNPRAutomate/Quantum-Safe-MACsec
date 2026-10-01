@@ -3,7 +3,7 @@
 MACsec Tunnel Health Monitor - Continuous monitoring of MACsec links
 Checks MKA session status, operational state, key status, and tunnel connectivity.
 
-Monitors all 11 QKD/MACsec devices for tunnel stability.
+Monitors QKD/MACsec devices selected from the supplied inventory.
 Alerts on MKA flaps, key transitions, and tunnel state changes.
 """
 
@@ -23,12 +23,18 @@ from getpass import getpass
 from datetime import datetime
 from collections import defaultdict
 
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+if str(WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKSPACE_ROOT))
+
 warnings.filterwarnings("ignore")
 import paramiko
+from tools.macsec_monitor_inventory import load_monitor_devices
 
 # Auto-detect workspace root
-WORKSPACE_ROOT = Path(__file__).parent.parent
 os.chdir(WORKSPACE_ROOT)
+DEFAULT_INVENTORY = WORKSPACE_ROOT / "config" / "inventory" / "input" / "lab_vmm.yaml"
+RESET_STATISTICS = False
 
 
 def get_device_interfaces_from_qkd_inventory(shell):
@@ -183,20 +189,8 @@ def get_qkd_state_dirs_from_config(shell):
 
     return dirs
 
-# Device mapping: sae_id -> (device_name, device_ip, ring_ip)
-DEVICES = {
-    "001": ("MX1", "100.123.113.151", "10.100.255.5"),
-    "002": ("MX2", "100.123.113.152", "10.100.255.6"),
-    "003": ("MX3", "100.123.113.2", "10.100.255.2"),
-    "004": ("MX4", "100.123.113.4", "10.100.255.4"),
-    "005": ("MX5", "100.123.113.3", "10.100.255.3"),
-    "006": ("MX6", "100.123.113.1", "10.100.255.1"),
-    "007": ("ACX1", "100.123.170.202", "10.100.255.7"),
-    "008": ("ACX2", "100.123.170.201", "10.100.255.8"),
-    "009": ("ACX3", "100.123.170.203", "10.100.255.9"),
-    "010": ("ACX4", "100.123.182.2", "10.100.255.11"),
-    "011": ("ACX5", "100.123.182.1", "10.100.255.10"),
-}
+# Populated from the selected inventory in main().
+DEVICES = {}
 
 class MACsecTunnelState:
     """Track MACsec tunnel state and detect anomalies."""
@@ -372,7 +366,7 @@ def reset_mka_statistics(password=None, verbose=False):
     print()
 
 
-def parse_macsec_connections(output, verbose=False):
+def parse_macsec_connections(output, verbose=False, expected_ifaces=None):
     """Parse MACsec connections output to extract interface status."""
     status = {
         'interfaces': [],
@@ -383,11 +377,16 @@ def parse_macsec_connections(output, verbose=False):
     
     lines = output.split('\n')
     iface_map = {}  # interface_name -> best_status
+    current_iface = None
     
     for line in lines:
         # Extract interface names - each appears once
         if 'Interface name:' in line:
             iface_name = line.split('Interface name:')[-1].strip()
+            if expected_ifaces and iface_name not in expected_ifaces:
+                current_iface = None
+                continue
+            current_iface = iface_name
             if iface_name and iface_name not in iface_map:
                 status['interfaces'].append(iface_name)
                 status['total_interfaces'] += 1
@@ -396,16 +395,16 @@ def parse_macsec_connections(output, verbose=False):
                     print(f"  [PARSE] Found interface: {iface_name}")
         
         # Track status for most recent interface
-        if 'Status: inuse' in line and status['interfaces']:
-            recent = status['interfaces'][-1]
+        if 'Status: inuse' in line and current_iface:
+            recent = current_iface
             # Prefer "inuse" over "standby"
             if iface_map[recent] != 'inuse':
                 iface_map[recent] = 'inuse'
                 status['inuse'] += 1
                 if verbose:
                     print(f"  [PARSE] {recent} -> inuse")
-        elif 'Status: standby' in line and status['interfaces']:
-            recent = status['interfaces'][-1]
+        elif 'Status: standby' in line and current_iface:
+            recent = current_iface
             if iface_map[recent] == 'unknown':
                 iface_map[recent] = 'standby'
                 status['standby'] += 1
@@ -418,7 +417,7 @@ def parse_macsec_connections(output, verbose=False):
     return status
 
 
-def parse_mka_sessions(output):
+def parse_mka_sessions(output, expected_ifaces=None):
     """Parse MKA sessions output to extract session status."""
     sessions = {
         'total': 0,
@@ -436,6 +435,9 @@ def parse_mka_sessions(output):
         # Extract interface name
         if 'Interface name:' in line:
             current_iface = line.split('Interface name:')[-1].strip()
+            if expected_ifaces and current_iface not in expected_ifaces:
+                current_iface = None
+                continue
             if current_iface and current_iface not in seen_ifaces:
                 sessions['total'] += 1
                 seen_ifaces.add(current_iface)
@@ -454,7 +456,7 @@ def parse_mka_sessions(output):
                         current_state = 'Not found'
         
         # Count live peers
-        if 'Member identifier:' in line and '(live)' in line:
+        if current_iface and 'Member identifier:' in line and '(live)' in line:
             sessions['peers_live'] += 1
     
     return sessions
@@ -695,7 +697,7 @@ def parse_key_status_from_log(log_content, sae_id):
     return key_status
 
 
-def parse_macsec_statistics(output):
+def parse_macsec_statistics(output, expected_ifaces=None):
     """Parse MACsec statistics for traffic flow."""
     stats = {
         'interfaces': {},
@@ -707,6 +709,9 @@ def parse_macsec_statistics(output):
     for line in lines:
         if 'Interface name:' in line:
             current_iface = line.split('Interface name:')[-1].strip()
+            if expected_ifaces and current_iface not in expected_ifaces:
+                current_iface = None
+                continue
             stats['interfaces'][current_iface] = {
                 'encrypted_packets': 0,
                 'encrypted_bytes': 0,
@@ -728,7 +733,7 @@ def parse_macsec_statistics(output):
     return stats
 
 
-def parse_mka_statistics(output):
+def parse_mka_statistics(output, expected_ifaces=None):
     """Parse MKA statistics for error detection."""
     stats = {
         'interfaces': {},
@@ -740,6 +745,9 @@ def parse_mka_statistics(output):
     for line in lines:
         if 'Interface name:' in line:
             current_iface = line.split('Interface name:')[-1].strip()
+            if expected_ifaces and current_iface not in expected_ifaces:
+                current_iface = None
+                continue
             stats['interfaces'][current_iface] = {
                 'cak_mismatch': 0,
                 'icv_mismatch': 0,
@@ -858,7 +866,8 @@ def parse_lacp_interfaces(output):
 
 def get_macsec_health(sae_id, password=None, verbose=False):
     """Get MACsec tunnel health from a device."""
-    device_name, device_ip, ring_ip = DEVICES[sae_id]
+    device_name, device_ip, target_interface = DEVICES[sae_id]
+    expected_ifaces = {target_interface} if target_interface else None
     key_path = f"certs/hierarchical_ca/juniper_pki/certs/sae-{sae_id}/sae-{sae_id}_id_ed25519"
     log_file = "/var/home/admin/logs/qkd_debug.log"
     
@@ -908,19 +917,31 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         
         # Get MACsec connections status
         macsec_output = send_shell_command(shell, "show security macsec connections | no-more", verbose=False)
-        health_data['macsec_status'] = parse_macsec_connections(macsec_output)
+        health_data['macsec_status'] = parse_macsec_connections(
+            macsec_output,
+            expected_ifaces=expected_ifaces,
+        )
         
         # Get MKA sessions detail
         mka_output = send_shell_command(shell, "show security mka sessions detail | no-more", verbose=False)
-        health_data['mka_status'] = parse_mka_sessions(mka_output)
+        health_data['mka_status'] = parse_mka_sessions(
+            mka_output,
+            expected_ifaces=expected_ifaces,
+        )
         
         # Get MACsec statistics
         macsec_stats_output = send_shell_command(shell, "show security macsec statistics | no-more", verbose=False)
-        health_data['macsec_stats'] = parse_macsec_statistics(macsec_stats_output)
+        health_data['macsec_stats'] = parse_macsec_statistics(
+            macsec_stats_output,
+            expected_ifaces=expected_ifaces,
+        )
         
         # Get MKA statistics
         mka_stats_output = send_shell_command(shell, "show security mka statistics | no-more", verbose=False)
-        health_data['mka_stats'] = parse_mka_statistics(mka_stats_output)
+        health_data['mka_stats'] = parse_mka_statistics(
+            mka_stats_output,
+            expected_ifaces=expected_ifaces,
+        )
         
         # Get LACP interfaces status
         lacp_output = send_shell_command(shell, "show lacp interfaces | no-more", verbose=False)
@@ -932,7 +953,12 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         
         # Get interface admin status (to detect admin-down vs operational-down)
         ifaces_output = send_shell_command(shell, "show interfaces terse | no-more", verbose=False)
-        health_data['admin_down'] = parse_admin_status(ifaces_output, expected_ifaces=device_ifaces if device_ifaces else None)
+        if expected_ifaces is None:
+            expected_ifaces = device_ifaces or None
+        health_data['admin_down'] = parse_admin_status(
+            ifaces_output,
+            expected_ifaces=expected_ifaces,
+        )
         
         # Get key status from JSON state files in configured runtime state_dir.
         # Use exec_command for deterministic, non-interactive output.
@@ -947,6 +973,10 @@ def get_macsec_health(sae_id, password=None, verbose=False):
             base = os.path.basename(candidate)
             if not (base.startswith('qkd_db_') and base.endswith('.json')):
                 return
+            if target_interface and not base.endswith(
+                "_%s.json" % target_interface.replace("/", "_")
+            ):
+                return
             # Keep first hit by priority order (home_dir -> configured state_dir -> /var/tmp).
             if base not in json_file_map:
                 json_file_map[base] = candidate
@@ -957,6 +987,8 @@ def get_macsec_health(sae_id, password=None, verbose=False):
         for link in device_links:
             peer = (link.get('peer') or '').strip()
             iface = (link.get('interface') or '').strip()
+            if target_interface and iface != target_interface:
+                continue
             if not peer or not iface:
                 continue
             compact_iface = iface.replace('/', '_')
@@ -1360,8 +1392,9 @@ def monitor_macsec_continuous(password=None, duration=300, interval=10, verbose=
     start_time = time.time()
     iteration = 0
     
-    # Reset MKA statistics on all devices for clean baseline
-    reset_mka_statistics(password, verbose)
+    # Reset MKA statistics only when explicitly requested.
+    if RESET_STATISTICS:
+        reset_mka_statistics(password, verbose)
     
     print("[*] Monitoring MACsec tunnel health...\n")
     
@@ -1643,7 +1676,26 @@ def main():
         action="store_true",
         help="Enable verbose debug output"
     )
+    parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
+    parser.add_argument("--link", help="Monitor only the endpoints of this inventory link ID")
+    parser.add_argument("--dry-run", action="store_true", help="List targets without connecting")
+    parser.add_argument(
+        "--reset-statistics",
+        action="store_true",
+        help="Clear MKA statistics before monitoring (changes device state)",
+    )
     args = parser.parse_args()
+
+    global DEVICES, RESET_STATISTICS
+    try:
+        DEVICES = load_monitor_devices(args.inventory, args.link)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.dry_run:
+        for sae_id, (device_name, device_ip, _) in sorted(DEVICES.items()):
+            print("%s sae-%s %s" % (device_name, sae_id, device_ip))
+        return
+    RESET_STATISTICS = args.reset_statistics
     
     password = get_auth()
     print()

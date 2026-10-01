@@ -20,8 +20,25 @@ exposes command-level detail.
 `macsec_tunnel_health_monitor_link_correlation.py` adds logical link
 correlation so endpoint symptoms are interpreted together.
 
-Inventory controls expected devices/interfaces; absence must not silently
-reduce the denominator.
+Both tools load device name, SAE ID, and management IP from an explicit
+inventory, with `config/inventory/input/lab_vmm.yaml` as the default. Use
+`--link <link-id>` to restrict the run to that link's two inventory endpoints;
+`--dry-run` lists selected devices without connecting. For example:
+
+```sh
+python tools/macsec_tunnel_health_monitor.py \
+  --inventory config/inventory/input/lab_vmm.yaml \
+  --link EVO1-EVO2 --dry-run
+```
+
+Both tools used to clear the devices' MKA statistics automatically at startup.
+That is now opt-in via `--reset-statistics`; without it, monitoring is
+read-only. Do not use the reset flag when preserving counter history.
+
+The monitor targets devices and interfaces in the selected inventory. Use the
+unfiltered inventory to monitor its full device set, or `--link` for a
+deliberate two-endpoint/interface scope. Current lab run evidence is recorded
+in the [tool runbook](tool_runbook.md#6-group-c-results).
 
 ## 3. Counter interpretation
 

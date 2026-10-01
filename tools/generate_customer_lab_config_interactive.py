@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive first-time setup for a customer QKD/MACsec lab."""
+"""Interactively generate customer QKD/MACsec lab configuration files."""
 
 from __future__ import annotations
 

@@ -39,7 +39,7 @@ root unless stated otherwise.
 
 | Tool | Canonical coverage |
 |---|---|
-| `customer_setup.py`, `generate_lab_config.py`, `customer_deploy.py` | [Inventory and customer setup](inventory_and_customer_setup.md) |
+| `generate_customer_lab_config_interactive.py`, `generate_lab_config.py`, `customer_deploy.py` | [Inventory and customer setup](inventory_and_customer_setup.md) |
 | `vault/*.sh` | [Inventory and customer setup](inventory_and_customer_setup.md#vault-localhost-flow) |
 | `collect_device_logs.py`, `observe_qkd_rotation.py`, `qkd_observation_summary.py` | [Collection and rotation observation](collection_and_analytics.md) |
 | `qkd_link_rotation_report.py`, `qkd_rotation_log_summary.py` | [Reports](collection_and_analytics.md#3-link-reports) |

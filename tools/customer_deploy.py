@@ -15,7 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Deploy a customer KME, then the QKD orchestrator.")
-    parser.add_argument("--name", required=True, help="Name used by customer_setup.py")
+    parser.add_argument(
+        "--name",
+        required=True,
+        help="Name used by generate_customer_lab_config_interactive.py",
+    )
     parser.add_argument("--run", action="store_true", help="Execute commands after displaying them")
     parser.add_argument("--skip-kme", action="store_true", help="Skip KME creation if it is already running")
     return parser.parse_args()
@@ -41,8 +45,14 @@ def main() -> int:
     inventory = ROOT / "config" / "inventory" / "input" / f"{args.name}.yaml"
     env_file = ROOT / "config" / "kme" / f"{args.name}.env"
     if not kme_config.exists() or not inventory.exists() or not env_file.exists():
-        print("Missing generated files. Run customer_setup.py first:", file=sys.stderr)
-        print(f"  {python} tools/customer_setup.py", file=sys.stderr)
+        print(
+            "Missing generated files. Run generate_customer_lab_config_interactive.py first:",
+            file=sys.stderr,
+        )
+        print(
+            f"  {python} tools/generate_customer_lab_config_interactive.py",
+            file=sys.stderr,
+        )
         return 2
 
     commands = []

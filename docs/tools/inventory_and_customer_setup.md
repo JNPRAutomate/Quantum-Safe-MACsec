@@ -7,8 +7,8 @@ print or execute the ordered KME/QKD deployment.
 
 ## 2. Rule: generated files are always new
 
-`customer_setup.py` and `generate_lab_config.py` never modify a file that
-already exists in `config/`. Inventories, KME profiles and
+`generate_customer_lab_config_interactive.py` and `generate_lab_config.py`
+never modify a file that already exists in `config/`. Inventories, KME profiles and
 `inventory_base.yaml` in use stay exactly as they are.
 
 - Every file they write gets a new name with a UTC timestamp,
@@ -26,10 +26,13 @@ already exists in `config/`. Inventories, KME profiles and
   database password) are excluded by `.gitignore`. A generated inventory is
   not ignored: review it and add it to Git explicitly if it must be kept.
 
-## 3. `customer_setup.py`
+## 3. `generate_customer_lab_config_interactive.py`
 
-Interactive. It asks for the devices, links, user names, passwords (hidden
-input), the KME host and the KME database, then writes three new files:
+Interactively collects devices, links, credentials (hidden password input),
+KME host/network/database settings, then writes three new files:
+
+Run it from an interactive terminal. If stdin is piped or has no TTY,
+Python's `getpass` may warn that password input can be echoed.
 
 | File | Content |
 |---|---|
@@ -37,7 +40,7 @@ input), the KME host and the KME database, then writes three new files:
 | `config/kme/<name>_<UTC>.yaml` | KME profile: `config/kme/lab.yaml` plus the answers, including the KME database password |
 | `config/kme/<name>_<UTC>.env` | `export QKD_*` users and passwords, mode 0600 |
 
-It ends by printing the next command,
+The generated filenames include a UTC timestamp. The tool ends by printing the next command,
 `python tools/customer_deploy.py --name <name>_<UTC>`.
 
 ## 4. `generate_lab_config.py`
@@ -97,15 +100,27 @@ Reviewing the printed plan before `--run` is an intentional safety gate.
 
 ## 6. Vault helper flow {#vault-localhost-flow}
 
-`tools/vault/` contains localhost setup/deploy/demo helpers. They demonstrate:
+`tools/vault/` contains three Bash helpers:
 
-- installing and starting Vault;
-- initialization/unseal status handling;
-- writing placeholder QKD secrets;
-- handing secret values to orchestration.
+- `deploy_vault_localhost_8200.sh` installs Vault and jq with `dnf`, writes
+  `/etc/vault.d/vault.hcl`, enables/restarts the system service and verifies
+  the loopback API. It is for RHEL-family lab hosts; it changes host state.
+- `setup_vault_localhost_8200.sh` initializes/unseals Vault, writes the QKD
+  KV secret, and creates an AppRole plus local `role_id`/`secret_id` files.
+  Its defaults are placeholder password strings; supply real values through
+  the environment before use. It mutates Vault state.
+- `demo_qkd_vault_env_flow.sh` logs in using the AppRole, retrieves the QKD
+  password fields, exports them without printing their values, and revokes
+  its AppRole token on exit. `--prompt-secrets` reads hidden values;
+  `--write-secrets` additionally stores them and requires a writer token.
+  `--skip-create` suppresses the default `qkd_orchestrator create` action.
 
-They are not a production Vault architecture. Do not copy root tokens or
-unseal keys into inventory.
+The deploy helper binds to `127.0.0.1` over HTTP; these are lab/development
+helpers, not a production Vault architecture. Never put root tokens, unseal
+keys, AppRole secret IDs, or QKD passwords in an inventory or Git. The demo
+defaults to a legacy inventory name; for an intentional deployment, pass the
+correct `--inventory` and `--pki-profile` explicitly and omit `--skip-create`
+only when ready to deploy.
 
 ## 7. Failure handling
 
