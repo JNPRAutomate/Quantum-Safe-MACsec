@@ -115,6 +115,7 @@ nav:
               - Lock handling: onbox/lock_reference.md
       - Operational tools:
           - Guide overview: tools/toc.md
+          - Tool runbook: tools/tool_runbook.md
           - Inventory and customer setup: tools/inventory_and_customer_setup.md
           - Collection and analytics: tools/collection_and_analytics.md
           - Monitoring and health: tools/monitoring_and_health.md

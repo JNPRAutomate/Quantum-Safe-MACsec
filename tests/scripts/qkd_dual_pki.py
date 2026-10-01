@@ -28,14 +28,14 @@ JUNIPER_TRUSTED_KME_CA_DIR = TRUST_EXCHANGE_DIR / "install_on_juniper"
 
 KME_DEVICES = [
     {
-        "name": "kme_001",
+        "name": "kme-001",
         "ip": "100.100.100.10",
-        "dns": ["kme_001", "kme1", "localhost"],
+        "dns": ["kme-001", "kme1", "localhost"],
     },
     {
-        "name": "kme_002",
+        "name": "kme-002",
         "ip": "100.100.100.11",
-        "dns": ["kme_002", "kme2", "localhost"],
+        "dns": ["kme-002", "kme2", "localhost"],
     },
 ]
 

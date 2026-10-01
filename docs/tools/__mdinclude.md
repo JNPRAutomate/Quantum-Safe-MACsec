@@ -1,5 +1,6 @@
 # Tools Include Order
 
+!INCLUDE "tool_runbook.md"
 !INCLUDE "inventory_and_customer_setup.md"
 !INCLUDE "collection_and_analytics.md"
 !INCLUDE "monitoring_and_health.md"

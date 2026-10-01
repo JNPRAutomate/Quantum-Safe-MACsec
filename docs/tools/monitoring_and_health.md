@@ -35,10 +35,11 @@ reduce the denominator.
 
 ## 4. Ring probe
 
-`ring_macsec_qkd_rotation_probe.sh` is a focused lab probe for observing ring
-and MKA behavior through rotation. Use it only with reviewed device targets,
-credentials, duration, and output path. Preserve its raw output with the
-observation snapshot.
+To observe ring and MKA behaviour through key rotation on a link, use
+`tests/scripts/ring_mka_rotation_test.sh` through the inventory-driven runner
+`tests/scripts/run_onbox_test.py`. It replaces the former
+`tools/ring_macsec_qkd_rotation_probe.sh`, which had ACX lab values built in.
+See [Lab Scripts](../test/lab_scripts.md#ring-macsecqkd-rotation-test).
 
 ## 5. RPC private/public identity rotation
 

@@ -19,9 +19,10 @@ from tools.generate_lab_config import (  # noqa: E402
     DEFAULT_INVENTORY_BASE,
     DEFAULT_KME_TEMPLATE,
     _deep_merge,
-    _update_inventory_base,
     _write_env,
     _write_yaml,
+    inventory_base_suggestions,
+    utc_stamp,
     build_inventory,
 )
 
@@ -107,7 +108,7 @@ def collect_inventory() -> Dict[str, Any]:
 
 def collect_credentials() -> Dict[str, str]:
     print("\nDeployment credentials")
-    print("These values are written to inventory_base.yaml and a mode-0600 .env file.")
+    print("These values are written only to a new mode-0600 .env file (passwords never go to YAML).")
     credentials = {
         "default_user": ask_required("Default user", "labuser"),
         "bootstrap_user": ask_required("Bootstrap/deploy user", "root"),
@@ -169,7 +170,9 @@ def main() -> int:
     kme_overrides = collect_kme_config()
     kme_overrides["database"].update(collect_kme_database_credentials())
 
-    name = spec["name"]
+    # The timestamp makes every set of generated files new, so an inventory or
+    # KME configuration in use is never overwritten.
+    name = f"{spec['name']}_{utc_stamp()}"
     inventory = build_inventory(spec)
     template = yaml.safe_load(DEFAULT_KME_TEMPLATE.read_text(encoding="utf-8")) or {}
     kme = _deep_merge(template, kme_overrides)
@@ -177,16 +180,19 @@ def main() -> int:
     kme_path = ROOT / "config" / "kme" / f"{name}.yaml"
     env_path = ROOT / "config" / "kme" / f"{name}.env"
 
-    _write_yaml(inventory_path, inventory, force=False)
-    _write_yaml(kme_path, kme, force=False)
-    _write_env(env_path, credentials, force=False)
-    _update_inventory_base(DEFAULT_INVENTORY_BASE, credentials, kme, force=True)
+    _write_yaml(inventory_path, inventory)
+    _write_yaml(kme_path, kme)
+    _write_env(env_path, credentials)
     print("\nCreated:")
     print(f"  inventory: {inventory_path}")
     print(f"  KME config: {kme_path}")
-    print(f"  environment: {env_path}")
-    print(f"  updated: {DEFAULT_INVENTORY_BASE}")
-    print("\nNext: run script2 to print the deployment commands in the correct order.")
+    print(f"  environment: {env_path} (mode 0600, not tracked by Git)")
+    suggestions = inventory_base_suggestions(DEFAULT_INVENTORY_BASE, credentials, kme)
+    if suggestions:
+        print(f"\nNot modified: {DEFAULT_INVENTORY_BASE}. Change it by hand only if these values must become the defaults:")
+        for line in suggestions:
+            print(f"  {line}")
+    print(f"\nNext: python tools/customer_deploy.py --name {name}")
     return 0
 
 

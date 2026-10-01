@@ -7,8 +7,13 @@ JSON results. It validates parseability, certificate/key relationships,
 identity fields, validity, and relevant chain information. It requires the
 `cryptography` dependency.
 
+```sh
+python tools/cert_manager.py <dir-or-files> -r --json > cert_report.json
+```
+
 Use strict mode for release/customer validation. Password options are mutually
-exclusive; prefer prompt handling rather than command-line secrets.
+exclusive. Use `--password-prompt` for encrypted keys: `--password <value>`
+leaves the password in the shell history and the process list.
 
 ## 2. Report filter
 
@@ -22,6 +27,18 @@ exclusive; prefer prompt handling rather than command-line secrets.
 - minimum severity.
 
 The filter changes presentation, not the underlying validation result.
+
+```sh
+python tools/cert_report_filter.py --input cert_report.json
+python tools/cert_report_filter.py --input cert_report.json \
+    --min-severity info --expiry-days 365 --flag-unencrypted-keys
+```
+
+By default an underscore in a certificate CN or SAN is reported as an error,
+because underscores are not valid in DNS host names. Name KMEs and devices
+with hyphens (`kme-001`). `--allow-underscore-identifiers` accepts them.
+
+Lab results for both tools are in the [tool runbook](tool_runbook.md#a1-a2-certificates).
 
 ## 3. Required checks
 

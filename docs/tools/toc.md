@@ -30,7 +30,9 @@ root unless stated otherwise.
    current automated, hierarchical-PKI, rolling-RPC model.
 10. [Documentation assembly](documentation_assembly.md) — assemble the active
    documentation set into a PDF.
-11. [Test guide](../test/toc.md) — run automated checks and understand
+11. [Tool runbook](tool_runbook.md) — what each tool does, how it was run in
+   the lab, its results, and the rule that tools never modify existing files.
+12. [Test guide](../test/toc.md) — run automated checks and understand
    device-facing test scripts separately.
 
 ## Tool inventory
@@ -42,9 +44,8 @@ root unless stated otherwise.
 | `collect_device_logs.py`, `observe_qkd_rotation.py`, `qkd_observation_summary.py` | [Collection and rotation observation](collection_and_analytics.md) |
 | `qkd_link_rotation_report.py`, `qkd_rotation_log_summary.py` | [Reports](collection_and_analytics.md#3-link-reports) |
 | `cert_manager.py`, `cert_report_filter.py` | [Certificate checks](identity_and_certificate_checks.md) |
-| `macsec_tunnel_health_monitor*.py`, `ring_macsec_qkd_rotation_probe.sh` | [MACsec/MKA checks](monitoring_and_health.md) |
+| `macsec_tunnel_health_monitor*.py` | [MACsec/MKA checks](monitoring_and_health.md) |
 | `qkd_pipeline_analytics.py` | [Pipeline analytics](collection_and_analytics.md#4-pipeline-analytics) |
-| `refactor_analysis.py`, `acx1_testing_tool_script_analysis.md` | [Tool analysis in the repository](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/tree/ver3.3.4.2/tools) |
 
 ## Related authoritative documentation
 

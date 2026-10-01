@@ -110,7 +110,7 @@ summary content is evidence to review, not an automatic pass/fail.
 
 **Purpose:** build two independent lab PKIs and exchange their trust anchors:
 
-- KME PKI: root CA → issuing CA → `kme_001`, `kme_002` server/client certificates.
+- KME PKI: root CA → issuing CA → `kme-001`, `kme-002` server/client certificates.
 - Juniper PKI: root CA → issuing CA → `vqfx-1`, `vqfx-2` device certificates.
 - `trust_exchange/install_on_kme/`: Juniper CA bundle for the KMEs.
 - `trust_exchange/install_on_juniper/`: KME CA bundle for the routers.
