@@ -2,7 +2,30 @@
 
 set -eu
 
-SRC="${SRC:-10.100.255.7}"
+# All lab-specific values come from the environment. They are normally set by
+# tests/scripts/run_onbox_test.py from the selected inventory; there are no
+# built-in lab defaults.
+#
+#   SRC           source address for pings (local link address)
+#   DESTS         whitespace-separated name:address ping targets
+#   QKD_IFACES    whitespace-separated MACsec interfaces to inspect
+#   QKD_CAS       whitespace-separated CA:keychain pairs to inspect
+#   QKD_LOG_GLOB  on-box qkd_debug log glob
+#   ROUTE_PREFIX  prefix(es) shown in the route snapshot
+
+require_env()
+{
+    for name in "$@"; do
+        eval "value=\${$name:-}"
+        if [ -z "$value" ]; then
+            echo "[ERROR] $name is not set; run through tests/scripts/run_onbox_test.py or export it" >&2
+            exit 2
+        fi
+    done
+}
+
+require_env SRC DESTS QKD_IFACES QKD_CAS QKD_LOG_GLOB ROUTE_PREFIX
+
 DURATION="${1:-${DURATION:-720}}"
 COUNT_PER_ROUND="${2:-${COUNT_PER_ROUND:-5}}"
 SLEEP_BETWEEN_ROUNDS="${3:-${SLEEP_BETWEEN_ROUNDS:-2}}"
@@ -12,28 +35,27 @@ LOG_PREFIX="${LOG_PREFIX:-ring_mka_rotation_test}"
 TEST_TS=$(date '+%Y%m%d_%H%M%S')
 OUT="${OUT_DIR}/${LOG_PREFIX}_${TEST_TS}.log"
 
-DESTS="${DESTS:-
-acx2:10.100.255.9
-acx3:10.100.255.8
-acx4:10.100.255.11
-acx5:10.100.255.10
-}"
-
-QKD_IFACES="${QKD_IFACES:-
-et-2/0/4
-et-2/0/2
-}"
-
-QKD_CAS="${QKD_CAS:-
-CA1:QKD_CA1
-CA9:QKD_CA9
-}"
-
-QKD_LOG_GLOB="${QKD_LOG_GLOB:-/var/tmp/qkd_debug*.log}"
-
 START=$(date +%s)
 END=$((START + DURATION))
 ROUND=1
+
+# Test window start, in the formats of the QKD logs (YYYY-MM-DD HH:MM:SS) and
+# of syslog (MMDDHHMMSS, built from "Mon DD HH:MM:SS"). The final summary only
+# counts events at or after these marks, read once from their source, so
+# repeated per-round dumps in the report cannot inflate it.
+WINDOW_QKD_TS=$(date '+%Y-%m-%d %H:%M:%S')
+WINDOW_SYSLOG_TS=$(date '+%m%d%H%M%S')
+LAST_QKD_TS="$WINDOW_QKD_TS"
+LAST_SYSLOG_TS="$WINDOW_SYSLOG_TS"
+
+PINGS_SENT=0
+PINGS_RECEIVED=0
+PING_LOSS_ROUNDS=0
+PING_CMD_FAILURES=0
+
+SYSLOG_PATTERN='DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR|MACSEC_SC_CAK_ACTIVATED|MACSEC_SC_PRIMARY_CAK_IN_USE|LACP.*Detached|LACP.*Expired|LACP.*Defaulted|ADJDOWN|RPD_ISIS.*DOWN|RPD_OSPF_NBRDOWN|SNMP_TRAP_LINK_DOWN|link down|commit failed|authentication-key-chains not defined|May not be configured'
+
+QKD_EVENT_PATTERN='STATE RECONCILED FROM ROUTER|ROLLING_REPLACEMENT (START|DONE)|RING_COMPLETION (START|DONE)|KEYCHAIN INSTALL (OK|FAIL)|KEYCHAIN BATCH INSTALL FAIL|MKA KEY CONFIRMED|PENDING KEY PROMOTED|ROTATION (SKIP|BLOCKED)|INSTALL-KEY ABORTED|\[ERROR\]'
 
 log()
 {
@@ -78,6 +100,39 @@ run_shell()
     sh -c "$CMD" 2>&1 | tee -a "$OUT"
 }
 
+# QKD log lines with a timestamp at or after $1 (YYYY-MM-DD HH:MM:SS), from
+# every file of QKD_LOG_GLOB and its first rotation, without duplicates.
+qkd_lines_since()
+{
+    for f in $QKD_LOG_GLOB; do
+        for g in "$f.1" "$f"; do
+            [ -f "$g" ] || continue
+            awk -v since="$1" '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / && substr($0, 1, 19) >= since' "$g"
+        done
+    done | sort -u
+}
+
+# Syslog lines matching SYSLOG_PATTERN with a timestamp at or after $1
+# (MMDDHHMMSS). The audit lines of this script's own CLI commands are excluded.
+syslog_events_since()
+{
+    cli -c "show log messages | match \"$SYSLOG_PATTERN\" | except UI_CMDLINE_READ_LINE | no-more" 2>&1 |
+        awk -v since="$1" '
+            BEGIN {
+                split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " ")
+                for (i = 1; i <= 12; i++) month[names[i]] = sprintf("%02d", i)
+            }
+            ($1 in month) && $3 ~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/ {
+                split($3, t, ":")
+                if (month[$1] sprintf("%02d", $2) t[1] t[2] t[3] >= since) print
+            }'
+}
+
+count_lines()
+{
+    awk -v pattern="$1" '$0 ~ pattern { n++ } END { print n + 0 }'
+}
+
 capture_qkd_state()
 {
     LABEL="$1"
@@ -94,10 +149,22 @@ capture_qkd_timeline()
 {
     LABEL="$1"
 
-    section "$LABEL - QKD rotation timeline"
+    section "$LABEL - new QKD key events since $LAST_QKD_TS"
 
-    run_shell "qkd scheduled/pending/promoted timeline" \
-        "for f in $QKD_LOG_GLOB; do [ -f \"\$f\" ] || continue; echo \"### \$f\"; grep -E \"KEYCHAIN ROTATION START|INSTALL-KEY SCHEDULE|STATE SAVED|pending_key_id|next_start_time|MKA KEY CONFIRMED|PENDING KEY PROMOTED|PENDING_KEY_NOT_CONFIRMED|KEYCHAIN ROTATION DONE|KEYCHAIN INSTALL FAIL|INSTALL-KEY ABORTED|MACSEC NOT INUSE|UNKNOWN_CAK|DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR\" \"\$f\" | tail -120; done"
+    NEXT_QKD_TS=$(date '+%Y-%m-%d %H:%M:%S')
+    qkd_lines_since "$LAST_QKD_TS" | grep -E "$QKD_EVENT_PATTERN" | tee -a "$OUT" || true
+    LAST_QKD_TS="$NEXT_QKD_TS"
+}
+
+capture_new_syslog_events()
+{
+    LABEL="$1"
+
+    section "$LABEL - new syslog events since $LAST_SYSLOG_TS"
+
+    NEXT_SYSLOG_TS=$(date '+%m%d%H%M%S')
+    syslog_events_since "$LAST_SYSLOG_TS" | tee -a "$OUT"
+    LAST_SYSLOG_TS="$NEXT_SYSLOG_TS"
 }
 
 capture_keychain_config()
@@ -148,8 +215,12 @@ capture_operational_snapshot()
     run_cli "ISIS adjacency" \
         'show isis adjacency | no-more'
 
-    run_cli "Routes to ring loopbacks" \
-        'show route 10.100.255.0/24 exact'
+    run_cli "OSPF neighbors" \
+        'show ospf neighbor | no-more'
+
+    for prefix in $ROUTE_PREFIX; do
+        run_cli "Route to $prefix" "show route $prefix exact"
+    done
 }
 
 capture_recent_events()
@@ -158,8 +229,8 @@ capture_recent_events()
 
     section "$LABEL - recent event/log scan"
 
-    run_cli "messages critical MACsec/MKA/LACP/ISIS events" \
-    'show log messages | match "DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR|MACSEC_SC_CAK_ACTIVATED|MACSEC_SC_PRIMARY_CAK_IN_USE|LACP.*Detached|LACP.*Expired|LACP.*Defaulted|ADJDOWN|RPD_ISIS.*DOWN|link down|commit failed|authentication-key-chains not defined|May not be configured" | last 160'
+    run_cli "messages critical MACsec/MKA/LACP/routing events" \
+        "show log messages | match \"$SYSLOG_PATTERN\" | except UI_CMDLINE_READ_LINE | last 160"
 
     run_shell "qkd debug recent errors" \
         "for f in $QKD_LOG_GLOB; do [ -f \"\$f\" ] || continue; echo \"### \$f\"; grep -E \"ERROR|FAIL|FAILED|KEYCHAIN|MKA|PENDING|PROMOTED|ROTATION|BOOTSTRAP|INSTALL-KEY|MACSEC|SSH|DEC|ENC|KME\" \"\$f\" | tail -80; done"
@@ -182,12 +253,30 @@ ping_round()
 
         subsection "ping $NAME $DST source $SRC"
 
-        cli -c "ping $DST source $SRC rapid count $COUNT_PER_ROUND" 2>&1 | tee -a "$OUT"
+        if PING_OUT=$(cli -c "ping $DST source $SRC rapid count $COUNT_PER_ROUND" 2>&1); then
+            RC=0
+        else
+            RC=$?
+        fi
+        printf '%s\n' "$PING_OUT" | tee -a "$OUT"
 
-        RC=$?
+        COUNTS=$(printf '%s\n' "$PING_OUT" |
+            sed -nE 's/^([0-9]+) packets transmitted, ([0-9]+) (packets )?received.*/\1 \2/p' | tail -1)
 
-        if [ "$RC" -ne 0 ]; then
-            log "!!! PING COMMAND RETURNED NON-ZERO rc=$RC dst=$DST name=$NAME"
+        if [ "$RC" -ne 0 ] || [ -z "$COUNTS" ]; then
+            PING_CMD_FAILURES=$((PING_CMD_FAILURES + 1))
+            PINGS_SENT=$((PINGS_SENT + COUNT_PER_ROUND))
+            PING_LOSS_ROUNDS=$((PING_LOSS_ROUNDS + 1))
+            log "!!! PING FAILED rc=$RC dst=$DST name=$NAME"
+            continue
+        fi
+
+        set -- $COUNTS
+        PINGS_SENT=$((PINGS_SENT + $1))
+        PINGS_RECEIVED=$((PINGS_RECEIVED + $2))
+        if [ "$2" -lt "$1" ]; then
+            PING_LOSS_ROUNDS=$((PING_LOSS_ROUNDS + 1))
+            log "!!! PING LOSS sent=$1 received=$2 dst=$DST name=$NAME"
         fi
     done
 
@@ -196,65 +285,100 @@ ping_round()
 
     run_cli "MKA summary after round $ROUND_ID" \
         'show security mka sessions | no-more'
-    
+
     capture_qkd_state "ROUND $ROUND_ID"
-    
+
     capture_qkd_timeline "ROUND $ROUND_ID"
 
     run_cli "LACP quick check after round $ROUND_ID" \
         'show lacp interfaces | match "Aggregated interface|LACP state|Collecting|Distributing|Detached|Expired|Defaulted|Synchronization"'
 
-    run_cli "Recent critical LACP/MKA/MACsec/ISIS messages after round $ROUND_ID" \
-    'show log messages | match "DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR|MACSEC_SC_CAK_ACTIVATED|MACSEC_SC_PRIMARY_CAK_IN_USE|LACP.*Detached|LACP.*Expired|LACP.*Defaulted|ADJDOWN|RPD_ISIS.*DOWN|link down|commit failed" | last 60'
-
+    capture_new_syslog_events "ROUND $ROUND_ID"
 }
 
+# Counts are taken once, from the device syslog and the QKD logs restricted to
+# the test window, never from this report (which repeats the same lines every
+# round and also contains the commands that were run).
 summary()
 {
-    section "FINAL SUMMARY AND FAILURE MARKERS"
+    section "FINAL SUMMARY (test window from $WINDOW_QKD_TS)"
 
-    log "Result file: $OUT"
+    WINDOW_SYSLOG=$(syslog_events_since "$WINDOW_SYSLOG_TS")
+    WINDOW_QKD=$(qkd_lines_since "$WINDOW_QKD_TS" | grep -E "$QKD_EVENT_PATTERN" || true)
+    FAILURES=0
+
+    subsection "Traffic"
+    log "Pings sent:              $PINGS_SENT"
+    log "Pings received:          $PINGS_RECEIVED"
+    log "Ping calls with loss:    $PING_LOSS_ROUNDS"
+    log "Ping command failures:   $PING_CMD_FAILURES"
+    if [ "$PING_LOSS_ROUNDS" -ne 0 ] || [ "$PING_CMD_FAILURES" -ne 0 ] || [ "$PINGS_SENT" -eq 0 ]; then
+        FAILURES=$((FAILURES + 1))
+    fi
+
+    subsection "Syslog events in the test window"
+    for iface in $QKD_IFACES; do
+        IFACE_LINES=$(printf '%s\n' "$WINDOW_SYSLOG" | grep -E "$iface([^0-9]|\$)" || true)
+        ACTIVATED=$(printf '%s\n' "$IFACE_LINES" | count_lines 'MACSEC_SC_CAK_ACTIVATED')
+        PRIMARY=$(printf '%s\n' "$IFACE_LINES" | count_lines 'MACSEC_SC_PRIMARY_CAK_IN_USE')
+        UNKNOWN=$(printf '%s\n' "$IFACE_LINES" | count_lines 'UNKNOWN_CAK_ERR')
+        log "$iface: CAK activated=$ACTIVATED primary CAK in use=$PRIMARY unknown CAK errors=$UNKNOWN"
+        [ "$UNKNOWN" -eq 0 ] || FAILURES=$((FAILURES + 1))
+        [ "$ACTIVATED" -gt 0 ] || log "  note: no CAK switch on $iface in the window (duration shorter than the rekey interval?)"
+    done
+    LACP_BAD=$(printf '%s\n' "$WINDOW_SYSLOG" | count_lines 'LACP.*(Detached|Expired|Defaulted)')
+    ROUTING_DOWN=$(printf '%s\n' "$WINDOW_SYSLOG" | count_lines 'ADJDOWN|RPD_ISIS.*DOWN|RPD_OSPF_NBRDOWN')
+    LINK_DOWN=$(printf '%s\n' "$WINDOW_SYSLOG" | count_lines 'SNMP_TRAP_LINK_DOWN|link down')
+    COMMIT_FAIL=$(printf '%s\n' "$WINDOW_SYSLOG" | count_lines 'commit failed|authentication-key-chains not defined|May not be configured')
+    log "LACP bad states:         $LACP_BAD"
+    log "Routing adjacency down:  $ROUTING_DOWN"
+    log "Link down:               $LINK_DOWN"
+    log "Commit failures:         $COMMIT_FAIL"
+    if [ "$LACP_BAD" -ne 0 ] || [ "$ROUTING_DOWN" -ne 0 ] || [ "$LINK_DOWN" -ne 0 ] || [ "$COMMIT_FAIL" -ne 0 ]; then
+        FAILURES=$((FAILURES + 1))
+    fi
+
+    subsection "QKD log events in the test window"
+    for iface in $QKD_IFACES; do
+        IFACE_LINES=$(printf '%s\n' "$WINDOW_QKD" | grep -F "[$iface]" || true)
+        log "$iface:"
+        log "  state reconciled from router: $(printf '%s\n' "$IFACE_LINES" | count_lines 'STATE RECONCILED FROM ROUTER')"
+        log "  MKA key confirmed:            $(printf '%s\n' "$IFACE_LINES" | count_lines 'MKA KEY CONFIRMED')"
+        log "  pending key promoted:         $(printf '%s\n' "$IFACE_LINES" | count_lines 'PENDING KEY PROMOTED')"
+        log "  ring refills done:            $(printf '%s\n' "$IFACE_LINES" | count_lines '(ROLLING_REPLACEMENT|RING_COMPLETION) DONE')"
+        log "  keychain installs OK:         $(printf '%s\n' "$IFACE_LINES" | count_lines 'KEYCHAIN INSTALL OK')"
+        log "  rotation skips:               $(printf '%s\n' "$IFACE_LINES" | count_lines 'ROTATION SKIP')"
+        INSTALL_FAIL=$(printf '%s\n' "$IFACE_LINES" | count_lines 'KEYCHAIN (BATCH )?INSTALL FAIL|INSTALL-KEY ABORTED')
+        BLOCKED=$(printf '%s\n' "$IFACE_LINES" | count_lines 'ROTATION BLOCKED')
+        ERRORS=$(printf '%s\n' "$IFACE_LINES" | count_lines '[[]ERROR[]]')
+        log "  install failures:             $INSTALL_FAIL"
+        log "  rotation blocked:             $BLOCKED"
+        log "  ERROR lines:                  $ERRORS"
+        if [ "$INSTALL_FAIL" -ne 0 ] || [ "$BLOCKED" -ne 0 ] || [ "$ERRORS" -ne 0 ]; then
+            FAILURES=$((FAILURES + 1))
+        fi
+    done
+
+    subsection "QKD key events in the test window"
+    printf '%s\n' "$WINDOW_QKD" | grep -Ev 'ROTATION SKIP' | tee -a "$OUT" || true
+
+    subsection "Syslog events in the test window"
+    printf '%s\n' "$WINDOW_SYSLOG" | tee -a "$OUT"
+
     log
-
-    run_shell "Count ping command failures" \
-        "grep -c 'PING COMMAND RETURNED NON-ZERO' '$OUT'"
-
-    run_shell "Count packet loss lines not 0%" \
-        "grep -E 'packet loss' '$OUT' | grep -v '0% packet loss' | wc -l"
-
-    run_shell "Count LACP bad markers" \
-        "grep -Ei 'Detached|Expired|Defaulted|LACP.*down' '$OUT' | wc -l"
-
-    run_shell "Count ISIS adjacency down markers" \
-        "grep -Ei 'ADJDOWN|RPD_ISIS.*DOWN|adjacency.*down' '$OUT' | wc -l"
-
-    run_shell "Count MACsec not-inuse / commit failures" \
-        "grep -Ei 'MACSEC NOT INUSE|commit failed|authentication-key-chains not defined|May not be configured|KEYCHAIN INSTALL FAIL|INSTALL-KEY ABORTED' '$OUT' | wc -l"
-
-    run_shell "Count transient UNKNOWN CAK events" \
-        "grep -c 'DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR' '$OUT'"
-
-    run_shell "Count MKA key confirmations" \
-        "grep -c 'MKA KEY CONFIRMED' '$OUT'"
-
-    run_shell "Count pending promotions" \
-        "grep -c 'PENDING KEY PROMOTED' '$OUT'"
-
-    run_shell "Count pending-not-confirmed skips" \
-        "grep -c 'PENDING_KEY_NOT_CONFIRMED' '$OUT'"
-
-    run_shell "Show QKD scheduled/pending/promoted timeline" \
-        "grep -Ei 'KEYCHAIN ROTATION START|INSTALL-KEY SCHEDULE|STATE SAVED|pending_key_id|next_start_time|MKA KEY CONFIRMED|PENDING KEY PROMOTED|PENDING_KEY_NOT_CONFIRMED|KEYCHAIN ROTATION DONE' '$OUT' | tail -200"
-
+    log "Expected healthy ring behaviour on each QKD interface:"
+    log "  1. CAK activated about once per rekey interval, no unknown CAK errors"
+    log "  2. STATE RECONCILED FROM ROUTER after each CAK switch"
+    log "  3. ROLLING_REPLACEMENT/RING_COMPLETION DONE when the ring is refilled"
+    log "  4. ROTATION SKIP while the ring is still full (normal)"
+    log "  5. No install failures, no ROTATION BLOCKED, no ERROR lines"
+    log "  6. 0% ping loss; no LACP, routing adjacency or link down events"
     log
-    log "Expected healthy scheduled behavior:"
-    log "  1. KEYCHAIN ROTATION START start_time=<future local time>"
-    log "  2. STATE SAVED pending_key_id=<key> next_start_time=<future>"
-    log "  3. Before start_time: ROTATION SKIP reason=PENDING_KEY_NOT_CONFIRMED"
-    log "  4. Around start_time: MKA KEY CONFIRMED"
-    log "  5. Then: PENDING KEY PROMOTED"
-    log "  6. Ping loss = 0%"
-    log "  7. LACP stays Current / Collecting distributing"
+    if [ "$FAILURES" -eq 0 ]; then
+        log "RESULT: PASS"
+    else
+        log "RESULT: FAIL ($FAILURES failed check groups)"
+    fi
 }
 
 section "Ring MACsec/QKD/MKA scheduled rotation test"
@@ -280,9 +404,11 @@ capture_recent_events "INITIAL"
 
 section "Starting ping/MKA rotation observation loop"
 
-while [ "$(date +%s)" -lt "$END" ]; do
+# At least one round always runs, even when the initial snapshot outlasts DURATION.
+while :; do
     ping_round "$ROUND"
     ROUND=$((ROUND + 1))
+    [ "$(date +%s)" -lt "$END" ] || break
     sleep "$SLEEP_BETWEEN_ROUNDS"
 done
 
@@ -292,3 +418,5 @@ summary
 
 section "Test completed at $(date)"
 log "Result file: $OUT"
+
+[ "$FAILURES" -eq 0 ] || exit 1

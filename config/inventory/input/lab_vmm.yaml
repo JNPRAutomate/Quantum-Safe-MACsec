@@ -10,6 +10,10 @@
 #   gateway 10.38.127.254. PostgreSQL is at 10.38.100.30 and is
 #   intentionally not configured as a QKD API endpoint here.
 #
+# MACsec CA and key-chain names are the ones configured on the routers
+# (verified 2026-09-30). On-box names use the short aliases MX1=MX9601,
+# MX2=MX9602, MX3=MX9603, MX4=MX4803, MX5=MX4804.
+#
 # Credentials are deliberately omitted. Supply them through the supported
 # runtime prompt/environment mechanism; do not commit lab passwords.
 topology: links
@@ -123,45 +127,45 @@ links:
     interface_a: et-0/0/2
     node_b: MX9601
     interface_b: ge-0/0/2
-    ca_name: CA_EVO1_MX9601
-    keychain_name: QKD_CA_EVO1_MX9601
+    ca_name: CA_EVO1_MX1
+    keychain_name: QKD_CA_EVO1_MX1
 
   - id: EVO2-MX4803
     node_a: EVO2
     interface_a: et-0/0/2
     node_b: MX4803
     interface_b: ge-0/0/1
-    ca_name: CA_EVO2_MX4803
-    keychain_name: QKD_CA_EVO2_MX4803
+    ca_name: CA_EVO2_MX4
+    keychain_name: QKD_CA_EVO2_MX4
 
   - id: MX9601-MX9602
     node_a: MX9601
     interface_a: ge-0/0/1
     node_b: MX9602
     interface_b: ge-0/0/2
-    ca_name: CA_MX9601_MX9602
-    keychain_name: QKD_CA_MX9601_MX9602
+    ca_name: CA_MX1_MX2
+    keychain_name: QKD_CA_MX1_MX2
 
   - id: MX9602-MX9603
     node_a: MX9602
     interface_a: ge-0/0/1
     node_b: MX9603
     interface_b: ge-0/0/2
-    ca_name: CA_MX9602_MX9603
-    keychain_name: QKD_CA_MX9602_MX9603
+    ca_name: CA_MX2_MX3
+    keychain_name: QKD_CA_MX2_MX3
 
   - id: MX9603-MX4804
     node_a: MX9603
     interface_a: ge-0/0/1
     node_b: MX4804
     interface_b: ge-0/0/2
-    ca_name: CA_MX9603_MX4804
-    keychain_name: QKD_CA_MX9603_MX4804
+    ca_name: CA_MX5_MX3
+    keychain_name: QKD_CA_MX5_MX3
 
   - id: MX4804-MX4803
     node_a: MX4804
     interface_a: ge-0/0/1
     node_b: MX4803
     interface_b: ge-0/0/2
-    ca_name: CA_MX4804_MX4803
-    keychain_name: QKD_CA_MX4804_MX4803
+    ca_name: CA_MX4_MX5
+    keychain_name: QKD_CA_MX4_MX5

@@ -15,6 +15,8 @@ The tests in `test_*.py` are offline tests: device transports and external
 effects are mocked or represented by fixtures. Scripts under `scripts/` are
 not all offline and may contact real network devices; read the
 [lab-script safety guide](../docs/test/lab_scripts.md) before running them.
+The device-facing scripts have no built-in lab values; start them with
+`scripts/run_onbox_test.py`, which reads the inventory.
 
 Generated PKI and logs are outputs, not fixtures. In particular,
 `qkd_dual_pki.py` writes private keys below `tests/certs/dual_pki/`, which is

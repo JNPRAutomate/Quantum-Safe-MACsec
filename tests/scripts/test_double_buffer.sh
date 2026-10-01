@@ -1,22 +1,22 @@
 #!/bin/sh
 
-SRC="10.100.255.7"
-DURATION=90
-COUNT_PER_ROUND=5
+# SRC (source address) and DESTS (whitespace-separated name:address targets)
+# come from the environment, normally set by tests/scripts/run_onbox_test.py
+# from the selected inventory. There are no built-in lab defaults.
+if [ -z "${SRC:-}" ] || [ -z "${DESTS:-}" ]; then
+    echo "[ERROR] SRC and DESTS must be set; run through tests/scripts/run_onbox_test.py or export them" >&2
+    exit 2
+fi
 
-DESTS="
-acx2:10.100.255.9
-acx3:10.100.255.8
-acx4:10.100.255.11
-acx5:10.100.255.10
-"
+DURATION="${1:-${DURATION:-90}}"
+COUNT_PER_ROUND="${2:-${COUNT_PER_ROUND:-5}}"
 
 START=$(date +%s)
 END=$((START + DURATION))
 ROUND=1
 
 echo "============================================================"
-echo " Ring MACsec/QKD ping rotation test"
+echo " Double-buffer MACsec/QKD ping test"
 echo " Source loopback: $SRC"
 echo " Duration: ${DURATION}s"
 echo " Ping count per destination per round: ${COUNT_PER_ROUND}"
