@@ -16,9 +16,12 @@ rules are in [Lab Scripts and Safety](lab_scripts.md).
 | Inventory (drives T3/T4) | [`config/inventory/input/lab_vmm.yaml`](https://github.com/JNPRAutomate/Quantum-Safe-MACsec/blob/ver3.3.4.2/config/inventory/input/lab_vmm.yaml) |
 | Run output root | `/root/qkd-test-runs/` on the runner (outside the Git clone) |
 
-Only EVO1 (PTX10001-36MR) and EVO2 (PTX10002-36QDD) carry real MACsec in this
-lab. The virtual MX devices run the automation but cannot validate data-plane
-encryption, so MACsec verdicts are taken from EVO1/EVO2 only.
+All devices in this lab are virtual, including EVO1 (PTX10001-36MR) and EVO2
+(PTX10002-36QDD). EVO1/EVO2 bring up MACsec and MKA and rotate keys, so the
+control-plane verdicts (MKA, key rotation, QKD key ring, traffic continuity)
+are taken from them. The MX devices run the automation but do not bring up
+MACsec. No virtual device exports MACsec data-plane counters, so data-plane
+encryption must be validated later on physical routers.
 
 To follow a run live on the runner, attach to its tmux session:
 
@@ -203,9 +206,10 @@ packets` in total since the counters were last cleared; check whether they
 increase during key switches (T4).
 
 **Verdict:** traffic continuity passed (0% loss across rotations).
-Data-plane encryption is **not proven** by this test on this lab. It needs
-either devices that export MACsec counters or an independent check, such as
-a capture on the link.
+Data-plane encryption is **not proven** by this test on this lab: EVO1/EVO2
+are virtual and their MACsec counters stay at 0. It must be repeated on
+physical routers, which export the counters, or checked independently, for
+example with a capture on the link.
 
 ## T4 — Ring MKA rotation observation
 
