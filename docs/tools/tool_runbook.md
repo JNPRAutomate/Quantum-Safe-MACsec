@@ -26,7 +26,7 @@ Section [A4](#a4-generator) records why this rule exists.
 |---|---|
 | Runner | Linux server `ubuntu204`, Ubuntu 24.04, Python virtualenv of the repository clone |
 | Branch | `ver3.3.4.2` |
-| Session | `tmux` session `qkd-tests`, one window per run (`tools-A`, `tools-A2`) |
+| Session | `tmux` session `qkd-tests`, one window per run (`tools-A`, `tools-A2`, `tools-B`, `tools-B-EVO1-EVO2`) |
 | Output | `/root/qkd-test-runs/<UTC>_<run>/`: `<step>.out`, `<step>.err`, `rc.txt` |
 | Isolation | Tools run on a scratch copy of the tree (`<run>/scratch`), never in the Git clone |
 
@@ -37,8 +37,8 @@ To watch a run: `tmux attach -t qkd-tests`, then `Ctrl-b w` to pick the window.
 | Group | Tools | Needs devices | Status |
 |---|---|---|---|
 | A, offline | `cert_manager.py`, `cert_report_filter.py`, `qkd_rotation_log_summary.py`, `generate_lab_config.py`, `customer_deploy.py` (dry run) | No | Run, results below |
-| A, offline | `qkd_observation_summary.py` | No | Pending: it reads the output of `observe_qkd_rotation.py`, so it runs with group B |
-| B, device-facing, inventory-driven | `collect_device_logs.py`, `observe_qkd_rotation.py`, `qkd_link_rotation_report.py`, `qkd_pipeline_analytics.py` | Yes, read only | Pending. Pass `--inventory config/inventory/input/lab_vmm.yaml`; the default inventory is an older ring file |
+| A, offline | `qkd_observation_summary.py` | No | Run with B4; results below |
+| B, device-facing, inventory-driven | `collect_device_logs.py`, `observe_qkd_rotation.py`, `qkd_link_rotation_report.py`, `qkd_pipeline_analytics.py` | Yes, read only | Run, results below. Pass `--inventory config/inventory/input/lab_vmm.yaml`; the default inventory is an older ring file |
 | C, device-facing, hard-coded | `macsec_tunnel_health_monitor.py`, `macsec_tunnel_health_monitor_link_correlation.py` | Yes | Pending. The device list is fixed in the source (`DEVICES`); it must become inventory-driven |
 | E, interactive or Vault | `customer_setup.py`, `vault/*.sh` | No (Vault for `vault/*.sh`) | Pending |
 
@@ -150,3 +150,66 @@ generated set.
 `customer_deploy.py` expects `config/kme/<name>.yaml`,
 `config/inventory/input/<name>.yaml` and `config/kme/<name>.env`. The
 generators produce exactly that set with a common `<name>_<UTC>` stem.
+
+## 5. Group B results
+
+The device-facing tools use SSH as `etsi_user` and perform read-only
+collection/reporting. The runner was the Linux server's repository clone at
+`ce38baf`, using the verified `lab_vmm.yaml` inventory. The original
+inventory and policy were not changed. All run output is under
+`/root/qkd-test-runs/`.
+
+### B1: device log collection
+
+`collect_device_logs.py` supports a dry-run plan and collects remote log files
+into a new snapshot directory.
+
+| Run | Result |
+|---|---|
+| Dry run, all inventory devices | rc 0; listed 7 devices and performed no collection |
+| Snapshot `snapshot_B1` | rc 0; 7/7 devices collected, 0 failures |
+
+### B2: link rotation report
+
+`qkd_link_rotation_report.py` reports bilateral state for each link in its
+inventory. Against the full seven-link inventory and B1 snapshot it returned
+rc 0: one link was HEALTHY (`EVO1-EVO2`) and six were PROBLEMATIC. The other
+links did not have successful rotation/MACsec-in-use evidence in this
+snapshot; this is why subsequent interpretation for this run is scoped to
+the working `EVO1-EVO2` link, rather than treating the other links as test
+targets.
+
+A new, temporary inventory containing only devices EVO1 and EVO2 and link
+`EVO1-EVO2` was written under the run-output directory (not under `config/`).
+Re-running B2 against the already collected snapshot and this scoped inventory
+returned rc 0, `Links: 1; status={"HEALTHY": 1}`.
+
+### B3: pipeline timing analytics
+
+`qkd_pipeline_analytics.py` collected timing logs from all 7 devices (7/7
+successful), analyzed 423 JSONL records, and returned rc 0. It produced the
+HTML platform report and, with `--skip-collect --json`, a JSON report from
+the same snapshot. No timing files or reports were written on the devices.
+
+### B4, B5: single-link timed observation and summary
+
+The first observation used the full inventory and completed, but its six
+non-healthy links made it unsuitable as the result for this run. Following
+the operator's direction, the observation was repeated without changing the
+script, using the new scoped inventory and only the `EVO1-EVO2` link. It
+collected T1, T2, and FINAL snapshots from the two endpoints; all stages
+reported HEALTHY.
+
+| Result | Value |
+|---|---|
+| Observation | `qkd_observation_2026-10-01_15-42-21_UTC` |
+| T1 / T2 / FINAL | HEALTHY / HEALTHY / HEALTHY; one link at every stage |
+| Final outcome | `ROTATED_HEALTHY=1`, green=1, attention-required=0 |
+| Device commit evidence | 2/2 devices; 2640 events; 0 failures |
+| B4 / B5 exit codes | rc 0 / rc 0; manifest status `complete`; summary overall status `OK` |
+
+The policy-derived offsets were T1 at +0 s, T2 at +600 s, and FINAL at
++960 s. The observation took about 16 minutes. B1's full-inventory snapshot
+and B3's fleet timing collection are retained as separate read-only tool
+checks; the rotation verdict for this run is the scoped, one-link B4/B5
+result.

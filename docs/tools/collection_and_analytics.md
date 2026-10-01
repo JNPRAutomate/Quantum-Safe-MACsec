@@ -37,6 +37,11 @@ the activation window.
 
 Use `--plan` before collection and configure inventory, policy, output root,
 remote path, identity, and connection timeout as required.
+Always pass the intended inventory explicitly: the tools' default inventory
+is a legacy ring file. For the current lab, use
+`--inventory config/inventory/input/lab_vmm.yaml`. The tools read device logs
+over SSH and write snapshots/reports to the selected local output root; they
+do not modify the inventory or device configuration.
 
 ## 3. Link reports
 
@@ -91,6 +96,22 @@ Do not overwrite snapshots. Preserve:
 
 Partial collection can still produce a report, but missing sources must remain
 explicit.
+
+## Lab execution record
+
+On 2026-10-01, `collect_device_logs.py` dry-run listed all seven devices and
+the subsequent collection succeeded on 7/7. `qkd_pipeline_analytics.py`
+collected the timing logs from 7/7 devices and analyzed 423 JSONL records,
+producing HTML and JSON reports.
+
+The first seven-link report had one HEALTHY link (`EVO1-EVO2`) and six
+PROBLEMATIC links due to missing successful rotation/MACsec-in-use evidence.
+For the rotation observation, the run was therefore scoped—without changing
+the script—to the working `EVO1-EVO2` link via a separate, temporary inventory
+outside `config/`. Its T1, T2, and FINAL stages were all HEALTHY; the summary
+reported `ROTATED_HEALTHY=1`, zero attention-required links, and no commit
+failures. See the [tool runbook](tool_runbook.md#5-group-b-results) for the
+full commands, counts, and observation details.
 
 
 ## Detailed pipeline analytics reference
