@@ -34,7 +34,7 @@ tmux attach -t qkd-tests      # detach with Ctrl-b d
 | T1 | `tests/scripts/generate_qkd_customer_summary.sh` | Runner | No | Passed |
 | T2 | `tests/scripts/qkd_dual_pki.py` | Runner | No | Passed after fix |
 | T3 | `run_onbox_test.py --test double-buffer` → `test_double_buffer.sh` | On-box, EVO1 (link EVO1-EVO2) | Yes: pings and show commands | Traffic passed; MACsec counters inconclusive |
-| T4 | `run_onbox_test.py --test ring-rotation` → `ring_mka_rotation_test.sh` | On-box, EVO1 (link EVO1-EVO2) | Yes: pings, show commands, QKD log reads | Passed (traffic); script summary invalid |
+| T4 | `run_onbox_test.py --test ring-rotation` → `ring_mka_rotation_test.sh` | On-box, EVO1 (link EVO1-EVO2) | Yes: pings, show commands, QKD log reads | Passed (rerun with fixed summary: `RESULT: PASS`) |
 
 ## T0 — Offline Python suite
 
@@ -268,3 +268,39 @@ window and from the on-box log of et-0/0/1.
 **Verdict:** passed for traffic continuity and key rotation. Two CAK
 switches and one QKD ring refill happened with 0% loss and MKA always
 secured. As in T3, data-plane encryption is not proven on this lab.
+
+### T4 rerun with the fixed script
+
+The ring script was then fixed (see
+[Lab Scripts](lab_scripts.md#ring-macsecqkd-rotation-test)): each round shows
+only new events, and the final summary counts events once, from the device
+syslog and the QKD logs restricted to the test window, with a `RESULT:
+PASS/FAIL` verdict and exit code. Offline coverage:
+`tests/test_ring_mka_rotation_script.py`.
+
+**Lab run (2026-10-01 10:34–10:46 UTC, 03:34–03:46 PDT on the device):**
+same command, exit code 0, 725 s, 210 rounds. Results are in
+`/root/qkd-test-runs/20261001T103434Z_ring-rotation_EVO1-EVO2_EVO1/`.
+
+| Summary line | Value |
+|---|---|
+| Pings sent / received | 1050 / 1050 |
+| Ping calls with loss / command failures | 0 / 0 |
+| et-0/0/1 QKD: state reconciled from router | 3 (03:35:07, 03:40:07, 03:45:07) |
+| et-0/0/1 QKD: ring refills done / keychain installs OK | 2 / 2 (slots 2–3 at 03:35, slots 0–1 at 03:45) |
+| et-0/0/1 QKD: rotation skips | 10 (ring full, normal) |
+| et-0/0/1 QKD: install failures / rotation blocked / ERROR lines | 0 / 0 / 0 |
+| LACP / routing adjacency / link down / commit failures | 0 / 0 / 0 / 0 |
+| Verdict | `RESULT: PASS` |
+
+The CAK switches on et-0/0/1 in the window were at 03:35:09, 03:40:09 and
+03:45:09, one every 5 minutes, matching the three QKD reconciliations. The
+summary of this run reported only the 03:45 switch (`CAK activated=1`):
+EVO1 rotated `/var/log/messages` at 03:45, during the test, and the script
+then read only the current file. The script now also reads `messages.0.gz`
+and `messages.1.gz`; a check of the three files on EVO1 confirms the three
+switches. The `UNKNOWN_CAK_ERR` events in the window are on et-0/0/2 only
+(towards the MX, expected, not a failure).
+
+**Verdict:** passed. Three CAK switches and two QKD ring refills with 0%
+loss, no QKD errors on et-0/0/1, and no LACP, routing or link events.

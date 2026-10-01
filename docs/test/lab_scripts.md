@@ -89,8 +89,10 @@ It ends with `RESULT: PASS` (exit code 0) or `RESULT: FAIL` (exit code 1).
 A check fails on any ping loss, unknown-CAK error, install failure, rotation
 block or `[ERROR]` line on a QKD interface, or any LACP, adjacency, link or
 commit failure. Events on interfaces that are not in `QKD_IFACES` are listed
-but do not fail the test. `show log messages` only reads the current syslog
-file, so a test that spans a syslog rotation may miss early events.
+but do not fail the test. Junos rotates `/var/log/messages` often (every
+15–30 minutes on the lab EVO devices), so the summary reads `messages`,
+`messages.0.gz` and `messages.1.gz`, and each round reads the current file and
+the last rotation.
 
 ## Double-buffer traffic probe
 

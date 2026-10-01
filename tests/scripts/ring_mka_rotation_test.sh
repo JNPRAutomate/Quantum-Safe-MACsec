@@ -113,10 +113,15 @@ qkd_lines_since()
 }
 
 # Syslog lines matching SYSLOG_PATTERN with a timestamp at or after $1
-# (MMDDHHMMSS). The audit lines of this script's own CLI commands are excluded.
+# (MMDDHHMMSS), oldest first and without duplicates. Junos rotates
+# /var/log/messages often, so the files in $2 (default: the two previous
+# rotations and the current file) are read. The audit lines of this script's
+# own CLI commands are excluded.
 syslog_events_since()
 {
-    cli -c "show log messages | match \"$SYSLOG_PATTERN\" | except UI_CMDLINE_READ_LINE | no-more" 2>&1 |
+    for logfile in ${2:-messages.1.gz messages.0.gz messages}; do
+        cli -c "show log $logfile | match \"$SYSLOG_PATTERN\" | except UI_CMDLINE_READ_LINE | no-more" 2>&1
+    done |
         awk -v since="$1" '
             BEGIN {
                 split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " ")
@@ -124,7 +129,7 @@ syslog_events_since()
             }
             ($1 in month) && $3 ~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/ {
                 split($3, t, ":")
-                if (month[$1] sprintf("%02d", $2) t[1] t[2] t[3] >= since) print
+                if (month[$1] sprintf("%02d", $2) t[1] t[2] t[3] >= since && !seen[$0]++) print
             }'
 }
 
@@ -163,7 +168,7 @@ capture_new_syslog_events()
     section "$LABEL - new syslog events since $LAST_SYSLOG_TS"
 
     NEXT_SYSLOG_TS=$(date '+%m%d%H%M%S')
-    syslog_events_since "$LAST_SYSLOG_TS" | tee -a "$OUT"
+    syslog_events_since "$LAST_SYSLOG_TS" "messages.0.gz messages" | tee -a "$OUT"
     LAST_SYSLOG_TS="$NEXT_SYSLOG_TS"
 }
 

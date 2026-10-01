@@ -29,7 +29,9 @@ def _write_fake_cli(bin_dir, syslog_file, ping_received):
         'cmd="$2"\n'
         'case "$cmd" in\n'
         f'  ping*) echo "5 packets transmitted, {ping_received} received, 0% packet loss, time 11ms" ;;\n'
-        f'  "show log messages"*) cat "{syslog_file}" ;;\n'
+        f'  "show log messages.0.gz"*) cat "{syslog_file}.0" ;;\n'
+        '  "show log messages.1.gz"*) ;;\n'
+        f'  "show log messages "*) cat "{syslog_file}" ;;\n'
         '  *) echo "fake output for: $cmd" ;;\n'
         "esac\n"
     )
@@ -41,11 +43,15 @@ def _run(tmp_path, ping_received=5):
     before = now - timedelta(hours=2)
     later = now + timedelta(seconds=30)
 
+    # The CAK switch is in the rotated file (messages.0.gz), as when Junos
+    # rotates the syslog during the test; it must still be counted, once.
     syslog_file = tmp_path / "messages"
-    syslog_file.write_text(
+    (tmp_path / "messages.0").write_text(
         f"{_syslog_ts(before)}  evo1 jmkad[1]: DOT1XD_MACSEC_SC_CAK_ACTIVATED: ifd: et-0/0/1 ckn: OLD\n"
         f"{_syslog_ts(later)}  evo1 jmkad[1]: DOT1XD_MACSEC_SC_PRIMARY_CAK_IN_USE: ifd: et-0/0/1 ckn: NEW\n"
         f"{_syslog_ts(later)}  evo1 jmkad[1]: DOT1XD_MACSEC_SC_CAK_ACTIVATED: ifd: et-0/0/1 ckn: NEW\n"
+    )
+    syslog_file.write_text(
         f"{_syslog_ts(later)}  evo1 jmkad[1]: DOT1XD_MACSEC_SC_UNKNOWN_CAK_ERR: ifd: et-0/0/2 ckn: X\n"
     )
 
