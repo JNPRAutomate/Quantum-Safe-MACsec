@@ -18,6 +18,7 @@ from lib.common.config import load_inventory_base
 BASE_DIR = Path(__file__).resolve().parents[3]
 INVENTORY_INPUT_DIR = BASE_DIR / "config" / "inventory" / "input"
 ONBOX_SCRIPT_NAME = "phiotx_qkd_onbox.py"
+LEGACY_ONBOX_SCRIPT_NAMES = ("qkd_onbox.py",)
 
 
 def load_clean_inventory(value):
@@ -252,7 +253,7 @@ def clean_device(name, device, full_macsec=False):
         user = device["auth"]["username"]
         passwd = device["auth"]["password"]
 
-        script_name = ONBOX_SCRIPT_NAME
+        script_names = (ONBOX_SCRIPT_NAME, *LEGACY_ONBOX_SCRIPT_NAMES)
         secrets = device.get("secrets") or {}
         script_user = str(device.get("script_user") or secrets.get("script_user") or QKD.get("SCRIPT_USER") or "etsi_user")
         script_user_class = str(secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS") or "")
@@ -391,13 +392,22 @@ def clean_device(name, device, full_macsec=False):
             "delete event-options generate-event QKD_TIMER",
             "delete event-options policy QKD",
             "delete event-options policy QKD_POLICY",
-            f"delete event-options event-script file {script_name}",
-            f"delete system scripts op file {script_name}",
-            f"delete system login user {script_user}",
-            f"delete system login user {peer_cmd_user}",
-            f"delete system login class {peer_cmd_user_class}",
-            "delete system login class qkd-script-class",
         ]
+        for candidate_script in script_names:
+            config_cmds.extend(
+                [
+                    f"delete event-options event-script file {candidate_script}",
+                    f"delete system scripts op file {candidate_script}",
+                ]
+            )
+        config_cmds.extend(
+            [
+                f"delete system login user {script_user}",
+                f"delete system login user {peer_cmd_user}",
+                f"delete system login class {peer_cmd_user_class}",
+                "delete system login class qkd-script-class",
+            ]
+        )
         # Only delete script_user_class if it's a custom class (not a Junos built-in)
         builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
         if script_user_class and script_user_class.lower() not in builtin_classes:
@@ -434,11 +444,8 @@ def clean_device(name, device, full_macsec=False):
         )
 
         file_cleanup_parts = [
-            f"rm -f {event_script_dir}/{script_name}",
-            f"rm -f {op_script_dir}/{script_name}",
             f"rm -f {op_script_dir}/phiotx_qkd_onbox_inventory.json",
             f"rm -f {op_script_dir}/phiotx_qkd_onbox_config.json",
-            f"rm -f /var/tmp/{script_name}",
             "rm -rf /var/tmp/qkd_peer_inbox",
             "rm -rf /var/tmp/qkd_peer_status",
             "rm -rf /var/tmp/qkd_peer_ack",
@@ -450,6 +457,14 @@ def clean_device(name, device, full_macsec=False):
             f"rm -rf {script_home_dir}",
             f"rm -rf {peer_cmd_home_dir}",
         ]
+        for candidate_script in script_names:
+            file_cleanup_parts.extend(
+                [
+                    f"rm -f {event_script_dir}/{candidate_script}",
+                    f"rm -f {op_script_dir}/{candidate_script}",
+                    f"rm -f /var/tmp/{candidate_script}",
+                ]
+            )
 
         for path in runtime_paths:
             if path.endswith(".lock"):
@@ -734,11 +749,8 @@ def clean_device(name, device, full_macsec=False):
                 )
 
             peer_cleanup_paths = [
-                f"{event_script_dir}/{script_name}",
-                f"{op_script_dir}/{script_name}",
                 f"{op_script_dir}/phiotx_qkd_onbox_inventory.json",
                 f"{op_script_dir}/phiotx_qkd_onbox_config.json",
-                f"/var/tmp/{script_name}",
                 "/var/tmp/qkd_peer_inbox",
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
@@ -751,6 +763,14 @@ def clean_device(name, device, full_macsec=False):
                 script_home_dir,
                 peer_cmd_home_dir,
             ]
+            for candidate_script in script_names:
+                peer_cleanup_paths.extend(
+                    [
+                        f"{event_script_dir}/{candidate_script}",
+                        f"{op_script_dir}/{candidate_script}",
+                        f"/var/tmp/{candidate_script}",
+                    ]
+                )
             for path in runtime_paths:
                 if path not in peer_cleanup_paths:
                     peer_cleanup_paths.append(path)
@@ -793,9 +813,14 @@ def clean_device(name, device, full_macsec=False):
                 "set event-options generate-event QKD_TIMER",
                 "set event-options policy QKD",
                 "set event-options policy QKD_POLICY",
-                f"set event-options event-script file {script_name}",
-                f"set system scripts op file {script_name}",
             ]
+            for candidate_script in script_names:
+                forbidden_patterns.extend(
+                    [
+                        f"set event-options event-script file {candidate_script}",
+                        f"set system scripts op file {candidate_script}",
+                    ]
+                )
 
             if full_macsec:
                 forbidden_patterns.extend(
@@ -842,11 +867,8 @@ def clean_device(name, device, full_macsec=False):
                 )
 
             paths_should_be_absent = [
-                f"{op_script_dir}/{script_name}",
-                f"{event_script_dir}/{script_name}",
                 f"{op_script_dir}/phiotx_qkd_onbox_inventory.json",
                 f"{op_script_dir}/phiotx_qkd_onbox_config.json",
-                f"/var/tmp/{script_name}",
                 "/var/tmp/qkd_peer_inbox",
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
@@ -858,6 +880,14 @@ def clean_device(name, device, full_macsec=False):
                 script_log_dir,
                 script_home_dir,
             ]
+            for candidate_script in script_names:
+                paths_should_be_absent.extend(
+                    [
+                        f"{op_script_dir}/{candidate_script}",
+                        f"{event_script_dir}/{candidate_script}",
+                        f"/var/tmp/{candidate_script}",
+                    ]
+                )
 
             for path in runtime_paths:
                 if path not in paths_should_be_absent:
