@@ -542,15 +542,14 @@ def start_container(device, settings, phiotx):
 
 
 def install_license(device, settings, license_path):
-    """Install the node-unique PhioTX licence."""
+    """Install or replace the node-unique PhioTX licence."""
     container = settings["container"]
     remote = f"{settings['data_dir']}/.license-install.lic"
     expected = _sha256_file(license_path)
 
     _run(device, f"mkdir -p {shlex.quote(settings['data_dir'])}", "licence staging")
-    _push_files(device, [(license_path, remote)])
-
     try:
+        _push_files(device, [(license_path, remote)])
         remote_digest = _run(
             device,
             f"sha256sum {shlex.quote(remote)} | awk '{{print $1}}'",
@@ -566,12 +565,12 @@ def install_license(device, settings, license_path):
         _exec(
             device,
             container,
-            "tx_install_license /data/.license-install.lic",
+            "tx_install_license -f /data/.license-install.lic",
             "licence install",
         )
         _exec(device, container, "tx_status -license", "licence verification")
     finally:
-        _run(device, f"rm -f {shlex.quote(remote)}", "licence cleanup", allow_fail=True)
+        _run(device, f"rm -f {shlex.quote(remote)}", "licence cleanup")
 
     print(f"[OK] licence installed on {container}")
     return True

@@ -227,6 +227,15 @@ Add 1 unique licence file(s) or reduce the managed inventory.
 
 To deploy more routers, supply more licences.
 
+Bootstrap automatically extracts the licences from the selected customer ZIP,
+allocates one per managed router, uploads each assigned file, and verifies its
+checksum. Installation uses `tx_install_license -f` so a retry can reinstall the
+assigned licence even when the container already has one; an existing licence
+does not bypass the assignment or fleet-capacity checks. The orchestrator then
+runs `tx_status -license` and removes the temporary upload. Transfer, installation,
+verification, and cleanup failures stop the workflow rather than reporting
+success. No manual licence installation is required.
+
 ---
 
 ## 5. Inventory
@@ -697,7 +706,7 @@ Do not use `-q` when you need to see what each test does. `-q` means
 .venv/bin/python -m pytest -v tests/test_docker_greenfield_bootstrap.py
 ```
 
-The expected test names and meanings are:
+Key test names and meanings include:
 
 | Test | What it proves |
 | --- | --- |
@@ -712,10 +721,13 @@ The expected test names and meanings are:
 | `test_phiotx_up_rejects_missing_licenses_before_router_mutation` | Lifecycle startup rejects incomplete licensing before host changes. |
 | `test_phiotx_up_waits_for_all_nodes_before_pqc` | PQC setup starts only after all containers are running. |
 | `test_license_install_uses_persistent_data_path_and_cleans_up` | Licence installation uses `/data` and removes the temporary remote file. |
+| `test_license_install_retry_enforces_selected_license` | Fresh installs and retries apply the assigned licence, including replacement of a previous licence. |
+| `test_license_install_failure_cleans_remote_file` | Upload, installation, and verification errors propagate while removing the temporary remote file. |
+| `test_license_cleanup_failure_is_not_silenced` | A failed cleanup is reported instead of printing installation success. |
 | `test_license_checksum_failure_still_cleans_remote_file` | Cleanup also runs when checksum verification fails. |
 
-Therefore `12 passed` means that these twelve **offline safety properties**
-passed. It does not mean that the EVO routers, containers, PKI, ETSI service,
+Passing these tests verifies **offline safety properties**. It does not mean
+that the EVO routers, containers, PKI, ETSI service,
 peer channel, or MACsec are currently healthy. Use `validate` and the
 post-deployment checks below for those live assertions.
 

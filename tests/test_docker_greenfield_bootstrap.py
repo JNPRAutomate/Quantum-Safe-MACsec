@@ -456,12 +456,128 @@ def test_license_install_uses_persistent_data_path_and_cleans_up(
         license_path,
     )
 
-    assert "tx_install_license /data/.license-install.lic" in commands
+    assert "tx_install_license -f /data/.license-install.lic" in commands
     assert "tx_status -license" in commands
     assert any(
         command == "rm -f /var/db/phiotx01/data/.license-install.lic"
         for command in commands
     )
+
+
+@pytest.fixture
+def vendor_license_install(tmp_path, monkeypatch):
+    license_path = tmp_path / "node.lic"
+    license_path.write_bytes(b"node-license")
+    state = SimpleNamespace(
+        license_path=license_path,
+        device={"name": "EVO1"},
+        settings={"container": "phiotx01", "data_dir": "/var/db/phiotx01/data"},
+        remote="/var/db/phiotx01/data/.license-install.lic",
+        host_files={},
+        installed=None,
+        failure=None,
+        commands=[],
+    )
+
+    def result(stdout="", stderr="", returncode=0):
+        return SimpleNamespace(
+            returncode=returncode, stdout=stdout, stderr=stderr
+        )
+
+    def push(_device, transfers):
+        for local, remote in transfers:
+            state.host_files[remote] = Path(local).read_bytes()
+        if state.failure == "upload":
+            raise lifecycle.PhiotxLifecycleError("simulated upload failure")
+
+    def shell(_device, command, **_kwargs):
+        state.commands.append(command)
+        parts = shlex.split(command)
+        if parts[:2] == ["mkdir", "-p"]:
+            return result()
+        if parts[:2] == ["sha256sum", state.remote]:
+            return result(hashlib.sha256(state.host_files[state.remote]).hexdigest())
+        if parts[:2] == ["rm", "-f"]:
+            if state.failure == "cleanup":
+                return result(stderr="simulated cleanup failure", returncode=1)
+            for remote in parts[2:]:
+                state.host_files.pop(remote, None)
+            return result()
+        assert parts[:3] == ["docker", "exec", "phiotx01"]
+        args = parts[3:]
+        if args[0] == "tx_install_license":
+            if state.failure == "install":
+                return result(stdout="simulated install failure", returncode=1)
+            if state.installed is not None and "-f" not in args:
+                return result(
+                    stdout="Error: License already installed. Use -f to enforce",
+                    returncode=1,
+                )
+            assert args[-1] == "/data/.license-install.lic"
+            state.installed = state.host_files[state.remote]
+            return result()
+        assert args == ["tx_status", "-license"]
+        if state.failure == "verification":
+            return result(stdout="simulated verification failure", returncode=1)
+        assert state.installed is not None
+        return result(stdout="License installed.")
+
+    monkeypatch.setattr(lifecycle, "_push_files", push)
+    monkeypatch.setattr(lifecycle, "pyez_shell_cmd", shell)
+    return state
+
+
+@pytest.mark.parametrize(
+    "previous_license",
+    [None, b"node-license", b"old-node-license"],
+    ids=["fresh", "already-installed", "replace-previous"],
+)
+def test_license_install_retry_enforces_selected_license(
+    vendor_license_install, previous_license
+):
+    state = vendor_license_install
+    state.installed = previous_license
+
+    for _ in range(2):
+        assert lifecycle.install_license(
+            state.device, state.settings, state.license_path
+        )
+        assert state.installed == b"node-license"
+        assert not state.host_files
+
+    assert state.commands.count(
+        "docker exec phiotx01 tx_install_license -f /data/.license-install.lic"
+    ) == 2
+    assert state.commands.count("docker exec phiotx01 tx_status -license") == 2
+    assert state.license_path.read_bytes() == b"node-license"
+
+
+@pytest.mark.parametrize("failure", ["upload", "install", "verification"])
+def test_license_install_failure_cleans_remote_file(
+    vendor_license_install, failure, capsys
+):
+    state = vendor_license_install
+    state.failure = failure
+
+    with pytest.raises(
+        lifecycle.PhiotxLifecycleError, match=f"simulated {failure} failure"
+    ):
+        lifecycle.install_license(state.device, state.settings, state.license_path)
+
+    assert not state.host_files
+    assert state.license_path.read_bytes() == b"node-license"
+    assert "[OK] licence installed" not in capsys.readouterr().out
+
+
+def test_license_cleanup_failure_is_not_silenced(vendor_license_install, capsys):
+    state = vendor_license_install
+    state.failure = "cleanup"
+
+    with pytest.raises(lifecycle.PhiotxLifecycleError, match="licence cleanup failed"):
+        lifecycle.install_license(state.device, state.settings, state.license_path)
+
+    assert state.host_files[state.remote] == b"node-license"
+    assert "[OK] licence installed" not in capsys.readouterr().out
 
 
 def test_license_checksum_failure_still_cleans_remote_file(
