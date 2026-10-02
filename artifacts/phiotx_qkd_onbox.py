@@ -29,7 +29,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import calendar
-EARLY_SCRIPT_VERSION = "ver3.3.4.1"
+EARLY_SCRIPT_VERSION = "ver_docker"
 TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
@@ -426,7 +426,7 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     if iface:
         safe_iface = iface.replace("/", "_")
-        link_log_file = f"{LOG_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
+        link_log_file = f"{LOG_DIR}/qkd_docker_debug_{DEVICE}_{safe_iface}.log"
         write_log_line(link_log_file)
 
 

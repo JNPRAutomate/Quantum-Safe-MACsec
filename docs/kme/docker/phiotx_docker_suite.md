@@ -697,6 +697,13 @@ These files are regenerated per environment and are never committed.
 
 ## 14. On-box runtime
 
+The Docker orchestrator and on-box runtime report version `ver_docker`.
+The runtime writes `/var/home/etsi_user/logs/qkd_docker_debug.log` and
+per-link `qkd_docker_debug_<SAE>_<interface>.log` files. Existing
+`qkd_debug.log` files are historical logs from before this naming change;
+redeployment does not rename or remove them. Docker clean recognizes both
+the current and previous log names.
+
 `artifacts/phiotx_qkd_onbox.py` is deployed to each router as
 `phiotx_qkd_onbox.py`, alongside `phiotx_qkd_onbox_config.json` and
 `phiotx_qkd_onbox_inventory.json`.

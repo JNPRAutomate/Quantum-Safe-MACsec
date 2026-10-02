@@ -388,6 +388,12 @@ def clean_device(name, device, full_macsec=False):
 
         runtime_paths = runtime_state_paths()
         soft_runtime_paths = [
+            f"{script_log_dir}/qkd_docker_debug.log",
+            f"{script_log_dir}/qkd_docker_debug.log.*",
+            f"{script_log_dir}/qkd_docker_debug_*.log",
+            "/var/tmp/qkd_docker_debug.log",
+            "/var/tmp/qkd_docker_debug.log.*",
+            "/var/tmp/qkd_docker_debug_*.log",
             f"{script_log_dir}/qkd_debug.log",
             f"{script_log_dir}/qkd_debug_*.log",
             # Legacy cleanup for older deployments that wrote under /var/tmp.

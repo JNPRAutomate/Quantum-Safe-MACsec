@@ -391,7 +391,7 @@ def check_validation_plan():
     print(f"authorized_keys      = {qkd_authorized_keys()}")
     print(f"op_script_path       = {qkd_remote_op_script()}")
     print(f"cert_dir             = {qkd_remote_cert_dir()}")
-    print(f"log_file             = {qkd_runtime_log_dir()}/qkd_debug.log")
+    print(f"log_file             = {qkd_runtime_log_dir()}/qkd_docker_debug.log")
     print(f"runtime_state_dir    = {qkd_runtime_state_dir()}")
     print(f"runtime_tmp_dir      = {qkd_remote_tmp_dir()}")
 
@@ -510,18 +510,22 @@ def check_runtime_cleanup_simple(device):
         f"chflags nouchg,noschg {runtime_state_dir}/qkd_db_*.json; "
         f"chflags nouchg,noschg {runtime_state_dir}/qkd_db_*.json.*.tmp; "
         f"chflags nouchg,noschg {runtime_log_dir}/qkd_debug*.log; "
+        f"chflags nouchg,noschg {runtime_log_dir}/qkd_docker_debug*.log*; "
         f"chflags nouchg,noschg {runtime_state_dir}/phiotx_qkd_onbox_*; "
         f"rm -f {runtime_state_dir}/qkd_db_*.json; "
         f"rm -f {runtime_state_dir}/qkd_db_*.json.*.tmp; "
         f"rm -f {runtime_log_dir}/qkd_debug*.log; "
+        f"rm -f {runtime_log_dir}/qkd_docker_debug*.log*; "
         f"rm -rf {runtime_state_dir}/phiotx_qkd_onbox_*; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json; "
         "chflags nouchg,noschg /var/tmp/qkd_db_*.json.*.tmp; "
         "chflags nouchg,noschg /var/tmp/qkd_debug*.log; "
+        "chflags nouchg,noschg /var/tmp/qkd_docker_debug*.log*; "
         "chflags nouchg,noschg /var/tmp/phiotx_qkd_onbox_*; "
         "rm -f /var/tmp/qkd_db_*.json; "
         "rm -f /var/tmp/qkd_db_*.json.*.tmp; "
         "rm -f /var/tmp/qkd_debug*.log; "
+        "rm -f /var/tmp/qkd_docker_debug*.log*; "
         "rm -rf /var/tmp/phiotx_qkd_onbox_*; "
         "echo ### qkd-runtime-cleanup-done"
     )
@@ -1074,6 +1078,8 @@ def check_no_state_save_errors(device):
     cmd = (
         "set nonomatch; "
         "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' "
+        f"{runtime_log_dir}/qkd_docker_debug*.log "
+        f"/var/tmp/qkd_docker_debug*.log "
         f"{runtime_log_dir}/qkd_debug*.log /var/tmp/qkd_debug*.log || true"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=20)

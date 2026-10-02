@@ -307,7 +307,7 @@ def build_onbox_config(name, device):
         "peer_status_dir": "/var/tmp/qkd_peer_status",
 
         # Logging
-        "log_file": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs/qkd_debug.log",
+        "log_file": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs/qkd_docker_debug.log",
         "log_max_bytes": QKD["LOG_MAX_BYTES"],
         "log_backup_count": QKD["LOG_BACKUP_COUNT"],
     }

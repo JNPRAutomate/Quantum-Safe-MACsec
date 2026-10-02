@@ -85,7 +85,7 @@ ONBOX_SCRIPT_NAME = "phiotx_qkd_onbox.py"
 BASE_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = DOCKER_RUNTIME_DIR
 INVENTORY_INPUT_DIR = BASE_DIR / CONFIG["inventory_dir"] / "input"
-SCRIPT_VERSION = "ver3.3.4.2-docker"
+SCRIPT_VERSION = "ver_docker"
 
 DEFAULT_INVENTORY = "docker_evo_lab.yaml"
 DEFAULT_BOOTSTRAP_DIR = BASE_DIR / "docker"
