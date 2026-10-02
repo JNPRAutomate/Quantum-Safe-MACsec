@@ -452,7 +452,12 @@ installer's `-y` flag. Existing local keypairs are reused on retries.
 | `--only NAME [NAME ...]` | Restrict the run to these devices |
 | `--username`, `--password` | Transport credentials |
 | `--ssh-key` | SSH key for transfers |
-| `-v`, `--debug` | Verbosity |
+| `-v`, `--verbose` | Repeatable verbosity counter |
+| `--debug` | Enable provisioning debug output |
+
+The shared logger uses ERROR by default, WARNING with `-v`, INFO with `-vv`,
+and DEBUG with `-vvv` or more. Both `bootstrap` and `deploy` forward this numeric
+counter when starting Junos provisioning.
 
 Credentials are never read from the inventory. They come from the command line,
 from `EVO_USERNAME` / `EVO_PASSWORD`, or from an interactive prompt.
@@ -549,6 +554,20 @@ before overlay activation.
 
 `bootstrap` refuses `--skip-pki`: a new container cannot work without its
 identity and trust material.
+
+If PhioTX and PQC completed but the Junos deployment was interrupted, keep
+`config/runtime_docker/` and resume with the staged certificates:
+
+```bash
+.venv/bin/python qkd_docker_orchestrator.py deploy \
+  --inventory config/inventory/input/docker_evo_lab.yaml \
+  --username root --require-pki -v
+```
+
+`deploy` reuses the installed image and licences unless replacements are
+supplied, reapplies staged PKI and container configuration, then provisions
+Junos. It does not generate a new CA or new leaf certificates. Running
+`bootstrap` again instead deliberately regenerates the entire PKI.
 
 ### Image transfer
 
@@ -747,7 +766,8 @@ Fleet-wide PQC regression checks are in `tests/test_docker_pqc_bootstrap.py`:
 ```bash
 .venv/bin/python -m pytest -v \
   tests/test_docker_greenfield_bootstrap.py \
-  tests/test_docker_pqc_bootstrap.py
+  tests/test_docker_pqc_bootstrap.py \
+  tests/test_docker_deploy_logging.py
 ```
 
 They cover missing versus existing local keypairs, read-back verification,
@@ -755,6 +775,10 @@ generation-before-import and import-before-activation ordering, error
 propagation, dry-run behavior, and retries that preserve an existing overlay.
 Hive peer status is collected with `txh -P -c no`; PhioTX 4.6.3 does not
 support `tx_status -peers`.
+
+The deploy-logging checks exercise both CLI commands with the real shared
+logger, from default verbosity through the DEBUG cap. They also verify that
+Junos provisioning errors remain fatal and `--phiotx-only` skips that phase.
 
 Passing these tests verifies **offline safety properties**. It does not mean
 that the EVO routers, containers, PKI, ETSI service,

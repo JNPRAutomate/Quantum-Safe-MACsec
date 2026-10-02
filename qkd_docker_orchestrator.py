@@ -625,7 +625,7 @@ def collect_staged_pki(devices: Dict[str, Any]) -> Dict[str, Any]:
 
 def cmd_deploy(args) -> int:
     """Bring up the containers, then push the Junos configuration."""
-    log = setup_logger("qkd_docker_orchestrator")
+    log = setup_logger(verbose=args.verbose)
 
     exit_code = cmd_phiotx_up(args)
     if exit_code != 0:
@@ -778,7 +778,7 @@ def _run_greenfield_bootstrap(args) -> int:
     }
     print("\n=== Junos configuration deploy ===")
     failed = run_provisioning(
-        setup_logger("qkd_docker_orchestrator"),
+        setup_logger(verbose=args.verbose),
         dry_run=args.dry_run,
         ssh_key=args.ssh_key,
         debug=args.debug,
