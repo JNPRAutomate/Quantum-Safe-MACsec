@@ -707,14 +707,57 @@ def install_layers(device, settings, layer_paths, dry_run=False):
     return True
 
 
-def setup_pqc(device, settings, phiotx):
-    """
-    Generate the local ML-KEM keypair and import every peer's public key.
+def _pqc_key_present(status, name, kem=None):
+    prefix = f"'{name}',"
+    for line in status.splitlines():
+        line = line.strip()
+        if not line.startswith(prefix):
+            continue
+        detail = line[len(prefix):].strip()
+        if kem is None:
+            if "KEM '" in detail:
+                continue
+        elif f"KEM '{kem}'" not in detail:
+            continue
+        return bool(detail) and not detail.lower().startswith("missing")
+    return False
 
-    Private keys never leave the container: only public keys travel, and they
-    travel over the already-authenticated TLS peer channel. The keys live in
-    the PhioTX internal database, so they are visible through tx_status -pqc
-    rather than as files.
+
+def ensure_pqc_keypair(device, settings, phiotx):
+    """Generate a missing local keypair without rotating an existing one."""
+    kem = phiotx.get("pqc")
+    if not kem:
+        print("[SKIP] no phiotx.pqc configured")
+        return False
+
+    container = settings["container"]
+    status = _exec(device, container, "tx_status -pqc", "PQC keypair status")
+    if _pqc_key_present(status.stdout or "", kem):
+        print(f"[SKIP] {kem} keypair already present on {container}")
+        return True
+
+    _exec(
+        device,
+        container,
+        f"tx_generate_pqc_keypair -m {shlex.quote(kem)}",
+        "PQC keypair generation",
+    )
+    status = _exec(device, container, "tx_status -pqc", "PQC keypair verification")
+    if not _pqc_key_present(status.stdout or "", kem):
+        raise PhiotxLifecycleError(
+            f"{device_name(device)}: {kem} keypair is not present after generation "
+            f"on {container}\nstdout={status.stdout}"
+        )
+    print(f"[OK] generated and verified {kem} keypair on {container}")
+    return True
+
+
+def setup_pqc(device, settings, phiotx, *, prepare_keypair=True):
+    """
+    Import peer public keys over the authenticated TLS channel.
+
+    Fleet bring-up prepares every local keypair before calling this function.
+    Private keys remain in the persistent PhioTX database.
     """
     kem = phiotx.get("pqc")
     if not kem:
@@ -722,27 +765,25 @@ def setup_pqc(device, settings, phiotx):
         return False
 
     container = settings["container"]
-
-    supported = _exec(
-        device, container, "tx_status -pqc", "PQC status", allow_fail=True
-    )
-    if kem not in (supported.stdout or ""):
-        _exec(
-            device,
-            container,
-            f"tx_generate_pqc_keypair -m {shlex.quote(kem)} -y",
-            "PQC keypair generation",
-        )
-        print(f"[OK] generated {kem} keypair on {container}")
+    if prepare_keypair:
+        ensure_pqc_keypair(device, settings, phiotx)
 
     for peer in settings.get("peers", []):
         _exec(
             device,
             container,
             f"tx_get_pqc_public_key -p {shlex.quote(peer['name'])} "
-            f"-m {shlex.quote(kem)} -y",
+            f"-m {shlex.quote(kem)}",
             f"PQC public key fetch from {peer['name']}",
         )
+        status = _exec(
+            device, container, "tx_status -pqc", "PQC public key verification"
+        )
+        if not _pqc_key_present(status.stdout or "", peer["name"], kem):
+            raise PhiotxLifecycleError(
+                f"{device_name(device)}: {kem} public key of {peer['name']} "
+                f"is not present after import on {container}\nstdout={status.stdout}"
+            )
         print(f"[OK] imported {kem} public key of {peer['name']} on {container}")
 
     return True
@@ -758,7 +799,7 @@ def verify_node(device, settings, phiotx):
         ("pki_qxc", "tx_status -pki qxc"),
         ("pki_etsi", "tx_status -pki etsi"),
         ("pqc", "tx_status -pqc"),
-        ("peers", "tx_status -peers"),
+        ("peers", "txh -P -c no"),
     ):
         result = _exec(device, container, command, label, allow_fail=True)
         report[label] = (result.stdout or "").strip()
@@ -849,14 +890,39 @@ def phiotx_up(
         else:
             print(f"[WARN] no PKI bundle for {name}; skipping PKI install")
 
-        layer_paths = build_layers(name, device, devices, phiotx)
+        layer_config = phiotx
+        kem = phiotx.get("pqc")
+        if kem and not dry_run:
+            status = _exec(
+                device, settings["container"], "tx_status -pqc", "PQC readiness"
+            )
+            ready = _pqc_key_present(status.stdout or "", kem) and all(
+                _pqc_key_present(status.stdout or "", peer["name"], kem)
+                for peer in settings["peers"]
+            )
+            if not ready:
+                layer_config = {**phiotx, "pqc": None}
+                print(f"[PLAN] {settings['container']}: stage TLS before PQC activation")
+
+        layer_paths = build_layers(name, device, devices, layer_config)
         install_layers(device, settings, layer_paths, dry_run=dry_run)
 
-    # Phase 2: all peer listeners now exist, so public-key exchange can work.
-    if not dry_run:
+    # Every peer must have a local keypair before any public-key fetch.
+    if not dry_run and phiotx.get("pqc"):
         for name, (device, settings) in prepared.items():
-            print(f"\n=== PhioTX PQC setup on {name} ===")
-            setup_pqc(device, settings, phiotx)
+            print(f"\n=== PhioTX PQC keypair preparation on {name} ===")
+            ensure_pqc_keypair(device, settings, phiotx)
+
+        for name, (device, settings) in prepared.items():
+            print(f"\n=== PhioTX PQC public-key exchange on {name} ===")
+            setup_pqc(device, settings, phiotx, prepare_keypair=False)
+
+        for name, (device, settings) in prepared.items():
+            print(f"\n=== PhioTX PQC activation on {name} ===")
+            layer_paths = build_layers(name, device, devices, phiotx)
+            install_layers(
+                device, settings, {LAYER_PEER: layer_paths[LAYER_PEER]}
+            )
 
     for name, (device, settings) in prepared.items():
         reports[name] = verify_node(device, settings, phiotx)

@@ -382,13 +382,23 @@ def test_phiotx_up_waits_for_all_nodes_before_pqc(monkeypatch):
     monkeypatch.setattr(
         lifecycle,
         "build_layers",
-        lambda *_args: {},
+        lambda *_args: {lifecycle.LAYER_PEER: Path("/tmp/peer.yaml")},
     )
     monkeypatch.setattr(lifecycle, "install_layers", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         lifecycle,
+        "_exec",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="PQC pub keys:"),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "ensure_pqc_keypair",
+        lambda device, *_args: events.append(("keypair", device["name"])),
+    )
+    monkeypatch.setattr(
+        lifecycle,
         "setup_pqc",
-        lambda device, *_args: events.append(("pqc", device["name"])),
+        lambda device, *_args, **_kwargs: events.append(("pqc", device["name"])),
     )
     monkeypatch.setattr(
         lifecycle,
@@ -398,7 +408,7 @@ def test_phiotx_up_waits_for_all_nodes_before_pqc(monkeypatch):
 
     reports = lifecycle.phiotx_up(
         devices,
-        {},
+        {"pqc": "ML-KEM-1024"},
         licenses={name: Path(f"/tmp/{name}.lic") for name in devices},
         pki_bundles={name: {"ca": "ca"} for name in devices},
         require_licenses=True,
@@ -408,6 +418,10 @@ def test_phiotx_up_waits_for_all_nodes_before_pqc(monkeypatch):
     last_start = max(index for index, event in enumerate(events) if event[0] == "start")
     first_pqc = min(index for index, event in enumerate(events) if event[0] == "pqc")
     assert first_pqc > last_start
+    last_keypair = max(
+        index for index, event in enumerate(events) if event[0] == "keypair"
+    )
+    assert first_pqc > last_keypair
     assert reports == {
         "EVO1": {"device": "EVO1"},
         "EVO2": {"device": "EVO2"},

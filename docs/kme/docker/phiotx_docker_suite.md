@@ -409,8 +409,20 @@ half-configured node.
 * Private keys stay in the PhioTX internal database, so they are visible through
   `tx_status -pqc` rather than as files.
 
-PQC setup runs only after **every** selected node is up, because importing a
-peer's public key requires that peer to be reachable.
+PQC setup uses fleet-wide barriers:
+
+1. Bring up every selected node with its licence, PKI, and TLS peer listener.
+   If PQC material is incomplete, stage the peer layer without `pqc`; a node
+   whose local and peer keys are already present retains its existing overlay.
+2. Generate and read back every missing local keypair before fetching any peer
+   public key. A KEM name followed by `missing` in `tx_status -pqc` does not mean
+   that a keypair exists.
+3. Fetch and verify every peer public key over the authenticated TLS channel.
+4. Commit `pqc: ML-KEM-1024` only after the complete selected fleet has its keys.
+
+The commands are `tx_generate_pqc_keypair -m ML-KEM-1024` and
+`tx_get_pqc_public_key -p PEER -m ML-KEM-1024`, without the certificate
+installer's `-y` flag. Existing local keypairs are reused on retries.
 
 > The value `shared_key` in the vendor sample is a placeholder, not a valid
 > algorithm. Using it fails the commit with `missing PQC shared key`.
@@ -523,13 +535,17 @@ router is modified.
 | 8 | Create `phiotx_oob`, start container, attach Juniper bridge | Yes |
 | 9 | Install the node-unique licence, verify it, delete the copy | Yes |
 | 10 | Install `qxc` and `etsi` PKI material | Yes |
-| 11 | Install the three layers, each dry-run first | Yes |
-| 12 | Generate ML-KEM keypairs, import peer public keys | Yes |
-| 13 | Collect status into `phiotx_status.json` | Read-only |
-| 14 | Push the Junos configuration and the on-box runtime | Yes |
+| 11 | Install the three layers, staging TLS when PQC material is incomplete | Yes |
+| 12 | Generate and verify all missing local ML-KEM keypairs | Yes |
+| 13 | Import and verify all peer public keys | Yes |
+| 14 | Activate the PQC peer layer on every selected node | Yes |
+| 15 | Collect status into `phiotx_status.json` | Read-only |
+| 16 | Push the Junos configuration and the on-box runtime | Yes |
 
-Phases 6 to 11 complete on every node before phase 12 starts, because PQC key
-exchange needs all peers online.
+Phases 6 to 11 complete on every node before phase 12 starts. Each subsequent
+PQC phase completes across the selected fleet before the next phase begins:
+all local keypairs must exist before imports, and all imports must succeed
+before overlay activation.
 
 `bootstrap` refuses `--skip-pki`: a new container cannot work without its
 identity and trust material.
@@ -725,6 +741,20 @@ Key test names and meanings include:
 | `test_license_install_failure_cleans_remote_file` | Upload, installation, and verification errors propagate while removing the temporary remote file. |
 | `test_license_cleanup_failure_is_not_silenced` | A failed cleanup is reported instead of printing installation success. |
 | `test_license_checksum_failure_still_cleans_remote_file` | Cleanup also runs when checksum verification fails. |
+
+Fleet-wide PQC regression checks are in `tests/test_docker_pqc_bootstrap.py`:
+
+```bash
+.venv/bin/python -m pytest -v \
+  tests/test_docker_greenfield_bootstrap.py \
+  tests/test_docker_pqc_bootstrap.py
+```
+
+They cover missing versus existing local keypairs, read-back verification,
+generation-before-import and import-before-activation ordering, error
+propagation, dry-run behavior, and retries that preserve an existing overlay.
+Hive peer status is collected with `txh -P -c no`; PhioTX 4.6.3 does not
+support `tx_status -peers`.
 
 Passing these tests verifies **offline safety properties**. It does not mean
 that the EVO routers, containers, PKI, ETSI service,
