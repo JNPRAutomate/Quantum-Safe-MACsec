@@ -620,6 +620,41 @@ A healthy node shows the three layers installed, both PKI stores populated, the
 ML-KEM keypair plus one imported public key per peer, listeners on `443` and
 `9002`, and an established peer session.
 
+### Reading the offline bootstrap tests
+
+The greenfield test module is a safety check for local orchestration logic. It
+does **not** connect to an EVO router, inspect Docker, validate certificates on
+hardware, or prove that a live MACsec rotation works.
+
+Do not use `-q` when you need to see what each test does. `-q` means
+“quiet” and intentionally prints only one dot per passing test:
+
+```bash
+.venv/bin/python -m pytest -v tests/test_docker_greenfield_bootstrap.py
+```
+
+The expected test names and meanings are:
+
+| Test | What it proves |
+| --- | --- |
+| `test_license_capacity_limits_selected_router_count` | A licence shortage fails before router mutation. |
+| `test_license_directory_assigns_one_unique_file_per_router` | Sorted licence files are assigned one-per-router. |
+| `test_only_filter_keeps_fleet_wide_license_mapping_stable` | `--only` does not renumber the full-fleet allocation. |
+| `test_same_license_file_cannot_be_assigned_twice` | One licence file cannot be reused for two routers. |
+| `test_image_archive_can_be_selected_interactively` | A manually supplied image path can be selected. |
+| `test_single_zip_in_docker_drop_directory_is_selected` | The single ZIP in `docker/` is discovered automatically. |
+| `test_bootstrap_bundle_requires_manual_upload` | Missing assets fail explicitly; no vendor download is attempted. |
+| `test_vendor_zip_preparation_finds_image_checksum_and_licenses` | ZIP extraction finds the image, checksum, licences, and cleans staging state. |
+| `test_phiotx_up_rejects_missing_licenses_before_router_mutation` | Lifecycle startup rejects incomplete licensing before host changes. |
+| `test_phiotx_up_waits_for_all_nodes_before_pqc` | PQC setup starts only after all containers are running. |
+| `test_license_install_uses_persistent_data_path_and_cleans_up` | Licence installation uses `/data` and removes the temporary remote file. |
+| `test_license_checksum_failure_still_cleans_remote_file` | Cleanup also runs when checksum verification fails. |
+
+Therefore `12 passed` means that these twelve **offline safety properties**
+passed. It does not mean that the EVO routers, containers, PKI, ETSI service,
+peer channel, or MACsec are currently healthy. Use `validate` and the
+post-deployment checks below for those live assertions.
+
 ### Manual end-to-end key check
 
 The authoritative manual procedure, including the exact `curl` commands and the

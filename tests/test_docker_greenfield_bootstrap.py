@@ -1,3 +1,11 @@
+"""Offline safety tests for the greenfield PhioTX Docker bootstrap.
+
+These tests do not contact routers. They verify the local decisions that must
+be correct before the orchestrator mutates an EVO router: licence capacity and
+allocation, manual asset handling, bootstrap validation, lifecycle ordering,
+and cleanup after licence-transfer failures.
+"""
+
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
