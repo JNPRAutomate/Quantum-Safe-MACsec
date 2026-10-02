@@ -71,6 +71,10 @@ def load_clean_inventory(value):
             + ", ".join(non_evo)
         )
 
+    phiotx = inventory["phiotx"]
+    for device in devices.values():
+        device["_phiotx_defaults"] = phiotx
+
     return inventory_path, devices
 
 
@@ -265,6 +269,16 @@ def clean_device(name, device, full_macsec=False):
         script_home_dir = f"{ssh_home_base}/{script_user}"
         script_log_dir = f"{script_home_dir}/logs"
         peer_cmd_home_dir = f"{ssh_home_base}/{peer_cmd_user}"
+        phiotx = device.get("_phiotx_defaults") or {}
+        node_phiotx = device.get("phiotx") or {}
+        container_name = node_phiotx.get("container")
+        image_name = phiotx.get("image")
+        host_data_base = str(phiotx.get("host_data_base", "/var/db")).rstrip("/")
+        container_data_dir = (
+            f"{host_data_base}/{container_name}" if container_name else None
+        )
+        oob_network = (phiotx.get("oob_network") or {}).get("name")
+        internal_network = (phiotx.get("internal_network") or {}).get("name")
 
         print(f"Cleaning device {name} {ip}", flush=True)
 
@@ -646,6 +660,79 @@ def clean_device(name, device, full_macsec=False):
                 strict=False,
             )
 
+            docker_cleanup_failures = []
+            if container_name:
+                run_shell(
+                    "PhioTX container cleanup",
+                    f"docker rm -f {shlex.quote(container_name)} >/dev/null 2>&1 || true",
+                    strict=False,
+                )
+            if oob_network:
+                if oob_network == internal_network:
+                    docker_cleanup_failures.append(
+                        f"refusing to remove Juniper-owned network {oob_network}"
+                    )
+                else:
+                    run_shell(
+                        "PhioTX OOB network cleanup",
+                        f"docker network rm {shlex.quote(oob_network)} "
+                        ">/dev/null 2>&1 || true",
+                        strict=False,
+                    )
+            if image_name:
+                run_shell(
+                    "PhioTX image cleanup",
+                    f"docker image rm {shlex.quote(image_name)} "
+                    ">/dev/null 2>&1 || true",
+                    strict=False,
+                )
+            if container_data_dir:
+                run_shell(
+                    "PhioTX persistent data cleanup",
+                    f"rm -rf {shlex.quote(container_data_dir)}",
+                    strict=True,
+                )
+
+            docker_checks = []
+            if container_name:
+                docker_checks.append(
+                    f"docker inspect {shlex.quote(container_name)} "
+                    ">/dev/null 2>&1 && echo CONTAINER_REMAINS || true"
+                )
+            if oob_network and oob_network != internal_network:
+                docker_checks.append(
+                    f"docker network inspect {shlex.quote(oob_network)} "
+                    ">/dev/null 2>&1 && echo NETWORK_REMAINS || true"
+                )
+            if image_name:
+                docker_checks.append(
+                    f"docker image inspect {shlex.quote(image_name)} "
+                    ">/dev/null 2>&1 && echo IMAGE_REMAINS || true"
+                )
+            if container_data_dir:
+                docker_checks.append(
+                    f"test -e {shlex.quote(container_data_dir)} "
+                    "&& echo DATA_REMAINS || true"
+                )
+            if docker_checks:
+                output = run_shell(
+                    "PhioTX Docker cleanup verification",
+                    "; ".join(docker_checks),
+                    strict=False,
+                    show_output=False,
+                )
+                marker_labels = {
+                    "CONTAINER_REMAINS": f"container {container_name}",
+                    "NETWORK_REMAINS": f"network {oob_network}",
+                    "IMAGE_REMAINS": f"image {image_name}",
+                    "DATA_REMAINS": f"persistent data {container_data_dir}",
+                }
+                docker_cleanup_failures.extend(
+                    label
+                    for marker, label in marker_labels.items()
+                    if marker in (output or "")
+                )
+
             peer_cleanup_paths = [
                 f"{event_script_dir}/{script_name}",
                 f"{op_script_dir}/{script_name}",
@@ -690,6 +777,11 @@ def clean_device(name, device, full_macsec=False):
                     time.sleep(2)
 
             failures = []
+            if docker_cleanup_failures:
+                failures.append(
+                    "Docker cleanup leftovers: "
+                    + ", ".join(docker_cleanup_failures)
+                )
             if not peer_cleanup_ok:
                 failures.append("peer RE cleanup verification failed")
 
