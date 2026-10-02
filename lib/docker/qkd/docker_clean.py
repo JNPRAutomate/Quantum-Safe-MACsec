@@ -522,6 +522,8 @@ def clean_device(name, device, full_macsec=False):
             )
 
             output = rpc_text(rsp)
+            if output.strip() == "True":
+                output = ""
 
             if show_output and output:
                 for line in output.splitlines():
@@ -540,9 +542,6 @@ def clean_device(name, device, full_macsec=False):
                         continue
 
                     if "No match" in line:
-                        continue
-
-                    if line == "True":
                         continue
 
                     print(f"[{name}] {line}", flush=True)
