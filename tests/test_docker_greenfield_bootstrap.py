@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import hashlib
 import io
+import shlex
 import sys
 import tarfile
 import zipfile
@@ -498,6 +499,114 @@ def test_license_checksum_failure_still_cleans_remote_file(
         )
 
     assert commands[-1] == "rm -f /var/db/phiotx01/data/.license-install.lic"
+
+
+@pytest.fixture
+def vendor_pki_install(tmp_path, monkeypatch):
+    ca = tmp_path / "ca.pem"
+    ca.write_bytes(b"test-ca")
+    identities = {}
+    for role, store in (("qxc", "qxc"), ("etsi", "etsi"), ("sae", None)):
+        key = tmp_path / f"{role}.key"
+        crt = tmp_path / f"{role}.crt"
+        key.write_bytes(f"{role}-key".encode("ascii"))
+        crt.write_bytes(f"{role}-certificate".encode("ascii"))
+        identities[role] = {"store": store, "key": key, "crt": crt}
+    state = SimpleNamespace(
+        bundle={"ca": ca, "identities": identities},
+        host_files={},
+        container_files={},
+        ca_copies=[],
+        installed=[],
+        fail_store=None,
+    )
+
+    def push_files(_device, transfers):
+        for source, destination in transfers:
+            state.host_files[destination] = Path(source).read_bytes()
+
+    def docker(_device, command, _what, **_kwargs):
+        operation, source, target = shlex.split(command)
+        assert operation == "cp"
+        container, _, destination = target.partition(":")
+        assert container == "phiotx01"
+        state.container_files[destination] = state.host_files[source]
+        if destination == "/tmp/pki/ca.pem":
+            state.ca_copies.append(state.container_files[destination])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def run(_device, command, _what, **_kwargs):
+        parts = shlex.split(command)
+        if parts[:2] == ["rm", "-f"]:
+            for path in parts[2:]:
+                state.host_files.pop(path, None)
+        else:
+            assert parts[:2] == ["mkdir", "-p"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def execute(_device, container, command, _what, **_kwargs):
+        assert container == "phiotx01"
+        parts = shlex.split(command)
+        if parts[0] == "tx_install_private_key":
+            key_path = parts[parts.index("-key") + 1]
+            state.container_files.pop(key_path)
+        elif parts[0] == "tx_install_crt":
+            store = parts[parts.index("-pki") + 1]
+            ca_path = parts[parts.index("-ca") + 1]
+            crt_path = parts[parts.index("-crt") + 1]
+            assert state.container_files[ca_path] == b"test-ca"
+            assert state.container_files[crt_path] == f"{store}-certificate".encode("ascii")
+            if store == state.fail_store:
+                raise lifecycle.PhiotxLifecycleError(f"Simulated {store} install failure")
+            state.container_files.pop(ca_path)
+            state.container_files.pop(crt_path)
+            state.installed.append(store)
+        elif parts == ["rm", "-rf", "/tmp/pki"]:
+            state.container_files.clear()
+        else:
+            assert parts == ["mkdir", "-p", "/tmp/pki"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(lifecycle, "_push_files", push_files)
+    monkeypatch.setattr(lifecycle, "_docker", docker)
+    monkeypatch.setattr(lifecycle, "_run", run)
+    monkeypatch.setattr(lifecycle, "_exec", execute)
+    return state
+
+
+def test_pki_replenishes_ca_input_consumed_by_each_vendor_install(
+    vendor_pki_install,
+):
+    state = vendor_pki_install
+
+    assert lifecycle.install_pki(
+        {"name": "EVO1"}, {"container": "phiotx01"}, state.bundle
+    )
+
+    assert state.installed == ["qxc", "etsi"]
+    assert state.ca_copies == [b"test-ca", b"test-ca"]
+    assert state.host_files == {}
+    assert state.container_files == {}
+    assert state.bundle["ca"].read_bytes() == b"test-ca"
+
+
+@pytest.mark.parametrize("store", ["qxc", "etsi"])
+def test_pki_install_failure_cleans_host_and_container_staging(
+    vendor_pki_install, store
+):
+    state = vendor_pki_install
+    state.fail_store = store
+
+    with pytest.raises(lifecycle.PhiotxLifecycleError, match=f"Simulated {store}"):
+        lifecycle.install_pki(
+            {"name": "EVO1"}, {"container": "phiotx01"}, state.bundle
+        )
+
+    assert state.host_files == {}
+    assert state.container_files == {}
+    for identity in state.bundle["identities"].values():
+        assert identity["key"].is_file()
+        assert identity["crt"].is_file()
 
 
 def test_external_ca_cert_paths_use_staged_sae_identity(tmp_path, monkeypatch):

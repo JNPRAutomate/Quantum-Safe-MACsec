@@ -593,59 +593,63 @@ def install_pki(device, settings, pki_bundle):
     _exec(device, container, "mkdir -p /tmp/pki", "container staging directory")
 
     ca_remote = f"{REMOTE_STAGING}/ca.pem"
-    _push_files(device, [(ca_local, ca_remote)])
-    _docker(device, f"cp {shlex.quote(ca_remote)} {shlex.quote(container)}:/tmp/pki/ca.pem", "CA copy")
+    try:
+        _push_files(device, [(ca_local, ca_remote)])
+        for role, identity in identities.items():
+            store = identity.get("store")
+            if not store:
+                # The SAE client identity belongs to the router, not the container.
+                continue
 
-    for role, identity in identities.items():
-        store = identity.get("store")
-        if not store:
-            # The SAE client identity belongs to the router, not the container.
-            continue
-
-        key_remote = f"{REMOTE_STAGING}/{role}.key"
-        crt_remote = f"{REMOTE_STAGING}/{role}.crt"
-
-        _push_files(
-            device,
-            [(identity["key"], key_remote), (identity["crt"], crt_remote)],
-        )
-
-        _docker(
-            device,
-            f"cp {shlex.quote(key_remote)} {shlex.quote(container)}:/tmp/pki/private.key",
-            f"{role} key copy",
-        )
-        _docker(
-            device,
-            f"cp {shlex.quote(crt_remote)} {shlex.quote(container)}:/tmp/pki/this.crt",
-            f"{role} certificate copy",
-        )
-
-        _exec(
-            device,
-            container,
-            f"tx_install_private_key -pki {shlex.quote(store)} "
-            "-key /tmp/pki/private.key -f -y",
-            f"{role} private key install",
-        )
-        _exec(
-            device,
-            container,
-            f"tx_install_crt -pki {shlex.quote(store)} "
-            "-crt /tmp/pki/this.crt -ca /tmp/pki/ca.pem -f -y",
-            f"{role} certificate install",
-        )
-
-        _run(
-            device,
-            f"rm -f {shlex.quote(key_remote)} {shlex.quote(crt_remote)}",
-            "staging cleanup",
-            allow_fail=True,
-        )
-        print(f"[OK] installed PKI store {store} on {container}")
-
-    _run(device, f"rm -f {shlex.quote(ca_remote)}", "staging cleanup", allow_fail=True)
-    _exec(device, container, "rm -rf /tmp/pki", "container staging cleanup", allow_fail=True)
+            key_remote = f"{REMOTE_STAGING}/{role}.key"
+            crt_remote = f"{REMOTE_STAGING}/{role}.crt"
+            try:
+                _push_files(
+                    device,
+                    [(identity["key"], key_remote), (identity["crt"], crt_remote)],
+                )
+                _docker(
+                    device,
+                    f"cp {shlex.quote(key_remote)} {shlex.quote(container)}:/tmp/pki/private.key",
+                    f"{role} key copy",
+                )
+                _docker(
+                    device,
+                    f"cp {shlex.quote(crt_remote)} {shlex.quote(container)}:/tmp/pki/this.crt",
+                    f"{role} certificate copy",
+                )
+                _exec(
+                    device,
+                    container,
+                    f"tx_install_private_key -pki {shlex.quote(store)} "
+                    "-key /tmp/pki/private.key -f -y",
+                    f"{role} private key install",
+                )
+                # tx_install_crt -y consumes the CA input along with the leaf.
+                _docker(
+                    device,
+                    f"cp {shlex.quote(ca_remote)} {shlex.quote(container)}:/tmp/pki/ca.pem",
+                    f"{role} CA copy",
+                )
+                _exec(
+                    device,
+                    container,
+                    f"tx_install_crt -pki {shlex.quote(store)} "
+                    "-crt /tmp/pki/this.crt -ca /tmp/pki/ca.pem -f -y",
+                    f"{role} certificate install",
+                )
+            finally:
+                _run(
+                    device,
+                    f"rm -f {shlex.quote(key_remote)} {shlex.quote(crt_remote)}",
+                    f"{role} staging cleanup",
+                )
+            print(f"[OK] installed PKI store {store} on {container}")
+    finally:
+        try:
+            _run(device, f"rm -f {shlex.quote(ca_remote)}", "CA staging cleanup")
+        finally:
+            _exec(device, container, "rm -rf /tmp/pki", "container staging cleanup")
 
     return True
 

@@ -327,7 +327,11 @@ For two EVOs this is **one new CA plus six new leaf certificates**:
 Container material is installed with `tx_install_private_key` and
 `tx_install_crt` rather than a bind mount, so PhioTX owns the keys in its own
 stores. In `-y` mode both commands wipe and unlink the source file inside the
-container.
+container. `tx_install_crt -y` also consumes its CA input, so the orchestrator
+copies the CA into the container again immediately before each store's
+certificate installation. The `qxc` and `etsi` stores never depend on a
+temporary CA file consumed by the previous installation. Temporary host and
+container PKI inputs are cleaned up on success and on installation failure.
 
 ---
 
