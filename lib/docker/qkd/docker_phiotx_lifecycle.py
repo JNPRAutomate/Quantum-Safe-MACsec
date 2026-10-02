@@ -761,7 +761,7 @@ def verify_node(device, settings, phiotx):
 
     listeners = _run(
         device,
-        f"docker exec {shlex.quote(container)} ss -ltn 2>/dev/null || true",
+        f"docker exec {shlex.quote(container)} ss -ltn || true",
         "listener check",
         allow_fail=True,
     )

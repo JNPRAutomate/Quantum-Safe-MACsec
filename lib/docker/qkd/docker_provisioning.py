@@ -267,7 +267,7 @@ def sync_qkd_scripts_dual_re(dev, name, script_name):
         dev,
         (
             f"mkdir -p {op_script_dir} {event_script_dir}; "
-            f"chmod 755 {event_script} {op_script} 2>/dev/null || true"
+            f"chmod 755 {event_script} {op_script} >& /dev/null || true"
         ),
         name=name,
         strict=False,

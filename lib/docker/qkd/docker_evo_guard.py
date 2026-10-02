@@ -123,7 +123,7 @@ def check_docker_enabled(device, timeout=60):
 
     result = pyez_shell_cmd(
         device,
-        "docker info --format '{{.ServerVersion}}|{{.Driver}}' 2>&1",
+        "docker info --format '{{.ServerVersion}}|{{.Driver}}'",
         timeout=timeout,
     )
 
@@ -162,7 +162,7 @@ def check_required_networks(device, networks, timeout=60):
     for network in networks:
         result = pyez_shell_cmd(
             device,
-            f"docker network inspect {network} --format '{{{{.Name}}}}' 2>&1",
+            f"docker network inspect {network} --format '{{{{.Name}}}}'",
             timeout=timeout,
         )
         if result.returncode != 0 or network not in result.stdout:

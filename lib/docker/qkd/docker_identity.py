@@ -789,7 +789,7 @@ def check_onbox_timestamp_protocol(device):
     result = ssh_deploy_cmd(
         device,
         f"grep -F -x {shlex.quote(declaration)} {shlex.quote(path)} "
-        ">/dev/null 2>&1",
+        ">& /dev/null",
         timeout=20,
         include_failed_marker=False,
     )
