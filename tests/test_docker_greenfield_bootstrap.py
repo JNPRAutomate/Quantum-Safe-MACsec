@@ -141,6 +141,54 @@ def test_bootstrap_rejects_multiple_zip_bundles_without_explicit_selection(
         orchestrator.resolve_bootstrap_bundle(None, interactive=False)
 
 
+def test_bundle_name_is_resolved_inside_the_docker_drop_directory(
+    tmp_path, monkeypatch
+):
+    bundle = tmp_path / "hpe.zip"
+    bundle.write_bytes(b"customer-supplied")
+    monkeypatch.setattr(orchestrator, "DEFAULT_BOOTSTRAP_DIR", tmp_path)
+
+    selected = orchestrator.resolve_bootstrap_bundle(
+        "hpe.zip",
+        interactive=False,
+    )
+
+    assert selected == bundle.resolve()
+
+
+def test_unknown_bundle_name_reports_every_searched_location(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(orchestrator, "DEFAULT_BOOTSTRAP_DIR", tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="Searched:.*never downloads"):
+        orchestrator.resolve_bootstrap_bundle("missing.zip", interactive=False)
+
+
+def test_operator_can_choose_among_several_bundles_at_runtime(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "hpe.zip"
+    second = tmp_path / "other-vendor.zip"
+    first.write_bytes(b"hpe-bundle")
+    second.write_bytes(b"other-bundle")
+    monkeypatch.setattr(orchestrator, "DEFAULT_BOOTSTRAP_DIR", tmp_path)
+
+    by_number = orchestrator.resolve_bootstrap_bundle(
+        None,
+        input_fn=lambda _prompt: "1",
+        interactive=True,
+    )
+    by_name = orchestrator.resolve_bootstrap_bundle(
+        None,
+        input_fn=lambda _prompt: "other-vendor.zip",
+        interactive=True,
+    )
+
+    assert by_number == first.resolve()
+    assert by_name == second.resolve()
+
+
 def test_bootstrap_bundle_requires_manual_upload(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "DEFAULT_BOOTSTRAP_DIR", tmp_path)
 

@@ -327,6 +327,46 @@ def resolve_local_image_archive(
     return path
 
 
+def bundle_search_locations() -> List[Path]:
+    """
+    Directories searched when a bundle is named without a full path.
+
+    The drop directory is included so that an operator can pass just the
+    supplied file name, for example ``--bundle hpe.zip``.
+    """
+    locations: List[Path] = []
+    for base in (Path.cwd(), DEFAULT_BOOTSTRAP_DIR, BASE_DIR):
+        candidate = Path(base).expanduser()
+        if candidate not in locations:
+            locations.append(candidate)
+    return locations
+
+
+def resolve_named_bundle(value: str) -> Path:
+    """Resolve an explicit bundle path, file name, or directory."""
+    candidate = Path(value).expanduser()
+
+    if candidate.is_absolute():
+        if not candidate.exists():
+            raise FileNotFoundError(f"Bootstrap bundle not found: {candidate}")
+        return candidate.resolve()
+
+    attempted: List[Path] = []
+    for base in bundle_search_locations():
+        resolved = base / candidate
+        attempted.append(resolved)
+        if resolved.exists():
+            print(f"Using customer-supplied bundle: {resolved.resolve()}")
+            return resolved.resolve()
+
+    searched = ", ".join(str(path) for path in attempted)
+    raise FileNotFoundError(
+        f"Bootstrap bundle not found: {value}. Searched: {searched}. "
+        "Upload the supplied bundle manually to the Linux orchestrator host; "
+        "the suite never downloads vendor images or licences."
+    )
+
+
 def resolve_bootstrap_bundle(
     value: Optional[str],
     input_fn=input,
@@ -335,17 +375,16 @@ def resolve_bootstrap_bundle(
     """
     Resolve the customer-supplied bundle already present on the Linux host.
 
-    The orchestrator never downloads vendor software or licences. By default
-    the operator manually places exactly one ZIP under the ignored repository
-    ``docker/`` directory before running ``bootstrap``.
+    The orchestrator never downloads vendor software or licences. The operator
+    manually places the supplied bundle under the ignored repository
+    ``docker/`` directory, or names it explicitly at run time.
     """
     if value:
-        path = Path(value).expanduser().resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Bootstrap bundle not found: {path}")
-        return path
+        return resolve_named_bundle(value)
 
-    candidates = []
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+
+    candidates: List[Path] = []
     if DEFAULT_BOOTSTRAP_DIR.is_dir():
         candidates = sorted(
             path.resolve()
@@ -356,8 +395,31 @@ def resolve_bootstrap_bundle(
     if len(candidates) == 1:
         print(f"Using customer-supplied bundle: {candidates[0]}")
         return candidates[0]
+
     if len(candidates) > 1:
         names = ", ".join(path.name for path in candidates)
+        if interactive:
+            print(
+                f"Multiple customer-supplied ZIP bundles are present under "
+                f"{DEFAULT_BOOTSTRAP_DIR}:"
+            )
+            for index, path in enumerate(candidates, start=1):
+                print(f"  {index}) {path.name}")
+            answer = input_fn(
+                "Select the bundle to unpack (number or file name): "
+            ).strip()
+            if answer:
+                if answer.isdigit():
+                    index = int(answer)
+                    if not 1 <= index <= len(candidates):
+                        raise ValueError(
+                            f"Invalid bundle selection {answer!r}; "
+                            f"expected 1..{len(candidates)}"
+                        )
+                    selected = candidates[index - 1]
+                    print(f"Using customer-supplied bundle: {selected}")
+                    return selected
+                return resolve_named_bundle(answer)
         raise ValueError(
             f"Expected exactly one customer-supplied PhioTX ZIP directly under "
             f"{DEFAULT_BOOTSTRAP_DIR}; found {len(candidates)}: {names}. "
@@ -365,24 +427,19 @@ def resolve_bootstrap_bundle(
             "with --bundle."
         )
 
-    interactive = sys.stdin.isatty() if interactive is None else interactive
     if interactive:
         selected = input_fn(
-            "No ZIP was found under docker/. Enter the path to the "
-            "customer-supplied PhioTX ZIP bundle: "
+            f"No ZIP was found under {DEFAULT_BOOTSTRAP_DIR}. Enter the path "
+            "or file name of the customer-supplied PhioTX bundle: "
         ).strip()
         if selected:
-            return resolve_bootstrap_bundle(
-                selected,
-                input_fn=input_fn,
-                interactive=False,
-            )
+            return resolve_named_bundle(selected)
 
     raise FileNotFoundError(
         f"No customer-supplied PhioTX ZIP bundle found under "
         f"{DEFAULT_BOOTSTRAP_DIR}. Upload it manually to the Linux "
-        "orchestrator host before running bootstrap; the suite never "
-        "downloads vendor images or licences."
+        "orchestrator host before running bootstrap, or name it with "
+        "--bundle; the suite never downloads vendor images or licences."
     )
 
 
@@ -843,10 +900,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--bundle",
         help=(
             "Customer-supplied PhioTX ZIP bundle or directory already present "
-            "on this Linux host. With no explicit asset options, bootstrap "
-            "uses the single ZIP under ./docker/. The suite never downloads "
-            "vendor images or licences. Only the image, checksum sidecars, "
-            "and *.lic files are read."
+            "on this Linux host. Accepts a bare file name (for example "
+            "hpe.zip), a relative path, or an absolute path; bare names are "
+            "resolved against the current directory, ./docker/, and the "
+            "repository root. With no explicit asset options, bootstrap uses "
+            "the single ZIP under ./docker/. The suite never downloads vendor "
+            "images or licences. Only the image, checksum sidecars, and *.lic "
+            "files are read."
         ),
     )
     bootstrap.add_argument(

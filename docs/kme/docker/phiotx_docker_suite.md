@@ -154,8 +154,14 @@ When exactly one `.zip` is present there, `bootstrap` finds it automatically.
 If more than one is present, select the desired bundle explicitly:
 
 ```bash
-.venv/bin/python qkd_docker_orchestrator.py bootstrap --bundle docker/supplied-phiotx-bundle.zip
+.venv/bin/python qkd_docker_orchestrator.py bootstrap --bundle hpe.zip
 ```
+
+`--bundle` accepts a bare file name, a relative path, or an absolute path. A
+bare name is searched in the current directory, then `docker/`, then the
+repository root, so `--bundle hpe.zip` works from the repository root. On an
+interactive terminal with several ZIPs present, the orchestrator lists them and
+asks which one to unpack instead of guessing.
 
 The explicit `--bundle` path is still checked before any router is touched: it
 must be a readable ZIP or directory containing exactly one Docker/OCI image,
@@ -405,7 +411,7 @@ from `EVO_USERNAME` / `EVO_PASSWORD`, or from an interactive prompt.
 
 | Option | Meaning |
 | --- | --- |
-| `--bundle` | Customer ZIP or directory already on this host |
+| `--bundle` | Customer ZIP or directory; bare name resolved under `docker/` |
 | `--image-archive` | Local image archive, bypassing bundle detection |
 | `--license DEVICE=PATH` | Per-device licence, repeatable |
 | `--license-dir DIR` | Directory of unique `*.lic` files |
