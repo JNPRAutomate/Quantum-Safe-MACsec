@@ -25,6 +25,7 @@ The CA private key is never read, copied, or transmitted by this module. Only
 import shlex
 import shutil
 import subprocess
+import base64
 from pathlib import Path
 
 from lib.common.settings import CONFIG
@@ -41,6 +42,9 @@ DEFAULT_CA = {
     "dir": "/root/linuxCA/phiotx",
     "config": "openssl.cnf",
     "cert": "certs/phiotx-lab-ca.crt",
+    "ca_key": "private/phiotx-lab-ca.key",
+    "ca_key_bits": 4096,
+    "ca_days": 3650,
     "key_bits": 3072,
     "digest": "sha384",
     "days": 825,
@@ -101,6 +105,40 @@ class CaRunner:
         ssh.append(f"{self.user}@{self.host}")
         ssh.append(inner)
         return ssh
+
+    def run_host_checked(self, command, what, timeout=120):
+        """Run a command on the CA host without requiring the CA directory."""
+        if self.host:
+            argv = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
+            if self.ssh_key:
+                argv.extend(["-i", self.ssh_key, "-o", "IdentitiesOnly=yes"])
+            argv.extend([f"{self.user}@{self.host}", command])
+        else:
+            argv = ["sh", "-lc", command]
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise ExternalCaError(
+                f"{what} failed on CA host {self.host or 'localhost'}\n"
+                f"command={command}\n"
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+        return result
+
+    def write_if_missing(self, relative_path, content, mode=0o600):
+        """Create a CA file atomically without overwriting operator state."""
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        path = shlex.quote(relative_path)
+        self.run_checked(
+            f"if test ! -f {path}; then "
+            f"printf %s {shlex.quote(encoded)} | base64 -d > {path}; "
+            f"chmod {mode:o} {path}; fi",
+            f"CA file creation for {relative_path}",
+        )
 
     def run(self, command, timeout=120):
         argv = self._wrap(command)
@@ -176,6 +214,124 @@ def verify_ca(runner, ca_settings):
         print(f"       {line.strip()}")
 
     return result.stdout.strip()
+
+
+def openssl_ca_config(ca_settings):
+    """Render the minimal OpenSSL CA configuration required by PhioTX."""
+    return f"""[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir = .
+database = $dir/index.txt
+new_certs_dir = $dir/newcerts
+certificate = $dir/{ca_settings['cert']}
+private_key = $dir/{ca_settings['ca_key']}
+serial = $dir/serial
+default_md = {ca_settings['digest']}
+default_days = {int(ca_settings['days'])}
+policy = policy_loose
+unique_subject = no
+copy_extensions = copy
+
+[ policy_loose ]
+countryName = optional
+stateOrProvinceName = optional
+localityName = optional
+organizationName = optional
+organizationalUnitName = optional
+commonName = supplied
+emailAddress = optional
+
+[ req ]
+prompt = no
+distinguished_name = req_dn
+default_md = {ca_settings['digest']}
+x509_extensions = v3_ca
+
+[ req_dn ]
+C = IT
+O = HPE Lab
+OU = PhioTX Lab
+CN = PhioTX Lab CA
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical,CA:true,pathlen:0
+keyUsage = critical,keyCertSign,cRLSign
+
+[ phiotx_peer ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth,clientAuth
+
+[ phiotx_etsi ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth,clientAuth
+
+[ phiotx_client ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = clientAuth
+"""
+
+
+def ensure_ca(runner, ca_settings):
+    """Create the external CA when absent, or safely reuse it when present."""
+    ca_dir = shlex.quote(ca_settings["dir"])
+    runner.run_host_checked(
+        f"umask 077; mkdir -p {ca_dir}/certs {ca_dir}/private "
+        f"{ca_dir}/csr {ca_dir}/newcerts",
+        "External CA directory creation",
+    )
+    runner.write_if_missing("index.txt", "", mode=0o600)
+    runner.write_if_missing("serial", "1000\n", mode=0o600)
+    runner.write_if_missing(
+        ca_settings["config"],
+        openssl_ca_config(ca_settings),
+        mode=0o600,
+    )
+
+    ca_key = shlex.quote(ca_settings["ca_key"])
+    ca_cert = shlex.quote(ca_settings["cert"])
+    runner.run_checked(
+        f"if test -f {ca_cert} && test ! -f {ca_key}; then "
+        "echo 'CA certificate exists but private key is missing' >&2; exit 21; fi",
+        "External CA consistency check",
+    )
+    runner.run_checked(
+        f"if test ! -f {ca_key}; then "
+        "openssl genpkey -algorithm RSA "
+        f"-pkeyopt rsa_keygen_bits:{int(ca_settings['ca_key_bits'])} "
+        f"-out {ca_key}; chmod 600 {ca_key}; fi",
+        "External CA private key creation",
+        timeout=300,
+    )
+    runner.run_checked(
+        f"if test ! -f {ca_cert}; then "
+        "openssl req -new -x509 "
+        f"-config {shlex.quote(ca_settings['config'])} "
+        f"-extensions v3_ca -days {int(ca_settings['ca_days'])} "
+        f"-key {ca_key} -out {ca_cert}; chmod 644 {ca_cert}; fi",
+        "External CA certificate creation",
+        timeout=300,
+    )
+    runner.run_checked(
+        f"test \"$(openssl x509 -in {ca_cert} -noout -pubkey | "
+        "openssl pkey -pubin -outform DER | openssl dgst -sha256)\" = "
+        f"\"$(openssl pkey -in {ca_key} -pubout -outform DER | "
+        "openssl dgst -sha256)\"",
+        "External CA key/certificate match",
+    )
+    print(f"[OK] external CA initialized at {runner.host or 'localhost'}:{runner.ca_dir}")
 
 
 def _san_value(common_name, ip_addresses):
@@ -430,6 +586,7 @@ def build_external_pki(
     ca_settings = resolve_ca_settings(phiotx)
     runner = CaRunner(ca_settings, host=ca_host, user=ca_user, ssh_key=ssh_key)
 
+    ensure_ca(runner, ca_settings)
     verify_ca(runner, ca_settings)
     plan = plan_pki(devices, phiotx, only=only)
 

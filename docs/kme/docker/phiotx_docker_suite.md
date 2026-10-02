@@ -109,9 +109,14 @@ python3 -m venv .venv
 
 ### External CA
 
-An operator-controlled OpenSSL CA, by default at `/root/linuxCA/phiotx`. The CA
-private key is never read, copied, or transmitted by this suite; only
-`openssl ca` on the CA host touches it.
+No pre-existing CA is required. During `create` or `bootstrap`, the
+orchestrator idempotently creates an operator-controlled OpenSSL CA at
+`/root/linuxCA/phiotx` when it is absent, including its configuration,
+database, RSA-4096 private key, and ten-year self-signed CA certificate. An
+existing complete CA is reused. A partial or mismatched CA fails closed.
+
+The CA private key is never read, copied, or transmitted by the suite; only
+OpenSSL commands running on the CA host touch it.
 
 ### Vendor assets
 
@@ -285,6 +290,11 @@ traffic uses the OOB macvlan network instead.
 
 All trust material comes from the external CA. The in-repo PKI generators are
 deliberately unused.
+
+The greenfield order is CA initialization, CA consistency verification,
+fleet-wide identity planning, then leaf issuance. The CA creation is
+idempotent and does not overwrite an existing `openssl.cnf`, key, certificate,
+database, or serial file.
 
 Three identities are issued per router:
 
