@@ -1,6 +1,7 @@
 # qkd_clean.py
 
 import os
+import getpass
 import shlex
 import time
 import yaml
@@ -15,7 +16,62 @@ from lib.common.settings import CONFIG, PKI, QKD
 from lib.common.config import load_inventory_base
 
 BASE_DIR = Path(__file__).resolve().parents[3]
+INVENTORY_INPUT_DIR = BASE_DIR / "config" / "inventory" / "input"
 ONBOX_SCRIPT_NAME = "phiotx_qkd_onbox.py"
+
+
+def load_clean_inventory(value):
+    """Load the EVO inventory selected by the clean command."""
+    candidate = Path(value)
+    locations = (
+        [candidate]
+        if candidate.is_absolute()
+        else [
+            Path.cwd() / candidate,
+            BASE_DIR / candidate,
+            INVENTORY_INPUT_DIR / candidate,
+        ]
+    )
+    inventory_path = next((path.resolve() for path in locations if path.is_file()), None)
+    if inventory_path is None:
+        searched = ", ".join(str(path) for path in locations)
+        raise FileNotFoundError(
+            f"Clean inventory not found: {value}. Searched: {searched}"
+        )
+
+    with inventory_path.open(encoding="utf-8") as handle:
+        inventory = yaml.safe_load(handle) or {}
+    if not isinstance(inventory, dict) or "phiotx" not in inventory:
+        raise ValueError(
+            f"Clean inventory {inventory_path} is not a PhioTX/Docker inventory"
+        )
+
+    records = inventory.get("devices") or []
+    if isinstance(records, list):
+        devices = {
+            device["name"]: device
+            for device in records
+            if isinstance(device, dict) and device.get("name")
+        }
+    elif isinstance(records, dict):
+        devices = records
+    else:
+        raise ValueError(
+            f"Invalid devices structure in clean inventory {inventory_path}"
+        )
+
+    non_evo = [
+        name
+        for name, device in devices.items()
+        if not isinstance(device, dict) or device.get("evo") is not True
+    ]
+    if non_evo:
+        raise ValueError(
+            "Docker clean is restricted to EVO devices; rejected: "
+            + ", ".join(non_evo)
+        )
+
+    return inventory_path, devices
 
 
 # ----------------------------------------
@@ -841,15 +897,9 @@ def handle_clean(args):
 
     else:
 
-        print("No runtime devices.yaml found -> fallback to inventory_base")
-
-        base = load_inventory_base()
-        devices = base.get("devices", {})
-
-        if devices:
-            print("Using inventory_base devices")
-        else:
-            print("No devices found anywhere -> skipping remote device cleanup")
+        print("No runtime devices.yaml found -> loading the selected EVO inventory")
+        inventory_path, devices = load_clean_inventory(args.inventory)
+        print(f"Using clean inventory: {inventory_path}")
 
     if not devices:
         clean_runtime()
@@ -867,6 +917,8 @@ def handle_clean(args):
 
     clean_user = (
         getattr(args, "clean_user", None)
+        or getattr(args, "username", None)
+        or os.getenv("EVO_USERNAME")
         or os.getenv("QKD_BOOTSTRAP_USER")
         or secrets.get("bootstrap_user")
         or secrets.get("deploy_user")
@@ -875,6 +927,8 @@ def handle_clean(args):
 
     clean_password = (
         getattr(args, "clean_password", None)
+        or getattr(args, "password", None)
+        or os.getenv("EVO_PASSWORD")
         or os.getenv("QKD_BOOTSTRAP_PASSWORD")
         or secrets.get("bootstrap_password")
         or secrets.get("deploy_password")
@@ -884,10 +938,15 @@ def handle_clean(args):
     )
 
     if not clean_password:
-        raise RuntimeError(
-            "Missing clean credentials. Set QKD_BOOTSTRAP_PASSWORD (recommended) or "
-            "configure one of secrets.bootstrap_password/deploy_password/root_password/default_password."
-        )
+        if os.isatty(0):
+            clean_password = getpass.getpass(
+                f"Password for {clean_user} on the EVO routers: "
+            )
+        if not clean_password:
+            raise RuntimeError(
+                "Missing clean credentials. Use --password, set EVO_PASSWORD "
+                "or QKD_BOOTSTRAP_PASSWORD, or run interactively."
+            )
 
     for _, device in devices.items():
         if not isinstance(device, dict):

@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 import qkd_docker_orchestrator as orchestrator
 from lib.docker.qkd import docker_bootstrap_assets as bootstrap_assets
+from lib.docker.qkd import docker_clean
 from lib.docker.qkd import docker_phiotx_lifecycle as lifecycle
 
 
@@ -197,6 +198,88 @@ def test_bootstrap_bundle_requires_manual_upload(tmp_path, monkeypatch):
         match="Upload it manually.*never downloads vendor images",
     ):
         orchestrator.resolve_bootstrap_bundle(None, interactive=False)
+
+
+def test_clean_loads_the_selected_evo_inventory(tmp_path):
+    inventory = tmp_path / "evo.yaml"
+    inventory.write_text(
+        """
+phiotx:
+  image: phiotx:test
+devices:
+  - name: EVO1
+    evo: true
+    ip: 192.0.2.1
+  - name: EVO2
+    evo: true
+    ip: 192.0.2.2
+""",
+        encoding="utf-8",
+    )
+
+    path, devices = docker_clean.load_clean_inventory(inventory)
+
+    assert path == inventory.resolve()
+    assert sorted(devices) == ["EVO1", "EVO2"]
+
+
+def test_clean_uses_cli_credentials_with_inventory_before_local_cleanup(
+    tmp_path, monkeypatch
+):
+    inventory = tmp_path / "evo.yaml"
+    inventory.write_text(
+        """
+phiotx:
+  image: phiotx:test
+devices:
+  - name: EVO1
+    evo: true
+    ip: 192.0.2.1
+""",
+        encoding="utf-8",
+    )
+    runtime = tmp_path / "runtime_docker"
+    events = []
+
+    monkeypatch.setattr(docker_clean, "DOCKER_RUNTIME_DIR", runtime)
+    monkeypatch.setattr(docker_clean, "load_inventory_base", lambda: {})
+    monkeypatch.setattr(
+        docker_clean,
+        "clean_device",
+        lambda name, device, full_macsec=False: (
+            events.append(
+                (
+                    "remote",
+                    name,
+                    device["auth"]["username"],
+                    device["auth"]["password"],
+                )
+            )
+            or True
+        ),
+    )
+    monkeypatch.setattr(
+        docker_clean,
+        "clean_runtime",
+        lambda: events.append(("local",)),
+    )
+
+    docker_clean.handle_clean(
+        SimpleNamespace(
+            local_only=False,
+            pki=False,
+            full_macsec=False,
+            continue_on_failure=False,
+            inventory=str(inventory),
+            username="root",
+            password="secret",
+        )
+    )
+
+    assert events == [
+        ("remote", "EVO1", "root", "secret"),
+        ("local",),
+    ]
 
 
 def test_vendor_zip_preparation_finds_image_checksum_and_licenses(
