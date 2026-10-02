@@ -851,6 +851,15 @@ def handle_clean(args):
         else:
             print("No devices found anywhere -> skipping remote device cleanup")
 
+    if not devices:
+        clean_runtime()
+        if args.pki:
+            clean_certs()
+        else:
+            print("Skipping local cert cleanup. Use --pki to remove certs.")
+        print("Local clean complete; no remote credentials required.")
+        return
+
     inventory_base = load_inventory_base()
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
     if not isinstance(secrets, dict):

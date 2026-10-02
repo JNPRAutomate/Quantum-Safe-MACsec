@@ -359,8 +359,10 @@ def resolve_bootstrap_bundle(
     if len(candidates) > 1:
         names = ", ".join(path.name for path in candidates)
         raise ValueError(
-            f"Multiple ZIP bundles found under {DEFAULT_BOOTSTRAP_DIR}: {names}. "
-            "Select one explicitly with --bundle."
+            f"Expected exactly one customer-supplied PhioTX ZIP directly under "
+            f"{DEFAULT_BOOTSTRAP_DIR}; found {len(candidates)}: {names}. "
+            "Remove the unwanted ZIP or select the desired one explicitly "
+            "with --bundle."
         )
 
     interactive = sys.stdin.isatty() if interactive is None else interactive

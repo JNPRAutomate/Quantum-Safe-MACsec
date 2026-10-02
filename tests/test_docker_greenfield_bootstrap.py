@@ -127,6 +127,20 @@ def test_single_zip_in_docker_drop_directory_is_selected(tmp_path, monkeypatch):
     assert selected == bundle.resolve()
 
 
+def test_bootstrap_rejects_multiple_zip_bundles_without_explicit_selection(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "phiotx-lab.zip").write_bytes(b"lab-bundle")
+    (tmp_path / "phiotx-production.zip").write_bytes(b"production-bundle")
+    monkeypatch.setattr(orchestrator, "DEFAULT_BOOTSTRAP_DIR", tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="Expected exactly one customer-supplied PhioTX ZIP.*--bundle",
+    ):
+        orchestrator.resolve_bootstrap_bundle(None, interactive=False)
+
+
 def test_bootstrap_bundle_requires_manual_upload(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "DEFAULT_BOOTSTRAP_DIR", tmp_path)
 

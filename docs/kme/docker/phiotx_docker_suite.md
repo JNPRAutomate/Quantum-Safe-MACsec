@@ -138,12 +138,30 @@ cp /path/to/supplied-phiotx-bundle.zip docker/
 `docker/` is ignored by `.gitignore`, so images and licences can never be
 committed.
 
+Before starting `bootstrap`, inspect the directory and confirm that it contains
+the intended customer bundle:
+
+```bash
+find docker -maxdepth 1 -type f -printf '%f\n' | sort
+```
+
+With no `--bundle` option, the orchestrator requires **exactly one `.zip`
+directly under `docker/`**. It rejects an empty directory and refuses to guess
+when multiple ZIPs are present. ZIPs in subdirectories are not selected by
+autodiscovery. This is an intentional preflight check, not a download step.
+
 When exactly one `.zip` is present there, `bootstrap` finds it automatically.
-Otherwise select it explicitly:
+If more than one is present, select the desired bundle explicitly:
 
 ```bash
 .venv/bin/python qkd_docker_orchestrator.py bootstrap --bundle docker/supplied-phiotx-bundle.zip
 ```
+
+The explicit `--bundle` path is still checked before any router is touched: it
+must be a readable ZIP or directory containing exactly one Docker/OCI image,
+its matching checksum sidecar, and at least one `.lic` file. The licence
+capacity check then compares the collected licences with the complete managed
+inventory.
 
 A plain directory is also accepted instead of a ZIP.
 
@@ -415,10 +433,13 @@ image loaded.
 ```bash
 mkdir -p docker
 cp /path/to/supplied-phiotx-bundle.zip docker/
+find docker -maxdepth 1 -type f -printf '%f\n' | sort
 ```
 
-The bundle must contain one image, its checksum sidecar, and one `.lic` file per
-router.
+The last command is a required operator check: confirm that the desired ZIP is
+present and that no second customer bundle is waiting in the same directory.
+The bundle itself must contain one image, its checksum sidecar, and one `.lic`
+file per router.
 
 ### Step 2: confirm the routers are admissible
 
