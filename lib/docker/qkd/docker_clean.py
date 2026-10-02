@@ -19,6 +19,12 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 INVENTORY_INPUT_DIR = BASE_DIR / "config" / "inventory" / "input"
 ONBOX_SCRIPT_NAME = "phiotx_qkd_onbox.py"
 LEGACY_ONBOX_SCRIPT_NAMES = ("qkd_onbox.py",)
+ONBOX_SIDECAR_NAMES = (
+    "phiotx_qkd_onbox_inventory.json",
+    "phiotx_qkd_onbox_config.json",
+    "qkd_onbox_inventory.json",
+    "qkd_onbox_config.json",
+)
 
 
 def load_clean_inventory(value):
@@ -444,11 +450,11 @@ def clean_device(name, device, full_macsec=False):
         )
 
         file_cleanup_parts = [
-            f"rm -f {op_script_dir}/phiotx_qkd_onbox_inventory.json",
-            f"rm -f {op_script_dir}/phiotx_qkd_onbox_config.json",
             "rm -rf /var/tmp/qkd_peer_inbox",
             "rm -rf /var/tmp/qkd_peer_status",
             "rm -rf /var/tmp/qkd_peer_ack",
+            "rm -rf /var/tmp/qkd_tests_*",
+            "rm -f /var/tmp/phiotx-*.json",
             "rm -f /var/db/scripts/event/qkd.conf",
             f"rm -rf {remote_cert_dir}",
             f"rm -rf {script_dir}/certs",
@@ -457,6 +463,14 @@ def clean_device(name, device, full_macsec=False):
             f"rm -rf {script_home_dir}",
             f"rm -rf {peer_cmd_home_dir}",
         ]
+        for sidecar_name in ONBOX_SIDECAR_NAMES:
+            file_cleanup_parts.extend(
+                [
+                    f"rm -f {op_script_dir}/{sidecar_name}",
+                    f"rm -f {event_script_dir}/{sidecar_name}",
+                    f"rm -f /var/tmp/{sidecar_name}",
+                ]
+            )
         for candidate_script in script_names:
             file_cleanup_parts.extend(
                 [
@@ -749,8 +763,6 @@ def clean_device(name, device, full_macsec=False):
                 )
 
             peer_cleanup_paths = [
-                f"{op_script_dir}/phiotx_qkd_onbox_inventory.json",
-                f"{op_script_dir}/phiotx_qkd_onbox_config.json",
                 "/var/tmp/qkd_peer_inbox",
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
@@ -763,6 +775,14 @@ def clean_device(name, device, full_macsec=False):
                 script_home_dir,
                 peer_cmd_home_dir,
             ]
+            for sidecar_name in ONBOX_SIDECAR_NAMES:
+                peer_cleanup_paths.extend(
+                    [
+                        f"{op_script_dir}/{sidecar_name}",
+                        f"{event_script_dir}/{sidecar_name}",
+                        f"/var/tmp/{sidecar_name}",
+                    ]
+                )
             for candidate_script in script_names:
                 peer_cleanup_paths.extend(
                     [
@@ -867,8 +887,6 @@ def clean_device(name, device, full_macsec=False):
                 )
 
             paths_should_be_absent = [
-                f"{op_script_dir}/phiotx_qkd_onbox_inventory.json",
-                f"{op_script_dir}/phiotx_qkd_onbox_config.json",
                 "/var/tmp/qkd_peer_inbox",
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
@@ -880,6 +898,14 @@ def clean_device(name, device, full_macsec=False):
                 script_log_dir,
                 script_home_dir,
             ]
+            for sidecar_name in ONBOX_SIDECAR_NAMES:
+                paths_should_be_absent.extend(
+                    [
+                        f"{op_script_dir}/{sidecar_name}",
+                        f"{event_script_dir}/{sidecar_name}",
+                        f"/var/tmp/{sidecar_name}",
+                    ]
+                )
             for candidate_script in script_names:
                 paths_should_be_absent.extend(
                     [
@@ -898,6 +924,20 @@ def clean_device(name, device, full_macsec=False):
             for path in paths_should_be_absent:
                 if remote_path_exists(path):
                     file_leftovers.append(path)
+
+            generated_temp_leftovers = run_shell(
+                "verify generated QKD temporary files",
+                (
+                    "find /var/tmp -maxdepth 1 "
+                    "\\( -name 'qkd_tests_*' -o -name 'phiotx-*.json' \\) "
+                    "-print 2>/dev/null"
+                ),
+                strict=False,
+                show_output=False,
+                show_label=False,
+            )
+            if generated_temp_leftovers.strip():
+                file_leftovers.extend(generated_temp_leftovers.splitlines())
 
             soft_leftovers = []
 
