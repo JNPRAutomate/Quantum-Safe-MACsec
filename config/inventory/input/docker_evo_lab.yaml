@@ -1,0 +1,134 @@
+# Docker/PhioTX EVO-only inventory, verified 2026-10-02.
+#
+# This inventory is consumed exclusively by qkd_docker_orchestrator.py.
+# It must never be used with qkd_orchestrator.py: the KME endpoints below are
+# PhioTX containers running inside the routers themselves, not the external
+# Linux KME servers on 10.38.100.0/24.
+#
+# Router models and Junos releases observed with "show version":
+#   EVO1: ptx10001-36mr, 26.2R1.7-EVOI20260619095247-evo-builder-1
+#   EVO2: ptx10002-36qdd, 26.2R1.7-EVOI20260619095247-evo-builder-1
+#
+# Only Junos EVO routers with Docker enabled are accepted. The orchestrator
+# refuses to deploy against any device whose "show version" does not report an
+# EVO build or whose Docker daemon is not reachable.
+#
+# Each router hosts its own PhioTX container. The on-box runtime
+# phiotx_qkd_onbox.py therefore reaches its KME over the local Docker bridge
+# jnpr_cntrz_net (9.1.1.0/24) instead of the OOB management network.
+#
+# Credentials are deliberately omitted. Supply them through the supported
+# runtime prompt/environment mechanism; do not commit lab passwords.
+topology: links
+platform: evo
+mode: qkd
+pki_profile: external_ca
+
+# Workflow-wide PhioTX container definition. Per-device overrides live under
+# devices[].phiotx.
+phiotx:
+  image: phiotx:4.6.3-deb-x86_64
+  image_archive: /var/tmp/phiotx-4.6.3-deb-x86_64.tar.gz
+
+  # Docker resource limits validated on EVO. "--cpus" is intentionally absent:
+  # the EVO kernel rejects the CFS quota write during OCI container creation.
+  cpu_shares: 1024
+  memory: 512m
+  restart_policy: unless-stopped
+
+  # Host-side persistent state. One directory tree per container.
+  host_data_base: /var/db
+
+  # OOB macvlan network used for PhioTX peer/Hive traffic between routers.
+  # ipvlan and macvlan-on-eth0 were both rejected by the EVO kernel.
+  oob_network:
+    name: phiotx_oob
+    driver: macvlan
+    macvlan_mode: bridge
+    parent: vmb0
+    subnet: 10.38.96.0/19
+    gateway: 10.38.127.254
+
+  # Pre-existing Junos EVO infrastructure bridge. The orchestrator attaches to
+  # it but must never create, modify, or remove it, nor touch the reserved
+  # endpoint 9.1.1.2 (jnpr_cntrz_infra_cntr).
+  internal_network:
+    name: jnpr_cntrz_net
+    subnet: 9.1.1.0/24
+    gateway: 9.1.1.1
+    reserved:
+      - 9.1.1.2
+
+  # Configuration layers installed with tx_install_cf, in this order.
+  layers:
+    - 100-zero-touch-base
+    - 600-peer-hive
+    - 700-etsi-bulk
+
+  # Post-quantum key encapsulation used on the peer/Hive channel.
+  # "shared_key" in the vendor sample is a placeholder and is rejected.
+  pqc: ML-KEM-1024
+
+  # ETSI QKD 014 service exposed to the on-box runtime.
+  etsi:
+    port: 443
+    keygen_method: bulk
+    validate_client: true
+    src_ip: 9.1.1.1/32
+
+  peer_port: 9002
+
+devices:
+  - name: EVO1
+    hostname: evo1
+    platform: ptx
+    evo: true
+    docker: true
+    ip: 10.38.97.218
+    qkd:
+      sae_id: sae-001
+    kme:
+      # Local PhioTX container reached over jnpr_cntrz_net, not the OOB LAN.
+      ip: 9.1.1.10
+      port: 443
+      api: phiotx
+    phiotx:
+      container: phiotx01
+      oob_ip: 10.38.112.10
+      internal_ip: 9.1.1.10
+      peer: phiotx02
+      peer_oob_ip: 10.38.112.11
+      etsi_client: sae-001
+    interfaces:
+      - et-0/0/1
+
+  - name: EVO2
+    hostname: evo2
+    platform: ptx
+    evo: true
+    docker: true
+    ip: 10.38.97.228
+    qkd:
+      sae_id: sae-002
+    kme:
+      ip: 9.1.1.11
+      port: 443
+      api: phiotx
+    phiotx:
+      container: phiotx02
+      oob_ip: 10.38.112.11
+      internal_ip: 9.1.1.11
+      peer: phiotx01
+      peer_oob_ip: 10.38.112.10
+      etsi_client: sae-002
+    interfaces:
+      - et-0/0/1
+
+links:
+  - id: EVO1-EVO2
+    node_a: EVO1
+    interface_a: et-0/0/1
+    node_b: EVO2
+    interface_b: et-0/0/1
+    ca_name: CA_EVO1_EVO2
+    keychain_name: QKD_CA_EVO1_EVO2
