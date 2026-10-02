@@ -26,7 +26,9 @@ import shlex
 import shutil
 import subprocess
 import base64
-from pathlib import Path
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 from lib.common.settings import CONFIG
 from lib.docker.qkd.docker_paths import DOCKER_RUNTIME_DIR
@@ -97,7 +99,7 @@ class CaRunner:
     def _wrap(self, command):
         inner = f"cd {shlex.quote(self.ca_dir)} && {command}"
         if not self.host:
-            return ["sh", "-lc", inner]
+            return ["sh", "-c", inner]
 
         ssh = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
         if self.ssh_key:
@@ -114,7 +116,7 @@ class CaRunner:
                 argv.extend(["-i", self.ssh_key, "-o", "IdentitiesOnly=yes"])
             argv.extend([f"{self.user}@{self.host}", command])
         else:
-            argv = ["sh", "-lc", command]
+            argv = ["sh", "-c", command]
         result = subprocess.run(
             argv,
             capture_output=True,
@@ -386,6 +388,64 @@ def ensure_ca(runner, ca_settings):
     print(f"[OK] external CA initialized at {runner.host or 'localhost'}:{runner.ca_dir}")
 
 
+def prepare_fresh_ca(runner, ca_settings):
+    """Prepare a separate CA generation, leaving the active CA untouched."""
+    ca_dir = PurePosixPath(ca_settings["dir"])
+    if not ca_dir.is_absolute() or len(ca_dir.parts) < 3 or ".." in ca_dir.parts:
+        raise ExternalCaError(f"Unsafe directory for fresh CA generation: {ca_dir}")
+    for field in ("config", "cert", "ca_key"):
+        path = PurePosixPath(ca_settings[field])
+        if path.is_absolute() or ".." in path.parts:
+            raise ExternalCaError(
+                f"Fresh CA {field} must be relative to the CA directory: {path}"
+            )
+
+    token = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex
+    fresh_settings = dict(ca_settings)
+    fresh_settings["dir"] = f"{ca_dir}.bootstrap-{token}"
+    backup_dir = f"{ca_dir}.backup-{token}"
+    lock_dir = f"{ca_dir}.bootstrap.lock"
+    active = shlex.quote(str(ca_dir))
+    generation = shlex.quote(fresh_settings["dir"])
+    backup = shlex.quote(backup_dir)
+    lock = shlex.quote(lock_dir)
+
+    runner.run_host_checked(
+        "set -e; command -v openssl >/dev/null; "
+        f"if test -L {active} || "
+        f"(test -e {active} && test ! -d {active}); then "
+        "echo 'Refusing to replace a symlink or non-directory CA path' >&2; exit 1; fi; "
+        f"if test -e {generation} || test -L {generation} || "
+        f"test -e {backup} || test -L {backup}; then "
+        "echo 'Fresh CA generation or backup path already exists' >&2; exit 1; fi; "
+        f"umask 077; mkdir -p {shlex.quote(str(ca_dir.parent))}; "
+        f"if ! mkdir {lock}; then "
+        f"echo {shlex.quote('Another PKI generation holds the lock: ' + lock_dir)} "
+        ">&2; exit 1; fi",
+        "Fresh CA preflight",
+    )
+    return fresh_settings, backup_dir, lock_dir
+
+
+def activate_fresh_ca(runner, fresh_settings, ca_settings, backup_dir):
+    """Preserve the previous CA and activate a fully issued new generation."""
+    active = shlex.quote(ca_settings["dir"])
+    generation = shlex.quote(fresh_settings["dir"])
+    backup = shlex.quote(backup_dir)
+    result = runner.run_host_checked(
+        "set -e; "
+        f"if test -e {active}; then "
+        f"mv {active} {backup}; printf 'Previous CA preserved at: %s\\n' {backup}; fi; "
+        f"if ! mv {generation} {active}; then "
+        f"if test -d {backup}; then mv {backup} {active}; fi; "
+        "echo 'Cannot activate the fresh CA generation' >&2; exit 1; fi",
+        "Fresh CA activation",
+    )
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    print(f"[NEW] CA and all leaf certificates activated at {runner.host or 'localhost'}:{ca_settings['dir']}")
+
+
 def _san_value(common_name, ip_addresses):
     parts = [f"DNS:{common_name}"]
     for address in ip_addresses:
@@ -620,6 +680,7 @@ def build_external_pki(
     ssh_key=None,
     only=None,
     force=False,
+    fresh=False,
 ):
     """
     Issue and stage all PhioTX trust material.
@@ -629,58 +690,95 @@ def build_external_pki(
 
     Staging layout, one directory per device:
 
-        config/runtime/<device>/pki/ca.pem
-        config/runtime/<device>/pki/<role>.crt
-        config/runtime/<device>/pki/<role>.key
+        config/runtime_docker/<device>/pki/ca.pem
+        config/runtime_docker/<device>/pki/<role>.crt
+        config/runtime_docker/<device>/pki/<role>.key
 
+    Fresh bootstrap replaces the fleet CA and every leaf key/certificate.
+    The previous CA is preserved only after the new generation is complete.
     Returns a per-device map consumed by docker_phiotx_lifecycle.py.
     """
     ca_settings = resolve_ca_settings(phiotx)
-    runner = CaRunner(ca_settings, host=ca_host, user=ca_user, ssh_key=ssh_key)
-
-    ensure_ca(runner, ca_settings)
-    verify_ca(runner, ca_settings)
     plan = plan_pki(devices, phiotx, only=only)
+    if fresh:
+        managed = {
+            name for name, device in devices.items()
+            if device.get("managed") is not False
+        }
+        if set(plan) != managed:
+            raise ExternalCaError(
+                "Fresh bootstrap replaces the shared CA and must include every "
+                "managed EVO router. Remove --only, or use create/deploy for a "
+                "partial rollout with the existing CA."
+            )
 
-    outputs = {}
+    active_runner = CaRunner(ca_settings, host=ca_host, user=ca_user, ssh_key=ssh_key)
+    runner = active_runner
+    generation_settings = ca_settings
+    lock_dir = None
+    if fresh:
+        generation_settings, backup_dir, lock_dir = prepare_fresh_ca(
+            active_runner, ca_settings
+        )
+        runner = CaRunner(
+            generation_settings, host=ca_host, user=ca_user, ssh_key=ssh_key
+        )
+        print("[NEW] Generating a fresh CA and every EVO leaf key/certificate; no reuse")
 
-    for name, identities in plan.items():
-        staging = RUNTIME_DIR / name / "pki"
-        staging.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_ca(runner, generation_settings)
+        verify_ca(runner, generation_settings)
+        issued_by_device = {}
+        for name, identities in plan.items():
+            issued_by_device[name] = {}
+            for identity in identities:
+                common_name = identity["common_name"]
+                if not (force or fresh) and certificate_is_usable(
+                    runner, generation_settings, common_name
+                ):
+                    print(f"[SKIP] {common_name} already has a valid certificate")
+                    issued = {
+                        "key": f"private/{common_name}.key",
+                        "crt": f"certs/{common_name}.crt",
+                    }
+                else:
+                    issued = issue_certificate(
+                        runner,
+                        generation_settings,
+                        common_name=common_name,
+                        ip_addresses=identity["ip_addresses"],
+                        extensions=identity["extensions"],
+                    )
+                issued_by_device[name][identity["role"]] = issued
 
-        ca_local = runner.fetch(ca_settings["cert"], staging / "ca.pem", mode=0o644)
+        if fresh:
+            activate_fresh_ca(
+                active_runner, generation_settings, ca_settings, backup_dir
+            )
+            runner = active_runner
 
-        resolved = {}
-        for identity in identities:
-            common_name = identity["common_name"]
-
-            if not force and certificate_is_usable(runner, ca_settings, common_name):
-                print(f"[SKIP] {common_name} already has a valid certificate")
-                issued = {
-                    "key": f"private/{common_name}.key",
-                    "crt": f"certs/{common_name}.crt",
+        outputs = {}
+        for name, identities in plan.items():
+            staging = RUNTIME_DIR / name / "pki"
+            staging.mkdir(parents=True, exist_ok=True)
+            ca_local = runner.fetch(ca_settings["cert"], staging / "ca.pem", mode=0o644)
+            resolved = {}
+            for identity in identities:
+                role = identity["role"]
+                issued = issued_by_device[name][role]
+                key_local = runner.fetch(issued["key"], staging / f"{role}.key", mode=0o600)
+                crt_local = runner.fetch(issued["crt"], staging / f"{role}.crt", mode=0o644)
+                resolved[role] = {
+                    "common_name": identity["common_name"],
+                    "store": identity["store"],
+                    "key": key_local,
+                    "crt": crt_local,
                 }
-            else:
-                issued = issue_certificate(
-                    runner,
-                    ca_settings,
-                    common_name=common_name,
-                    ip_addresses=identity["ip_addresses"],
-                    extensions=identity["extensions"],
-                )
-
-            role = identity["role"]
-            key_local = runner.fetch(issued["key"], staging / f"{role}.key", mode=0o600)
-            crt_local = runner.fetch(issued["crt"], staging / f"{role}.crt", mode=0o644)
-
-            resolved[role] = {
-                "common_name": common_name,
-                "store": identity["store"],
-                "key": key_local,
-                "crt": crt_local,
-            }
-
-        outputs[name] = {"ca": ca_local, "identities": resolved}
-        print(f"[OK] staged PhioTX PKI for {name} in {staging}")
-
-    return outputs
+            outputs[name] = {"ca": ca_local, "identities": resolved}
+            print(f"[OK] staged PhioTX PKI for {name} in {staging}")
+        return outputs
+    finally:
+        if lock_dir is not None:
+            active_runner.run_host_checked(
+                f"rmdir {shlex.quote(lock_dir)}", "Fresh CA lock release"
+            )

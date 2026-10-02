@@ -109,11 +109,20 @@ python3 -m venv .venv
 
 ### External CA
 
-No pre-existing CA is required. During `create` or `bootstrap`, the
-orchestrator idempotently creates an operator-controlled OpenSSL CA at
-`/root/linuxCA/phiotx` when it is absent, including its configuration,
-database, RSA-4096 private key, and ten-year self-signed CA certificate. An
-existing complete CA is reused. A partial or mismatched CA fails closed.
+No pre-existing CA is required. `bootstrap` generates a **new CA and every
+EVO certificate/key from scratch**, including `phiotx01` and `phiotx02`.
+It does not reuse manual lab certificates, even if they are still valid.
+The default active CA directory is `/root/linuxCA/phiotx`, with its own
+configuration, database, RSA-4096 private key, and ten-year CA certificate.
+
+The new generation is fully issued separately before it replaces the active
+CA. The previous directory is preserved as
+`/root/linuxCA/phiotx.backup-<timestamp>-<unique-id>`. An issuance failure
+leaves the active CA untouched. The new root of trust applies to the whole
+managed fleet, so partial-fleet `bootstrap --only` is rejected.
+
+For day-two operations, `create` keeps the existing CA and reuses valid leaf
+certificates; `create --force-pki` reissues leaves without replacing the CA.
 
 The CA private key is never read, copied, or transmitted by the suite; only
 OpenSSL commands running on the CA host touch it.
@@ -291,10 +300,11 @@ traffic uses the OOB macvlan network instead.
 All trust material comes from the external CA. The in-repo PKI generators are
 deliberately unused.
 
-The greenfield order is CA initialization, CA consistency verification,
-fleet-wide identity planning, then leaf issuance. The CA creation is
-idempotent and does not overwrite an existing `openssl.cnf`, key, certificate,
-database, or serial file.
+The greenfield order is fleet-wide identity validation, generation of a fresh
+CA in a separate directory, issuance of every leaf certificate/key, preservation
+of the previous CA, activation of the new CA, then local staging.
+All three extension profiles are generated with the new configuration; no
+manual `openssl.cnf` is required or reused.
 
 Three identities are issued per router:
 
@@ -308,6 +318,11 @@ Three identities are issued per router:
 common names or addresses across the fleet. Certificates that are still valid
 are reused, so re-running the workflow does not needlessly reissue identities;
 `--force-pki` overrides that.
+
+`bootstrap` always generates all of the above identities with new private keys.
+For two EVOs this is **one new CA plus six new leaf certificates**:
+`phiotx01`, `phiotx01-etsi`, `sae-001`, `phiotx02`, `phiotx02-etsi`, and
+`sae-002`. This applies even when `--force-pki` is not supplied.
 
 Container material is installed with `tx_install_private_key` and
 `tx_install_crt` rather than a bind mount, so PhioTX owns the keys in its own
@@ -470,11 +485,13 @@ presence of `jnpr_cntrz_net`.
 
 ```bash
 .venv/bin/python qkd_docker_orchestrator.py bootstrap \
-  --ca-host 10.38.98.181 \
+  --bundle hpe.zip \
   --username root
 ```
 
 To stop before the Junos configuration is pushed, add `--phiotx-only`.
+The CA is generated locally on the Linux orchestrator host by default. Use
+`--ca-host` only when the CA must reside on a different host.
 
 ### Execution order
 
@@ -486,7 +503,7 @@ router is modified.
 | 1 | Validate bundle, verify checksum, collect licences | No |
 | 2 | Check licence capacity against the managed fleet | No |
 | 3 | Build runtime inventory, policy, sidecars, layers | No |
-| 4 | Issue certificates on the external CA | No |
+| 4 | Generate fresh CA and all leaf keys/certificates; back up the previous CA | No |
 | 5 | Admission: EVO build, Docker daemon, networks | Read-only |
 | 6 | Create persistent storage under `/var/db` | Yes |
 | 7 | Upload image, verify SHA-256, `docker load`, delete archive | Yes |
@@ -554,21 +571,27 @@ remote archive exists before loading it.
 
 1. Add the device, its `phiotx` block, and its links to the inventory.
 2. Add one more `.lic` file to the bundle.
-3. Run `bootstrap`, optionally with `--only NEWNODE`.
+3. Run `create` to issue the new node's certificates under the existing CA,
+   then use `deploy --only NEWNODE` with its licence.
 
 Licence allocation stays stable across the existing fleet, and the Hive mesh
 and ETSI clients are re-derived from the inventory automatically.
+Do not use `bootstrap --only NEWNODE`: replacing the shared CA on just one
+router would break trust with the other peers.
 
-### Re-running is safe
+### Re-running and PKI policy
 
-Each step checks current state first:
+Container operations check current state first. PKI behavior depends on the
+command: every `bootstrap` intentionally generates a new CA and all leaf keys,
+whereas `create` preserves the CA and normally reuses valid leaves.
 
 | Step | Behaviour on re-run |
 | --- | --- |
 | Image | Skipped when already loaded |
 | OOB network | Skipped when it already exists |
 | Container | Started rather than recreated |
-| Certificates | Reused while still valid, unless `--force-pki` |
+| Certificates (`create`) | Reused while valid, unless `--force-pki`; CA preserved |
+| Certificates (`bootstrap`) | New CA and every leaf key/certificate; previous CA backed up |
 | Layers | Dry-run, then committed |
 | PQC keypair | Generated only when absent |
 

@@ -488,7 +488,7 @@ def cmd_validate(args) -> int:
     return 0
 
 
-def cmd_create(args) -> int:
+def cmd_create(args, *, fresh_pki=False) -> int:
     """
     Build everything that can be produced without touching the routers.
 
@@ -534,6 +534,7 @@ def cmd_create(args) -> int:
             ssh_key=args.ssh_key,
             only=args.only,
             force=args.force_pki,
+            fresh=fresh_pki,
         )
 
     build_onbox_artifacts(runtime_devices, phiotx=phiotx)
@@ -718,7 +719,7 @@ def _run_greenfield_bootstrap(args) -> int:
     )
 
     print("\n=== Building Docker workflow artifacts ===")
-    cmd_create(args)
+    cmd_create(args, fresh_pki=True)
 
     runtime_devices = load_docker_runtime_devices()
     pki_bundles = collect_staged_pki(runtime_devices)
@@ -924,8 +925,9 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap = subparsers.add_parser(
         "bootstrap",
         help=(
-            "Greenfield install: build artifacts, upload image, configure all "
-            "PhioTX containers, then deploy Junos"
+            "Greenfield install: generate a fresh CA and all EVO certificates, "
+            "build artifacts, upload image, configure all PhioTX containers, "
+            "then deploy Junos (requires the complete managed fleet)"
         ),
     )
     add_common(bootstrap)
