@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
-from lib.docker.qkd.docker_paths import DOCKER_RUNTIME_DIR, DOCKER_RUNTIME_REL
+from lib.docker.qkd.docker_paths import (
+    DOCKER_RUNTIME_DIR,
+    DOCKER_RUNTIME_REL,
+    load_docker_runtime_pki_profile,
+    load_docker_runtime_qkd_policy,
+)
 from lib.common.settings import CONFIG, QKD, PKI
-from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 from jnpr.junos import Device
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import ast
@@ -872,8 +876,8 @@ def check_onbox_runtime_policy_config(device):
     device = normalize_device(device)
     name = device_name(device)
     path = qkd_remote_onbox_config_json()
-    runtime_pki = load_runtime_pki_profile()
-    runtime_policy = load_runtime_qkd_policy()
+    runtime_pki = load_docker_runtime_pki_profile()
+    runtime_policy = load_docker_runtime_qkd_policy()
     pki = runtime_pki.get("pki", {})
     qkd_policy = runtime_policy.get("qkd_policy", {})
     pki_profile = pki.get("profile")
@@ -908,7 +912,7 @@ def check_onbox_runtime_policy_config(device):
 
 
 def expected_max_installed_keys():
-    runtime_policy = load_runtime_qkd_policy()
+    runtime_policy = load_docker_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {})
     value = int(qkd_policy.get("max_installed_keys", 5))
     return 1 if value < 1 else value

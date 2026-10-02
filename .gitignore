@@ -45,6 +45,9 @@ config/kme/state/*.yaml
 # Local auxiliary reference material
 archive/
 
+# Customer-supplied container images and licences
+/docker/
+
 # Legacy local backups
 *.orig.py
 

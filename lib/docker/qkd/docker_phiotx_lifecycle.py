@@ -13,6 +13,7 @@ EVO router to config/inventory/input/docker_evo_lab.yaml is sufficient.
 Every device reached here has already passed docker_evo_guard.admit_device().
 """
 
+import hashlib
 import shlex
 from pathlib import Path
 
@@ -342,8 +343,22 @@ def ensure_host_dirs(device, settings):
     return True
 
 
-def ensure_image(device, phiotx):
-    """Load the PhioTX image from the offline archive if it is not present."""
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ensure_image(device, phiotx, local_archive=None):
+    """
+    Load the PhioTX image when absent.
+
+    When ``local_archive`` is supplied, the orchestrator uploads it to the
+    remote ``phiotx.image_archive`` path and verifies SHA-256 before loading.
+    Otherwise the archive must already exist on the EVO.
+    """
     image = phiotx["image"]
 
     present = _docker(
@@ -362,17 +377,67 @@ def ensure_image(device, phiotx):
             f"Image {image} is absent and phiotx.image_archive is not set"
         )
 
-    _run(
-        device,
-        f"test -f {shlex.quote(archive)}",
-        f"image archive lookup ({archive})",
-    )
-    _run(
-        device,
-        f"gzip -dc {shlex.quote(archive)} | docker load",
-        "image load",
-        timeout=900,
-    )
+    uploaded = False
+    if local_archive is not None:
+        local_archive = Path(local_archive).expanduser().resolve()
+        if not local_archive.is_file():
+            raise PhiotxLifecycleError(
+                f"Local PhioTX image archive not found: {local_archive}"
+            )
+
+        remote_parent = str(Path(archive).parent)
+        _run(
+            device,
+            f"mkdir -p {shlex.quote(remote_parent)}",
+            "image staging directory",
+        )
+        _push_files(device, [(local_archive, archive)])
+        uploaded = True
+
+    else:
+        _run(
+            device,
+            f"test -f {shlex.quote(archive)}",
+            f"image archive lookup ({archive}); upload it with scp -O or pass "
+            "--image-archive to the orchestrator",
+        )
+
+    try:
+        if uploaded:
+            expected = _sha256_file(local_archive)
+            remote_digest = _run(
+                device,
+                f"sha256sum {shlex.quote(archive)} | awk '{{print $1}}'",
+                "uploaded image checksum",
+                timeout=300,
+            )
+            actual = (remote_digest.stdout or "").strip().splitlines()
+            actual = actual[-1].strip() if actual else ""
+            if actual != expected:
+                raise PhiotxLifecycleError(
+                    f"{device_name(device)}: uploaded image checksum mismatch: "
+                    f"expected {expected}, received {actual or '<empty>'}"
+                )
+            print(
+                f"[OK] uploaded and verified image archive for "
+                f"{device_name(device)}"
+            )
+
+        if str(archive).endswith((".gz", ".tgz")):
+            load_command = f"gzip -dc {shlex.quote(archive)} | docker load"
+        else:
+            load_command = f"docker load -i {shlex.quote(archive)}"
+
+        _run(device, load_command, "image load", timeout=900)
+    finally:
+        if uploaded:
+            _run(
+                device,
+                f"rm -f {shlex.quote(archive)}",
+                "uploaded image cleanup",
+                allow_fail=True,
+            )
+
     print(f"[OK] loaded image {image}")
     return True
 
@@ -478,18 +543,34 @@ def start_container(device, settings, phiotx):
 def install_license(device, settings, license_path):
     """Install the node-unique PhioTX licence."""
     container = settings["container"]
-    remote = f"{REMOTE_STAGING}/{settings['container']}.lic"
+    remote = f"{settings['data_dir']}/.license-install.lic"
+    expected = _sha256_file(license_path)
 
-    _run(device, f"mkdir -p {shlex.quote(REMOTE_STAGING)}", "staging directory")
+    _run(device, f"mkdir -p {shlex.quote(settings['data_dir'])}", "licence staging")
     _push_files(device, [(license_path, remote)])
 
-    _docker(
-        device,
-        f"cp {shlex.quote(remote)} {shlex.quote(container)}:/tmp/phiotx.lic",
-        "licence copy",
-    )
-    _exec(device, container, "tx_install_license -f /tmp/phiotx.lic -y", "licence install")
-    _run(device, f"rm -f {shlex.quote(remote)}", "staging cleanup", allow_fail=True)
+    try:
+        remote_digest = _run(
+            device,
+            f"sha256sum {shlex.quote(remote)} | awk '{{print $1}}'",
+            "licence checksum",
+        )
+        actual = (remote_digest.stdout or "").strip().splitlines()
+        actual = actual[-1].strip() if actual else ""
+        if actual != expected:
+            raise PhiotxLifecycleError(
+                f"{device_name(device)}: licence checksum mismatch for {container}"
+            )
+
+        _exec(
+            device,
+            container,
+            "tx_install_license /data/.license-install.lic",
+            "licence install",
+        )
+        _exec(device, container, "tx_status -license", "licence verification")
+    finally:
+        _run(device, f"rm -f {shlex.quote(remote)}", "licence cleanup", allow_fail=True)
 
     print(f"[OK] licence installed on {container}")
     return True
@@ -700,6 +781,9 @@ def phiotx_up(
     phiotx,
     pki_bundles=None,
     licenses=None,
+    image_archive=None,
+    require_licenses=False,
+    require_pki=False,
     dry_run=False,
     only=None,
 ):
@@ -721,16 +805,33 @@ def phiotx_up(
     if not selected:
         raise PhiotxLifecycleError("No managed EVO devices selected")
 
-    reports = {}
+    missing_licenses = sorted(set(selected) - set(licenses))
+    if require_licenses and missing_licenses:
+        raise PhiotxLifecycleError(
+            "A unique PhioTX licence is required for every selected EVO router; "
+            f"missing: {', '.join(missing_licenses)}"
+        )
 
+    missing_pki = sorted(set(selected) - set(pki_bundles))
+    if require_pki and missing_pki:
+        raise PhiotxLifecycleError(
+            "PKI material is required for every selected EVO router; "
+            f"missing: {', '.join(missing_pki)}. Run create without --skip-pki."
+        )
+
+    reports = {}
+    prepared = {}
+
+    # Phase 1: make every node available before configuring cross-node PQC.
     for name, device in selected.items():
         print(f"\n=== PhioTX bring-up on {name} ===")
 
         settings = node_settings(name, device, phiotx)
         settings["peers"] = resolve_peers(name, device, devices, phiotx)
+        prepared[name] = (device, settings)
 
         ensure_host_dirs(device, settings)
-        ensure_image(device, phiotx)
+        ensure_image(device, phiotx, local_archive=image_archive)
         ensure_oob_network(device, phiotx)
         start_container(device, settings, phiotx)
 
@@ -747,9 +848,13 @@ def phiotx_up(
         layer_paths = build_layers(name, device, devices, phiotx)
         install_layers(device, settings, layer_paths, dry_run=dry_run)
 
-        if not dry_run:
+    # Phase 2: all peer listeners now exist, so public-key exchange can work.
+    if not dry_run:
+        for name, (device, settings) in prepared.items():
+            print(f"\n=== PhioTX PQC setup on {name} ===")
             setup_pqc(device, settings, phiotx)
 
+    for name, (device, settings) in prepared.items():
         reports[name] = verify_node(device, settings, phiotx)
 
     return reports

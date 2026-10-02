@@ -3,8 +3,14 @@
 **QKD-assisted MACsec automation for Juniper devices.**
 
 This repository brings together the KME and QKD orchestrators, the
-router-side `qkd_onbox.py` runtime, PKI and identity management, and
+router-side `phiotx_qkd_onbox.py` runtime, PKI and identity management, and
 operational tools for secure key rotation and service validation.
+
+> **Branch note.** On the `docker_kme` branch the KME runs as a PhioTX
+> container **inside** each Junos EVO router instead of on external Linux
+> servers. `qkd_docker_orchestrator.py` is the only supported QKD entry point
+> here, and the legacy `qkd_orchestrator.py` is not part of this branch. See
+> the [PhioTX Docker suite guide](docs/kme/docker/phiotx_docker_suite.md).
 
 > **New to the project?** Start with the
 > [First Steps guide](docs/getting_started.md). The searchable HTML site can be
@@ -26,8 +32,8 @@ The system is organized into four operational components:
 | Component | Role |
 |---|---|
 | `kme_orchestrator.py` | Creates and operates the KME service environment |
-| `qkd_orchestrator.py` | Validates inventory and generates, deploys, and checks the QKD device configuration |
-| `artifacts/qkd_onbox.py` | Runs on devices and handles key acquisition, peer coordination, and runtime rotation |
+| `qkd_docker_orchestrator.py` | Validates EVO routers and generates, deploys, and checks the QKD device configuration, including the PhioTX containers |
+| `artifacts/phiotx_qkd_onbox.py` | Runs on devices and handles key acquisition, peer coordination, and runtime rotation |
 | `tools/` | Provides deployment helpers, observation, reporting, monitoring, and recovery tools |
 
 For the protocol roles behind these components, see
@@ -74,9 +80,9 @@ attempting a deployment.
 
 ## Source layout
 
-- `qkd_orchestrator.py` — QKD/MACsec deployment entry point
+- `qkd_docker_orchestrator.py` — QKD/MACsec deployment entry point
 - `kme_orchestrator.py` — KME service lifecycle entry point
-- `artifacts/qkd_onbox.py` — router-side runtime source
+- `artifacts/phiotx_qkd_onbox.py` — router-side runtime source
 - `config/` — inventory, policy, and KME configuration inputs
 - `tools/` — deployment, monitoring, collection, reporting, and analysis
 - `docs/` — canonical theory, component guides, operations, and evolution

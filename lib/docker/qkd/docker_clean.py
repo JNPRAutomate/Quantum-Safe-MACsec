@@ -785,7 +785,7 @@ def clean_device(name, device, full_macsec=False):
 # ----------------------------------------
 def handle_clean(args):
     """
-    Clean handler used by qkd_orchestrator.py.
+    Clean handler used by qkd_docker_orchestrator.py.
 
     Behavior:
       - --local-only:

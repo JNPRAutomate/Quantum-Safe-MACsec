@@ -3,8 +3,11 @@ import copy
 import json
 
 from lib.common.settings import CONFIG, QKD
-from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
-from lib.docker.qkd.docker_paths import DOCKER_RUNTIME_DIR
+from lib.docker.qkd.docker_paths import (
+    DOCKER_RUNTIME_DIR,
+    load_docker_runtime_pki_profile,
+    load_docker_runtime_qkd_policy,
+)
 
 
 # ----------------------------
@@ -224,7 +227,7 @@ def normalize_onbox_links(name, device):
 
 
 def resolve_pki_runtime():
-    runtime_pki = load_runtime_pki_profile()
+    runtime_pki = load_docker_runtime_pki_profile()
     pki = runtime_pki["pki"]
     pki_profile = pki["profile"]
 
@@ -281,7 +284,7 @@ def build_onbox_config(name, device):
 
     pki_runtime = resolve_pki_runtime()
 
-    runtime_qkd_policy = load_runtime_qkd_policy()
+    runtime_qkd_policy = load_docker_runtime_qkd_policy()
     qkd_policy = runtime_qkd_policy.get("qkd_policy", {})
 
     config = {

@@ -31,10 +31,10 @@ No ring/chain/pair/hub links are generated here.
 
 Compatibility
 -------------
-- build_full_inventory() remains the public entrypoint used by qkd_orchestrator.py.
+- build_full_inventory() is the public entrypoint used by qkd_docker_orchestrator.py.
 - It now accepts links=... as the preferred argument.
 - extra_links=... remains accepted as a compatibility alias.
-- If an older qkd_orchestrator.py does not pass links but does pass source_path,
+- If a caller does not pass links but does pass source_path,
   this module reads links directly from that source YAML to avoid producing a
   zero-link runtime silently.
 """
@@ -141,7 +141,7 @@ def _normalize_legacy_device_fields(devices: Iterable[Dict[str, Any]]) -> List[D
     """
     Normalize in-memory device records before passing them to topology_builder.
 
-    qkd_orchestrator.py enriches devices with auth, kme_ip, kme_port,
+    qkd_docker_orchestrator.py enriches devices with auth, kme_ip, kme_port,
     script_user, managed, topology_member, etc. This function preserves those
     fields and converts legacy kme_ip/kme_port into the canonical kme: dict.
     """
@@ -195,7 +195,7 @@ def _normalize_links_argument(
       1. links argument
       2. extra_links argument, for compatibility
       3. source YAML links / extra_links, for compatibility with older
-         qkd_orchestrator.py versions that do not pass links yet
+         callers that do not pass links yet
     """
     if links is not None:
         if not isinstance(links, list):
@@ -539,12 +539,12 @@ def build_full_inventory(
     source_path: Optional[Any] = None,
 ) -> List[List[str]]:
     """
-    Public compatibility entrypoint used by qkd_orchestrator.py.
+    Public compatibility entrypoint used by qkd_docker_orchestrator.py.
 
     New behavior:
         devices + explicit links -> topology_builder -> runtime files
 
-    If an older qkd_orchestrator.py does not pass links, this function reads
+    If a caller does not pass links, this function reads
     links from source_path as a bridge.
     """
     normalized_devices = _normalize_legacy_device_fields(devices)

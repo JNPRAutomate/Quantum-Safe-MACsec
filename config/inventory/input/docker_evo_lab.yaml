@@ -1,9 +1,9 @@
 # Docker/PhioTX EVO-only inventory, verified 2026-10-02.
 #
 # This inventory is consumed exclusively by qkd_docker_orchestrator.py.
-# It must never be used with qkd_orchestrator.py: the KME endpoints below are
-# PhioTX containers running inside the routers themselves, not the external
-# Linux KME servers on 10.38.100.0/24.
+# The legacy qkd_orchestrator.py is intentionally not part of this branch:
+# the KME endpoints below are PhioTX containers running inside the routers
+# themselves, not external Linux KME servers on 10.38.100.0/24.
 #
 # Router models and Junos releases observed with "show version":
 #   EVO1: ptx10001-36mr, 26.2R1.7-EVOI20260619095247-evo-builder-1
@@ -28,6 +28,9 @@ pki_profile: external_ca
 # devices[].phiotx.
 phiotx:
   image: phiotx:4.6.3-deb-x86_64
+  # Remote staging path on each EVO. The customer-supplied ZIP itself is
+  # uploaded manually to repo-root docker/ on the Linux orchestrator host;
+  # bootstrap extracts the image locally and transfers it to this EVO path.
   image_archive: /var/tmp/phiotx-4.6.3-deb-x86_64.tar.gz
 
   # Docker resource limits validated on EVO. "--cpus" is intentionally absent:

@@ -2,11 +2,11 @@
 
 # qkd_docker_orchestrator
 #
-# PhioTX/Docker variant of qkd_orchestrator.py.
+# PhioTX/Docker orchestrator for the docker_kme branch.
 #
-# The difference is where the KME lives. qkd_orchestrator.py talks to external
-# Linux KME servers; this orchestrator runs one PhioTX container inside each
-# router and points the on-box runtime at it over the local Docker bridge.
+# This workflow runs one PhioTX container inside each router and points the
+# on-box runtime at it over the local Docker bridge. The legacy external-Linux
+# KME orchestrator is intentionally not part of this branch.
 #
 # Because the KME is a container on the router, this tool is restricted to
 # Junos EVO platforms with Docker enabled (QFX EVO, PTX EVO, vJunos EVO). Any
@@ -51,16 +51,23 @@ from lib.common.logger import setup_logger
 from lib.common.settings import CONFIG, PKI, QKD
 from lib.common.config import (
     load_inventory_file,
-    load_runtime_devices,
     load_qkd_policy_template,
 )
 from lib.docker.qkd.docker_inventory_builder import (
     build_full_inventory,
     build_runtime_qkd_policy,
 )
-from lib.docker.qkd.docker_paths import DOCKER_RUNTIME_DIR
+from lib.docker.qkd.docker_paths import (
+    DOCKER_RUNTIME_DIR,
+    load_docker_runtime_devices,
+)
 from lib.docker.qkd.docker_onbox_builder import build_onbox_artifacts
 from lib.docker.qkd.docker_evo_guard import EvoAdmissionError, admit_devices
+from lib.docker.qkd.docker_bootstrap_assets import (
+    BootstrapAssetError,
+    cleanup_bootstrap_bundle,
+    prepare_bootstrap_bundle,
+)
 from lib.docker.qkd.docker_pki_external import ExternalCaError, build_external_pki
 from lib.docker.qkd.docker_phiotx_lifecycle import (
     PhiotxLifecycleError,
@@ -78,6 +85,7 @@ INVENTORY_INPUT_DIR = BASE_DIR / CONFIG["inventory_dir"] / "input"
 SCRIPT_VERSION = "ver3.3.4.2-docker"
 
 DEFAULT_INVENTORY = "docker_evo_lab.yaml"
+DEFAULT_BOOTSTRAP_DIR = BASE_DIR / "docker"
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +141,7 @@ def load_docker_inventory(path: Path) -> Dict[str, Any]:
         raise ValueError(
             f"Inventory {path} contains non-EVO device(s): "
             f"{', '.join(str(n) for n in non_evo)}. "
-            "qkd_docker_orchestrator.py is restricted to Junos EVO routers; "
-            "use qkd_orchestrator.py for classic Junos platforms."
+            "qkd_docker_orchestrator.py is restricted to Junos EVO routers."
         )
 
     return data
@@ -179,12 +186,222 @@ def load_license_map(spec: Optional[List[str]]) -> Dict[str, Path]:
         if "=" not in entry:
             raise ValueError(f"Invalid --license value {entry!r}; expected DEVICE=PATH")
         name, _, path = entry.partition("=")
-        resolved = Path(path).expanduser()
-        if not resolved.exists():
+        name = name.strip()
+        if not name:
+            raise ValueError(f"Invalid --license value {entry!r}; DEVICE is empty")
+        if name in licenses:
+            raise ValueError(f"Duplicate --license assignment for {name}")
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.is_file():
             raise FileNotFoundError(f"Licence file not found for {name}: {resolved}")
-        licenses[name.strip()] = resolved
+        licenses[name] = resolved
 
     return licenses
+
+
+def selected_device_names(
+    devices: Dict[str, Any],
+    only: Optional[List[str]] = None,
+) -> List[str]:
+    selected = [
+        name
+        for name, device in devices.items()
+        if device.get("managed") is not False and (not only or name in set(only))
+    ]
+    if not selected:
+        raise ValueError("No managed EVO devices selected")
+    unknown = sorted(set(only or []) - set(devices))
+    if unknown:
+        raise ValueError(f"Unknown --only device(s): {', '.join(unknown)}")
+    return sorted(selected)
+
+
+def resolve_license_assignments(
+    devices: Dict[str, Any],
+    spec: Optional[List[str]] = None,
+    license_dir: Optional[str] = None,
+    only: Optional[List[str]] = None,
+    required: bool = False,
+    input_fn=input,
+    interactive: Optional[bool] = None,
+) -> Dict[str, Path]:
+    """
+    Resolve one unique licence per managed router before touching any EVO.
+
+    Explicit ``DEVICE=PATH`` assignments take precedence. Remaining routers
+    are assigned sorted ``*.lic`` files from ``license_dir``. The available
+    licence count is therefore the hard upper bound on the inventory fleet.
+    Allocation covers the full inventory even with ``--only`` so staged runs
+    cannot accidentally reuse the first licence on multiple routers.
+    """
+    fleet = selected_device_names(devices)
+    selected = selected_device_names(devices, only)
+    assignments = load_license_map(spec)
+    unknown = sorted(set(assignments) - set(fleet))
+    if unknown:
+        raise ValueError(
+            "Licence assignment targets a router outside the managed fleet: "
+            + ", ".join(unknown)
+        )
+
+    missing = [name for name in fleet if name not in assignments]
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+
+    if missing and not license_dir and required and interactive:
+        license_dir = input_fn(
+            "Directory containing one unique PhioTX .lic file per EVO router: "
+        ).strip()
+
+    candidates: List[Path] = []
+    if license_dir:
+        directory = Path(license_dir).expanduser().resolve()
+        if not directory.is_dir():
+            raise FileNotFoundError(f"Licence directory not found: {directory}")
+        used = {path.resolve() for path in assignments.values()}
+        candidates = sorted(
+            path.resolve()
+            for path in directory.glob("*.lic")
+            if path.is_file() and path.resolve() not in used
+        )
+
+    capacity = len(assignments) + len(candidates)
+    if required and capacity < len(fleet):
+        raise ValueError(
+            f"Licence capacity is {capacity} but the inventory contains "
+            f"{len(fleet)} managed EVO routers. Add "
+            f"{len(fleet) - capacity} unique licence file(s) or reduce the "
+            "managed inventory."
+        )
+
+    if missing and candidates:
+        for name, path in zip(missing, candidates):
+            assignments[name] = path
+
+    missing = [name for name in fleet if name not in assignments]
+    if required and missing:
+        raise ValueError(
+            "A unique PhioTX licence is required for every selected EVO router; "
+            f"missing: {', '.join(missing)}. Use --license DEVICE=FILE once per "
+            "router or --license-dir DIRECTORY."
+        )
+
+    resolved_paths = [path.resolve() for path in assignments.values()]
+    if len(resolved_paths) != len(set(resolved_paths)):
+        raise ValueError("The same PhioTX licence file cannot be assigned twice")
+
+    if assignments:
+        print("\nPhioTX licence allocation:")
+        for name in selected:
+            if name in assignments:
+                print(f"  {name}: {assignments[name].name}")
+        print(
+            f"Licence capacity: {capacity} file(s); "
+            f"managed fleet: {len(fleet)}; selected this run: {len(selected)}"
+        )
+
+    return assignments
+
+
+def resolve_local_image_archive(
+    value: Optional[str],
+    phiotx: Dict[str, Any],
+    input_fn=input,
+    interactive: Optional[bool] = None,
+) -> Optional[Path]:
+    """Resolve the local vendor image archive, prompting when appropriate."""
+    candidate = value or phiotx.get("local_image_archive")
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+
+    if not candidate and interactive:
+        candidate = input_fn(
+            "Local path of the supplied PhioTX .tar.gz image "
+            "(leave empty only if already uploaded to every EVO): "
+        ).strip()
+
+    if not candidate:
+        return None
+
+    path = Path(candidate).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"PhioTX image archive not found: {path}")
+    return path
+
+
+def resolve_bootstrap_bundle(
+    value: Optional[str],
+    input_fn=input,
+    interactive: Optional[bool] = None,
+) -> Path:
+    """
+    Resolve the customer-supplied bundle already present on the Linux host.
+
+    The orchestrator never downloads vendor software or licences. By default
+    the operator manually places exactly one ZIP under the ignored repository
+    ``docker/`` directory before running ``bootstrap``.
+    """
+    if value:
+        path = Path(value).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Bootstrap bundle not found: {path}")
+        return path
+
+    candidates = []
+    if DEFAULT_BOOTSTRAP_DIR.is_dir():
+        candidates = sorted(
+            path.resolve()
+            for path in DEFAULT_BOOTSTRAP_DIR.glob("*.zip")
+            if path.is_file()
+        )
+
+    if len(candidates) == 1:
+        print(f"Using customer-supplied bundle: {candidates[0]}")
+        return candidates[0]
+    if len(candidates) > 1:
+        names = ", ".join(path.name for path in candidates)
+        raise ValueError(
+            f"Multiple ZIP bundles found under {DEFAULT_BOOTSTRAP_DIR}: {names}. "
+            "Select one explicitly with --bundle."
+        )
+
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+    if interactive:
+        selected = input_fn(
+            "No ZIP was found under docker/. Enter the path to the "
+            "customer-supplied PhioTX ZIP bundle: "
+        ).strip()
+        if selected:
+            return resolve_bootstrap_bundle(
+                selected,
+                input_fn=input_fn,
+                interactive=False,
+            )
+
+    raise FileNotFoundError(
+        f"No customer-supplied PhioTX ZIP bundle found under "
+        f"{DEFAULT_BOOTSTRAP_DIR}. Upload it manually to the Linux "
+        "orchestrator host before running bootstrap; the suite never "
+        "downloads vendor images or licences."
+    )
+
+
+def print_manual_image_upload(
+    devices: Dict[str, Any],
+    phiotx: Dict[str, Any],
+    username: Optional[str],
+    only: Optional[List[str]] = None,
+) -> None:
+    remote = phiotx.get("image_archive")
+    if not remote:
+        raise ValueError("phiotx.image_archive is required")
+    user = username or os.environ.get("EVO_USERNAME") or "root"
+    print(
+        "\nNo local image archive was selected. Before continuing, place the "
+        "same vendor archive at the configured path on every selected EVO:"
+    )
+    for name in selected_device_names(devices, only):
+        host = devices[name].get("ip") or devices[name].get("host")
+        print(f"  scp -O /path/to/phiotx-image.tar.gz {user}@{host}:{remote}")
+    print("The bootstrap will verify that the remote archive exists before docker load.")
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +460,7 @@ def cmd_create(args) -> int:
         key_batch_size=args.key_batch_size,
     )
 
-    runtime_devices = load_runtime_devices()
+    runtime_devices = load_docker_runtime_devices()
 
     if args.skip_pki:
         print("Skipping external CA issuance (--skip-pki)")
@@ -274,19 +491,34 @@ def cmd_phiotx_up(args) -> int:
     data = load_docker_inventory(path)
     phiotx = data["phiotx"]
 
-    runtime_devices = load_runtime_devices()
+    runtime_devices = load_docker_runtime_devices()
+    local_image = resolve_local_image_archive(args.image_archive, phiotx)
+    if local_image is None:
+        print_manual_image_upload(
+            runtime_devices, phiotx, args.username, only=args.only
+        )
+    licenses = resolve_license_assignments(
+        runtime_devices,
+        spec=args.license,
+        license_dir=args.license_dir,
+        only=args.only,
+        required=args.require_licenses,
+    )
+
     attach_credentials(runtime_devices, args.username, args.password)
 
     admit_devices(runtime_devices, required_networks=required_networks(phiotx))
 
     pki_bundles = collect_staged_pki(runtime_devices)
-    licenses = load_license_map(args.license)
 
     reports = phiotx_up(
         runtime_devices,
         phiotx,
         pki_bundles=pki_bundles,
         licenses=licenses,
+        image_archive=local_image,
+        require_licenses=args.require_licenses,
+        require_pki=args.require_pki,
         dry_run=args.dry_run,
         only=args.only,
     )
@@ -341,7 +573,7 @@ def cmd_deploy(args) -> int:
         print("\nStopping after container bring-up (--phiotx-only)")
         return 0
 
-    runtime_devices = load_runtime_devices()
+    runtime_devices = load_docker_runtime_devices()
     attach_credentials(runtime_devices, args.username, args.password)
 
     if args.only:
@@ -357,6 +589,110 @@ def cmd_deploy(args) -> int:
         debug=args.debug,
         verbose=args.verbose,
         devices=runtime_devices,
+    )
+    return 0
+
+
+def cmd_bootstrap(args) -> int:
+    """Prepare local vendor assets, then run the greenfield workflow."""
+    prepared = None
+    bundle = args.bundle
+    if (
+        not bundle
+        and not args.image_archive
+        and not args.license
+        and not args.license_dir
+    ):
+        bundle = str(resolve_bootstrap_bundle(None))
+
+    try:
+        if bundle:
+            prepared = prepare_bootstrap_bundle(bundle)
+            if not args.image_archive:
+                args.image_archive = str(prepared["image_archive"])
+            if not args.license_dir:
+                args.license_dir = str(prepared["license_dir"])
+        return _run_greenfield_bootstrap(args)
+    finally:
+        cleanup_bootstrap_bundle(prepared)
+
+
+def _run_greenfield_bootstrap(args) -> int:
+    """
+    Perform a complete greenfield deployment from empty EVO routers.
+
+    All local capacity checks happen before admission or upload so a shortage
+    of unique licence files cannot leave a partially bootstrapped fleet.
+    """
+    path = resolve_inventory_path(args.inventory)
+    data = load_docker_inventory(path)
+    phiotx = data["phiotx"]
+    if args.skip_pki:
+        raise ValueError(
+            "Greenfield bootstrap cannot use --skip-pki: every new container "
+            "requires its external-CA identity and trust material."
+        )
+
+    inventory_devices = {
+        device["name"]: dict(device) for device in data["devices"]
+    }
+    selected_device_names(inventory_devices, args.only)
+    local_image = resolve_local_image_archive(args.image_archive, phiotx)
+    if local_image is None:
+        print_manual_image_upload(
+            inventory_devices, phiotx, args.username, only=args.only
+        )
+    licenses = resolve_license_assignments(
+        inventory_devices,
+        spec=args.license,
+        license_dir=args.license_dir,
+        only=args.only,
+        required=True,
+    )
+
+    print("\n=== Building Docker workflow artifacts ===")
+    cmd_create(args)
+
+    runtime_devices = load_docker_runtime_devices()
+    pki_bundles = collect_staged_pki(runtime_devices)
+    attach_credentials(runtime_devices, args.username, args.password)
+
+    print("\n=== EVO admission ===")
+    admit_devices(runtime_devices, required_networks=required_networks(phiotx))
+
+    print("\n=== Greenfield PhioTX bootstrap ===")
+    reports = phiotx_up(
+        runtime_devices,
+        phiotx,
+        pki_bundles=pki_bundles,
+        licenses=licenses,
+        image_archive=local_image,
+        require_licenses=True,
+        require_pki=True,
+        dry_run=args.dry_run,
+        only=args.only,
+    )
+    report_path = RUNTIME_DIR / "phiotx_status.json"
+    report_path.write_text(json.dumps(reports, indent=2) + "\n", encoding="utf-8")
+    print(f"\nPhioTX status written to {report_path}")
+
+    if args.phiotx_only:
+        print("\nStopping after container bootstrap (--phiotx-only)")
+        return 0
+
+    selected = {
+        name: device
+        for name, device in runtime_devices.items()
+        if not args.only or name in set(args.only)
+    }
+    print("\n=== Junos configuration deploy ===")
+    run_provisioning(
+        setup_logger("qkd_docker_orchestrator"),
+        dry_run=args.dry_run,
+        ssh_key=args.ssh_key,
+        debug=args.debug,
+        verbose=args.verbose,
+        devices=selected,
     )
     return 0
 
@@ -388,6 +724,61 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--debug", action="store_true")
 
 
+def add_create_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--ca-host", help="Host running the external OpenSSL CA")
+    parser.add_argument("--ca-user", default="root", help="SSH user on the CA host")
+    parser.add_argument(
+        "--force-pki",
+        action="store_true",
+        help="Reissue certificates even when valid ones already exist",
+    )
+    parser.add_argument(
+        "--skip-pki",
+        action="store_true",
+        help="Do not contact the external CA",
+    )
+    parser.add_argument("--rekey", action="store_true", default=None)
+    parser.add_argument("--interval", type=int, default=None)
+    parser.add_argument("--key-batch-size", type=int, default=None)
+
+
+def add_phiotx_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--image-archive",
+        help=(
+            "Local supplied PhioTX .tar/.tar.gz archive. It is uploaded, "
+            "SHA-256 verified, loaded on every selected EVO, then removed."
+        ),
+    )
+    parser.add_argument(
+        "--license",
+        action="append",
+        help="Per-device licence, repeatable: DEVICE=/path/to/file.lic",
+    )
+    parser.add_argument(
+        "--license-dir",
+        help=(
+            "Directory of unique *.lic files. Sorted files are assigned to "
+            "selected routers that have no explicit --license."
+        ),
+    )
+    parser.add_argument(
+        "--require-licenses",
+        action="store_true",
+        help="Fail before router mutation unless every selected router has a licence",
+    )
+    parser.add_argument(
+        "--require-pki",
+        action="store_true",
+        help="Fail unless every selected router has staged PKI material",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate configuration layers without committing them",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qkd_docker_orchestrator.py",
@@ -412,21 +803,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build runtime inventory, external-CA PKI, on-box artifacts, layers",
     )
     add_common(create)
-    create.add_argument("--ca-host", help="Host running the external OpenSSL CA")
-    create.add_argument("--ca-user", default="root", help="SSH user on the CA host")
-    create.add_argument(
-        "--force-pki",
-        action="store_true",
-        help="Reissue certificates even when valid ones already exist",
-    )
-    create.add_argument(
-        "--skip-pki",
-        action="store_true",
-        help="Do not contact the external CA",
-    )
-    create.add_argument("--rekey", action="store_true", default=None)
-    create.add_argument("--interval", type=int, default=None)
-    create.add_argument("--key-batch-size", type=int, default=None)
+    add_create_options(create)
     create.set_defaults(func=cmd_create)
 
     up = subparsers.add_parser(
@@ -434,16 +811,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create and configure the PhioTX container inside each EVO router",
     )
     add_common(up)
-    up.add_argument(
-        "--license",
-        action="append",
-        help="Per-device licence, repeatable: DEVICE=/path/to/file.lic",
-    )
-    up.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate configuration layers without committing them",
-    )
+    add_phiotx_options(up)
     up.set_defaults(func=cmd_phiotx_up)
 
     deploy = subparsers.add_parser(
@@ -451,14 +819,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bring up the containers, then push the Junos configuration",
     )
     add_common(deploy)
-    deploy.add_argument("--license", action="append")
-    deploy.add_argument("--dry-run", action="store_true")
+    add_phiotx_options(deploy)
     deploy.add_argument(
         "--phiotx-only",
         action="store_true",
         help="Stop after container bring-up, skip the Junos deploy",
     )
     deploy.set_defaults(func=cmd_deploy)
+
+    bootstrap = subparsers.add_parser(
+        "bootstrap",
+        help=(
+            "Greenfield install: build artifacts, upload image, configure all "
+            "PhioTX containers, then deploy Junos"
+        ),
+    )
+    add_common(bootstrap)
+    add_create_options(bootstrap)
+    add_phiotx_options(bootstrap)
+    bootstrap.add_argument(
+        "--bundle",
+        help=(
+            "Customer-supplied PhioTX ZIP bundle or directory already present "
+            "on this Linux host. With no explicit asset options, bootstrap "
+            "uses the single ZIP under ./docker/. The suite never downloads "
+            "vendor images or licences. Only the image, checksum sidecars, "
+            "and *.lic files are read."
+        ),
+    )
+    bootstrap.add_argument(
+        "--phiotx-only",
+        action="store_true",
+        help="Stop after PhioTX container bootstrap, skip the Junos deploy",
+    )
+    bootstrap.set_defaults(func=cmd_bootstrap)
 
     clean = subparsers.add_parser("clean", help="Clean local runtime and remote state")
     add_common(clean)
@@ -476,7 +870,12 @@ def main() -> int:
 
     try:
         return args.func(args)
-    except (EvoAdmissionError, ExternalCaError, PhiotxLifecycleError) as error:
+    except (
+        BootstrapAssetError,
+        EvoAdmissionError,
+        ExternalCaError,
+        PhiotxLifecycleError,
+    ) as error:
         print(f"\nERROR: {error}", file=sys.stderr)
         return 2
     except (FileNotFoundError, ValueError) as error:

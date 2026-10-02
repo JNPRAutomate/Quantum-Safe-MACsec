@@ -2,7 +2,7 @@ from pathlib import Path
 import hashlib
 from jinja2 import Environment, FileSystemLoader
 
-from lib.common.config import load_runtime_qkd_policy
+from lib.docker.qkd.docker_paths import load_docker_runtime_qkd_policy
 from lib.common.settings import CONFIG, QKD
 
 
@@ -31,7 +31,7 @@ def build_device_config(device_name, device, platform, base, topology):
     Therefore rendering must not rely on a top-level device["role"].
     """
 
-    runtime_policy = load_runtime_qkd_policy()
+    runtime_policy = load_docker_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(
         qkd_policy.get(

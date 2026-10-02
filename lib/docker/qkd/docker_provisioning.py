@@ -14,12 +14,15 @@ import logging
 
 from lib.docker.qkd.docker_rendering import build_device_config
 from lib.common.settings import CONFIG
-from lib.docker.qkd.docker_paths import DOCKER_RUNTIME_DIR
 from lib.common.settings import PKI
 from lib.common.settings import QKD
-from lib.common.config import load_inventory, load_platform
-from lib.common.config import load_runtime_pki_profile
-from lib.common.config import load_runtime_qkd_policy
+from lib.common.config import load_platform
+from lib.docker.qkd.docker_paths import (
+    DOCKER_RUNTIME_DIR,
+    load_docker_runtime_inventory,
+    load_docker_runtime_pki_profile,
+    load_docker_runtime_qkd_policy,
+)
 from jinja2 import Environment, FileSystemLoader
 
 
@@ -476,7 +479,7 @@ def resolve_cert_paths_for_device(name, device):
     sae_id = device_sae_id(device)
     sae_candidates = sae_id_aliases(sae_id)
 
-    runtime_pki = load_runtime_pki_profile()
+    runtime_pki = load_docker_runtime_pki_profile()
     pki = runtime_pki.get("pki", {})
     profile = pki.get("profile", "self_signed")
 
@@ -724,7 +727,7 @@ def configure_qkd_scripts(dev, name, base):
     secrets = base.get("secrets", {})
     script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
     script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "super-user")
-    runtime_policy = load_runtime_qkd_policy()
+    runtime_policy = load_docker_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
     rotation_interval_seconds = int(
         qkd_policy.get(
@@ -1225,7 +1228,7 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
     global DEBUG
     DEBUG = bool(debug) or int(verbose or 0) > 0
 
-    base, runtime_devices, topology = load_inventory()
+    base, runtime_devices, topology = load_docker_runtime_inventory()
     if devices is None:
         devices = runtime_devices
 

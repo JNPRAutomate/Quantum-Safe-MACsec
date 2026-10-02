@@ -1,14 +1,15 @@
 """
 Filesystem layout for the PhioTX/Docker workflow.
 
-The Docker suite must never share runtime state with the legacy workflow.
-qkd_orchestrator.py writes config/runtime/, so qkd_docker_orchestrator.py
-writes config/runtime_docker/ instead. Mixing them would let one workflow
-silently overwrite the other's devices.yaml, PKI profile, and on-box sidecars,
-and would make it impossible to tell which runtime a deployed router came from.
+The Docker suite must never reuse legacy runtime state. This branch writes
+config/runtime_docker/ instead of config/runtime/, preserving a hard boundary
+between PhioTX container artifacts and any legacy artifacts retained outside
+this branch.
 """
 
 from pathlib import Path
+
+import yaml
 
 from lib.common.settings import CONFIG
 
@@ -41,3 +42,40 @@ def assert_not_legacy_runtime(path) -> None:
             f"Refusing to use the legacy runtime directory {legacy} from the "
             f"Docker workflow; expected {DOCKER_RUNTIME_DIR}"
         )
+
+
+def _load_yaml(path):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing Docker runtime YAML file: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid YAML root in {path}: expected mapping")
+    return data
+
+
+def load_docker_runtime_devices():
+    return _load_yaml(DOCKER_RUNTIME_DIR / "devices.yaml").get("devices", {})
+
+
+def load_docker_runtime_topology():
+    return _load_yaml(DOCKER_RUNTIME_DIR / "topology.yaml")
+
+
+def load_docker_runtime_pki_profile():
+    return _load_yaml(DOCKER_RUNTIME_DIR / "pki_profile.yaml")
+
+
+def load_docker_runtime_qkd_policy():
+    return _load_yaml(DOCKER_RUNTIME_DIR / "qkd_policy.yaml")
+
+
+def load_docker_runtime_inventory():
+    config_dir = BASE_DIR / CONFIG["inventory_dir"]
+    base = _load_yaml(config_dir / "inventory_base.yaml")
+    devices = load_docker_runtime_devices()
+    topology = load_docker_runtime_topology()
+    return base, devices, topology.get("qkd", {})
