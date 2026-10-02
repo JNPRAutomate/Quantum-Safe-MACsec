@@ -693,7 +693,7 @@ def clean_device(name, device, full_macsec=False):
             if container_name:
                 run_shell(
                     "PhioTX container cleanup",
-                    f"docker rm -f {shlex.quote(container_name)} >/dev/null 2>&1 || true",
+                    f"docker rm -f {shlex.quote(container_name)} >& /dev/null || true",
                     strict=False,
                 )
             if oob_network:
@@ -705,14 +705,14 @@ def clean_device(name, device, full_macsec=False):
                     run_shell(
                         "PhioTX OOB network cleanup",
                         f"docker network rm {shlex.quote(oob_network)} "
-                        ">/dev/null 2>&1 || true",
+                        ">& /dev/null || true",
                         strict=False,
                     )
             if image_name:
                 run_shell(
                     "PhioTX image cleanup",
                     f"docker image rm {shlex.quote(image_name)} "
-                    ">/dev/null 2>&1 || true",
+                    ">& /dev/null || true",
                     strict=False,
                 )
             if container_data_dir:
@@ -726,17 +726,17 @@ def clean_device(name, device, full_macsec=False):
             if container_name:
                 docker_checks.append(
                     f"docker inspect {shlex.quote(container_name)} "
-                    ">/dev/null 2>&1 && echo CONTAINER_REMAINS || true"
+                    ">& /dev/null && echo CONTAINER_REMAINS || true"
                 )
             if oob_network and oob_network != internal_network:
                 docker_checks.append(
                     f"docker network inspect {shlex.quote(oob_network)} "
-                    ">/dev/null 2>&1 && echo NETWORK_REMAINS || true"
+                    ">& /dev/null && echo NETWORK_REMAINS || true"
                 )
             if image_name:
                 docker_checks.append(
                     f"docker image inspect {shlex.quote(image_name)} "
-                    ">/dev/null 2>&1 && echo IMAGE_REMAINS || true"
+                    ">& /dev/null && echo IMAGE_REMAINS || true"
                 )
             if container_data_dir:
                 docker_checks.append(
@@ -930,7 +930,7 @@ def clean_device(name, device, full_macsec=False):
                 (
                     "find /var/tmp -maxdepth 1 "
                     "\\( -name 'qkd_tests_*' -o -name 'phiotx-*.json' \\) "
-                    "-print 2>/dev/null"
+                    "-print"
                 ),
                 strict=False,
                 show_output=False,
