@@ -81,6 +81,9 @@ nav:
           - Operations and troubleshooting: kme/operations_and_troubleshooting.md
           - Vault integration: kme/vault_localhost_8200_setup.md
           - Design evolution: kme/design_evolution.md
+          - Manual Docker labs:
+              - KME on Junos EVO: kme/docker/kme_in_Junos_evo.md
+              - PhioTX on Junos EVO: kme/docker/phiotx_on_junos_evo.md
           - Lab and migration history:
               - Index: kme/lab_history/index.md
               - Ubuntu KME/QKD lab full record: kme/lab_history/ubuntu_kme_qkd_lab_full_record.md

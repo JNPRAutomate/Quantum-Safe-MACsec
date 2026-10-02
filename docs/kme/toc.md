@@ -14,6 +14,8 @@ KME orchestration architecture, interface contract, and Vault integration design
 6. [Operations and Troubleshooting](operations_and_troubleshooting.md)
 7. [Vault Integration LLD](vault_localhost_8200_setup.md)
 8. [Design Evolution](design_evolution.md)
-9. [KME and QKD Lab History](lab_history/index.md) — detailed historical
+9. [Manual KME on Junos EVO](docker/kme_in_Junos_evo.md)
+10. [Manual PhioTX on Junos EVO](docker/phiotx_on_junos_evo.md)
+11. [KME and QKD Lab History](lab_history/index.md) — detailed historical
    records, including the manual EVO1 KME experiment.
-10. [Product and Architecture Roadmap](../roadmap.md)
+12. [Product and Architecture Roadmap](../roadmap.md)
