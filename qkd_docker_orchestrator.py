@@ -75,6 +75,7 @@ from lib.docker.qkd.docker_phiotx_lifecycle import (
     phiotx_up,
 )
 from lib.docker.qkd.docker_provisioning import run_provisioning
+from lib.common.script_user_bootstrap import bootstrap_script_users
 from lib.docker.qkd.docker_clean import handle_clean
 
 
@@ -260,7 +261,7 @@ def resolve_license_assignments(
         used = {path.resolve() for path in assignments.values()}
         candidates = sorted(
             path.resolve()
-            for path in directory.glob("*.lic")
+            for path in directory.rglob("*.lic")
             if path.is_file() and path.resolve() not in used
         )
 
@@ -475,6 +476,7 @@ def cmd_validate(args) -> int:
 
     devices = {device["name"]: dict(device) for device in data["devices"]}
     if args.only:
+        selected_device_names(devices, args.only)
         devices = {n: d for n, d in devices.items() if n in set(args.only)}
 
     attach_credentials(devices, args.username, args.password)
@@ -641,7 +643,7 @@ def cmd_deploy(args) -> int:
         }
 
     print("\n=== Junos configuration deploy ===")
-    run_provisioning(
+    failed = run_provisioning(
         log,
         dry_run=args.dry_run,
         ssh_key=args.ssh_key,
@@ -649,6 +651,10 @@ def cmd_deploy(args) -> int:
         verbose=args.verbose,
         devices=runtime_devices,
     )
+    if failed:
+        raise RuntimeError(
+            f"Junos provisioning failed for: {', '.join(sorted(failed))}"
+        )
     return 0
 
 
@@ -656,6 +662,8 @@ def cmd_bootstrap(args) -> int:
     """Prepare local vendor assets, then run the greenfield workflow."""
     prepared = None
     bundle = args.bundle
+    if bundle:
+        bundle = str(resolve_bootstrap_bundle(bundle))
     if (
         not bundle
         and not args.image_archive
@@ -719,6 +727,29 @@ def _run_greenfield_bootstrap(args) -> int:
     print("\n=== EVO admission ===")
     admit_devices(runtime_devices, required_networks=required_networks(phiotx))
 
+    print("\n=== EVO script-user bootstrap ===")
+    first_device = next(iter(runtime_devices.values()))
+    auth = first_device.get("auth") or {}
+    bootstrapped, failed_users = bootstrap_script_users(
+        devices=runtime_devices,
+        repo_root=BASE_DIR,
+        only=args.only,
+        deploy_user=auth.get("username"),
+        deploy_password=auth.get("password"),
+        prompt_for_deploy_password=False,
+        skip_if_no_deploy_password=False,
+        verbose=args.verbose,
+    )
+    if failed_users:
+        raise RuntimeError(
+            "Script-user bootstrap failed for: "
+            + ", ".join(sorted(failed_users))
+        )
+    print(
+        "Script user ready on: "
+        + ", ".join(sorted(bootstrapped))
+    )
+
     print("\n=== Greenfield PhioTX bootstrap ===")
     reports = phiotx_up(
         runtime_devices,
@@ -745,7 +776,7 @@ def _run_greenfield_bootstrap(args) -> int:
         if not args.only or name in set(args.only)
     }
     print("\n=== Junos configuration deploy ===")
-    run_provisioning(
+    failed = run_provisioning(
         setup_logger("qkd_docker_orchestrator"),
         dry_run=args.dry_run,
         ssh_key=args.ssh_key,
@@ -753,6 +784,10 @@ def _run_greenfield_bootstrap(args) -> int:
         verbose=args.verbose,
         devices=selected,
     )
+    if failed:
+        raise RuntimeError(
+            f"Junos provisioning failed for: {', '.join(sorted(failed))}"
+        )
     return 0
 
 

@@ -322,15 +322,15 @@ def build_runtime_pki_profile(profile: str, out_dir: Any) -> Dict[str, Any]:
             "pki": {
                 "profile": "external_ca",
                 "source_config": None,
-                "output_dir": "config/runtime/<device>/pki",
+                "output_dir": "config/runtime_docker/<device>/pki",
                 "juniper": {
-                    "certs_dir": "config/runtime/<device>/pki",
-                    "trust_bundle": "config/runtime/<device>/pki/ca.pem",
+                    "certs_dir": "config/runtime_docker/<device>/pki",
+                    "trust_bundle": "config/runtime_docker/<device>/pki/ca.pem",
                     "ca_cert": "ca.pem",
                 },
                 "kme": {
-                    "certs_dir": "config/runtime/<device>/pki",
-                    "trust_bundle": "config/runtime/<device>/pki/ca.pem",
+                    "certs_dir": "config/runtime_docker/<device>/pki",
+                    "trust_bundle": "config/runtime_docker/<device>/pki/ca.pem",
                     "runtime_root_crt": "ca.pem",
                 },
             }

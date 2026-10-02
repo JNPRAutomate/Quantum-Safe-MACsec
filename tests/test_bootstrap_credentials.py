@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import qkd_orchestrator
+qkd_orchestrator = pytest.importorskip(
+    "qkd_orchestrator",
+    reason="legacy orchestrator is intentionally absent on docker_kme",
+)
 
 
 ORCHESTRATOR = Path(qkd_orchestrator.__file__)

@@ -24,6 +24,7 @@ import qkd_docker_orchestrator as orchestrator
 from lib.docker.qkd import docker_bootstrap_assets as bootstrap_assets
 from lib.docker.qkd import docker_clean
 from lib.docker.qkd import docker_phiotx_lifecycle as lifecycle
+from lib.docker.qkd import docker_provisioning as provisioning
 
 
 def _devices():
@@ -497,3 +498,102 @@ def test_license_checksum_failure_still_cleans_remote_file(
         )
 
     assert commands[-1] == "rm -f /var/db/phiotx01/data/.license-install.lic"
+
+
+def test_external_ca_cert_paths_use_staged_sae_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(provisioning, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(
+        provisioning,
+        "load_docker_runtime_pki_profile",
+        lambda: {"pki": {"profile": "external_ca"}},
+    )
+
+    paths = provisioning.resolve_cert_paths_for_device(
+        "EVO1",
+        {"qkd": {"sae_id": "sae-001"}},
+    )
+
+    assert paths["cert"] == tmp_path / "EVO1" / "pki" / "sae.crt"
+    assert paths["key"] == tmp_path / "EVO1" / "pki" / "sae.key"
+    assert paths["ca"] == tmp_path / "EVO1" / "pki" / "ca.pem"
+
+
+def test_plain_tar_upload_keeps_plain_tar_remote_name(tmp_path, monkeypatch):
+    image = tmp_path / "phiotx.tar"
+    image.write_bytes(b"docker-image")
+    commands = []
+    transfers = []
+
+    monkeypatch.setattr(
+        lifecycle,
+        "_docker",
+        lambda _device, args, _what, **_kwargs: SimpleNamespace(
+            returncode=1 if args.startswith("image inspect") else 0,
+            stdout="",
+            stderr="",
+        ),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "_push_files",
+        lambda _device, items: transfers.extend(items),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "_run",
+        lambda _device, command, _what, **_kwargs: (
+            commands.append(command)
+            or SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    lifecycle._sha256_file(image)
+                    if command.startswith("sha256sum")
+                    else ""
+                ),
+                stderr="",
+            )
+        ),
+    )
+
+    lifecycle.ensure_image(
+        {"name": "EVO1"},
+        {
+            "image": "phiotx:test",
+            "image_archive": "/var/tmp/vendor-image.tar.gz",
+        },
+        local_archive=image,
+    )
+
+    assert transfers == [(image.resolve(), "/var/tmp/phiotx.tar")]
+    assert "docker load -i /var/tmp/phiotx.tar" in commands
+    assert not any("gzip -dc" in command for command in commands)
+
+
+def test_provisioning_returns_failed_devices(monkeypatch):
+    devices = {
+        "EVO1": {
+            "name": "EVO1",
+            "platform": "ptx",
+            "links": [{"peer": "EVO2"}],
+        }
+    }
+    monkeypatch.setattr(
+        provisioning,
+        "load_docker_runtime_inventory",
+        lambda: ({}, devices, {}),
+    )
+    monkeypatch.setattr(provisioning, "load_platform", lambda _platform: {})
+    monkeypatch.setattr(
+        provisioning,
+        "build_device_config",
+        lambda **_kwargs: ["set system host-name evo1"],
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "push_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("failed")),
+    )
+
+    failed = provisioning.run_provisioning(None, devices=devices)
+
+    assert failed == ["EVO1"]

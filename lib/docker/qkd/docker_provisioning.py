@@ -483,6 +483,16 @@ def resolve_cert_paths_for_device(name, device):
     pki = runtime_pki.get("pki", {})
     profile = pki.get("profile", "self_signed")
 
+    if profile == "external_ca":
+        local_dev_dir = RUNTIME_DIR / name / "pki"
+        return {
+            "profile": profile,
+            "sae_id": sae_id,
+            "cert": local_dev_dir / "sae.crt",
+            "key": local_dev_dir / "sae.key",
+            "ca": local_dev_dir / "ca.pem",
+        }
+
     if profile == "self_signed":
         profile_dir = CERTS_DIR / "self_signed"
         candidate_device_dirs = []
@@ -586,6 +596,11 @@ def push_certs(dev, name, device):
     local_cert = files["cert"]
     local_key = files["key"]
     local_ca = files["ca"]
+    remote_names = {
+        local_cert: f"{sae_id}.crt",
+        local_key: f"{sae_id}.key",
+        local_ca: local_ca.name,
+    }
 
     missing = [str(path) for path in (local_cert, local_key, local_ca) if not path.exists()]
     if missing:
@@ -612,24 +627,27 @@ def push_certs(dev, name, device):
 
     with SCP(dev, progress=progress) as scp:
         for local_file in (local_cert, local_key, local_ca):
-            remote_file = f"{remote_dir}/{local_file.name}"
+            remote_file = f"{remote_dir}/{remote_names[local_file]}"
             if DEBUG:
                 print(f"[{name}] SCP {local_file} -> {remote_file}")
             scp.put(str(local_file), remote_path=remote_file)
 
+    remote_cert_name = remote_names[local_cert]
+    remote_key_name = remote_names[local_key]
+    remote_ca_name = remote_names[local_ca]
     verify_cmd = (
         f"chown root {remote_dir}; "
         f"chmod 755 {remote_dir}; "
-        f"chown root {remote_dir}/{local_cert.name} {remote_dir}/{local_key.name} {remote_dir}/{local_ca.name}; "
-        f"chmod 644 {remote_dir}/{local_cert.name}; "
-        f"chmod 644 {remote_dir}/{local_key.name}; "
-        f"chmod 644 {remote_dir}/{local_ca.name}; "
-        f"test -s {remote_dir}/{local_cert.name} && echo OK:{remote_dir}/{local_cert.name}; "
-        f"test -s {remote_dir}/{local_key.name} && echo OK:{remote_dir}/{local_key.name}; "
-        f"test -s {remote_dir}/{local_ca.name} && echo OK:{remote_dir}/{local_ca.name}; "
-        f"ls -l {remote_dir}/{local_cert.name}; "
-        f"ls -l {remote_dir}/{local_key.name}; "
-        f"ls -l {remote_dir}/{local_ca.name}; "
+        f"chown root {remote_dir}/{remote_cert_name} {remote_dir}/{remote_key_name} {remote_dir}/{remote_ca_name}; "
+        f"chmod 644 {remote_dir}/{remote_cert_name}; "
+        f"chmod 644 {remote_dir}/{remote_key_name}; "
+        f"chmod 644 {remote_dir}/{remote_ca_name}; "
+        f"test -s {remote_dir}/{remote_cert_name} && echo OK:{remote_dir}/{remote_cert_name}; "
+        f"test -s {remote_dir}/{remote_key_name} && echo OK:{remote_dir}/{remote_key_name}; "
+        f"test -s {remote_dir}/{remote_ca_name} && echo OK:{remote_dir}/{remote_ca_name}; "
+        f"ls -l {remote_dir}/{remote_cert_name}; "
+        f"ls -l {remote_dir}/{remote_key_name}; "
+        f"ls -l {remote_dir}/{remote_ca_name}; "
         f"ls -l {remote_dir}"
     )
 
@@ -654,9 +672,9 @@ def push_certs(dev, name, device):
         )
 
     required_markers = [
-        f"OK:{remote_dir}/{local_cert.name}",
-        f"OK:{remote_dir}/{local_key.name}",
-        f"OK:{remote_dir}/{local_ca.name}",
+        f"OK:{remote_dir}/{remote_cert_name}",
+        f"OK:{remote_dir}/{remote_key_name}",
+        f"OK:{remote_dir}/{remote_ca_name}",
     ]
     missing_remote = [marker for marker in required_markers if marker not in output]
     if missing_remote:
@@ -668,7 +686,7 @@ def push_certs(dev, name, device):
 
     # Ensure runtime key/cert/CA files are root-owned (read-only for script_user),
     # while remaining readable by policy-defined permissions.
-    expected_files = [local_cert.name, local_key.name, local_ca.name]
+    expected_files = [remote_cert_name, remote_key_name, remote_ca_name]
     owner_violations = []
     for line in (output or "").splitlines():
         stripped = line.strip()
@@ -698,9 +716,83 @@ def push_certs(dev, name, device):
             f"[{name}] Remote cert owner mismatch. Expected owner=root\n{details}"
         )
 
-    sync_certs_dual_re(dev, name, remote_dir, [local_cert.name, local_key.name, local_ca.name])
+    sync_certs_dual_re(
+        dev,
+        name,
+        remote_dir,
+        [remote_cert_name, remote_key_name, remote_ca_name],
+    )
 
-    print(f"[{name}] Certs copied OK {local_cert.name}, {local_key.name}, {local_ca.name}")
+    print(
+        f"[{name}] Certs copied OK "
+        f"{remote_cert_name}, {remote_key_name}, {remote_ca_name}"
+    )
+
+
+def push_onbox_artifacts(dev, name):
+    """Install the generated Docker-suite runtime and JSON sidecars."""
+    local_dir = RUNTIME_DIR / name
+    script = local_dir / ONBOX_SCRIPT_NAME
+    config = local_dir / "phiotx_qkd_onbox_config.json"
+    inventory = local_dir / "phiotx_qkd_onbox_inventory.json"
+    missing = [str(path) for path in (script, config, inventory) if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            f"[{name}] Missing generated on-box artifacts:\n"
+            + "\n".join(missing)
+        )
+
+    op_dir = "/var/db/scripts/op"
+    event_dir = "/var/db/scripts/event"
+    dev.rpc.request_shell_execute(
+        command=f"mkdir -p {op_dir} {event_dir}"
+    )
+    transfers = (
+        (script, f"{op_dir}/{ONBOX_SCRIPT_NAME}"),
+        (script, f"{event_dir}/{ONBOX_SCRIPT_NAME}"),
+        (config, f"{op_dir}/{config.name}"),
+        (inventory, f"{op_dir}/{inventory.name}"),
+    )
+    with SCP(dev, progress=progress) as scp:
+        for local_file, remote_file in transfers:
+            print(f"[{name}] SCP {local_file} -> {remote_file}")
+            scp.put(str(local_file), remote_path=remote_file)
+
+    verify_cmd = (
+        f"chmod 755 {op_dir}/{ONBOX_SCRIPT_NAME} "
+        f"{event_dir}/{ONBOX_SCRIPT_NAME}; "
+        f"chmod 644 {op_dir}/{config.name} {op_dir}/{inventory.name}; "
+        f"test -s {op_dir}/{ONBOX_SCRIPT_NAME} && echo OK:{op_dir}/{ONBOX_SCRIPT_NAME}; "
+        f"test -s {event_dir}/{ONBOX_SCRIPT_NAME} && echo OK:{event_dir}/{ONBOX_SCRIPT_NAME}; "
+        f"test -s {op_dir}/{config.name} && echo OK:{op_dir}/{config.name}; "
+        f"test -s {op_dir}/{inventory.name} && echo OK:{op_dir}/{inventory.name}"
+    )
+    output = rpc_text(dev.rpc.request_shell_execute(command=verify_cmd))
+    required = [
+        f"OK:{op_dir}/{ONBOX_SCRIPT_NAME}",
+        f"OK:{event_dir}/{ONBOX_SCRIPT_NAME}",
+        f"OK:{op_dir}/{config.name}",
+        f"OK:{op_dir}/{inventory.name}",
+    ]
+    missing_markers = [marker for marker in required if marker not in output]
+    if missing_markers:
+        raise RuntimeError(
+            f"[{name}] On-box artifact verification failed: {missing_markers}\n"
+            f"output={output}"
+        )
+
+    sync_qkd_scripts_dual_re(dev, name, ONBOX_SCRIPT_NAME)
+    if has_dual_re(dev, name):
+        for filename in (config.name, inventory.name):
+            if not copy_file_to_other_re(
+                dev,
+                name,
+                f"{op_dir}/{filename}",
+            ):
+                raise RuntimeError(
+                    f"[{name}] Failed to sync on-box sidecar to peer RE: {filename}"
+                )
+    print(f"[{name}] On-box runtime and sidecars copied OK")
 
 
 # --------------------------
@@ -1109,6 +1201,7 @@ def push_config(device_name, device, commands, base, devices_dict=None):
         except Exception:
             pass
 
+        push_onbox_artifacts(dev, device_name)
         push_certs(dev, device_name, device)
         configure_qkd_scripts(dev, device_name, base)
 
@@ -1275,3 +1368,4 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
 
     if failed_devices:
         print(f"[WARN] provisioning completed with failures on: {', '.join(sorted(failed_devices))}")
+    return failed_devices

@@ -1072,8 +1072,9 @@ def check_no_state_save_errors(device):
     started = time.perf_counter()
     runtime_log_dir = qkd_runtime_log_dir()
     cmd = (
+        "set nonomatch; "
         "grep -h -E 'STATE SAVE ERROR|KEYCHAIN BOOTSTRAP STATE SAVE FAIL|Operation not permitted' "
-        f"{runtime_log_dir}/qkd_debug*.log /var/tmp/qkd_debug*.log 2>/dev/null || true"
+        f"{runtime_log_dir}/qkd_debug*.log /var/tmp/qkd_debug*.log || true"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=20)
     output = (result.stdout or "").strip()

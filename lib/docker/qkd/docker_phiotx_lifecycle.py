@@ -386,6 +386,7 @@ def ensure_image(device, phiotx, local_archive=None):
             )
 
         remote_parent = str(Path(archive).parent)
+        archive = str(Path(remote_parent) / local_archive.name)
         _run(
             device,
             f"mkdir -p {shlex.quote(remote_parent)}",
@@ -423,7 +424,7 @@ def ensure_image(device, phiotx, local_archive=None):
                 f"{device_name(device)}"
             )
 
-        if str(archive).endswith((".gz", ".tgz")):
+        if str(archive).lower().endswith((".gz", ".tgz")):
             load_command = f"gzip -dc {shlex.quote(archive)} | docker load"
         else:
             load_command = f"docker load -i {shlex.quote(archive)}"
