@@ -140,6 +140,19 @@ class CaRunner:
             f"CA file creation for {relative_path}",
         )
 
+    def append_section_if_missing(self, relative_path, section, content):
+        """Append one OpenSSL section without rewriting an existing config."""
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        path = shlex.quote(relative_path)
+        pattern = shlex.quote(
+            rf"^[[:space:]]*\[[[:space:]]*{section}[[:space:]]*\]"
+        )
+        self.run_checked(
+            f"if ! grep -Eq {pattern} {path}; then "
+            f"printf %s {shlex.quote(encoded)} | base64 -d >> {path}; fi",
+            f"OpenSSL profile migration for {section}",
+        )
+
     def run(self, command, timeout=120):
         argv = self._wrap(command)
         try:
@@ -284,6 +297,39 @@ extendedKeyUsage = clientAuth
 """
 
 
+def required_leaf_profiles():
+    """Profiles required by both new and pre-existing PhioTX lab CAs."""
+    return {
+        "phiotx_peer": """
+
+[ phiotx_peer ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth,clientAuth
+""",
+        "phiotx_etsi": """
+
+[ phiotx_etsi ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth,clientAuth
+""",
+        "phiotx_client": """
+
+[ phiotx_client ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = clientAuth
+""",
+    }
+
+
 def ensure_ca(runner, ca_settings):
     """Create the external CA when absent, or safely reuse it when present."""
     ca_dir = shlex.quote(ca_settings["dir"])
@@ -299,6 +345,12 @@ def ensure_ca(runner, ca_settings):
         openssl_ca_config(ca_settings),
         mode=0o600,
     )
+    for section, content in required_leaf_profiles().items():
+        runner.append_section_if_missing(
+            ca_settings["config"],
+            section,
+            content,
+        )
 
     ca_key = shlex.quote(ca_settings["ca_key"])
     ca_cert = shlex.quote(ca_settings["cert"])
