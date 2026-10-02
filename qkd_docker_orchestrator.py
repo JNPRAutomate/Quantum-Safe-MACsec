@@ -43,6 +43,8 @@ import os
 import sys
 import traceback
 from pathlib import Path
+
+from lib.common.command_output import capture_command_output
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -967,6 +969,11 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
+    with capture_command_output("qkd_docker_orchestrator", args.command):
+        return _run_command(args)
+
+
+def _run_command(args) -> int:
     try:
         return args.func(args)
     except (

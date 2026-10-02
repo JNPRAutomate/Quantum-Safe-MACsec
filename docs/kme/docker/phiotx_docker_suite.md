@@ -459,6 +459,20 @@ The shared logger uses ERROR by default, WARNING with `-v`, INFO with `-vv`,
 and DEBUG with `-vvv` or more. Both `bootstrap` and `deploy` forward this numeric
 counter when starting Junos provisioning.
 
+Every command automatically duplicates its console output and errors into a
+timestamped file on the orchestrator host:
+`/var/tmp/qkd_docker_orchestrator_<command>_YYYYMMDD_HHMMSS.log`.
+The path is printed at startup. Progress, provisioning logger messages,
+exceptions, and interruption messages are saved while remaining visible in the
+terminal; command exit codes are unchanged. No shell `tee` wrapper is needed.
+External commands such as `git pull` are not included.
+
+For example, find the latest deployment transcript on the Linux server with:
+
+```bash
+ls -t /var/tmp/qkd_docker_orchestrator_deploy_*.log | head -1
+```
+
 Credentials are never read from the inventory. They come from the command line,
 from `EVO_USERNAME` / `EVO_PASSWORD`, or from an interactive prompt.
 
