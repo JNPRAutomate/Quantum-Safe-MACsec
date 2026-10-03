@@ -1247,7 +1247,7 @@ def _run_rpc_key_action(peer, action, pubkey_line, key_path):
     return True
 
 
-def _verify_rpc_next_key(peer):
+def _verify_rpc_next_key_once(peer):
     cmd = f"op phiotx_qkd_onbox.py action status iface {peer['interface']}"
     try:
         result = subprocess.run(
@@ -1269,18 +1269,38 @@ def _verify_rpc_next_key(peer):
         )
         return False
     stdout = result.stdout.decode(errors="ignore").strip()
-    if result.returncode != 0:
-        return False
-    try:
-        payload = json.loads(stdout)
-    except Exception:
-        start = stdout.find("{")
-        end = stdout.rfind("}")
+    stderr = result.stderr.decode(errors="ignore").strip()
+    payload = None
+    if result.returncode == 0:
         try:
-            payload = json.loads(stdout[start:end + 1])
+            payload = json.loads(stdout)
         except Exception:
-            payload = None
-    return isinstance(payload, dict)
+            start = stdout.find("{")
+            end = stdout.rfind("}")
+            try:
+                payload = json.loads(stdout[start:end + 1])
+            except Exception:
+                payload = None
+    if isinstance(payload, dict):
+        return True
+    log(
+        f"RPC-KEY VERIFY ATTEMPT FAILED peer={peer['name']} rc={result.returncode} "
+        f"stderr={stderr[:200]!r} stdout={stdout[:200]!r}",
+        "WARN",
+        mode="RPC-KEY-ROTATION",
+    )
+    return False
+
+
+def _verify_rpc_next_key(peer, attempts=3, delay=5):
+    # The peer can be briefly busy (commit/lock) while answering the status
+    # probe; retry before discarding the prepared key.
+    for attempt in range(attempts):
+        if _verify_rpc_next_key_once(peer):
+            return True
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return False
 
 
 def _activate_rpc_next_keypair():
