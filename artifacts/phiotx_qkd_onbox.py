@@ -1001,6 +1001,34 @@ def _rpc_keys_for_source(source_device):
     ]
 
 
+def _script_user_authorized_keys_path():
+    return os.path.join(SSH_HOME_BASE, SCRIPT_USER, ".ssh", "authorized_keys")
+
+
+def _read_authorized_keys_file():
+    try:
+        with open(_script_user_authorized_keys_path(), "r") as handle:
+            return [line.strip() for line in handle if line.strip()]
+    except Exception:
+        return []
+
+
+def _stage_rpc_pubkey_in_authorized_keys(pubkey_line):
+    # Prepare only: sshd reads authorized_keys directly, so the next key is
+    # usable without a Junos commit. Commits that do not touch system login
+    # leave this file alone; the finalize commit makes the key persistent.
+    if any(_public_keys_match(line, pubkey_line) for line in _read_authorized_keys_file()):
+        return True
+    path = _script_user_authorized_keys_path()
+    try:
+        with open(path, "a") as handle:
+            handle.write(pubkey_line + "\n")
+        return True
+    except Exception as exc:
+        log(f"RPC-PUBKEY STAGE FAIL file={path} error={exc}", "ERROR", mode="RPC-KEY-ROTATION")
+        return False
+
+
 def _apply_rpc_pubkey(source_device, pubkey_b64, finalize=False):
     try:
         pubkey_line = _decode_rpc_pubkey(source_device, pubkey_b64)
@@ -1008,9 +1036,18 @@ def _apply_rpc_pubkey(source_device, pubkey_b64, finalize=False):
         log(f"RPC-PUBKEY INVALID source_device={source_device} error={exc}", "ERROR", mode="RPC-KEY-ROTATION")
         return False
 
+    if not finalize:
+        if not _stage_rpc_pubkey_in_authorized_keys(pubkey_line):
+            print(f"ERROR PREPARE-RPC-PUBKEY STAGE FAILED source_device={source_device}")
+            return False
+        log(f"OK PREPARE-RPC-PUBKEY source_device={source_device} mode=authorized_keys_no_commit", "INFO", mode="RPC-KEY-ROTATION")
+        print(f"OK PREPARE-RPC-PUBKEY source_device={source_device}")
+        return True
+
     existing = _rpc_keys_for_source(source_device)
     commands = []
-    if finalize and not any(_public_keys_match(key, pubkey_line) for key in existing):
+    staged = any(_public_keys_match(line, pubkey_line) for line in _read_authorized_keys_file())
+    if not staged and not any(_public_keys_match(key, pubkey_line) for key in existing):
         # Finalize removes every other key of this source. Accepting a key that
         # was never prepared here would silently replace the working one.
         log(
@@ -1292,10 +1329,8 @@ def _verify_rpc_next_key_once(peer, final=True):
     return False
 
 
-def _verify_rpc_next_key(peer, attempts=4, delay=3, settle=3):
-    # sshd on the peer picks up the freshly committed authorized key a few
-    # seconds after the prepare commit returns; give it time to settle and
-    # poll before declaring the prepared key lost.
+def _verify_rpc_next_key(peer, attempts=4, delay=3, settle=1):
+    # Poll briefly before declaring the staged key lost (peer may be busy).
     time.sleep(settle)
     for attempt in range(attempts):
         last = attempt + 1 == attempts
@@ -1471,7 +1506,22 @@ def run_rpc_key_rotation_cycle():
             pubkey,
             RPC_SSH_KEY,
         ):
-            return False
+            # The staged key lives only in the peer's authorized_keys until
+            # this finalize commits it; an unrelated login commit on the peer
+            # may have dropped it. The previous key is still committed there.
+            previous_key = f"{RPC_SSH_KEY}.prev"
+            if not os.path.isfile(previous_key) or not _run_rpc_key_action(
+                peers[peer_name],
+                "finalize-rpc-pubkey",
+                pubkey,
+                previous_key,
+            ):
+                return False
+            log(
+                f"RPC-KEY FINALIZE VIA PREVIOUS KEY peer={peer_name}",
+                "WARN",
+                mode="RPC-KEY-ROTATION",
+            )
         finalized.add(peer_name)
         transaction["finalized_peers"] = sorted(finalized)
         transaction["phase"] = "finalizing"

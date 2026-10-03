@@ -896,6 +896,15 @@ Three runtime anomalies were found and addressed:
   verification now retries (3 attempts, 5 s apart) and logs
   `RPC-KEY VERIFY ATTEMPT FAILED` with rc/stderr. Live result: first attempt
   denied, second succeeded, rotation completed on both routers.
+* RPC identity rotation now performs one Junos commit instead of two. The
+  `prepare-rpc-pubkey` step appends the next public key only to
+  `~etsi_user/.ssh/authorized_keys` (sshd `AuthorizedKeysFile`), which sshd
+  honours immediately; `finalize-rpc-pubkey` is the single commit that writes
+  the new key to `system login` and removes the old one. Lab test: a key added
+  only to the file survived a MACsec keyring commit; only commits touching
+  `system login` regenerate the file. If such a commit drops the staged key
+  before finalize, finalize falls back to the previous (still committed) key
+  and logs `RPC-KEY FINALIZE VIA PREVIOUS KEY`.
 
 Live verification after deploying the fix to both EVOs (runtime copies in both
 `/var/db/scripts/op` and `/var/db/scripts/event`): rolling replacements
