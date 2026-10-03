@@ -302,6 +302,80 @@ to that bridge but never creates, modifies, or removes it.
 The two `9.1.1.0/24` bridges are isolated per router, which is why cross-node
 traffic uses the OOB macvlan network instead.
 
+### What Hive does inside each PhioTX container
+
+Hive is the distributed network formed by PhioTX nodes, not a separate Docker
+container or a Junos keyring manager. Each container runs one PhioTX node and
+provides two distinct services: a local ETSI API for its SAE client and a peer
+service for communication with other configured PhioTX nodes.
+
+In this two-node lab, `phiotx01` and `phiotx02` form a direct Hive peer pair:
+
+| Service | EVO1 / phiotx01 | EVO2 / phiotx02 | Purpose |
+| --- | --- | --- | --- |
+| Local ETSI API | `9.1.1.10:443`, client `sae-001` | `9.1.1.11:443`, client `sae-002` | Deliver keys to the local router over mTLS |
+| Hive peer service | `10.38.112.10:9002` | `10.38.112.11:9002` | Coordinate key delivery between KME nodes over mTLS with the configured ML-KEM overlay |
+
+The peer layer selects the neighbor's name/address, the `qxc` PKI store and
+`pqc: ML-KEM-1024`. Hive allows the KME serving one SAE to make the corresponding
+key available to the KME serving the other SAE. In larger deployments, PhioTX
+supports delivery through configured neighbors over multiple hops; this lab
+does not exercise multi-hop routing, load balancing or fault tolerance.
+
+The end-to-end workflow is:
+
+1. The EVO1 runtime requests a key for `sae-002` from its local PhioTX using
+   ETSI `enc_keys`. The response contains a key-ID and key material.
+2. PhioTX handles the inter-KME coordination/delivery over Hive so the
+   corresponding key can be retrieved by the destination SAE.
+3. EVO1 sends key-IDs, target slots, activation times and transaction metadata
+   to EVO2 through the separate router-to-router SSH RPC channel. It does not
+   send the CAKs in that RPC batch.
+4. The EVO2 runtime asks its own local PhioTX for the keys using `dec_keys` and
+   those key-IDs.
+5. The runtimes install and commit their Junos keychains and exchange
+   acknowledgments. Junos MKA then handles the MACsec secure associations.
+
+Hive does **not** run the Junos timer, choose the four keyring slots, commit
+router configuration, or rotate the routers' SSH identities. Those tasks belong
+to the on-box runtime and Junos.
+
+The active ETSI layer uses `keygen_method: bulk`: PhioTX derives the supplied
+keys using its DRBG. The use of ETSI QKD 014 and QKD-named scripts does not by
+itself establish that these keys came from a physical QKD link. Likewise,
+`pqc: ML-KEM-1024` protects the peer-delivery channel; it is distinct from
+selecting a PQC or hybrid ETSI key-generation method.
+
+### Independent protection and rotation planes
+
+| Plane | Credentials/protection | Who manages it |
+| --- | --- | --- |
+| EVO to local PhioTX | ETSI HTTPS/mTLS; SAE identity and container `etsi` identity | Orchestrator provisions PKI; runtime makes ETSI requests |
+| PhioTX to PhioTX | Hive mTLS using `qxc`, plus ML-KEM-1024 overlay | PhioTX runs the peer protocol; orchestrator prepares the PQC material |
+| EVO to EVO | SSH RPC as `etsi_user`; independent SSH identity per router | On-box runtime automatically rotates the identities |
+| MACsec data plane | CAK/CKN keychain and MKA/SAK operation | Runtime commits CAK/CKN; Junos operates MKA/MACsec |
+
+The policy configures a 60-second runtime timer, 300-second spacing between
+key activation times, and a four-slot keyring. Slot 0 is initially seeded by
+deploy; initial completion fetches slots 1-3. Steady-state replacement updates
+two slots (`N-2`), preserving the active and next keys. A four-slot ring does
+not mean that every timer invocation requests four new keys.
+
+SSH identity rotation is independently configured at 600 seconds. After its
+MACsec work, each router's runtime generates a new pair locally, prepares the
+new public key on its direct peers, verifies access using the new private key,
+activates it, and finalizes the peer authorization. Private keys stay on their
+source router. An incomplete rotation is retained for retry; 600 seconds is
+the configured cadence, not a guarantee of completion during a peer outage.
+
+This SSH rotation is not performed by Hive and does not make SSH post-quantum.
+The Hive ML-KEM overlay does not protect the separate EVO-to-EVO SSH connection.
+The orchestrator generates missing PhioTX PQC keypairs and reuses existing ones
+on retries; it does **not** configure a periodic 600-second regeneration of
+those pairs or renewal of the TLS certificates. Do not infer their lifecycle
+from the router SSH rotation interval or confuse a KEM exchange with rotation
+of its long-lived public/private keypair.
+
 ---
 
 ## 7. PKI
@@ -782,6 +856,52 @@ ss -ltn
 A healthy node shows the three layers installed, both PKI stores populated, the
 ML-KEM keypair plus one imported public key per peer, listeners on `443` and
 `9002`, and an established peer session.
+
+### Live EVO lab observations, 2026-10-02/03
+
+These observations apply to the two-node lab inventory, not to every supported
+platform or a complete unattended endurance test. The local ETSI transport
+automation was published in commit `d69a563`.
+
+| Check | Observed result | Scope/limitation |
+| --- | --- | --- |
+| Local ETSI access | Both routers reached their own PhioTX with mTLS, HTTP 200, running as UID 2001 (`etsi_user`) | Bridge/source binding supplied by the endpoint-limited helper; no new interfaces or policy routes |
+| Final socket adapter | Both routers passed the live mTLS check with a non-inheritable received socket | Final adapter logic was exercised directly without reseeding the running ring |
+| Paired ETSI retrieval | EVO1 `enc_keys` and EVO2 `dec_keys` returned matching 32-byte key material; a second `dec_keys` returned HTTP 400 | Key material was not printed |
+| Initial ring completion | Master logged `RING_COMPLETION DONE slots=[1, 2, 3]`; slave logged installation of the three-key batch | Deploy seed plus three fetched keys fills the four-slot ring |
+| Committed configuration | Concurrent readback found slots 0, 1, 2, 3 on both routers, with identical key-names and activation times | A previous sequential read straddled a replacement and differed; concurrent readback confirmed agreement |
+| Automatic SSH rotation | Both routers logged `RPC KEY ROTATION COMPLETED rotation_count=66`, with `interval_seconds=600` | Confirms live router identity rotation, not Hive keypair rotation |
+| MACsec/MKA | MACsec secure associations were `inuse`; both detailed MKA outputs reported `Secured - Primary` with the same active CAK name | Does not establish that every runtime reconciliation/rotation check succeeded |
+| Offline regressions | 98 related transport, PQC/bootstrap, deploy, naming and transcript tests passed; changed Python modules compiled and `git diff --check` passed | Offline checks do not replace live rollover verification |
+
+Two runtime anomalies remain unresolved:
+
+* `MKA_PARSE CAK LENGTH INVALID len=62`: the detailed Junos output also rendered
+  the active CAK name as a 62-character token, while its configured key-name
+  was 64 characters. This is an observed operational CKN/name rendering issue,
+  not evidence that the fetched CAK secret was only 31 bytes.
+* `ROLLING_REPLACEMENT POST-COMMIT VERIFY FAILED
+  rotations_blocked_until_reconciled=1`: the master failed its bilateral
+  post-commit state check, despite the later matching committed keyring
+  readback. The cause and recovery still require investigation; do not declare
+  the complete MACsec rotation cycle anomaly-free.
+
+For read-only follow-up, run these from the appropriate EVO shell/CLI:
+
+```text
+grep 'RPC KEY ROTATION COMPLETED' /var/home/etsi_user/logs/qkd_docker_debug.log
+grep -E 'MKA_PARSE CAK LENGTH|POST-COMMIT VERIFY FAILED' /var/home/etsi_user/logs/qkd_docker_debug.log
+show configuration security authentication-key-chains
+show security mka sessions interface et-0/0/1 detail
+show security macsec connections interface et-0/0/1
+```
+
+Inside each PhioTX container, use `txh -P -c no` for Hive peer status and
+`tx_status -pqc` for provisioned PQC material. Do not use the unsupported
+`tx_status -peers` command on PhioTX 4.6.3.
+
+Avoid rerunning `deploy` merely to observe rotation: the current provisioning
+reseeds slot 0 and removes the future slots before the runtime refills them.
 
 ### Reading the offline bootstrap tests
 
