@@ -889,6 +889,14 @@ Two runtime anomalies were found and fixed:
   (`purge_pending_in_replaced_slots`); regression tests are in
   `tests/test_docker_pending_alignment.py`.
 
+* `RPC-KEY VERIFY FAIL peer=... action=keep_current_key_and_reprepare`
+  (intermittent, self-healing): both routers rotate their SSH identity at the
+  same time, so the first verification of the new key can reach the peer before
+  it finished committing it (`Permission denied (publickey...)`, rc=255). The
+  verification now retries (3 attempts, 5 s apart) and logs
+  `RPC-KEY VERIFY ATTEMPT FAILED` with rc/stderr. Live result: first attempt
+  denied, second succeeded, rotation completed on both routers.
+
 Live verification after deploying the fix to both EVOs (runtime copies in both
 `/var/db/scripts/op` and `/var/db/scripts/event`): rolling replacements
 completed with no `POST-COMMIT VERIFY FAILED`, no CAK length warning and no
