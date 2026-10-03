@@ -874,17 +874,26 @@ automation was published in commit `d69a563`.
 | MACsec/MKA | MACsec secure associations were `inuse`; both detailed MKA outputs reported `Secured - Primary` with the same active CAK name | Does not establish that every runtime reconciliation/rotation check succeeded |
 | Offline regressions | 98 related transport, PQC/bootstrap, deploy, naming and transcript tests passed; changed Python modules compiled and `git diff --check` passed | Offline checks do not replace live rollover verification |
 
-Two runtime anomalies remain unresolved:
+Two runtime anomalies were found and fixed:
 
-* `MKA_PARSE CAK LENGTH INVALID len=62`: the detailed Junos output also rendered
-  the active CAK name as a 62-character token, while its configured key-name
-  was 64 characters. This is an observed operational CKN/name rendering issue,
-  not evidence that the fetched CAK secret was only 31 bytes.
-* `ROLLING_REPLACEMENT POST-COMMIT VERIFY FAILED
-  rotations_blocked_until_reconciled=1`: the master failed its bilateral
-  post-commit state check, despite the later matching committed keyring
-  readback. The cause and recovery still require investigation; do not declare
-  the complete MACsec rotation cycle anomaly-free.
+* `MKA_PARSE CAK LENGTH INVALID len=62`: Junos renders the active CAK name as a
+  62-character token that is a prefix of the configured 64-character key-name
+  (`sha256(key_id)`). The CKN does not depend on the requested key size, so
+  asking for another key length does not help (and a shorter key would break
+  GCM-AES-XPN-256). The validator now accepts 32, 62 and 64 characters.
+* `ROLLING_REPLACEMENT POST-COMMIT VERIFY FAILED`: not a timing race. After each
+  rolling replacement the master purged pending keys by incoming start time and
+  dropped the future pending key in the untouched slot, while the slave purged
+  by replaced slots and kept it. The pending heads then differed. The master
+  now uses the same slot-based purge
+  (`purge_pending_in_replaced_slots`); regression tests are in
+  `tests/test_docker_pending_alignment.py`.
+
+Live verification after deploying the fix to both EVOs (runtime copies in both
+`/var/db/scripts/op` and `/var/db/scripts/event`): rolling replacements
+completed with no `POST-COMMIT VERIFY FAILED`, no CAK length warning and no
+incoming-start-time purge. The event-script copy must be updated too, because
+the timer runs that one.
 
 For read-only follow-up, run these from the appropriate EVO shell/CLI:
 
