@@ -874,7 +874,7 @@ automation was published in commit `d69a563`.
 | MACsec/MKA | MACsec secure associations were `inuse`; both detailed MKA outputs reported `Secured - Primary` with the same active CAK name | Does not establish that every runtime reconciliation/rotation check succeeded |
 | Offline regressions | 98 related transport, PQC/bootstrap, deploy, naming and transcript tests passed; changed Python modules compiled and `git diff --check` passed | Offline checks do not replace live rollover verification |
 
-Two runtime anomalies were found and fixed:
+Three runtime anomalies were found and addressed:
 
 * `MKA_PARSE CAK LENGTH INVALID len=62`: Junos renders the active CAK name as a
   62-character token that is a prefix of the configured 64-character key-name
