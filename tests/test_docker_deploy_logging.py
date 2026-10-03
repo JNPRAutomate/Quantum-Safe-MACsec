@@ -49,13 +49,15 @@ def deployment(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(orchestrator, "phiotx_up", Mock(return_value={"EVO1": {}}))
     monkeypatch.setattr(orchestrator, "cmd_phiotx_up", Mock(return_value=0))
+    artifacts = Mock()
+    monkeypatch.setattr(orchestrator, "build_onbox_artifacts", artifacts)
     provisioning = Mock(return_value=[])
     monkeypatch.setattr(orchestrator, "run_provisioning", provisioning)
 
     logger = logging.getLogger("qkd")
     previous_level = logger.level
     previous_handlers = tuple(logger.handlers)
-    yield SimpleNamespace(provisioning=provisioning, create=create)
+    yield SimpleNamespace(provisioning=provisioning, create=create, artifacts=artifacts)
     for handler in tuple(logger.handlers):
         if handler not in previous_handlers:
             logger.removeHandler(handler)
@@ -100,6 +102,10 @@ def test_junos_deploy_uses_numeric_cli_verbosity(deployment, command, verbosity,
     assert set(call.kwargs["devices"]) == {"EVO1"}
     if command == "bootstrap":
         deployment.create.assert_called_once_with(args, fresh_pki=True)
+    else:
+        deployment.artifacts.assert_called_once_with(
+            call.kwargs["devices"], phiotx={}
+        )
 
 
 @pytest.mark.parametrize("command", ["bootstrap", "deploy"])
@@ -120,3 +126,4 @@ def test_phiotx_only_does_not_run_junos_provisioning(deployment, command):
     assert args.func(args) == 0
 
     deployment.provisioning.assert_not_called()
+    deployment.artifacts.assert_not_called()

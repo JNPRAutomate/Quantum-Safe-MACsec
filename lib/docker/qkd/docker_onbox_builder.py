@@ -380,6 +380,8 @@ def build_onbox_inventory(name, device, phiotx=None):
     source_ip = _device_kme_source_ip(device, phiotx)
     if source_ip:
         inventory["kme_source_ip"] = source_ip
+        if inventory["kme_api"] == "phiotx":
+            inventory["kme_transport_socket"] = "/run/phiotx-etsi/transport.sock"
 
     return inventory
 

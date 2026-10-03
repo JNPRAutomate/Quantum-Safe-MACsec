@@ -17,6 +17,35 @@ from lib.docker.qkd import docker_phiotx_lifecycle as lifecycle
 KEM = "ML-KEM-1024"
 
 
+@pytest.mark.parametrize("source_override", [False, True])
+@pytest.mark.parametrize("only", [None, ["EVO1", "EVO2"]])
+def test_fleet_installs_transport_for_every_selected_router(pqc_fleet, monkeypatch, source_override, only):
+    state = pqc_fleet
+    installed = []
+    if only:
+        state.keypairs.add("phiotx03")
+    if source_override:
+        for device in state.devices.values():
+            device["phiotx"]["source_ip"] = "9.1.1.1"
+    else:
+        state.phiotx["internal_network"] = {"gateway": "9.1.1.1"}
+    monkeypatch.setattr(
+        lifecycle, "install_transport",
+        lambda device, *_args: installed.append(device["name"]),
+    )
+    lifecycle.phiotx_up(state.devices, state.phiotx, only=only)
+    assert installed == (only or ["EVO1", "EVO2", "EVO3"])
+
+
+def test_dry_run_does_not_install_transport(pqc_fleet, monkeypatch):
+    state = pqc_fleet
+    state.phiotx["internal_network"] = {"gateway": "9.1.1.1"}
+    installed = []
+    monkeypatch.setattr(lifecycle, "install_transport", lambda *_args: installed.append(True))
+    lifecycle.phiotx_up(state.devices, state.phiotx, dry_run=True)
+    assert installed == []
+
+
 @pytest.fixture
 def pqc_fleet(tmp_path, monkeypatch):
     devices = {

@@ -29,6 +29,8 @@ from lib.docker.qkd.docker_identity import (
     normalize_device,
     pyez_shell_cmd,
 )
+from lib.docker.qkd.docker_etsi_transport import install_transport
+from lib.docker.qkd.docker_onbox_builder import _device_kme_source_ip
 
 
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -879,6 +881,13 @@ def phiotx_up(
         ensure_image(device, phiotx, local_archive=image_archive)
         ensure_oob_network(device, phiotx)
         start_container(device, settings, phiotx)
+        if not dry_run and _device_kme_source_ip(device, phiotx):
+            install_transport(
+                device, phiotx, RUNTIME_DIR / name / "transport",
+                lambda command: _run(device, command, "ETSI transport setup").stdout,
+                lambda transfers: _push_files(device, transfers),
+            )
+            print(f"[OK] {name}: local ETSI socket helper ready")
 
         if name in licenses:
             install_license(device, settings, licenses[name])

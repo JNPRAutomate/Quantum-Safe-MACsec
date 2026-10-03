@@ -726,8 +726,42 @@ From the Junos host, the Docker bridge is only reachable when the request is
 bound to the bridge. Binding to the VRF alone fails with `No route to host`.
 
 Bridge interface names such as `br-29a2ff4d333b` differ per router and change
-when networks are recreated, so the runtime binds to the stable bridge gateway
-address `9.1.1.1` through a custom HTTP adapter instead.
+when networks are recreated. Live EVO testing showed that binding only to the
+gateway source IP is insufficient: the socket must also be bound to the bridge
+device. A source/destination policy-routing rule did not fix the connection.
+
+The orchestrator installs `phiotx-etsi-socket.service`, a root-owned transport
+helper. It discovers the bridge from the configured gateway, creates a socket
+bound to that bridge, and connects only to the inventory-selected **local**
+PhioTX IP on TCP 443. It passes the connected descriptor to `etsi_user` through
+`/run/phiotx-etsi/transport.sock`, checking the caller's kernel UID. Callers cannot
+supply a destination, port, command, or payload to the helper.
+
+The on-box runtime performs TLS, client certificate authentication, ETSI
+`enc_keys`/`dec_keys`, and keyring coordination using that socket. The helper
+does not read certificates or key material; systemd restricts its capabilities
+to socket binding and socket-file ownership and blocks its certificate-directory
+access. No new interfaces, routing rules, privileged containers, or capabilities
+on the Python interpreter are required.
+
+Helper code and fixed configuration are installed under `/var/db/phiotx-etsi`;
+the systemd service is enabled for reboot. Each connection rediscovers the bridge
+so a changed Docker bridge name does not require hardcoded edits. `clean` stops
+and disables the service and removes its managed files.
+
+`bootstrap`, `phiotx-up`, and `deploy` install/reconfigure the helper for each
+selected managed router in the inventory. `deploy` also regenerates the runtime
+script and JSON sidecars before uploading them, so updating the repository does
+not leave an old generated runtime without helper support. This regeneration
+does not generate or replace the CA or certificates. No manual SCP, systemd
+setup, or per-router edits are needed; `--only` limits the selected routers.
+
+Diagnostics:
+
+```bash
+systemctl status phiotx-etsi-socket.service --no-pager
+journalctl -u phiotx-etsi-socket.service -n 30 --no-pager
+```
 
 ---
 
@@ -741,7 +775,7 @@ tx_install_cf -list
 tx_status -pki qxc
 tx_status -pki etsi
 tx_status -pqc
-tx_status -peers
+txh -P -c no
 ss -ltn
 ```
 

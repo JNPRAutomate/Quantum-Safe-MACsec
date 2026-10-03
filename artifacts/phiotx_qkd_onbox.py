@@ -61,6 +61,8 @@ import hashlib
 import pwd
 import shutil
 import stat
+import array
+import socket
 
 
 urllib3.disable_warnings()
@@ -188,6 +190,7 @@ KME_API = str(CONFIG.get("kme_api", "legacy")).lower()
 # Optional local source address for KME calls. Required when the KME is an
 # on-box PhioTX container reached over the Docker bridge.
 KME_SOURCE_IP = str(CONFIG.get("kme_source_ip") or "").strip() or None
+KME_TRANSPORT_SOCKET = CONFIG.get("kme_transport_socket")
 CA_CERT = CONFIG["ca_cert"]
 LINKS = CONFIG.get("links", [])
 
@@ -4298,6 +4301,56 @@ def kme_url(peer_sae, endpoint, query):
     return f"https://{KME_IP}:{KME_PORT}/api/v1/keys/{peer_sae}/{endpoint}{query}"
 
 
+def connected_etsi_socket(host, port, timeout):
+    if host != KME_IP or int(port) != KME_PORT:
+        raise ValueError("ETSI socket transport refuses a different endpoint")
+    descriptors = array.array("i")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as client:
+        client.settimeout(5)
+        client.connect(KME_TRANSPORT_SOCKET)
+        message, ancillary, flags, _address = client.recvmsg(
+            512, socket.CMSG_SPACE(descriptors.itemsize)
+        )
+    for level, kind, data in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            descriptors.frombytes(data[:len(data) - len(data) % descriptors.itemsize])
+    if message != b"OK" or flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC) or len(descriptors) != 1:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise OSError(f"ETSI socket helper failed: {message.decode(errors='replace')}")
+    try:
+        transport = socket.socket(fileno=descriptors[0])
+    except (OSError, ValueError):
+        os.close(descriptors[0])
+        raise
+    try:
+        transport.set_inheritable(False)
+        if transport.getpeername() != (KME_IP, KME_PORT):
+            raise OSError("ETSI helper returned a socket for a different endpoint")
+        transport.settimeout(timeout)
+        return transport
+    except Exception:
+        transport.close()
+        raise
+
+
+class _HelperHTTPSConnection(urllib3.connection.HTTPSConnection):
+    def _new_conn(self):
+        return connected_etsi_socket(self.host, self.port, self.timeout)
+
+
+class _HelperHTTPSPool(urllib3.connectionpool.HTTPSConnectionPool):
+    ConnectionCls = _HelperHTTPSConnection
+
+
+class _HelperBoundAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            **self.poolmanager.pool_classes_by_scheme, "https": _HelperHTTPSPool,
+        }
+
+
 class _SourceBoundAdapter(requests.adapters.HTTPAdapter):
     """Pin outgoing KME connections to a specific local source address."""
 
@@ -4321,18 +4374,18 @@ def kme_session():
     """
     Return the shared HTTP session used for every KME call.
 
-    When the KME is an on-box PhioTX container, the request has to leave
-    through the local Docker bridge. Selecting that bridge by VRF
-    ("ip vrf exec <vrf> curl ...") fails with "No route to host" on Junos EVO,
-    and the bridge device name (br-<id>) changes whenever the Docker network is
-    recreated. Binding to the bridge gateway address instead is stable and is
-    the equivalent of curl's --interface for this path.
+    Local EVO ETSI uses a connected, bridge-bound socket supplied by the
+    endpoint-limited helper. TLS and ETSI remain in this unprivileged process.
+    Other deployments retain the optional source-address adapter.
     """
     global _KME_SESSION
 
     if _KME_SESSION is None:
         session = requests.Session()
-        if KME_SOURCE_IP:
+        if KME_TRANSPORT_SOCKET:
+            session.trust_env = False
+            session.mount("https://", _HelperBoundAdapter())
+        elif KME_SOURCE_IP:
             session.mount("https://", _SourceBoundAdapter(KME_SOURCE_IP))
         _KME_SESSION = session
 

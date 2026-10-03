@@ -694,6 +694,12 @@ def clean_device(name, device, full_macsec=False):
                 strict=False,
             )
 
+            if container_name:
+                from lib.docker.qkd.docker_etsi_transport import remove_transport
+                remove_transport(
+                    lambda command: run_shell("ETSI transport cleanup", command, strict=True)
+                )
+
             docker_cleanup_failures = []
             if container_name:
                 run_shell(

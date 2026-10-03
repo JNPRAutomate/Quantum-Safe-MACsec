@@ -645,6 +645,9 @@ def cmd_deploy(args) -> int:
             n: d for n, d in runtime_devices.items() if n in set(args.only)
         }
 
+    data = load_docker_inventory(resolve_inventory_path(args.inventory))
+    build_onbox_artifacts(runtime_devices, phiotx=data["phiotx"])
+
     print("\n=== Junos configuration deploy ===")
     failed = run_provisioning(
         log,
