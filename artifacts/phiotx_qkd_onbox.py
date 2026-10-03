@@ -1247,7 +1247,7 @@ def _run_rpc_key_action(peer, action, pubkey_line, key_path):
     return True
 
 
-def _verify_rpc_next_key_once(peer):
+def _verify_rpc_next_key_once(peer, final=True):
     cmd = f"op phiotx_qkd_onbox.py action status iface {peer['interface']}"
     try:
         result = subprocess.run(
@@ -1286,19 +1286,22 @@ def _verify_rpc_next_key_once(peer):
     log(
         f"RPC-KEY VERIFY ATTEMPT FAILED peer={peer['name']} rc={result.returncode} "
         f"stderr={stderr[:200]!r} stdout={stdout[:200]!r}",
-        "WARN",
+        "WARN" if final else "INFO",
         mode="RPC-KEY-ROTATION",
     )
     return False
 
 
-def _verify_rpc_next_key(peer, attempts=3, delay=5):
-    # The peer can be briefly busy (commit/lock) while answering the status
-    # probe; retry before discarding the prepared key.
+def _verify_rpc_next_key(peer, attempts=4, delay=3, settle=3):
+    # sshd on the peer picks up the freshly committed authorized key a few
+    # seconds after the prepare commit returns; give it time to settle and
+    # poll before declaring the prepared key lost.
+    time.sleep(settle)
     for attempt in range(attempts):
-        if _verify_rpc_next_key_once(peer):
+        last = attempt + 1 == attempts
+        if _verify_rpc_next_key_once(peer, final=last):
             return True
-        if attempt + 1 < attempts:
+        if not last:
             time.sleep(delay)
     return False
 
