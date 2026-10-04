@@ -14,7 +14,9 @@ Every device reached here has already passed docker_evo_guard.admit_device().
 """
 
 import hashlib
+import re
 import shlex
+import time
 from pathlib import Path
 
 import yaml
@@ -46,6 +48,7 @@ REMOTE_STAGING = "/var/tmp/phiotx_stage"
 LAYER_BASE = "100-zero-touch-base"
 LAYER_PEER = "600-peer-hive"
 LAYER_ETSI = "700-etsi-bulk"
+LAYER_KEY_FETCH = "650-key-fetch"
 
 
 class PhiotxLifecycleError(RuntimeError):
@@ -296,6 +299,9 @@ def build_layers(name, device, devices, phiotx):
         LAYER_PEER: render_peer_layer(settings, peers, phiotx),
         LAYER_ETSI: render_etsi_layer(settings, phiotx),
     }
+    if phiotx.get("keygen_mode") == "hybrid":
+        from lib.docker.qkd.docker_key_fetch import render_key_fetch
+        layers[LAYER_KEY_FETCH] = render_key_fetch(name, device, devices, phiotx)
 
     out_dir = RUNTIME_DIR / name / "phiotx"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -666,7 +672,7 @@ def install_layers(device, settings, layer_paths, dry_run=False):
     container = settings["container"]
     _run(device, f"mkdir -p {shlex.quote(REMOTE_STAGING)}", "staging directory")
 
-    for layer_name in (LAYER_BASE, LAYER_PEER, LAYER_ETSI):
+    for layer_name in (LAYER_BASE, LAYER_PEER, LAYER_KEY_FETCH, LAYER_ETSI):
         local_path = layer_paths.get(layer_name)
         if not local_path:
             continue
@@ -851,6 +857,12 @@ def phiotx_up(
 
     if not selected:
         raise PhiotxLifecycleError("No managed EVO devices selected")
+    if phiotx.get("keygen_mode") == "hybrid":
+        from lib.docker.qkd.docker_key_fetch import render_key_fetch
+        for name, device in selected.items():
+            render_key_fetch(name, device, devices, phiotx)
+            if "qkd" not in (pki_bundles.get(name, {}).get("identities") or {}):
+                raise PhiotxLifecycleError(f"Missing QKD client PKI for {name}")
 
     missing_licenses = sorted(set(selected) - set(licenses))
     if require_licenses and missing_licenses:
@@ -914,6 +926,13 @@ def phiotx_up(
                 print(f"[PLAN] {settings['container']}: stage TLS before PQC activation")
 
         layer_paths = build_layers(name, device, devices, layer_config)
+        if phiotx.get("keygen_mode") in ("pqc", "hybrid"):
+            # Application KEM generation must not start before the fleet has
+            # exchanged its public keys. No temporary bulk fallback is added.
+            layer_paths = {
+                key: value for key, value in layer_paths.items()
+                if key not in (LAYER_ETSI, LAYER_KEY_FETCH)
+            }
         install_layers(device, settings, layer_paths, dry_run=dry_run)
 
     # Every peer must have a local keypair before any public-key fetch.
@@ -933,7 +952,44 @@ def phiotx_up(
                 device, settings, {LAYER_PEER: layer_paths[LAYER_PEER]}
             )
 
+    if phiotx.get("keygen_mode") in ("pqc", "hybrid"):
+        if phiotx["keygen_mode"] == "hybrid":
+            for name, (device, settings) in prepared.items():
+                layer_paths = build_layers(name, device, devices, phiotx)
+                install_layers(
+                    device, settings,
+                    {LAYER_KEY_FETCH: layer_paths[LAYER_KEY_FETCH]},
+                    dry_run=dry_run,
+                )
+            if not dry_run:
+                wait_for_qkd_pool(prepared)
+        for name, (device, settings) in prepared.items():
+            layer_paths = build_layers(name, device, devices, phiotx)
+            install_layers(
+                device, settings, {LAYER_ETSI: layer_paths[LAYER_ETSI]},
+                dry_run=dry_run,
+            )
+
     for name, (device, settings) in prepared.items():
         reports[name] = verify_node(device, settings, phiotx)
 
     return reports
+
+
+def wait_for_qkd_pool(prepared, timeout=90):
+    deadline = time.monotonic() + timeout
+    waiting = set(prepared)
+    while waiting:
+        for name in list(waiting):
+            device, settings = prepared[name]
+            result = _exec(device, settings["container"], "txh -Q -c no", "QKD pool readiness")
+            if re.search(r"Q Pool:\s*[1-9][0-9]*", result.stdout or ""):
+                waiting.remove(name)
+        if not waiting:
+            return
+        if time.monotonic() >= deadline:
+            raise PhiotxLifecycleError(
+                "No pre-fetched QKD material before hybrid activation on: "
+                + ", ".join(sorted(waiting))
+            )
+        time.sleep(3)

@@ -79,6 +79,7 @@ from lib.docker.qkd.docker_phiotx_lifecycle import (
 from lib.docker.qkd.docker_provisioning import run_provisioning
 from lib.common.script_user_bootstrap import bootstrap_script_users
 from lib.docker.qkd.docker_clean import handle_clean
+from lib.docker.qkd.docker_keygen import MODES, resolve_keygen, save_keygen
 
 
 ONBOX_SCRIPT_NAME = "phiotx_qkd_onbox.py"
@@ -499,7 +500,11 @@ def cmd_create(args, *, fresh_pki=False) -> int:
     """
     path = resolve_inventory_path(args.inventory)
     data = load_docker_inventory(path)
-    phiotx = data["phiotx"]
+    phiotx = resolve_keygen(
+        data["phiotx"], getattr(args, "keygen_mode", None),
+        RUNTIME_DIR / "keygen_mode.json",
+    )
+    print(f"Application key generation: {phiotx['keygen_mode']} ({phiotx['etsi']['keygen_method']})")
 
     out_dir = RUNTIME_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -547,13 +552,18 @@ def cmd_create(args, *, fresh_pki=False) -> int:
         build_layers(name, device, runtime_devices, phiotx)
 
     print(f"\nArtifacts written under {out_dir}")
+    save_keygen(phiotx, out_dir / "keygen_mode.json")
     return 0
 
 
 def cmd_phiotx_up(args) -> int:
     path = resolve_inventory_path(args.inventory)
     data = load_docker_inventory(path)
-    phiotx = data["phiotx"]
+    phiotx = resolve_keygen(
+        data["phiotx"], getattr(args, "keygen_mode", None),
+        RUNTIME_DIR / "keygen_mode.json",
+    )
+    print(f"Application key generation: {phiotx['keygen_mode']} ({phiotx['etsi']['keygen_method']})")
 
     runtime_devices = load_docker_runtime_devices()
     local_image = resolve_local_image_archive(args.image_archive, phiotx)
@@ -589,6 +599,8 @@ def cmd_phiotx_up(args) -> int:
 
     report_path = RUNTIME_DIR / "phiotx_status.json"
     report_path.write_text(json.dumps(reports, indent=2) + "\n", encoding="utf-8")
+    if not args.dry_run:
+        save_keygen(phiotx, RUNTIME_DIR / "keygen_mode.json")
     print(f"\nPhioTX status written to {report_path}")
     return 0
 
@@ -646,7 +658,10 @@ def cmd_deploy(args) -> int:
         }
 
     data = load_docker_inventory(resolve_inventory_path(args.inventory))
-    build_onbox_artifacts(runtime_devices, phiotx=data["phiotx"])
+    build_onbox_artifacts(runtime_devices, phiotx=resolve_keygen(
+        data["phiotx"], getattr(args, "keygen_mode", None),
+        RUNTIME_DIR / "keygen_mode.json",
+    ))
 
     print("\n=== Junos configuration deploy ===")
     failed = run_provisioning(
@@ -699,7 +714,10 @@ def _run_greenfield_bootstrap(args) -> int:
     """
     path = resolve_inventory_path(args.inventory)
     data = load_docker_inventory(path)
-    phiotx = data["phiotx"]
+    phiotx = resolve_keygen(
+        data["phiotx"], getattr(args, "keygen_mode", None),
+        RUNTIME_DIR / "keygen_mode.json",
+    )
     if args.skip_pki:
         raise ValueError(
             "Greenfield bootstrap cannot use --skip-pki: every new container "
@@ -824,6 +842,13 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--debug", action="store_true")
 
 
+def add_keygen_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--keygen-mode", choices=MODES, default=None,
+        help="Application key generation (CLI > inventory > saved mode > bulk); not Hive transport PQC",
+    )
+
+
 def add_create_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ca-host", help="Host running the external OpenSSL CA")
     parser.add_argument("--ca-user", default="root", help="SSH user on the CA host")
@@ -904,6 +929,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common(create)
     add_create_options(create)
+    add_keygen_options(create)
     create.set_defaults(func=cmd_create)
 
     up = subparsers.add_parser(
@@ -912,6 +938,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common(up)
     add_phiotx_options(up)
+    add_keygen_options(up)
     up.set_defaults(func=cmd_phiotx_up)
 
     deploy = subparsers.add_parser(
@@ -920,6 +947,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common(deploy)
     add_phiotx_options(deploy)
+    add_keygen_options(deploy)
     deploy.add_argument(
         "--phiotx-only",
         action="store_true",
@@ -938,6 +966,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(bootstrap)
     add_create_options(bootstrap)
     add_phiotx_options(bootstrap)
+    add_keygen_options(bootstrap)
     bootstrap.add_argument(
         "--bundle",
         help=(

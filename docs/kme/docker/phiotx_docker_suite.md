@@ -402,6 +402,197 @@ itself establish that these keys came from a physical QKD link. Likewise,
 `pqc: ML-KEM-1024` protects the peer-delivery channel; it is distinct from
 selecting a PQC or hybrid ETSI key-generation method.
 
+### Bulk: generate keys using a random-number generator
+
+DRBG means **Deterministic Random Bit Generator**. In plain English, it is
+software that starts with a secret random seed and uses a cryptographic
+algorithm to generate more random-looking bits. The same seed and internal
+state produce the same output; this does not mean an attacker can predict
+that output without knowing the secret state.
+
+In the current bulk deployment, PhioTX generates the application keys using
+its DRBG and makes the matching keys available to both SAE clients through
+Hive. There is no QKD-generated input in this key-generation process.
+Protecting delivery with ML-KEM does not change how those keys were generated.
+
+### PQC-only: generate application keys from a PQC exchange
+
+**You can use PQC-only key generation, but PhioTX calls that `pqc(...)`, not
+`bulk`.** They are separate key-generation modes.
+
+| Mode | How the application/MACsec key is generated | External QKD needed? |
+| --- | --- | --- |
+| `bulk` | Directly from the DRBG | No |
+| `pqc(...)` | From PQC KEM shared material, combined using SSKDF | No |
+| `hybrid(...)` | From PQC shared material plus pre-fetched QKD material | Yes; real, or simulated for a lab |
+
+The existing PhioTX01/PhioTX02 pair can provide the PQC participants; an
+external PQC service or additional PhioTX container is not required for this
+design. ML-KEM is real software-based post-quantum cryptography, not a quantum
+hardware simulation. Selecting PQC-only ETSI generation changes the source of
+the application keys, independently of the existing ML-KEM protection of Hive.
+
+The notation `pqc(...)` and `hybrid(...)` here describes the vendor methods,
+not executable configuration. Check the installed PhioTX 4.6.3 samples for
+the exact ML-KEM-1024 syntax and verify licence feature availability before
+activation.
+
+### Hybrid: combine two sources of secret material
+
+In PhioTX terminology, hybrid generation combines:
+
+* **PQC material:** a shared secret established using a post-quantum algorithm,
+  such as ML-KEM.
+* **QKD material:** a matching secret supplied by a QKD system and pre-fetched
+  into the PhioTX nodes.
+
+PhioTX combines those inputs using its cryptographic derivation function
+(SSKDF) to produce the final application key:
+
+```text
+Bulk:
+Secret DRBG state ---> generated key ---> MACsec
+
+Hybrid:
+PQC shared secret ---+
+                     +-- cryptographic combination ---> MACsec key
+QKD shared secret ---+
+```
+
+The intent is to draw protection from two different mechanisms. The exact
+security guarantees depend on the combination and implementation, not simply
+on naming the mode "hybrid."
+
+| Aspect | Current bulk deployment | PhioTX hybrid generation |
+| --- | --- | --- |
+| Application key inputs | DRBG state | PQC shared material plus pre-fetched QKD material |
+| QKD input required | No | Yes |
+| ETSI key-generation method | `bulk` | Explicit vendor-supported hybrid method |
+| ML-KEM protection of Hive | Configured | Separate from selecting hybrid key generation |
+
+The current deployment is **bulk with ML-KEM-protected Hive**, not hybrid.
+Hybrid is described here for clarity; it has not yet been deployed or verified
+in this lab. Using a QKD simulator would validate hybrid processing with
+**simulated QKD input**, not establish physical quantum key distribution.
+These definitions follow the PhioTX installation/admin guide's ETSI service
+section (pages 32-33) and key-fetch section (pages 37-38).
+
+### Lab implementation roadmap: bulk, then PQC-only, then hybrid
+
+This is the implementation sequence for `docker/phiotx_ver1.1`. Bulk remains a
+supported, selectable baseline; adding modes does not replace or silently
+change the existing bulk deployment. Explicit bulk mode and PQC-only have been
+tested on the existing EVO lab. Hybrid simulator integration is the next stage;
+do not infer hybrid acceptance from PQC-only results.
+
+The application key-generation selector is available on `create`, `bootstrap`,
+`phiotx-up`, and `deploy`:
+
+```bash
+.venv/bin/python qkd_docker_orchestrator.py bootstrap --bundle docker/hpe.zip --keygen-mode bulk
+.venv/bin/python qkd_docker_orchestrator.py bootstrap --bundle docker/hpe.zip --keygen-mode pqc
+.venv/bin/python qkd_docker_orchestrator.py deploy --keygen-mode pqc
+```
+
+Resolution order is CLI selection, explicit `phiotx.keygen_mode` in the
+inventory, saved runtime selection, then the existing ETSI method (bulk for
+unchanged inventories). The resolved mode/method is saved under
+`config/runtime_docker/keygen_mode.json`. Malformed or unsupported selections
+fail rather than silently falling back. PQC uses `pqc(ML-KEM-1024)`; hybrid
+uses `hybrid(ML-KEM-1024)` and additionally requires explicit simulator input.
+Both service and client overrides receive the same method.
+
+`bootstrap` includes Junos deploy. `deploy` retains its existing reseed
+behaviour; it is not a non-disruptive mode switch. `phiotx-up --keygen-mode pqc`
+updates container configuration without reseeding the Junos ring, but is still
+a coordinated service change and must be validated on the whole pair. Existing
+bulk-derived ring entries persist until replaced; activating PQC does not
+retroactively change the origin of installed keys.
+
+The ETSI layer retains its existing filename `700-etsi-bulk.yaml` to replace
+the existing service/client settings rather than merge competing mode layers.
+Its contents, not its historical filename, determine the generation mode.
+
+#### Bulk and PQC-only live validation, 2026-10-04
+
+The installed 4.6.3 sample explicitly supports `pqc(ML-KEM-1024)` and the
+corresponding hybrid syntax. Explicit `phiotx-up --keygen-mode bulk` completed
+on both EVOs, retaining the original ETSI payload, matching committed rings,
+secured MKA and error-free runtime logs.
+
+Then `phiotx-up --keygen-mode pqc` committed PQC-only service and client
+settings on both nodes, without bulk fallback or Junos reseed. Application PQC
+activation is deferred until after fleet keypair preparation and public-key
+exchange. A fresh SAE1 enc / SAE2 dec probe as `etsi_user` returned matching
+32-byte material; only its digest was compared, never its secret value printed.
+Subsequent observation found matching rings and pending heads, secured MKA,
+and no runtime ERROR/WARN. This is PQC-only validation, not hybrid or physical
+QKD validation.
+
+#### Stage 1: add PQC-only alongside bulk
+
+1. Inspect the installed ETSI/PQC samples and licence features. Confirm the
+   supported ML-KEM-1024 key-generation syntax and peer prerequisites.
+2. Add explicit mode selection to the inventory and orchestrator, retaining
+   bulk as the existing default. Render the selected method at both ETSI
+   service level and in each SAE client's explicit override.
+3. Reuse the two licensed embedded PhioTX nodes and their PQC provisioning.
+   Keep local ETSI endpoints/helpers, mTLS, 256-bit CAK requests, four-slot
+   keyring management, SSH RPC and SSH identity rotation unchanged.
+4. Validate PQC-only enc/dec correlation and evidence of PQC key generation,
+   not merely a secured Hive channel. Do not use a bulk fallback during
+   acceptance: a method list tries alternatives, rather than combining them.
+5. Observe multiple MACsec replacements and SSH rotations, verify bilateral
+   keyring/pending alignment, and test explicit failure/recovery behaviour.
+6. Prove clean/bootstrap/deploy in both bulk and PQC-only modes through the
+   orchestrator, and document mode switching and rollback to bulk.
+
+#### Stage 2: add hybrid with external simulated QKD input
+
+After PQC-only passes acceptance, host paired QKD simulator endpoints in
+non-PhioTX KME Docker containers on Linux server `10.38.98.181`:
+
+```text
+Linux: simulated QKD endpoint A <--> endpoint B
+                   |                    |
+              ETSI / mTLS          ETSI / mTLS
+                   |                    |
+           PhioTX01 on EVO1 <--> PhioTX02 on EVO2
+                 QKD input + PQC shared material
+                   |                    |
+              Local ETSI           Local ETSI
+                   |                    |
+                  SAE1 ===== MACsec ==== SAE2
+```
+
+1. Verify simulator ETSI compatibility and paired-key behaviour before reuse.
+   Two independent random generators are insufficient: counterpart retrieval
+   must return identical material for the same key-ID with correct identity,
+   peer mapping, consumption and retry semantics.
+2. Provision isolated Linux endpoints, persistent storage, health checks and
+   mTLS. Choose published ports after checking existing services. The QKD-facing
+   clients are PhioTX01/PhioTX02, separate from SAE1/SAE2.
+3. Configure vendor `key_fetch` on the primary PhioTX node, with local and
+   remote QKD connections. PhioTX fetches material from the simulators; the
+   simulators do not push unsolicited keys to the EVO SAE runtimes.
+4. Verify both PhioTX stores have corresponding QKD input before enabling
+   hybrid. Select the supported hybrid method for both ETSI service and client
+   overrides, without bulk fallback during acceptance.
+5. Prove PQC participation, QKD-input consumption, correlated hybrid output,
+   and successful MACsec rollovers. Test outages, buffered-key exhaustion and
+   restart recovery; stopping replenishment need not cause immediate failure
+   while stored QKD input remains available.
+6. Automate dependency ordering, simulator lifecycle, PKI, key-fetch readiness,
+   mode selection, scoped cleanup and rollback in the orchestrator. Validate
+   a complete clean/bootstrap/deploy and record observed results.
+
+This topology retains exactly two PhioTX instances and introduces no extra
+PhioTX instance licences for the non-PhioTX simulators. Existing licence feature
+entitlements and the simulator software's own licensing still require checks.
+The result must be labelled **hybrid with simulated QKD input**: simulator
+keys are conventional random material, not quantum-generated keys. Real paired
+QKD equipment can later replace the simulated sources.
+
 ### Independent protection and rotation planes
 
 | Plane | Credentials/protection | Who manages it |

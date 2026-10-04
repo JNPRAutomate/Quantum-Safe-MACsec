@@ -119,6 +119,19 @@ def pqc_fleet(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def install_layers(device, _settings, paths, *, dry_run=False):
+        if lifecycle.LAYER_ETSI in paths:
+            etsi_layer = yaml.safe_load(paths[lifecycle.LAYER_ETSI].read_text())
+            method = etsi_layer["etsi_service"]["keygen_method"]
+            if method.startswith("pqc("):
+                assert all(
+                    (device["phiotx"]["container"], peer["phiotx"]["container"])
+                    in state.public_keys
+                    for peer in state.devices.values()
+                    if peer != device
+                )
+                state.events.append(("application-pqc", device["phiotx"]["container"]))
+        if lifecycle.LAYER_PEER not in paths:
+            return True
         peer_layer = yaml.safe_load(paths[lifecycle.LAYER_PEER].read_text())
         enabled = any(peer.get("pqc") for peer in peer_layer["peers"])
         state.events.append(("layer", device["phiotx"]["container"], enabled, dry_run))
@@ -153,6 +166,17 @@ def pqc_fleet(tmp_path, monkeypatch):
         lifecycle, "verify_node", lambda device, *_args: {"device": device["name"]}
     )
     return state
+
+
+def test_application_pqc_activates_after_fleet_exchange(pqc_fleet):
+    state = pqc_fleet
+    state.phiotx["keygen_mode"] = "pqc"
+    state.phiotx["etsi"] = {"keygen_method": "pqc(ML-KEM-1024)"}
+    lifecycle.phiotx_up(state.devices, state.phiotx)
+    applications = [event for event in state.events if event[0] == "application-pqc"]
+    assert len(applications) == 3
+    first_application = next(i for i, event in enumerate(state.events) if event[0] == "application-pqc")
+    assert all(i < first_application for i, event in enumerate(state.events) if event[0] == "fetch")
 
 
 def test_missing_status_generates_and_verifies_the_local_keypair(pqc_fleet):

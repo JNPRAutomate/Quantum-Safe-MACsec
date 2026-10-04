@@ -104,7 +104,8 @@ def test_junos_deploy_uses_numeric_cli_verbosity(deployment, command, verbosity,
         deployment.create.assert_called_once_with(args, fresh_pki=True)
     else:
         deployment.artifacts.assert_called_once_with(
-            call.kwargs["devices"], phiotx={}
+            call.kwargs["devices"],
+            phiotx={"keygen_mode": "bulk", "etsi": {"keygen_method": "bulk"}},
         )
 
 
