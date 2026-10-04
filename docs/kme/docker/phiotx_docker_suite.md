@@ -26,6 +26,43 @@ state. It preserves Juniper's infrastructure container/network and unrelated
 Docker resources. Even when generated runtime inventory exists, clean loads
 shared Docker cleanup targets from the selected source inventory.
 
+### Full reset verification: EVO1/EVO2, 2026-10-03
+
+The above commands were executed from the Linux orchestrator host, using the
+customer bundle already present there. No manual runtime/helper uploads were
+needed after bootstrap.
+
+* The first clean exposed missing shared Docker defaults when loading generated
+  runtime inventory: containers were removed, but the PhioTX image and OOB
+  network remained. Clean now restores those targets from the selected source
+  inventory; a regression test covers this case.
+* The repeated clean exited successfully. Independent inspection of both
+  routers found no PhioTX containers, PhioTX image, `phiotx_oob` network,
+  authentication keychains, MACsec connectivity associations, or registered
+  op/event scripts. The cleanup verifier also checked managed persistent data
+  and helper removal. Juniper's infrastructure container and `jnpr_cntrz_net`
+  remained; unrelated `etsi-kme` and PostgreSQL images were preserved.
+* Bootstrap exited successfully and created a fresh fleet CA and certificates,
+  installed both licences, recreated both containers/networks, installed the
+  local ETSI helper, exchanged ML-KEM-1024 public keys, and deployed Junos.
+  The generated op/event runtime copies on both routers had identical SHA-256
+  `1eff9ce91d8510dcd8b3dd9ec55b66d3dbeaa23a54cd69d4e53586b31e7e63f6`.
+* The automatic timer completed the four-slot ring from the deploy seed.
+  Concurrent observations at router times 20:06 and 20:16 PDT found matching
+  key-names and activation times in all four slots, identical active/pending
+  key-IDs, and `Secured - Primary` with the same operational CAK name.
+* At the final observation, two rolling replacements and three SSH identity
+  rotations per router had completed since deployment. Both Hive peers were
+  up and both ETSI helpers active. Runtime logs contained zero ERROR/WARN,
+  `Permission denied`, `POST-COMMIT VERIFY FAILED`, or CAK-length warnings.
+  SSH prepare used `authorized_keys_no_commit`; the new SSH config commits
+  were finalize only.
+
+Transcripts on the Linux orchestrator host:
+
+* `/var/tmp/qkd_docker_orchestrator_clean_20261003_194928.log`
+* `/var/tmp/qkd_docker_orchestrator_bootstrap_20261003_195010.log`
+
 The manual lab that proved the design is documented separately in
 [PhioTX on Junos EVO](./phiotx_on_junos_evo.md). Read this guide for the
 automated workflow; read the manual runbook to understand *why* each step
