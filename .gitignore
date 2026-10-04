@@ -47,6 +47,12 @@ archive/
 
 # Customer-supplied container images and licences
 /docker/
+*.[lL][iI][cC]
+[hH][pP][eE]*.[zZ][iI][pP]
+*[pP][hH][iI][oO][tT][xX]*.[zZ][iI][pP]
+*[pP][hH][iI][oO][tT][xX]*.[tT][aA][rR]
+*[pP][hH][iI][oO][tT][xX]*.[tT][aA][rR].[gG][zZ]
+*[pP][hH][iI][oO][tT][xX]*.[tT][gG][zZ]
 
 # Legacy local backups
 *.orig.py
