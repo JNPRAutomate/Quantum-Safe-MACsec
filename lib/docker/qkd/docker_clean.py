@@ -1067,6 +1067,19 @@ def handle_clean(args):
         devices = data.get("devices", {})
 
         print("Using runtime devices.yaml")
+        inventory_path, inventory_devices = load_clean_inventory(args.inventory)
+        for name, device in devices.items():
+            if name not in inventory_devices:
+                raise ValueError(
+                    f"Runtime device {name} is absent from clean inventory "
+                    f"{inventory_path}; cannot determine Docker cleanup targets"
+                )
+            source = inventory_devices[name]
+            device["_phiotx_defaults"] = source["_phiotx_defaults"]
+            device["phiotx"] = {
+                **(source.get("phiotx") or {}),
+                **(device.get("phiotx") or {}),
+            }
 
     else:
 

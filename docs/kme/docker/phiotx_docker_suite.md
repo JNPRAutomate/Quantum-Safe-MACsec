@@ -7,6 +7,25 @@ This guide documents the complete suite: prerequisites, vendor asset handling,
 licensing limits, the command line, the greenfield bring-up order, and
 troubleshooting.
 
+For a complete lab reset followed by greenfield deployment, run:
+
+```bash
+.venv/bin/python qkd_docker_orchestrator.py clean \
+  --inventory config/inventory/input/docker_evo_lab.yaml --username root \
+  --pki --full-macsec -v
+.venv/bin/python qkd_docker_orchestrator.py bootstrap \
+  --inventory config/inventory/input/docker_evo_lab.yaml --username root \
+  --bundle docker/hpe.zip -v
+```
+
+Supply router credentials through `EVO_PASSWORD` or the password prompt.
+`bootstrap` already includes the complete Junos deploy; a second `deploy` is
+unnecessary and reseeds the ring. Clean removes managed PhioTX containers,
+their image, OOB network, persistent data, ETSI helper, scripts, runtime and PKI
+state. It preserves Juniper's infrastructure container/network and unrelated
+Docker resources. Even when generated runtime inventory exists, clean loads
+shared Docker cleanup targets from the selected source inventory.
+
 The manual lab that proved the design is documented separately in
 [PhioTX on Junos EVO](./phiotx_on_junos_evo.md). Read this guide for the
 automated workflow; read the manual runbook to understand *why* each step
