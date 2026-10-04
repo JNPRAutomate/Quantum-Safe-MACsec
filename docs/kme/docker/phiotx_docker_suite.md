@@ -643,7 +643,10 @@ validated from a full clean on the same two licensed PhioTX nodes.
 
 Sequence run from the Linux orchestrator:
 `clean --pki`, then `bootstrap --keygen-mode hybrid --bundle docker/hpe.zip`.
-Both exited 0 with zero ERROR/WARN lines. Observed results:
+Both exited 0; the final bootstrap transcript contained zero ERROR/WARN
+lines. Earlier clean runs reported non-blocking connectivity-association
+probe warnings, so an exit-0 clean must not be interpreted as evidence that
+all cleanup transcripts were warning-free. Observed results:
 
 * Simulator preflight, IP conflict check, `hierarchical_ca` PKI, PostgreSQL
   `.20` and KMEs `.21`/`.22` came up; the standalone mTLS enc/dec probe through
@@ -689,11 +692,39 @@ PhioTX instances; the simulators use no PhioTX licence.
 Execution transcripts on Linux: `/tmp/hy_clean5.out`, `/tmp/hy_boot5.out`
 and the matching `/var/tmp/qkd_docker_orchestrator_{clean,bootstrap}_*.log`.
 
+#### Acceptance summary and remaining coverage
+
+The following is the recorded acceptance status for the 2026-10-04 lab run,
+not a new test run. Implementation and live results were published in commit
+`f28bb49` on `docker/phiotx_ver1.1`.
+
+| Check | Recorded result |
+| --- | --- |
+| Mode selection | Bulk, PQC-only and hybrid remain separately selectable; no application-key bulk fallback is configured for PQC/hybrid |
+| Linux simulator | Two KMEs plus one PostgreSQL; static addresses `10.38.112.21`, `.22`, `.20`; IP-conflict preflight passed |
+| Hierarchical PKI | KME server and PhioTX client identities validated over mTLS; matched KME enc/dec material |
+| Hybrid application key | Fresh local ETSI enc/dec returned matching 32-byte material; vendor log explicitly identified `hybrid(ML-KEM-1024)` |
+| MACsec rollover | Matching four-slot rings and pending heads; a hybrid-derived key became active; both MKA sessions remained secured |
+| Independent SSH rotation | One completed identity rotation per router in the observation window |
+| Local regression checks | `157 passed` for `tests/test_docker*.py`; Python compilation and `git diff --check` passed |
+
+Remaining acceptance work includes KME outage and restart, buffered-key
+exhaustion, failure/recovery during provisioning, larger licensed fleets,
+and long-duration rollover observation. A stopped KME does not necessarily
+cause immediate hybrid failure while pre-fetched input remains buffered.
+Physical QKD and its security properties are outside this simulator test.
+
+The two-slide project overview is available in
+[phiotx_project_overview.pptx](slides/phiotx_project_overview.pptx): slide 1
+shows the actual lab devices and connections; slide 2 distinguishes bulk,
+PQC-only and hybrid with simulated QKD input.
+
 ### Independent protection and rotation planes
 
 | Plane | Credentials/protection | Who manages it |
 | --- | --- | --- |
 | EVO to local PhioTX | ETSI HTTPS/mTLS; SAE identity and container `etsi` identity | Orchestrator provisions PKI; runtime makes ETSI requests |
+| PhioTX to Linux KME (hybrid only) | ETSI HTTPS/mTLS; hierarchical CA and container `qkd` identity | Orchestrator provisions simulator PKI; PhioTX key-fetch retrieves paired input |
 | PhioTX to PhioTX | Hive mTLS using `qxc`, plus ML-KEM-1024 overlay | PhioTX runs the peer protocol; orchestrator prepares the PQC material |
 | EVO to EVO | SSH RPC as `etsi_user`; independent SSH identity per router | On-box runtime automatically rotates the identities |
 | MACsec data plane | CAK/CKN keychain and MKA/SAK operation | Runtime commits CAK/CKN; Junos operates MKA/MACsec |
