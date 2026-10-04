@@ -633,22 +633,41 @@ def install_pki(device, settings, pki_bundle):
                     f"{role} private key install",
                 )
                 # tx_install_crt -y consumes the CA input along with the leaf.
-                _docker(
-                    device,
-                    f"cp {shlex.quote(ca_remote)} {shlex.quote(container)}:/tmp/pki/ca.pem",
-                    f"{role} CA copy",
-                )
+                # Hierarchical identities carry an ordered CA list
+                # (own Root/Issuing first, then the trusted peer domain).
+                ca_files = identity.get("cas") or []
+                if ca_files:
+                    ca_remotes = [
+                        f"{REMOTE_STAGING}/{role}-ca{index}.pem"
+                        for index in range(len(ca_files))
+                    ]
+                    _push_files(device, list(zip(ca_files, ca_remotes)))
+                else:
+                    ca_remotes = [ca_remote]
+                ca_args = []
+                for index, remote_ca in enumerate(ca_remotes):
+                    target = f"/tmp/pki/ca{index}.pem" if ca_files else "/tmp/pki/ca.pem"
+                    _docker(
+                        device,
+                        f"cp {shlex.quote(remote_ca)} {shlex.quote(container)}:{target}",
+                        f"{role} CA copy",
+                    )
+                    ca_args.append(f"-ca {target}")
                 _exec(
                     device,
                     container,
                     f"tx_install_crt -pki {shlex.quote(store)} "
-                    "-crt /tmp/pki/this.crt -ca /tmp/pki/ca.pem -f -y",
+                    f"-crt /tmp/pki/this.crt {' '.join(ca_args)} -f -y",
                     f"{role} certificate install",
                 )
             finally:
+                extra = " ".join(
+                    shlex.quote(f"{REMOTE_STAGING}/{role}-ca{index}.pem")
+                    for index in range(len(identity.get("cas") or []))
+                )
                 _run(
                     device,
-                    f"rm -f {shlex.quote(key_remote)} {shlex.quote(crt_remote)}",
+                    f"rm -f {shlex.quote(key_remote)} {shlex.quote(crt_remote)} {extra}",
                     f"{role} staging cleanup",
                 )
             print(f"[OK] installed PKI store {store} on {container}")
@@ -661,9 +680,12 @@ def install_pki(device, settings, pki_bundle):
     return True
 
 
-def install_layers(device, settings, layer_paths, dry_run=False):
+def install_layers(device, settings, layer_paths, dry_run=False, prune_key_fetch=False):
     """
     Install configuration layers with tx_install_cf.
+
+    prune_key_fetch removes a 650-key-fetch layer left by an earlier hybrid
+    deployment; it must only be set when the active mode is not hybrid.
 
     tx_install_cf without -y is a dry run, so each layer is validated before it
     is committed. A rejected dry run aborts the deployment rather than leaving
@@ -711,6 +733,10 @@ def install_layers(device, settings, layer_paths, dry_run=False):
             allow_fail=True,
         )
         _run(device, f"rm -f {shlex.quote(remote)}", "staging cleanup", allow_fail=True)
+
+    # Leaving hybrid: the key-fetch layer would keep polling the external KME.
+    if prune_key_fetch and LAYER_ETSI in layer_paths and not dry_run:
+        remove_layer(device, settings, LAYER_KEY_FETCH)
 
     return True
 
@@ -760,6 +786,35 @@ def ensure_pqc_keypair(device, settings, phiotx):
     return True
 
 
+PEER_READY_TIMEOUT = 60
+PEER_READY_INTERVAL = 3
+
+
+def _fetch_pqc_public_key(device, container, peer, kem):
+    """
+    Import a peer's public key, retrying while the peer is still loading its layer.
+
+    A peer that has just committed 600-peer-hive answers "400 (invalid peer)"
+    until its tx service reloads the peer list; any other error fails at once.
+    """
+    command = f"tx_get_pqc_public_key -p {shlex.quote(peer)} -m {shlex.quote(kem)}"
+    what = f"PQC public key fetch from {peer}"
+    deadline = time.monotonic() + PEER_READY_TIMEOUT
+    while True:
+        result = _exec(device, container, command, what, allow_fail=True)
+        if result.returncode == 0:
+            return result
+        output = f"{result.stdout or ''}{result.stderr or ''}"
+        if "invalid peer" not in output or time.monotonic() >= deadline:
+            raise PhiotxLifecycleError(
+                f"{device_name(device)}: {what} failed\n"
+                f"command=docker exec {container} {command}\n"
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+        print(f"[WAIT] {peer} not ready as Hive peer of {container}; retrying")
+        time.sleep(PEER_READY_INTERVAL)
+
+
 def setup_pqc(device, settings, phiotx, *, prepare_keypair=True):
     """
     Import peer public keys over the authenticated TLS channel.
@@ -777,13 +832,7 @@ def setup_pqc(device, settings, phiotx, *, prepare_keypair=True):
         ensure_pqc_keypair(device, settings, phiotx)
 
     for peer in settings.get("peers", []):
-        _exec(
-            device,
-            container,
-            f"tx_get_pqc_public_key -p {shlex.quote(peer['name'])} "
-            f"-m {shlex.quote(kem)}",
-            f"PQC public key fetch from {peer['name']}",
-        )
+        _fetch_pqc_public_key(device, container, peer["name"], kem)
         status = _exec(
             device, container, "tx_status -pqc", "PQC public key verification"
         )
@@ -933,7 +982,10 @@ def phiotx_up(
                 key: value for key, value in layer_paths.items()
                 if key not in (LAYER_ETSI, LAYER_KEY_FETCH)
             }
-        install_layers(device, settings, layer_paths, dry_run=dry_run)
+        install_layers(
+            device, settings, layer_paths, dry_run=dry_run,
+            prune_key_fetch=phiotx.get("keygen_mode", "bulk") == "bulk",
+        )
 
     # Every peer must have a local keypair before any public-key fetch.
     if not dry_run and phiotx.get("pqc"):
@@ -968,6 +1020,7 @@ def phiotx_up(
             install_layers(
                 device, settings, {LAYER_ETSI: layer_paths[LAYER_ETSI]},
                 dry_run=dry_run,
+                prune_key_fetch=phiotx["keygen_mode"] != "hybrid",
             )
 
     for name, (device, settings) in prepared.items():
@@ -976,14 +1029,52 @@ def phiotx_up(
     return reports
 
 
+def remove_layer(device, settings, layer_name):
+    """Delete a stale layer (e.g. key-fetch after leaving hybrid) if installed."""
+    container = settings["container"]
+    listed = _exec(device, container, "tx_install_cf -list", "layer list")
+    if not re.search(rf"^\s*{re.escape(layer_name)}\s*$", listed.stdout or "", re.M):
+        return False
+    _exec(
+        device, container,
+        f"tx_install_cf -y -del -layer {shlex.quote(layer_name)}",
+        f"{layer_name} removal",
+    )
+    print(f"[OK] removed stale layer {layer_name} on {container}")
+    return True
+
+
+def qkd_store_counts(txh_keys_output):
+    """
+    Parse `txh -K` key-fetch stores, e.g. "[phiotx01]&>&phiotx02: 16 [...]".
+
+    Key fetch fills one synchronised store per node pair (the bracketed name is
+    the local node); the global "Q Pool" counter of `txh -Q` is not used for it.
+    """
+    counts = {}
+    for left, right, count in re.findall(
+        r"^\s*\[?([\w.-]+)\]?&>&\[?([\w.-]+)\]?:\s*(\d+)", txh_keys_output, re.M
+    ):
+        counts[frozenset((left, right))] = int(count)
+    return counts
+
+
 def wait_for_qkd_pool(prepared, timeout=90):
+    """Wait until every node holds pre-fetched QKD keys for each of its peers."""
     deadline = time.monotonic() + timeout
     waiting = set(prepared)
     while waiting:
         for name in list(waiting):
             device, settings = prepared[name]
-            result = _exec(device, settings["container"], "txh -Q -c no", "QKD pool readiness")
-            if re.search(r"Q Pool:\s*[1-9][0-9]*", result.stdout or ""):
+            container = settings["container"]
+            result = _exec(device, container, "txh -K -c no", "QKD key-store readiness")
+            counts = qkd_store_counts(result.stdout or "")
+            peers = [peer["name"] for peer in settings.get("peers", [])]
+            if peers and all(counts.get(frozenset((container, peer)), 0) > 0 for peer in peers):
+                summary = ", ".join(
+                    f"{peer}={counts[frozenset((container, peer))]}" for peer in peers
+                )
+                print(f"[OK] pre-fetched QKD keys on {container}: {summary}")
                 waiting.remove(name)
         if not waiting:
             return

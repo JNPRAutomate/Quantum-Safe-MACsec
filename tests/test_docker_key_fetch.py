@@ -44,9 +44,9 @@ def test_missing_remote_endpoint_fails():
 
 
 def test_qkd_pool_must_be_nonempty_on_every_node(monkeypatch):
-    prepared = {"EVO1": ({}, {"container": "phiotx01"})}
-    monkeypatch.setattr(lifecycle, "_exec", lambda *args: type("R", (), {"stdout": "Q Pool: 0 rcv nvr ago"})())
+    prepared = {"EVO1": ({}, {"container": "phiotx01", "peers": [{"name": "phiotx02"}]})}
+    monkeypatch.setattr(lifecycle, "_exec", lambda *args: type("R", (), {"stdout": "Keys:0\nQ Pool: 0 rcv nvr ago"})())
     with pytest.raises(lifecycle.PhiotxLifecycleError, match="EVO1"):
         lifecycle.wait_for_qkd_pool(prepared, timeout=0)
-    monkeypatch.setattr(lifecycle, "_exec", lambda *args: type("R", (), {"stdout": "Q Pool: 2 rcv 1s ago"})())
+    monkeypatch.setattr(lifecycle, "_exec", lambda *args: type("R", (), {"stdout": "[phiotx01]&>&phiotx02: 2 [1s]"})())
     lifecycle.wait_for_qkd_pool(prepared, timeout=0)

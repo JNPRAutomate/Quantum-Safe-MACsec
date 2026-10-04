@@ -130,6 +130,11 @@ open during troubleshooting can never be confused with its legacy counterpart.
 | `docker_provisioning.py` | Pushes the Junos configuration |
 | `docker_clean.py` | Local and remote cleanup |
 | `docker_identity.py` | Device transport and identity helpers |
+| `docker_keygen.py` | Resolves `--keygen-mode` (bulk / pqc / hybrid) and the ETSI method |
+| `docker_key_fetch.py` | Renders the hybrid `650-key-fetch` layer (primary node only) |
+| `docker_hybrid.py` | Hybrid QKD simulator on Linux: validation, IP preflight, compose, start, mTLS probe, clean |
+| `docker_hybrid_pki.py` | Two-domain `hierarchical_ca` PKI between Linux KMEs and PhioTX |
+| `docker_simulator_etsi.py` | Validates correlated ETSI enc/dec responses |
 
 ### Runtime isolation
 
@@ -315,6 +320,22 @@ EVO-only: the orchestrator refuses it if any device lacks `evo: true`.
 | `etsi` | Local ETSI service: port, keygen method, client validation |
 | `peer_port` | Hive peer port, `9002` |
 | `ca` | Optional overrides for the external CA |
+| `keygen_mode` | Optional default `bulk`, `pqc` or `hybrid` (CLI `--keygen-mode` wins) |
+| `qkd_simulator` | Hybrid only: Linux KMEs + PostgreSQL (see section 6, "Hybrid lab") |
+
+The `qkd_simulator` block must contain exactly these keys:
+
+```yaml
+  qkd_simulator:
+    host: 10.38.98.181            # Linux host that runs the orchestrator and the KMEs
+    network: qkd_net              # existing ipvlan on eth0 (10.38.96.0/19); never created/removed
+    source_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
+    project: docker-qkd-hybrid    # compose project and ownership label
+    port: 8443                    # KME ETSI 014 HTTPS port
+    key_rate: 0.1                 # key-fetch rate (keys/s) used by PhioTX
+    postgres_ip: 10.38.112.20
+    kme_ips: {EVO1: 10.38.112.21, EVO2: 10.38.112.22}   # one KME per managed PhioTX
+```
 
 ### Per-device `phiotx` section
 
@@ -470,10 +491,10 @@ on naming the mode "hybrid."
 | ETSI key-generation method | `bulk` | Explicit vendor-supported hybrid method |
 | ML-KEM protection of Hive | Configured | Separate from selecting hybrid key generation |
 
-The current deployment is **bulk with ML-KEM-protected Hive**, not hybrid.
-Hybrid is described here for clarity; it has not yet been deployed or verified
-in this lab. Using a QKD simulator would validate hybrid processing with
-**simulated QKD input**, not establish physical quantum key distribution.
+The original deployment is **bulk with ML-KEM-protected Hive**. PQC-only and
+hybrid are selectable with `--keygen-mode`; hybrid in this lab uses
+**simulated QKD input** (see "Hybrid lab" below), not physical quantum key
+distribution.
 These definitions follow the PhioTX installation/admin guide's ETSI service
 section (pages 32-33) and key-fetch section (pages 37-38).
 
@@ -482,8 +503,8 @@ section (pages 32-33) and key-fetch section (pages 37-38).
 This is the implementation sequence for `docker/phiotx_ver1.1`. Bulk remains a
 supported, selectable baseline; adding modes does not replace or silently
 change the existing bulk deployment. Explicit bulk mode and PQC-only have been
-tested on the existing EVO lab. Hybrid simulator integration is the next stage;
-do not infer hybrid acceptance from PQC-only results.
+tested on the existing EVO lab. Hybrid with the Linux KME simulator is
+implemented and validated live (see "Hybrid live validation" below).
 
 The application key-generation selector is available on `create`, `bootstrap`,
 `phiotx-up`, and `deploy`:
@@ -529,69 +550,144 @@ Subsequent observation found matching rings and pending heads, secured MKA,
 and no runtime ERROR/WARN. This is PQC-only validation, not hybrid or physical
 QKD validation.
 
-#### Stage 1: add PQC-only alongside bulk
+A subsequent complete PQC-only reset was executed from the Linux orchestrator:
+`clean --pki --full-macsec`, then
+`bootstrap --bundle docker/hpe.zip --keygen-mode pqc`. Both commands exited
+successfully. Clean removed the managed containers, image, OOB network and ETSI
+helpers; bootstrap recreated the fleet CA, certificates, licensed containers,
+helpers, peer PQC material and Junos deployment. No manual router configuration
+was needed. At router time 01:33 PDT on 2026-10-04, the automatic timer had
+completed the four-slot ring, both routers were `Secured - Primary`, and
+concurrent readback found identical rings and pending heads. New runtime logs
+contained zero ERROR/WARN, permission-denied or post-commit verification errors.
+At the subsequent 01:43:58 PDT observation, one rolling replacement and two
+SSH identity rotations per router had completed since the reset. Both Hive
+peers remained up, MKA remained `Secured - Primary` with the same CAK name,
+and committed rings and pending heads matched. Runtime logs still contained
+zero ERROR/WARN, permission-denied or post-commit verification errors.
+This establishes initial PQC-only greenfield rollover validation, not hybrid
+acceptance, failure-injection coverage, or a long-duration endurance test.
 
-1. Inspect the installed ETSI/PQC samples and licence features. Confirm the
-   supported ML-KEM-1024 key-generation syntax and peer prerequisites.
-2. Add explicit mode selection to the inventory and orchestrator, retaining
-   bulk as the existing default. Render the selected method at both ETSI
-   service level and in each SAE client's explicit override.
-3. Reuse the two licensed embedded PhioTX nodes and their PQC provisioning.
-   Keep local ETSI endpoints/helpers, mTLS, 256-bit CAK requests, four-slot
-   keyring management, SSH RPC and SSH identity rotation unchanged.
-4. Validate PQC-only enc/dec correlation and evidence of PQC key generation,
-   not merely a secured Hive channel. Do not use a bulk fallback during
-   acceptance: a method list tries alternatives, rather than combining them.
-5. Observe multiple MACsec replacements and SSH rotations, verify bilateral
-   keyring/pending alignment, and test explicit failure/recovery behaviour.
-6. Prove clean/bootstrap/deploy in both bulk and PQC-only modes through the
-   orchestrator, and document mode switching and rollback to bulk.
+Execution transcripts on Linux:
 
-#### Stage 2: add hybrid with external simulated QKD input
+* `/var/tmp/qkd_docker_orchestrator_phiotx-up_20261004_002052.log` (explicit bulk)
+* `/var/tmp/qkd_docker_orchestrator_phiotx-up_20261004_002325.log` (PQC-only)
+* `/var/tmp/qkd_docker_orchestrator_clean_20261004_012657.log` (full reset)
+* `/var/tmp/qkd_docker_orchestrator_bootstrap_20261004_012718.log` (PQC bootstrap).
 
-After PQC-only passes acceptance, host paired QKD simulator endpoints in
-non-PhioTX KME Docker containers on Linux server `10.38.98.181`:
+#### Hybrid lab: external simulated QKD on the Linux server
+
+Hybrid is implemented in the orchestrator as `--keygen-mode hybrid`
+(`hybrid(ML-KEM-1024)` on the ETSI service and every client override). The
+QKD input comes from **one ETSI GS QKD 014 reference KME per deployed PhioTX**
+plus **one shared PostgreSQL**, running as Docker containers on the Linux
+server. No extra PhioTX licences are used: the KMEs are not PhioTX instances.
 
 ```text
-Linux: simulated QKD endpoint A <--> endpoint B
-                   |                    |
-              ETSI / mTLS          ETSI / mTLS
-                   |                    |
-           PhioTX01 on EVO1 <--> PhioTX02 on EVO2
-                 QKD input + PQC shared material
-                   |                    |
-              Local ETSI           Local ETSI
-                   |                    |
-                  SAE1 ===== MACsec ==== SAE2
+ Linux 10.38.98.181 ── Docker network qkd_net (existing ipvlan on eth0, 10.38.96.0/19)
+ ┌───────────────────────────────────────────────────────────────────────┐
+ │ kme-phiotx01            PostgreSQL (shared)             kme-phiotx02    │
+ │ 10.38.112.21:8443 ◄──►  10.38.112.20:5432  ◄──────────► 10.38.112.22:8443│
+ └─────────▲─────────────────────────────────────────────────────▲─────────┘
+           │ ETSI 014 + mTLS (store "qkd")                         │ ETSI 014 + mTLS
+           │ 650-key-fetch: enc_keys                               │ dec_keys(key_ID)
+  ┌────────┴──────────┐                                  ┌─────────┴─────────┐
+  │ phiotx01 (primary)│◄──── Hive :9002 (ML-KEM-1024) ──►│ phiotx02          │
+  │ EVO1 10.38.97.218 │                                  │ EVO2 10.38.97.228 │
+  │ KDF(PQC S + QKD Q)│                                  │ KDF(PQC S + QKD Q)│
+  └────────┬──────────┘                                  └─────────┬─────────┘
+           ▼ local ETSI 9.1.1.10:443                                ▼ 9.1.1.11:443
+     SAE1 sae-001 ════════════ MACsec et-0/0/1 (same CAK) ════════ SAE2 sae-002
 ```
 
-1. Verify simulator ETSI compatibility and paired-key behaviour before reuse.
-   Two independent random generators are insufficient: counterpart retrieval
-   must return identical material for the same key-ID with correct identity,
-   peer mapping, consumption and retry semantics.
-2. Provision isolated Linux endpoints, persistent storage, health checks and
-   mTLS. Choose published ports after checking existing services. The QKD-facing
-   clients are PhioTX01/PhioTX02, separate from SAE1/SAE2.
-3. Configure vendor `key_fetch` on the primary PhioTX node, with local and
-   remote QKD connections. PhioTX fetches material from the simulators; the
-   simulators do not push unsolicited keys to the EVO SAE runtimes.
-4. Verify both PhioTX stores have corresponding QKD input before enabling
-   hybrid. Select the supported hybrid method for both ETSI service and client
-   overrides, without bulk fallback during acceptance.
-5. Prove PQC participation, QKD-input consumption, correlated hybrid output,
-   and successful MACsec rollovers. Test outages, buffered-key exhaustion and
-   restart recovery; stopping replenishment need not cause immediate failure
-   while stored QKD input remains available.
-6. Automate dependency ordering, simulator lifecycle, PKI, key-fetch readiness,
-   mode selection, scoped cleanup and rollback in the orchestrator. Validate
-   a complete clean/bootstrap/deploy and record observed results.
+Design decisions:
 
-This topology retains exactly two PhioTX instances and introduces no extra
-PhioTX instance licences for the non-PhioTX simulators. Existing licence feature
-entitlements and the simulator software's own licensing still require checks.
-The result must be labelled **hybrid with simulated QKD input**: simulator
-keys are conventional random material, not quantum-generated keys. Real paired
-QKD equipment can later replace the simulated sources.
+| Topic | Decision |
+| --- | --- |
+| Simulator | Rust ETSI 014 reference implementation already built on Linux (`etsi-kme:local`), pinned by image ID and source-file hashes |
+| Correlation | Both KMEs share one PostgreSQL, so `dec_keys(key_ID)` on KME B returns the key issued by `enc_keys` on KME A |
+| Location | `/home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation/phiotx-hybrid/` (`docker-compose-phiotx-hybrid.yml`, `certs/`, `*.env` at 0600); legacy files in the parent folder untouched |
+| Addressing | Static IPs on the existing `qkd_net`: `.20` PostgreSQL, `.21` KME for phiotx01, `.22` KME for phiotx02. Never IPAM-assigned |
+| IP safety | Preflight refuses an address used by any other container (running or stopped, e.g. `andrea-kme*`), by the inventory, the host or the gateway, or one that answers ARP on the LAN |
+| PKI | `hierarchical_ca` (section 7): KME and Juniper domains with Root + Issuing CAs; PhioTX store `qkd` trusts all four CAs |
+| Client identity | Certificate CN = PhioTX container name, which the KME uses as SAE ID |
+| Key fetch | Only the lexically lower node (phiotx01) gets sources in `650-key-fetch`; PhioTX pulls keys from both KMEs, nothing is pushed |
+| Readiness | Before touching routers the orchestrator runs a real mTLS enc/dec through both KMEs (from PostgreSQL's network namespace, because ipvlan hides children from the host) and compares the keys without printing them; then it waits until `txh -K` shows a non-empty key-fetch store for every peer pair on every node (e.g. `[phiotx01]&>&phiotx02: 6`) before enabling `hybrid(...)`. The global `Q Pool` counter of `txh -Q` stays `0` with key fetch and is not used |
+| Hardening | KMEs `read_only`, `cap_drop: ALL`, `no-new-privileges`; secrets never in the compose file |
+| Clean | Label-scoped removal of the simulator containers/volume and `phiotx-hybrid/`; `qkd_net` is never created or deleted |
+| Mode switch | Activating bulk or PQC removes a stale `650-key-fetch` layer with `tx_install_cf -y -del -layer 650-key-fetch`; hybrid activation never removes it |
+
+Phase per command:
+
+| Command | Hybrid action |
+| --- | --- |
+| `create --keygen-mode hybrid` | Validates `qkd_simulator`, issues the hierarchical PKI, renders `650-key-fetch` and the hybrid ETSI layer |
+| `phiotx-up` / `bootstrap --keygen-mode hybrid` | Preflight and IP conflict check, start PostgreSQL + N KMEs, enc/dec probe, install `qkd` store, key-fetch, key-store wait, hybrid ETSI layer |
+| `deploy` | Unchanged Junos deployment; SAE requests reach the local PhioTX as in bulk/PQC |
+| `clean` | Removes the simulator as above, then the routers |
+
+The orchestrator must run on the Linux host (`host` in the inventory): the
+KMEs are local Docker containers. `--only` is rejected in hybrid mode because
+the pair must be complete.
+
+Limits: the QKD input is **simulated** (software random keys stored in
+PostgreSQL), so this validates hybrid processing, not physical QKD. Only
+pairs are supported (one primary per link). Real QKD equipment can replace the
+simulator by pointing `qkd_sources` at real KMEs with the same `qkd` PKI model.
+
+#### Hybrid live validation, 2026-10-04
+
+The roadmap is complete: bulk (stage 0), PQC-only (stage 1) and hybrid with
+simulated QKD input (stage 2) are all selectable through `--keygen-mode` and
+validated from a full clean on the same two licensed PhioTX nodes.
+
+Sequence run from the Linux orchestrator:
+`clean --pki`, then `bootstrap --keygen-mode hybrid --bundle docker/hpe.zip`.
+Both exited 0 with zero ERROR/WARN lines. Observed results:
+
+* Simulator preflight, IP conflict check, `hierarchical_ca` PKI, PostgreSQL
+  `.20` and KMEs `.21`/`.22` came up; the standalone mTLS enc/dec probe through
+  both KMEs returned the same key, and a second run was idempotent.
+* PQC keypairs and public keys were exchanged first; a transient
+  `400 (invalid peer)` while the peer was committing `600-peer-hive` was
+  absorbed by the bounded retry (`[WAIT] ... retrying`).
+* `650-key-fetch` was committed on both nodes. phiotx01 calls `enc_keys` on
+  KME `.21` and phiotx02 `dec_keys(key_ID)` on KME `.22` every 10 s, over mTLS
+  with the `qkd` store; `txh -K` showed matching stores
+  (`[phiotx01]&>&phiotx02` / `phiotx01&>&[phiotx02]`) before activation.
+* Final layers on both nodes: `100-zero-touch-base`, `600-peer-hive`,
+  `650-key-fetch`, `700-etsi-bulk` (content `hybrid(ML-KEM-1024)`).
+* A fresh SAE1 `enc_keys` / SAE2 `dec_keys` probe as `etsi_user` returned the
+  same key ID and identical 32-byte material (compared by SHA-256 digest only).
+  The PhioTX log recorded `etsi new key '...'[32] hybrid(ML-KEM-1024)`.
+* Junos deploy completed. At 03:35 PDT both routers had completed the
+  four-slot ring, MKA was `Secured - Primary` and committed rings and pending
+  heads matched. At 03:43 PDT one rolling replacement had promoted a
+  hybrid-derived ETSI key (generation 5) to active: MKA stayed
+  `Secured - Primary` on a new, identical CAK name on both routers, rings and
+  pending heads still matched, one SSH identity rotation had completed and
+  runtime logs held zero ERROR/WARN, permission-denied or post-commit
+  verification errors. Both Hive peers remained up.
+
+This establishes initial hybrid greenfield rollover validation, not
+failure-injection coverage (KME outage, store exhaustion) or a long-duration
+endurance test.
+
+Two defects were found and fixed during this validation:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Bootstrap stopped with "No pre-fetched QKD material" although key fetch returned HTTP 200 | Readiness parsed the global `Q Pool` of `txh -Q`, which key fetch does not fill | `wait_for_qkd_pool` now parses the per-pair stores of `txh -K` and requires every peer |
+| `650-key-fetch` disappeared after hybrid activation | Stale-layer pruning ran whenever the ETSI layer was installed alone | Pruning is explicit (`prune_key_fetch`) and only enabled for bulk/PQC |
+
+The result is **hybrid with simulated QKD input**: the KME keys are
+conventional random material, not quantum-generated keys. Real paired QKD
+equipment can later replace the simulated sources by pointing `qkd_sources`
+at real KMEs with the same `qkd` PKI model. This topology keeps exactly two
+PhioTX instances; the simulators use no PhioTX licence.
+
+Execution transcripts on Linux: `/tmp/hy_clean5.out`, `/tmp/hy_boot5.out`
+and the matching `/var/tmp/qkd_docker_orchestrator_{clean,bootstrap}_*.log`.
 
 ### Independent protection and rotation planes
 
@@ -662,6 +758,31 @@ copies the CA into the container again immediately before each store's
 certificate installation. The `qxc` and `etsi` stores never depend on a
 temporary CA file consumed by the previous installation. Temporary host and
 container PKI inputs are cleaned up on success and on installation failure.
+
+### Hybrid: `hierarchical_ca` between Linux KMEs and PhioTX
+
+Hybrid adds a fourth container store, `qkd`, used only by PhioTX to call the
+Linux KMEs. It follows `config/pki/hierarchical_ca.yml` (RSA 4096, SHA-256)
+and is generated locally by `docker_hybrid_pki.py` under the ignored
+`certs/docker_hybrid_ca/`:
+
+```text
+KME domain:      KME Root CA ─► KME Issuing CA ─► kme-phiotx01 / kme-phiotx02
+                 (serverAuth, SAN DNS + IP 10.38.112.21 / .22)
+Juniper domain:  Juniper Root CA ─► Juniper Issuing CA ─► phiotx01 / phiotx02
+                 (clientAuth, CN = PhioTX container = ETSI SAE ID seen by the KME)
+Trust exchange:  install_on_kme/trusted-juniper-ca-bundle.crt
+                 install_on_juniper/trusted-kme-ca-bundle.crt
+```
+
+* KMEs present `leaf + KME issuing` and require a client certificate chaining
+  to the Juniper root.
+* PhioTX installs the `qkd` store with `tx_install_crt -crt <leaf> -ca <juniper root>
+  -ca <juniper issuing> -ca <kme root> -ca <kme issuing> -f -y`; the four
+  CA files are copied separately because `-y` consumes them.
+* Root/issuing CAs are reused across runs; leaves are re-issued on every
+  provision and the KMEs are force-recreated to load them. `bootstrap` and
+  `clean --pki` start from a fresh hierarchy.
 
 ---
 
@@ -986,6 +1107,13 @@ whereas `create` preserves the CA and normally reuses valid leaves.
 .venv/bin/python qkd_docker_orchestrator.py clean --full-macsec
 ```
 
+When the inventory contains `phiotx.qkd_simulator` and clean runs on the
+Linux host, it first removes the hybrid simulator: only containers and volumes
+labelled `io.quantum-safe.docker-qkd.project=docker-qkd-hybrid`, plus the
+`phiotx-hybrid/` folder. The `qkd_net` network, the legacy compose files,
+`certs/`, `db-init/` and the stopped `andrea-*` containers are never touched.
+Credentials for the remote part come from `--password` or `EVO_PASSWORD`.
+
 ---
 
 ## 13. Generated artifacts
@@ -1267,6 +1395,11 @@ Behaviours confirmed on real hardware during the manual lab.
 | `No route to host` to the KME | VRF-only binding | Bind to the bridge gateway `9.1.1.1` |
 | `subsystem request failed` on copy | No SFTP subsystem on the EVO build | Use `scp -O` |
 | Inventory rejected | Missing `phiotx` section or `evo: true` | Use `docker_evo_lab.yaml` as the model |
+| `pqc_pubkey: 400 (invalid peer)` during public-key exchange | Peer committed `600-peer-hive` moments earlier and its `tx` service has not reloaded the peer list | Handled: the fetch retries on this error only (up to 60 s, `[WAIT]` lines); other errors fail at once |
+| `txh -Q` shows `Q:0` / `Q Pool: 0` in hybrid mode | Normal: key fetch fills per-pair stores, not the global Q pool | Check `txh -K`: `[phiotx01]&>&phiotx02: N` must be non-zero on both nodes |
+| `... is already assigned to container ...` / `answers on the lab network` | A hybrid simulator IP is in use (e.g. a stopped `andrea-kme*` container or a lab VM) | Pick free addresses in `qkd_simulator`; never reuse an occupied one |
+| `Run the orchestrator on 10.38.98.181` | Hybrid started from another host | Run hybrid commands on the Linux host that owns `qkd_net` |
+| Host cannot reach `10.38.112.2x` | ipvlan parent cannot talk to its own children | Expected; probes run inside the PostgreSQL container namespace |
 
 ---
 
@@ -1294,3 +1427,4 @@ Behaviours confirmed on real hardware during the manual lab.
 | --- | --- |
 | [PhioTX on Junos EVO](./phiotx_on_junos_evo.md) | Manual lab that validated this design |
 | [KME on Junos EVO](./kme_in_Junos_evo.md) | Earlier KME-in-container investigation |
+| [Project overview slides](./slides/phiotx_project_overview.pptx) | 2 slides: lab architecture and bulk / PQC / hybrid modes |

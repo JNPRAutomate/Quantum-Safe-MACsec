@@ -81,6 +81,22 @@ phiotx:
 
   peer_port: 9002
 
+  # External simulated QKD for --keygen-mode hybrid: one ETSI 014 reference
+  # KME per PhioTX plus one shared PostgreSQL, run on the Linux host in
+  # <source_dir>/phiotx-hybrid. Addresses are static on the existing OOB
+  # ipvlan network (never created/removed here) and were checked to be free.
+  qkd_simulator:
+    host: 10.38.98.181
+    network: qkd_net
+    source_dir: /home/andrea/kme-lab/etsi-gs-qkd-014-referenceimplementation
+    project: docker-qkd-hybrid
+    port: 8443
+    key_rate: 0.1
+    postgres_ip: 10.38.112.20
+    kme_ips:
+      EVO1: 10.38.112.21
+      EVO2: 10.38.112.22
+
 devices:
   - name: EVO1
     hostname: evo1

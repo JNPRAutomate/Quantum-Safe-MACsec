@@ -1012,6 +1012,18 @@ def clean_device(name, device, full_macsec=False):
 # ----------------------------------------
 # CLEAN HANDLER
 # ----------------------------------------
+def clean_hybrid_simulator(args):
+    """Remove the host-local hybrid ETSI KMEs/PostgreSQL owned by this suite."""
+    from lib.docker.qkd.docker_hybrid import cleanup
+
+    inventory = getattr(args, "inventory", None)
+    if not inventory:
+        return False
+    path, devices = load_clean_inventory(inventory)
+    phiotx = next(iter(devices.values()), {}).get("_phiotx_defaults") or {}
+    return cleanup(phiotx)
+
+
 def handle_clean(args):
     """
     Clean handler used by qkd_docker_orchestrator.py.
@@ -1038,6 +1050,8 @@ def handle_clean(args):
     print("")
 
     devices_file = DOCKER_RUNTIME_DIR / "devices.yaml"
+
+    clean_hybrid_simulator(args)
 
     # ----------------------------------------
     # LOCAL ONLY MODE

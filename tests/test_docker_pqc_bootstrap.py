@@ -118,7 +118,7 @@ def pqc_fleet(tmp_path, monkeypatch):
                 state.public_keys.add((container, peer))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def install_layers(device, _settings, paths, *, dry_run=False):
+    def install_layers(device, _settings, paths, *, dry_run=False, prune_key_fetch=False):
         if lifecycle.LAYER_ETSI in paths:
             etsi_layer = yaml.safe_load(paths[lifecycle.LAYER_ETSI].read_text())
             method = etsi_layer["etsi_service"]["keygen_method"]

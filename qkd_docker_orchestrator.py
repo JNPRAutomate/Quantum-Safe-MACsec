@@ -80,6 +80,13 @@ from lib.docker.qkd.docker_provisioning import run_provisioning
 from lib.common.script_user_bootstrap import bootstrap_script_users
 from lib.docker.qkd.docker_clean import handle_clean
 from lib.docker.qkd.docker_keygen import MODES, resolve_keygen, save_keygen
+from lib.docker.qkd.docker_hybrid import (
+    attach_qkd_pki,
+    issue_pki,
+    provision,
+    qkd_sources,
+    resolve_settings,
+)
 
 
 ONBOX_SCRIPT_NAME = "phiotx_qkd_onbox.py"
@@ -544,6 +551,10 @@ def cmd_create(args, *, fresh_pki=False) -> int:
             fresh=fresh_pki,
         )
 
+    if phiotx["keygen_mode"] == "hybrid":
+        hybrid = resolve_settings(phiotx, runtime_devices)
+        issue_pki(hybrid, fresh=fresh_pki)
+        phiotx = {**phiotx, "qkd_sources": qkd_sources(hybrid)}
     build_onbox_artifacts(runtime_devices, phiotx=phiotx)
 
     for name, device in runtime_devices.items():
@@ -579,11 +590,17 @@ def cmd_phiotx_up(args) -> int:
         required=args.require_licenses,
     )
 
+    pki_bundles = collect_staged_pki(runtime_devices)
+    if phiotx["keygen_mode"] == "hybrid":
+        if args.only:
+            raise ValueError("Hybrid deployment requires the complete paired fleet; omit --only")
+        phiotx, hybrid_pki = provision(
+            phiotx, runtime_devices, dry_run=args.dry_run,
+        )
+        attach_qkd_pki(pki_bundles, hybrid_pki)
     attach_credentials(runtime_devices, args.username, args.password)
 
     admit_devices(runtime_devices, required_networks=required_networks(phiotx))
-
-    pki_bundles = collect_staged_pki(runtime_devices)
 
     reports = phiotx_up(
         runtime_devices,
@@ -746,6 +763,13 @@ def _run_greenfield_bootstrap(args) -> int:
 
     runtime_devices = load_docker_runtime_devices()
     pki_bundles = collect_staged_pki(runtime_devices)
+    if phiotx["keygen_mode"] == "hybrid":
+        if args.only:
+            raise ValueError("Hybrid bootstrap requires the complete paired fleet; omit --only")
+        phiotx, hybrid_pki = provision(
+            phiotx, runtime_devices, dry_run=args.dry_run,
+        )
+        attach_qkd_pki(pki_bundles, hybrid_pki)
     attach_credentials(runtime_devices, args.username, args.password)
 
     print("\n=== EVO admission ===")
