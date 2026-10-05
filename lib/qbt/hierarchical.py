@@ -1,5 +1,6 @@
 """QBT adapter for the repository's dual hierarchical CA generator."""
 
+import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -34,8 +35,22 @@ def validate(directory, manifest):
         existing.verify_tree(root, issuing, leaves)
 
 
-def prepare_hierarchical(directory, config_path):
+def supersede_directory(directory):
+    """Move an existing PKI aside for rotation; old identities are never deleted."""
+    directory = Path(directory)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = directory.with_name(f"{directory.name}.superseded-{stamp}")
+    if target.exists():
+        raise ValueError(f"Superseded PKI directory already exists: {target}")
+    directory.rename(target)
+    return target
+
+
+def prepare_hierarchical(directory, config_path, rotate=False):
     directory = Path(directory).resolve()
+    if rotate and directory.exists() and any(directory.iterdir()):
+        superseded = supersede_directory(directory)
+        print(f"[pki] previous PKI kept in {superseded}", flush=True)
     config = yaml.safe_load(Path(config_path).read_text())
     config_digest = hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
     marker = directory / "manifest.json"

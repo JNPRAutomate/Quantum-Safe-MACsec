@@ -144,3 +144,10 @@ def test_container_lifecycle_requires_explicit_safety_flags(arguments, message, 
 
 def test_backup_is_not_an_orchestrator_action():
     assert "backup" not in qbt.COMMANDS
+
+
+def test_rotate_pki_is_only_valid_with_pki_or_deploy(capsys):
+    with pytest.raises(SystemExit) as error:
+        qbt.main(["status", "--rotate-pki"])
+    assert error.value.code == 2
+    assert "--rotate-pki is only valid with pki/deploy" in capsys.readouterr().err

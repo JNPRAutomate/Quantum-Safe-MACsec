@@ -23,3 +23,15 @@ def test_mismatched_key_rejected(tmp_path):
     (tmp_path / "evo1.key").write_bytes((tmp_path / "evo2.key").read_bytes())
     with pytest.raises(ValueError, match="mismatch"):
         prepare_pki(tmp_path)
+
+
+def test_rotate_moves_previous_pki_aside_and_generates_new_identities(tmp_path):
+    directory = prepare_pki(tmp_path / "private")
+    old_key = (directory / "evo1.key").read_bytes()
+
+    prepare_pki(directory, rotate=True)
+
+    assert (directory / "evo1.key").read_bytes() != old_key
+    superseded = list(tmp_path.glob("private.superseded-*"))
+    assert len(superseded) == 1
+    assert (superseded[0] / "evo1.key").read_bytes() == old_key

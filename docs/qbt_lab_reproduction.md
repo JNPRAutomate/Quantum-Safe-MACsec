@@ -126,6 +126,8 @@ python qbt_orchestrator.py --pki --pki-profile hierarchical_ca \
 
 Rotation removes only the tracked server certificate/key through QBT's PKI CLI,
 then imports the new trust bundle, key and certificate and validates the result.
+`--rotate-pki` also regenerates the bundle itself: the previous directory is
+renamed `<dir>.superseded-<UTC time>` and never deleted.
 It does not remove the container, database, licence, machine ID or master key.
 The initial lab CA remains trusted after this migration; removal of obsolete
 trust anchors is a separate operation, not an implicit side effect.
@@ -191,6 +193,11 @@ python qbt_orchestrator.py create --help
 python qbt_orchestrator.py deploy --pki-dir /private/qbt-lab-pki --dry-run
 python qbt_orchestrator.py deploy --pki-dir /private/qbt-lab-pki
 ```
+
+`deploy` also handles the PKI: it reuses a valid bundle in `--pki-dir`, generates
+one when the directory is absent, imports it into both KME containers and
+installs the runtime certificates on the EVOs. Add `--rotate-pki` to force a new
+PKI for the containers and the EVOs in one run.
 
 `create` renders the Jinja sources in `config/templates/qbt/` into `.json`
 sidecars under `config/runtime/EVO1/` and `config/runtime/EVO2/`, and builds

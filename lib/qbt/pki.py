@@ -23,8 +23,12 @@ def write_private(path, data):
     path.chmod(0o600)
 
 
-def prepare_pki(directory):
+def prepare_pki(directory, rotate=False):
     directory = Path(directory).resolve()
+    if rotate and directory.exists() and any(directory.iterdir()):
+        from lib.qbt.hierarchical import supersede_directory
+
+        print(f"[pki] previous PKI kept in {supersede_directory(directory)}", flush=True)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
     expected = ["ca.pem", "ca.key"] + [
