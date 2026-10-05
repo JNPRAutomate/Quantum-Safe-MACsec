@@ -11,6 +11,13 @@ directories, regenerate their identity/master-key files, or deactivate their
 licences without explicit operator approval. Preserve Juniper infrastructure.
 Existing containers are the first integration targets.
 
+The manual, encrypted backup procedure is documented separately in
+[qbt_evo_manual_backup.md](qbt_evo_manual_backup.md); it is not an orchestrator
+action. No backup or live container operation is performed by this code change.
+For this lab a temporary MACsec interruption during a confirmed recreation is
+acceptable; preserving active Docker licence state and persistent identity is
+the required recreation gate.
+
 ## Current evidence
 
 Use `python qbt_orchestrator.py --help` for the overview and
@@ -54,9 +61,19 @@ the architecture, key classes, four-key acceptance sequence and evidence limits.
 Retain each instance's complete `data/`, `secrets/` and `license-staging/`
 directories and deployment configuration. The database and its matching master
 key belong together. Machine identity must remain stable. Backups must be
-protected as secrets, stored outside Git and checked before destructive work.
-A consistent backup/restore and container recreation procedure still needs
-implementation and validation.
+protected as secrets, stored outside Git and checked before recreation. Follow
+the manual tar, SHA-256, encryption and restore safety guidance in
+[qbt_evo_manual_backup.md](qbt_evo_manual_backup.md). The orchestrator's
+`recreate` command requires explicit manual-backup confirmation, validates the
+active licences and persistent identities, then uses Compose to create
+replacement containers with the same mounts and loaded image. It retains the
+stopped original containers for rollback and does not delete Docker containers
+or persistent data. The live recreation itself has not been run or verified.
+
+The required post-recreation check is running Docker containers with matching
+active licence status, machine IDs, master-key inputs and persistent data
+fingerprints. ETSI and MACsec are separate checks; MACsec being temporarily
+down during this lab procedure does not invalidate preserved licence state.
 
 ### Create genuinely new instances from an empty lab
 

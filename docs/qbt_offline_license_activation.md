@@ -209,3 +209,33 @@ or MACsec integration.
 
 The two Linux instances require their own QBT-issued activation materials.
 Do not reuse either EVO file or identity for them.
+
+## Lessons for recreating a licensed container
+
+These came from the 2026-10-05 preflight and are useful for any KME container
+with a licence mechanism. The orchestrator's preflight refused to proceed on
+each point, before any container was changed.
+
+1. **Treat the running container as the source of truth.** Read `Env`, `Mounts`
+   and `HostConfig` with `docker inspect` and compare them to the profile used
+   for recreation. Our profile had drifted from the real containers.
+2. **The activation configuration is part of the licence behaviour.** The real
+   containers set `KME_LICENSE_ACTIVATION_MODE=offline` and
+   `KME_LICENSE_MACHINE_FILE=/run/license-staging/license.machine`. The first
+   recreation profile omitted both; a recreated container would likely have
+   started without offline activation. That consequence is an inference from
+   the vendor documentation, not an observed result.
+3. **Licence identity and state live outside the container.** The host ID equals
+   the mounted `machine-id`; activated state is in `data/license.storage` and
+   `data/license.lic`. Removing a container does not remove them, but losing or
+   regenerating `machine-id`, or replacing `data/`, would.
+4. **Do not match secrets by name.** A filter on "LICENSE" also matches the
+   harmless mode variable. Allow known variables only when the value equals the
+   expected one, and reject unknown sensitive names holding inline values.
+5. **Compare labels case-insensitively.** Our labels use lower-case device
+   names (`evo1`); we had assumed `EVO1`.
+6. **Treat `license status` output as secret.** It prints the licence key, and
+   `No feature in file` does not by itself show which features are enabled.
+7. **Back up the whole persistent root first** (`data/`, `secrets/`,
+   `license-staging/`), then recreate with identical mounts. See
+   [the manual backup runbook](qbt_evo_manual_backup.md).

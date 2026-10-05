@@ -4,6 +4,22 @@ import ipaddress
 
 
 OWNER = "qbt-orchestrator"
+KME_ENVIRONMENT = {
+    "KME_DATA_DIRECTORY": "/var/lib/qbt-kme",
+    "KME_LICENSE_KEY_PATH": "/run/secrets/kme-license",
+    "KME_LICENSE_ACTIVATION_MODE": "offline",
+    "KME_LICENSE_MACHINE_FILE": "/run/license-staging/license.machine",
+    "KME_MASTER_KEY_BYTES_FILE": "/run/secrets/master-key-bytes",
+    "KME_MASTER_KEY_ID_FILE": "/run/secrets/master-key-id",
+    "KME_LISTEN_ADDRESS": "0.0.0.0",
+    "KME_LISTEN_PORT": "443",
+    "KME_INTERNAL_MESSAGES_LISTEN_ADDRESS": "0.0.0.0",
+    "KME_CISCO_SKIP_LISTEN_ADDRESS": "0.0.0.0",
+    "KME_CISCO_NEXUS_SKIP_LISTEN_ADDRESS": "0.0.0.0",
+    "KME_NOKIA_ETSI_014_LISTEN_ADDRESS": "0.0.0.0",
+    "QBT_SERVICE_TYPE": "docker",
+    "QBT_RNG_SOURCE": "os-rng",
+}
 
 
 def render_profile(name, host, image):
@@ -18,10 +34,11 @@ def render_profile(name, host, image):
         "services": {
             "kme": {
                 "image": image,
+                "pull_policy": "never",
                 "container_name": "qbt-" + name.lower(),
-                "init": True,
                 "restart": "unless-stopped",
-                "labels": {"io.qbt.lab.owner": OWNER, "io.qbt.lab.device": name},
+                "network_mode": "none",
+                "labels": {"io.qbt.lab.owner": OWNER, "io.qbt.lab.device": name.lower()},
                 "read_only": True,
                 "tmpfs": ["/tmp", "/run"],
                 "cap_drop": ["ALL"],
@@ -29,31 +46,7 @@ def render_profile(name, host, image):
                 "security_opt": ["no-new-privileges:true"],
                 "command": ["-f", "run"],
                 "working_dir": "/var/lib/qbt-kme",
-                "environment": {
-                    "KME_DATA_DIRECTORY": "/var/lib/qbt-kme",
-                    "KME_LICENSE_KEY_PATH": "/run/secrets/kme-license",
-                    "KME_MASTER_KEY_BYTES_FILE": "/run/secrets/master-key-bytes",
-                    "KME_MASTER_KEY_ID_FILE": "/run/secrets/master-key-id",
-                    "KME_LISTEN_ADDRESS": "0.0.0.0",
-                    "KME_LISTEN_PORT": "443",
-                    "KME_INTERNAL_MESSAGES_LISTEN_ADDRESS": "0.0.0.0",
-                    "KME_CISCO_SKIP_LISTEN_ADDRESS": "0.0.0.0",
-                    "KME_CISCO_NEXUS_SKIP_LISTEN_ADDRESS": "0.0.0.0",
-                    "KME_ENABLE_CISCO_SKIP": "false",
-                    "KME_ENABLE_CISCO_NEXUS_SKIP": "false",
-                    "KME_ENABLE_ETSI_020": "false",
-                    "KME_ENABLE_NOKIA_ETSI_014": "false",
-                    "KME_NOKIA_ETSI_014_LISTEN_ADDRESS": "0.0.0.0",
-                    "QBT_SERVICE_TYPE": "docker",
-                    "QBT_RNG_SOURCE": "os-rng",
-                },
-                # Proposed host mappings, not yet approved for live use.
-                # 8443 avoids claiming the router's privileged HTTPS listener.
-                "ports": [
-                    f"{host}:8443:443",
-                    f"{host}:4004:4004",
-                    f"{host}:4005:4005",
-                ],
+                "environment": dict(KME_ENVIRONMENT),
                 "volumes": [
                     {
                         "type": "bind",
@@ -61,21 +54,27 @@ def render_profile(name, host, image):
                         "target": "/var/lib/qbt-kme",
                         "bind": {"create_host_path": False},
                     },
-                    *[
-                        {
-                            "type": "bind",
-                            "source": root + "/secrets/" + filename,
-                            "target": target,
-                            "read_only": True,
-                            "bind": {"create_host_path": False},
-                        }
-                        for filename, target in (
-                            ("kme-license", "/run/secrets/kme-license"),
-                            ("master-key-id", "/run/secrets/master-key-id"),
-                            ("master-key-bytes", "/run/secrets/master-key-bytes"),
-                            ("machine-id", "/etc/machine-id"),
-                        )
-                    ],
+                    {
+                        "type": "bind",
+                        "source": root + "/secrets",
+                        "target": "/run/secrets",
+                        "read_only": True,
+                        "bind": {"create_host_path": False},
+                    },
+                    {
+                        "type": "bind",
+                        "source": root + "/secrets/machine-id",
+                        "target": "/etc/machine-id",
+                        "read_only": True,
+                        "bind": {"create_host_path": False},
+                    },
+                    {
+                        "type": "bind",
+                        "source": root + "/license-staging",
+                        "target": "/run/license-staging",
+                        "read_only": True,
+                        "bind": {"create_host_path": False},
+                    },
                 ],
             }
         }

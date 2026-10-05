@@ -58,6 +58,8 @@ def test_help_contains_howto_without_credentials(capsys):
     assert "--network" in output
     assert "--rotate-pki" in output
     assert "OUTSIDE this repository" in output
+    assert "docs/qbt_evo_manual_backup.md" in output
+    assert "--confirm-manual-backup" in output
 
 
 def test_deploy_requires_external_pki_before_connecting(monkeypatch, capsys):
@@ -99,15 +101,46 @@ def test_profile_isolated_no_inline_secrets():
     assert service["image"] == "sha256:test"
     assert service["labels"]["io.qbt.lab.owner"] == "qbt-orchestrator"
     assert service["read_only"] is True
+    assert service["pull_policy"] == "never"
     assert "KME_CRYPTO_MASTER_KEY_BYTES" not in service["environment"]
     assert all(volume["bind"]["create_host_path"] is False for volume in service["volumes"])
     assert "networks" not in profile
-    assert service["ports"] == [
-        "10.38.97.218:8443:443", "10.38.97.218:4004:4004", "10.38.97.218:4005:4005"
-    ]
+    assert service["network_mode"] == "none"
+    assert "ports" not in service
+    assert {
+        volume["target"]: volume["source"]
+        for volume in service["volumes"]
+    } == {
+        "/var/lib/qbt-kme": "/var/db/qbt/evo1/data",
+        "/run/secrets": "/var/db/qbt/evo1/secrets",
+        "/etc/machine-id": "/var/db/qbt/evo1/secrets/machine-id",
+        "/run/license-staging": "/var/db/qbt/evo1/license-staging",
+    }
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.1", "::1", "bad"])
 def test_profile_rejects_invalid_exposure(host):
     with pytest.raises(ValueError):
         qbt.render_profile("EVO1", host, "image")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["recreate"], "--confirm-manual-backup"),
+        (["recreate", "--confirm-manual-backup"], "--confirm-recreate"),
+        (
+            ["license-activate", "--only", "EVO1", "--confirm-license-activation"],
+            "--confirm-manual-backup",
+        ),
+    ],
+)
+def test_container_lifecycle_requires_explicit_safety_flags(arguments, message, capsys):
+    with pytest.raises(SystemExit) as error:
+        qbt.main(arguments)
+    assert error.value.code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_backup_is_not_an_orchestrator_action():
+    assert "backup" not in qbt.COMMANDS

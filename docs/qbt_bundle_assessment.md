@@ -52,6 +52,8 @@ integration findings, not a copy of the vendor documentation.
 See [key flow and AKE/mesh terminology](qbt_key_flow.md) for the detailed
 control-plane/application-delivery flow and the distinction between AKE keys,
 DSKE PSRD, application-key inventory and the Junos keyring.
+See [QBT container feature inventory](qbt_container_features.md) for a concise
+list of vendor-documented capabilities, the current lab evidence and its limits.
 
 These are vendor-documented capabilities, not live acceptance results:
 

@@ -218,6 +218,15 @@ private keys from PKCS#1 to PKCS#8 and restarting the existing containers,
 TCP 443 was observed listening on both. A listening socket alone does not prove
 successful mTLS or SAE authorization.
 
-Local SAEs were registered. Reciprocal peer/AKE establishment, four-key
-ENC/DEC equality, MACsec up and key rotation are not yet verified.
-Keep this boundary explicit when reporting results.
+Local SAE authentication, bilateral peer/AKE configuration with
+`ECDHE521-MLKEM1024`, and four-key paired ETSI ENC/DEC equality were subsequently
+verified. A direct shell ENC/DEC sample also returned the same Key-ID and
+SHA-256 digest at both ends. These are KME/key-delivery results, not evidence
+that MACsec is secured.
+
+The four-slot Junos runtime and timer were deployed, but secured MKA and an
+actual bilateral MACsec rollover remain unverified. No physical QKD source,
+QRNG, Security Hub/PSRD or Cortex integration was configured in this lab.
+Keep these boundaries explicit when reporting results; see the
+[feature inventory](qbt_container_features.md) and
+[EVO acceptance record](qbt_lab_reproduction.md).

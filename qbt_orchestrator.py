@@ -22,6 +22,16 @@ from lib.qbt.pki import prepare_pki, import_pki
 from lib.qbt.hierarchical import prepare_hierarchical
 from lib.qbt.peer import configure_peers
 from lib.qbt.probe import paired_probe
+from lib.qbt.lifecycle import (
+    assert_activation_continuity as assert_qbt_activation_continuity,
+    assert_continuity as assert_qbt_continuity,
+    activate_offline_license as activate_qbt_license,
+    preflight_pair as qbt_preflight_pair,
+    public_summary as qbt_public_summary,
+    recreate_pair as recreate_qbt_pair,
+    run_private as run_qbt_private,
+    verify_pair as verify_qbt_pair,
+)
 
 LINUX_HOST = "10.38.98.181"
 DEVICES = {"EVO1": "10.38.97.218", "EVO2": "10.38.97.228"}
@@ -184,23 +194,29 @@ def network(args, password):
             print(name, json.dumps(attach_networks(client, name, run, probe)))
 
 
+def require_live_confirmation(prompt, expected):
+    if not sys.stdin.isatty():
+        raise QbtError("This operation requires an interactive confirmation")
+    if input(prompt).strip() != expected:
+        raise QbtError("Confirmation phrase did not match; no change was made")
+
+
+def load_qbt_script_user():
+    path = Path(__file__).resolve().parent / "config/inventory/inventory_base.yaml"
+    inventory = yaml.safe_load(path.read_text(encoding="utf-8"))
+    script_user = (inventory.get("secrets") or {}).get("script_user")
+    if not isinstance(script_user, str) or not script_user:
+        raise QbtError("The QBT script user is missing from inventory_base.yaml")
+    return script_user
+
+
 def clean(args, linux, password):
-    """Remove only explicitly named QBT resources, never Juniper infrastructure."""
-    for name in args.only or DEVICES:
-        with connect(DEVICES[name], args.username, password, args.known_hosts) as evo:
-            container = "qbt-" + name.lower()
-            names = run(evo, "docker ps -a --format '{{.Names}}'").splitlines()
-            if container in names:
-                info = json.loads(run(evo, "docker inspect " + container))[0]
-                labels = info["Config"].get("Labels") or {}
-                if labels.get("io.qbt.lab.owner") != "qbt-orchestrator":
-                    raise QbtError(f"Refusing to remove unowned container {container}")
-                run(evo, "docker rm -f " + container)
-            remaining = run(evo, "docker ps -a --format '{{.Names}}'").splitlines()
-            if container in remaining:
-                raise QbtError(f"{name}: container remains after cleanup")
-            print(f"[OK] {name}: managed QBT container absent; infrastructure untouched")
-    print("[INFO] Images, staging, PKI and persistent data retained")
+    """Keep direct teardown unavailable for licensed EVO instances."""
+    raise QbtError(
+        "clean is disabled for licensed EVO1/EVO2. Use the explicitly confirmed "
+        "recreate workflow only after making a separate manual backup; it retains "
+        "the original containers and never removes persistent data."
+    )
 
 
 def require_bootstrap_inputs(args):
@@ -241,7 +257,7 @@ def bootstrap_plan(args, linux, password):
                 check_environment(evo)
                 image_id = inspect_image(evo)
             local = Path(folder) / f"{name}.yml"
-            local.write_text(yaml.safe_dump(render_profile(name, DEVICES[name], image_id)))
+            local.write_text(yaml.safe_dump(render_profile(name, DEVICES[name], IMAGE)))
             os.chmod(local, 0o600)
             # Unique staging avoids clobbering a simultaneous invocation.
             remote = run(linux, "mktemp /var/tmp/qbt-compose.XXXXXX.yml")
@@ -264,13 +280,17 @@ COMMANDS = {
     "images": "Verify archives, load on Linux, export and copy/load on EVO",
     "copy": "Alias for images; does not start containers",
     "status": "Inspect loaded images and current EVO containers",
-    "clean": "Remove owned QBT containers only; retain images/data/config",
+    "clean": "Disabled for the licensed EVO pair; containers and data are retained",
     "bootstrap": "Validate deployment with --dry-run; live bootstrap remains gated",
     "pki": "Prepare external lab PKI and import server credentials into existing EVO KMEs",
     "peer": "Configure reciprocal QBT peers, AKE public keys and local/remote SAEs",
     "probe": "Verify an authenticated paired batch of four 256-bit ETSI keys",
     "create": "Generate the standalone on-box script and EVO1/EVO2 profiles from router inventory",
     "deploy": "Install the EVO1/EVO2 on-box runtime and configure the Junos rotation timer",
+    "preflight": "Read-only validation of EVO Docker, mounts, identity and QBT licence state",
+    "recreate": "Recreate the licensed EVO pair with Compose and retain rollback containers",
+    "license-activate": "Activate an offline licence only when QBT explicitly reports it missing",
+    "verify": "Verify Docker/licence, paired ETSI keys, secured MKA and a fresh bilateral MACsec rollover",
 }
 
 HOWTO = """Quick start:
@@ -286,7 +306,17 @@ HOWTO = """Quick start:
   6. Test binary: python qbt_orchestrator.py --check-image
   7. Validate profile: python qbt_orchestrator.py --bootstrap --dry-run
 
-Existing licensed EVO containers (no container recreation):
+Existing licensed EVO containers:
+  Read-only licence/identity/mount preflight:
+    python qbt_orchestrator.py preflight
+  Before any recreation, make and verify the manual backup described in:
+    docs/qbt_evo_manual_backup.md
+  Recreate both containers, keeping their data and retaining the stopped originals:
+    python qbt_orchestrator.py recreate --confirm-manual-backup --confirm-recreate
+  Do not reactivate an already-active licence; see the guarded license-activate
+  action, which requires an explicit missing state and manual backup confirmation.
+  Direct `clean` is disabled. No lifecycle action runs `docker rm` or removes
+  a QBT persistent directory.
   Connect the approved internal ETSI and OOB peer networks:
     python qbt_orchestrator.py --network
   Generate/import dual Root -> Issuing -> Leaf PKI:
@@ -307,8 +337,9 @@ PKI import alone does not prove that the running TLS listener is ready.
 
 Commands can also be positional, e.g. 'check-env' instead of '--check-env'.
 Use --only EVO1 to target one router; --linux-only with copy/images stops
-after loading the Linux image. --clean removes only owned QBT containers,
-NOT the Junos configuration, volumes, licences, staging or images.
+after loading the Linux image. `clean` is intentionally disabled for EVO1/EVO2;
+recreation requires a separately made manual backup and keeps the old containers
+for rollback. Never use `docker compose down -v` on licensed QBT data.
 
 The on-box pair always targets EVO1 and EVO2 from
 config/inventory/input/lab_vmm.yaml; `create` writes the standalone script and
@@ -349,11 +380,10 @@ Loads images only; does not start, recreate or activate KME containers.""",
   python qbt_orchestrator.py status
   python qbt_orchestrator.py status --only EVO2
 Container running state is not proof of licensing or ETSI readiness.""",
-    "clean": """DESTRUCTIVE: removes owned persistent QBT containers:
+    "clean": """Disabled teardown action:
   python qbt_orchestrator.py clean --only EVO1
-Retains data, secrets, licences, images and Junos configuration.
-Do NOT run during the current integration without explicit operator approval.
-This is not a full lab teardown or a backup procedure.""",
+Disabled for the licensed EVO1/EVO2 pair. No container or persistent directory
+is removed by this command.""",
     "bootstrap": """Compose profile validation only:
   python qbt_orchestrator.py bootstrap --dry-run
 Requires Linux Compose, SSH access and the loaded EVO images.
@@ -408,6 +438,42 @@ It removes only the three known old QBT helper scripts from `op`; any other
 Python file left there stops deployment rather than being deleted. It does not
 restart, recreate or remove either KME container. Rotation/MKA must be observed
 after deployment before being reported as verified.""",
+    "preflight": """Read-only preflight of the licensed EVO1/EVO2 pair:
+  python qbt_orchestrator.py preflight
+Checks container/image ownership, security profile, all persistent bind mounts,
+network addresses, host ID == machine-id, licence state/expiry and fingerprints
+of identity/licence files. Licence status output is redacted from logs/output.
+`No feature in file` is reported as unknown entitlements, not as a proven block.
+Does not stop or modify containers.""",
+    "recreate": """Compose-recreate the licensed EVO1/EVO2 pair without deleting data:
+  python qbt_orchestrator.py recreate --confirm-manual-backup --confirm-recreate
+First create and verify a manual backup using docs/qbt_evo_manual_backup.md.
+Requires both confirmations and an interactive typed phrase. Preflights the
+active licences, identities, current image and all bind mounts; validates both
+Compose profiles before stopping either KME; uses the already-loaded image
+(pull_policy=never), reuses the same data/secrets/licence mounts and approved
+networks, and retains each stopped original under a rollback name. No
+docker rm/down or persistent-directory deletion is performed. It then verifies
+Docker/licence state, paired ETSI ENC/DEC and bilateral MACsec rollover. On a
+failed gate it attempts to restore the originals and preserves failed
+replacements for diagnosis.""",
+    "license-activate": """Guarded offline activation (only for a genuinely missing licence):
+  python qbt_orchestrator.py license-activate --only EVO1 \\
+    --confirm-manual-backup --confirm-license-activation
+Requires the manual backup described in docs/qbt_evo_manual_backup.md and a
+typed confirmation. Refuses active, expired, invalid, unknown or ambiguous
+licence states and any existing persistent licence storage. Uses the
+host-specific staged files without printing the licence key; verifies the
+machine-id/master-key fingerprints and QBT active status afterward. Do not
+use it to reapply an already-active licence.""",
+    "verify": """Automated end-to-end acceptance:
+  python qbt_orchestrator.py verify --confirm-verify --rotation-timeout-seconds 900
+Requires a typed interactive confirmation because the ETSI acceptance probe
+requests keys. Checks Docker/image/licence state, performs paired four-key
+256-bit ETSI ENC/DEC equality, then requires fresh keychain installation,
+matching bilateral MKA confirmation, a SAK AN rollover, MACsec in-use and
+MKA Secured on both EVOs. Timeout or missing evidence is a failure, not a pass.
+It does not recreate containers or print key bytes/licence keys.""",
 }
 ACTION_HELP["copy"] = ACTION_HELP["images"]
 
@@ -438,6 +504,19 @@ def main(argv=None):
     parser.add_argument("--image-archive", type=Path)
     parser.add_argument("--deployment-archive", type=Path)
     parser.add_argument("--license-file", type=Path, help="External licence file; never committed")
+    parser.add_argument(
+        "--confirm-manual-backup",
+        action="store_true",
+        help="Confirm a separate, verified manual backup exists before lifecycle changes",
+    )
+    parser.add_argument(
+        "--confirm-recreate",
+        action="store_true",
+        help="Acknowledge Compose recreation with retained rollback containers",
+    )
+    parser.add_argument("--confirm-license-activation", action="store_true", help="Acknowledge guarded offline activation on a confirmed missing licence")
+    parser.add_argument("--confirm-verify", action="store_true", help="Acknowledge that end-to-end verification requests ETSI keys")
+    parser.add_argument("--rotation-timeout-seconds", type=int, default=900)
     parser.add_argument("--pki-dir", type=Path, help="Private PKI directory OUTSIDE the repository")
     parser.add_argument("--pki-profile", choices=["self_signed", "hierarchical_ca"], default="hierarchical_ca")
     parser.add_argument("--pki-config", type=Path, default=Path(__file__).resolve().parent / "config/pki/hierarchical_ca.yml")
@@ -476,6 +555,46 @@ def main(argv=None):
         parser.error("--linux-only is supported only for images/copy")
     if args.command in ("create", "deploy") and args.only:
         parser.error(f"{args.command} always targets the EVO1/EVO2 pair; omit --only")
+    if args.command == "clean":
+        print(
+            "ERROR: clean is disabled for the licensed EVO pair; it removes "
+            "neither containers nor data.",
+            file=sys.stderr,
+        )
+        return 1
+    lifecycle_commands = {
+        "preflight", "recreate", "license-activate", "verify"
+    }
+    if args.command in ("preflight", "recreate", "verify") and args.only:
+        parser.error(f"{args.command} always targets EVO1 and EVO2; omit --only")
+    if args.command == "license-activate" and (
+        not args.only or len(args.only) != 1
+    ):
+        parser.error("license-activate requires exactly one --only EVO1 or --only EVO2")
+    if args.command == "recreate":
+        if not args.confirm_manual_backup:
+            parser.error("recreate requires --confirm-manual-backup")
+        if not args.confirm_recreate:
+            parser.error("recreate requires --confirm-recreate")
+    if args.command == "license-activate":
+        if not args.confirm_manual_backup:
+            parser.error("license-activate requires --confirm-manual-backup")
+        if not args.confirm_license_activation:
+            parser.error("license-activate requires --confirm-license-activation")
+    if args.command == "verify" and not args.confirm_verify:
+        parser.error("verify requires --confirm-verify because it requests ETSI keys")
+    for flag, expected_command, option in (
+        (args.confirm_manual_backup, ("recreate", "license-activate"), "--confirm-manual-backup"),
+        (args.confirm_recreate, ("recreate",), "--confirm-recreate"),
+        (args.confirm_license_activation, ("license-activate",), "--confirm-license-activation"),
+        (args.confirm_verify, ("verify",), "--confirm-verify"),
+    ):
+        if flag and args.command not in expected_command:
+            parser.error(f"{option} is only valid with {'/'.join(expected_command)}")
+    if args.rotation_timeout_seconds <= 0:
+        parser.error("--rotation-timeout-seconds must be positive")
+    if args.command != "verify" and args.rotation_timeout_seconds != 900:
+        parser.error("--rotation-timeout-seconds is only valid with verify")
     if args.command == "bootstrap":
         try:
             require_bootstrap_inputs(args)
@@ -533,9 +652,164 @@ def main(argv=None):
     if not password and sys.stdin.isatty():
         password = getpass.getpass("EVO password: ")
     linux_password = os.getenv("QBT_LINUX_PASSWORD") or password
-    if not password or not linux_password:
-        parser.error("Set EVO_PASSWORD and, if different, QBT_LINUX_PASSWORD")
+    linux_commands = {
+        "images", "status", "bootstrap", "network", "check-env",
+    }
+    if not password or (args.command in linux_commands and not linux_password):
+        parser.error("Set EVO_PASSWORD and, if needed, QBT_LINUX_PASSWORD")
     try:
+        if args.command in lifecycle_commands:
+            from contextlib import ExitStack
+
+            if args.command == "recreate":
+                require_live_confirmation(
+                    "Confirm that a complete manual backup of both EVO data roots "
+                    "was created and verified. Type MANUAL BACKUP VERIFIED: ",
+                    "MANUAL BACKUP VERIFIED",
+                )
+                require_live_confirmation(
+                    "This will recreate both QBT containers, retaining the originals. "
+                    "Type RECREATE QBT EVO1,EVO2: ",
+                    "RECREATE QBT EVO1,EVO2",
+                )
+            elif args.command == "license-activate":
+                device = args.only[0]
+                require_live_confirmation(
+                    "Confirm that a complete manual backup of both EVO data roots "
+                    "was created and verified. Type MANUAL BACKUP VERIFIED: ",
+                    "MANUAL BACKUP VERIFIED",
+                )
+                require_live_confirmation(
+                    f"This activates an offline licence on {device}. "
+                    f"Type ACTIVATE QBT LICENSE {device}: ",
+                    f"ACTIVATE QBT LICENSE {device}",
+                )
+            elif args.command == "verify":
+                require_live_confirmation(
+                    "This requests paired ETSI keys and waits for a MACsec rollover. "
+                    "Type VERIFY QBT EVO1,EVO2: ",
+                    "VERIFY QBT EVO1,EVO2",
+                )
+
+            with ExitStack() as stack:
+                clients = {
+                    name: stack.enter_context(connect(
+                        DEVICES[name], args.username, password, args.known_hosts
+                    ))
+                    for name in ("EVO1", "EVO2")
+                }
+                if args.command == "preflight":
+                    current = qbt_preflight_pair(
+                        clients,
+                        run,
+                        run_qbt_private,
+                        IMAGE,
+                        allow_inactive_license=True,
+                    )
+                    print(json.dumps({
+                        name: qbt_public_summary(current[name])
+                        for name in ("EVO1", "EVO2")
+                    }, indent=2))
+                    return 0
+                if args.command == "license-activate":
+                    snapshots = qbt_preflight_pair(
+                        clients,
+                        run,
+                        run_qbt_private,
+                        IMAGE,
+                        allow_inactive_license=True,
+                    )
+                    device = args.only[0]
+                    if snapshots[device]["license_status"]["state"] != "missing":
+                        raise QbtError(
+                            f"{device}: QBT must explicitly report a missing licence; "
+                            "active, expired or unknown state will not be reactivated"
+                        )
+                    activation = activate_qbt_license(
+                        clients[device],
+                        device,
+                        run,
+                        run_qbt_private,
+                    )
+                    post = qbt_preflight_pair(
+                        clients,
+                        run,
+                        run_qbt_private,
+                        IMAGE,
+                        allow_inactive_license=True,
+                    )
+                    for name in ("EVO1", "EVO2"):
+                        if name == device:
+                            assert_qbt_activation_continuity(snapshots[name], post[name])
+                        else:
+                            assert_qbt_continuity(snapshots[name], post[name])
+                    print(json.dumps({
+                        "activation": activation,
+                        "pair": {
+                            name: qbt_public_summary(post[name])
+                            for name in ("EVO1", "EVO2")
+                        },
+                    }, indent=2))
+                    return 0
+                if args.command == "recreate":
+                    snapshots = qbt_preflight_pair(
+                        clients, run, run_qbt_private, IMAGE
+                    )
+                    linux = stack.enter_context(connect(
+                        args.linux_host,
+                        args.linux_username,
+                        linux_password,
+                        args.known_hosts,
+                    ))
+
+                    def probe(address):
+                        print(probe_address(linux, address, run))
+
+                    def verify_after_recreation(pair_clients, before):
+                        after = qbt_preflight_pair(
+                            pair_clients,
+                            run,
+                            run_qbt_private,
+                            IMAGE,
+                        )
+                        for device in ("EVO1", "EVO2"):
+                            assert_qbt_continuity(before[device], after[device])
+                        return {
+                            "docker_license": {
+                                device: qbt_public_summary(after[device])
+                                for device in ("EVO1", "EVO2")
+                            },
+                            "etsi": "Not gated during recreation; run `probe` separately.",
+                            "macsec": "Not a recreation success gate in the lab.",
+                        }
+
+                    result = recreate_qbt_pair(
+                        clients,
+                        snapshots,
+                        run,
+                        run_qbt_private,
+                        transfer,
+                        probe,
+                        IMAGE,
+                        verify_after_recreation,
+                    )
+                    print(json.dumps(result, indent=2))
+                    return 0
+                from lib.qbt.macsec import load_target_devices
+
+                devices = load_target_devices(args.router_inventory)
+                result = verify_qbt_pair(
+                    clients,
+                    run,
+                    run_qbt_private,
+                    transfer,
+                    IMAGE,
+                    devices,
+                    load_qbt_script_user(),
+                    rotation_timeout=args.rotation_timeout_seconds,
+                )
+                print(json.dumps(result, indent=2))
+                return 0
         if args.command == "deploy":
             from contextlib import ExitStack
             from lib.qbt.macsec import deploy_runtime, load_target_devices
