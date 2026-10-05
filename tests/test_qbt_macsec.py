@@ -77,6 +77,27 @@ def test_python_script_user_is_configured_only_for_event_script():
     )
 
 
+def test_reset_commands_remove_only_the_qbt_macsec_objects():
+    assert macsec._reset_commands("et-0/0/1") == [
+        "delete security macsec interfaces et-0/0/1",
+        "delete security macsec connectivity-association QBT_EVO",
+        "delete security authentication-key-chains key-chain QKD_QBT_EVO",
+    ]
+
+
+def test_park_runtime_state_moves_files_and_never_deletes():
+    seen = []
+
+    def fake_run(client, command):
+        seen.append(command)
+        return "/var/home/etsi_user/qbt-state/reset-backup-1"
+
+    macsec._park_runtime_state(object(), fake_run, "etsi_user")
+
+    assert "mv " in seen[0] and "rm " not in seen[0]
+    assert "qkd_db_*.json" in seen[0]
+
+
 def test_runtime_profiles_are_derived_from_inventory(monkeypatch, tmp_path):
     use_standalone_fixture(monkeypatch, tmp_path)
     runtime_root = tmp_path / "runtime"

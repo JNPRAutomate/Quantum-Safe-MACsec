@@ -437,7 +437,12 @@ preserves a matching existing key-0 seed, and refuses asymmetric/partial state.
 It removes only the three known old QBT helper scripts from `op`; any other
 Python file left there stops deployment rather than being deleted. It does not
 restart, recreate or remove either KME container. Rotation/MKA must be observed
-after deployment before being reported as verified.""",
+after deployment before being reported as verified.
+With --reset-rotation-state both EVOs must already have the QBT configuration:
+it is replaced in one commit per router with a fresh shared seed (MACsec
+restarts), and the old qkd_db_*.json runtime state is moved to
+qbt-state/reset-backup-<timestamp>, never deleted. Use it only to recover a
+stalled rotation; licences and containers are not touched.""",
     "preflight": """Read-only preflight of the licensed EVO1/EVO2 pair:
   python qbt_orchestrator.py preflight
 Checks container/image ownership, security profile, all persistent bind mounts,
@@ -515,6 +520,11 @@ def main(argv=None):
         help="Acknowledge recreation with retained rollback containers",
     )
     parser.add_argument("--confirm-license-activation", action="store_true", help="Acknowledge guarded offline activation on a confirmed missing licence")
+    parser.add_argument(
+        "--reset-rotation-state",
+        action="store_true",
+        help="deploy only: replace the QBT MACsec keychain with a fresh seed and park runtime state (MACsec flaps)",
+    )
     parser.add_argument("--confirm-verify", action="store_true", help="Acknowledge that end-to-end verification requests ETSI keys")
     parser.add_argument("--rotation-timeout-seconds", type=int, default=900)
     parser.add_argument("--pki-dir", type=Path, help="Private PKI directory OUTSIDE the repository")
@@ -591,6 +601,8 @@ def main(argv=None):
     ):
         if flag and args.command not in expected_command:
             parser.error(f"{option} is only valid with {'/'.join(expected_command)}")
+    if args.reset_rotation_state and args.command != "deploy":
+        parser.error("--reset-rotation-state is only valid with deploy")
     if args.rotation_timeout_seconds <= 0:
         parser.error("--rotation-timeout-seconds must be positive")
     if args.command != "verify" and args.rotation_timeout_seconds != 900:
@@ -833,6 +845,7 @@ def main(argv=None):
                     args.runtime_root,
                     run,
                     transfer,
+                    reset_rotation_state=args.reset_rotation_state,
                 )
             return 0
         if args.command in ("peer", "probe"):

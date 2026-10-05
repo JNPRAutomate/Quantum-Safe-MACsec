@@ -387,7 +387,28 @@ def _progress(message):
     print(f"[deploy] {message}", flush=True)
 
 
-def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, transfer):
+def _reset_commands(interface):
+    return [
+        f"delete security macsec interfaces {interface}",
+        f"delete security macsec connectivity-association {CA_NAME}",
+        f"delete security authentication-key-chains key-chain {KEYCHAIN}",
+    ]
+
+
+def _park_runtime_state(client, run, script_user):
+    state_dir = f"/var/home/{script_user}/qbt-state"
+    return run(
+        client,
+        f"d={state_dir}; b=$d/reset-backup-$(date +%Y%m%d%H%M%S); mkdir -p $b; "
+        f"for f in $d/qkd_db_*.json; do test -e \"$f\" && mv \"$f\" $b/; done; "
+        f"chown -R {script_user} $b; chmod 700 $b; echo $b",
+    )
+
+
+def deploy_runtime(
+    clients, inventory_path, password, pki, runtime_root, run, transfer,
+    reset_rotation_state=False,
+):
     if set(clients) != set(TARGET_DEVICES):
         raise ValueError("Runtime deployment requires both EVO1 and EVO2")
     devices = load_target_devices(inventory_path)
@@ -401,6 +422,8 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
     rpc_key = secrets_config["rpc_ssh_key_name"]
 
     _progress("1/5 reading Junos MACsec state on EVO1/EVO2 (read-only)")
+    if reset_rotation_state:
+        _progress("reset requested: QBT MACsec config will be replaced with a fresh seed")
     states = {}
     seed_names = {}
     for name in TARGET_DEVICES:
@@ -415,10 +438,18 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
             if KEYCHAIN in keychains and not key0:
                 raise ValueError(f"{name}: QBT keychain has no seed key; refusing overwrite")
             states[name] = CA_NAME not in associations
+            _progress(
+                f"1/5 {name}: "
+                + ("no QBT MACsec configuration yet" if states[name] else "existing QBT MACsec configuration found")
+            )
             if not states[name]:
                 if not key0_name:
                     raise ValueError(f"{name}: QBT seed key has no key-name; refusing deployment")
                 seed_names[name] = key0_name
+    if reset_rotation_state:
+        if any(states.values()):
+            raise ValueError("--reset-rotation-state requires an existing QBT MACsec configuration on both EVOs")
+        states = {name: True for name in TARGET_DEVICES}
     if len(set(states.values())) != 1:
         raise ValueError("EVO1/EVO2 MACsec state differs; refusing partial deployment")
     if not states["EVO1"] and seed_names["EVO1"] != seed_names["EVO2"]:
@@ -426,6 +457,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
     _progress("2/5 checking /var/db/scripts/op for unexpected scripts")
     allowed_op_scripts = {RUNTIME_NAME, *OLD_QBT_HELPERS}
     for name in TARGET_DEVICES:
+        _progress(f"2/5 {name}: listing /var/db/scripts/op")
         scripts = _op_python_files(clients[name], run)
         unexpected = sorted(set(scripts) - allowed_op_scripts)
         if unexpected:
@@ -441,6 +473,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
     _progress("3/5 preparing the SSH identities used for peer key exchange")
     keys = {}
     for name in TARGET_DEVICES:
+        _progress(f"3/5 {name}: reading or creating the peer SSH key")
         keys[name] = _peer_public_key(clients[name], run, script_user, rpc_key)
 
     for name in TARGET_DEVICES:
@@ -496,6 +529,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
                 f"{staging}/qbt-ca.pem {staging}/{sae}.crt {staging}/{sae}.key; "
                 f"rmdir {staging}"
             )
+            _progress(f"4/5 {name}: installing runtime files and certificates")
             run(client, setup)
             remaining_scripts = _op_python_files(client, run)
             if remaining_scripts != [RUNTIME_NAME]:
@@ -519,6 +553,9 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
     for name in TARGET_DEVICES:
         _progress(f"5/5 {name}: loading and committing the Junos configuration")
         peer = "EVO2" if name == "EVO1" else "EVO1"
+        if reset_rotation_state:
+            parked = _park_runtime_state(clients[name], run, script_user)
+            _progress(f"5/5 {name}: previous runtime state moved to {parked}")
         with Device(host=hosts[name], user="root", passwd=password, gather_facts=False) as dev:
             policy = json.loads(
                 (runtime_dirs[name] / "qbt_onbox_config.json").read_text()
@@ -531,11 +568,21 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
                 script_user_class,
                 build_link(name, devices)["interface"],
             )
+            interface = build_link(name, devices)["interface"]
             with Config(dev, mode="exclusive") as cu:
+                if reset_rotation_state:
+                    cu.load("\n".join(_reset_commands(interface)), format="set")
                 cu.load("\n".join(commands), format="set", merge=True)
+                _progress(f"5/5 {name}: commit check")
                 cu.commit_check()
+                _progress(f"5/5 {name}: committing")
                 cu.commit(comment="QBT on-box runtime and key rotation event")
+        seed_note = (
+            "fresh QBT seed installed; rotation state reset"
+            if reset_rotation_state
+            else "existing QBT seed preserved"
+        )
         print(
             f"{name}: installed one op script, two JSON sidecars, QBT ETSI helper, "
-            "and 60-second event timer; existing QBT seed preserved"
+            f"and 60-second event timer; {seed_note}"
         )
