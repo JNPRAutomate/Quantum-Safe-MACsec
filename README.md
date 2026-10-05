@@ -1,99 +1,46 @@
-# Quantum-Safe MACsec
+# QBT KME lab
 
-**QKD-assisted MACsec automation for Juniper devices.**
+This branch, `docker/qbt_ver1.0`, starts a separate QBT KME integration.
+The PhioTX deployment implementation, inventory, runtime, dedicated tests
+and documentation have been removed from this branch. The validated PhioTX
+implementation remains on `docker/phiotx_ver1.1`.
 
-This repository brings together the KME and QKD orchestrators, the
-router-side `phiotx_qkd_onbox.py` runtime, PKI and identity management, and
-operational tools for secure key rotation and service validation.
+## Current status
 
-> **Branch note.** On the `docker_kme` branch the KME runs as a PhioTX
-> container **inside** each Junos EVO router instead of on external Linux
-> servers. `qkd_docker_orchestrator.py` is the only supported QKD entry point
-> here, and the legacy `qkd_orchestrator.py` is not part of this branch. See
-> the [PhioTX Docker suite guide](docs/kme/docker/phiotx_docker_suite.md).
+The previous lab deployment has been cleaned from EVO1, EVO2 and the Linux
+host, including the simulated KMEs, PostgreSQL containers and dedicated data
+volumes. Juniper infrastructure containers and networks were preserved.
 
-> **New to the project?** Start with the
-> [First Steps guide](docs/getting_started.md). The searchable HTML site can be
-> built locally using the instructions below; public publishing needs GitHub
-> Pages enabled for this repository.
+QBT installation and ETSI GS QKD 014 integration are not implemented or
+validated yet. Generic code and tests inherited from the original project
+remain for evaluation; their presence does not establish QBT compatibility.
 
-## What the suite does
+## Embedded EVO integration plan
 
-- Runs ETSI GS QKD 014-compatible KME services and manages their lifecycle.
-- Generates link-oriented QKD configuration, certificates, and deployment
-  artifacts.
-- Deploys an on-box runtime to Juniper devices to coordinate matching QKD
-  key IDs and maintain a hitless MACsec rolling keyring.
-- Supports operational observation, certificate and SSH identity checks,
-  MACsec/MKA health monitoring, log collection, analytics, and troubleshooting.
+See [QBT EVO lab plan](docs/qbt_evo_lab_plan.md) for feasibility gates,
+the two-router topology, the four-slot keyring parameters and the phased
+implementation and acceptance sequence.
 
-The system is organized into four operational components:
+## Vendor installation instructions received
 
-| Component | Role |
-|---|---|
-| `kme_orchestrator.py` | Creates and operates the KME service environment |
-| `qkd_docker_orchestrator.py` | Validates EVO routers and generates, deploys, and checks the QKD device configuration, including the PhioTX containers |
-| `artifacts/phiotx_qkd_onbox.py` | Runs on devices and handles key acquisition, peer coordination, and runtime rotation |
-| `tools/` | Provides deployment helpers, observation, reporting, monitoring, and recovery tools |
+The supplied instructions identify the offline deployment bundle as
+`qbt-kme-deploy-2.10.0-alpha.4.tar.gz` and require Docker with the Compose
+plugin:
 
-For the protocol roles behind these components, see
-[MKA, QKD, KME, and SAE](docs/pqc/mka_qkd_kme.md). For current responsibilities
-and system boundaries, see [QKD architecture](docs/qkd/architecture.md) and
-[KME architecture](docs/kme/architecture.md).
-
-## Documentation
-
-The documentation preserves the project's detailed design and version
-history while providing a beginner-oriented route through it:
-
-1. [First Steps](docs/getting_started.md) — component overview and safe
-   deployment sequence.
-2. [Documentation map](docs/readme.md) — the canonical `pqc`, `kme`, `qkd`,
-   `onbox`, and `tools` domains.
-3. [Architecture evolution](docs/architecture_evolution.md) — why transport,
-   PKI, topology, and runtime state evolved.
-4. [Release history](docs/qkd/release_history.md) — changes by release.
-
-## Building the documentation site locally
-
-```bash
-python3 -m venv .venv-docs
-source .venv-docs/bin/activate
-python -m pip install -r docs-requirements.txt
-mkdocs serve
+```sh
+tar -xzf qbt-kme-deploy-2.10.0-alpha.4.tar.gz
+./scripts/load-images.sh
+./scripts/install.sh --rootless --compose "docker compose"
 ```
 
-Open the local address printed by MkDocs to browse the site. To validate the
-production build:
+These are vendor-provided instructions, not a tested procedure for Junos EVO.
+Inspect the bundle, installer, image architectures and host requirements
+before running them. The meaning and prerequisites of `--rootless` must be
+confirmed from the installer; do not assume it works with the EVO Docker
+daemon.
 
-```bash
-mkdocs build --strict
-```
-
-The generated `site/` directory is build output; Markdown under `docs/` remains
-the canonical editable source. GitHub Actions builds and deploys the site when
-documentation changes reach `ver3.3.4.2`. GitHub Actions builds and validates
-the site on every matching change. Publishing requires GitHub Pages to be
-configured with **GitHub Actions** and the repository variable
-`GITHUB_PAGES_ENABLED=true`; until then, the build remains green without
-attempting a deployment.
-
-## Source layout
-
-- `qkd_docker_orchestrator.py` — QKD/MACsec deployment entry point
-- `kme_orchestrator.py` — KME service lifecycle entry point
-- `artifacts/phiotx_qkd_onbox.py` — router-side runtime source
-- `config/` — inventory, policy, and KME configuration inputs
-- `tools/` — deployment, monitoring, collection, reporting, and analysis
-- `docs/` — canonical theory, component guides, operations, and evolution
-- `tests/` — automated pytest suite, lab scripts, and representative fixtures
-
-## Project status and roadmap
-
-The documentation describes `ver3.3.4.2`. Planned work, including class-based
-orchestrator/runtime refactoring and embedded KME deployment on Junos EVO
-ACX/PTX devices, is tracked in the
-[product and architecture roadmap](docs/roadmap.md).
-
-Test procedures and coverage are documented in the
-[Test Guide](docs/test/toc.md).
+The installation does not initially serve ETSI 014: certificates must be
+installed and SAEs registered. Certificate roles, registration procedures,
+peer-key correlation and service endpoints still require vendor verification.
+The supplied `qbtbuildtool.com` documentation describes an unrelated build
+tool, not this KME.
