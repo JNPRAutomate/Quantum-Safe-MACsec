@@ -5,9 +5,11 @@ Date: 2026-10-04
 Branch: `docker/qbt_ver1.0`
 
 Status: on 2026-10-05, four persistent, isolated KME containers were started:
-one on each EVO and two on Linux. Database initialization and migration passed,
-but all four wait for offline licence activation. Networking, ETSI key delivery
-and MACsec integration remain unvalidated.
+one on each EVO and two on Linux. Database initialization and migration passed.
+EVO1 and EVO2 were subsequently activated offline using vendor-issued files
+on the same date; the two Linux instances still await activation. The EVO
+ETSI TLS listeners remain unavailable pending PKI provisioning. Networking,
+ETSI key delivery and MACsec integration remain unvalidated.
 
 See [the bundle assessment](qbt_bundle_assessment.md) for verified archive
 metadata, vendor-documented features and outstanding runtime/licence gates.
@@ -73,8 +75,9 @@ not imply a single container or an embedded database.
 
 Each root contains `data/`, `secrets/` and `license-staging/`. Secrets include a
 separate persistent `machine-id`, master-key ID and randomly generated 32-byte
-master key stored as base64. No licence key or machine file has been fabricated
-or installed. Actual database files include `data/dske-sdk/config.sqlite`;
+master key stored as base64. Vendor-issued licence keys and offline files were
+subsequently installed on EVO1 and EVO2; no licence material was fabricated.
+Actual database files include `data/dske-sdk/config.sqlite`;
 licensing state is stored separately under `data/license.storage`.
 
 All containers use the previously verified image ID, `--network none`, no
@@ -92,10 +95,16 @@ No valid license found; the KME is idling until a license is activated.
 Host IDs, machine IDs, master-key IDs and master-key file digests were verified
 distinct across all four instances. Each container was restarted and its host ID
 verified unchanged. In this build the reported host ID equals the mounted
-machine ID. `license status` reports `No license found` on every instance.
+machine ID. Initially, `license status` reported `No license found` on every
+instance. EVO1 and EVO2 have since reported successful offline activation.
 Do not regenerate these secrets or replace their databases when obtaining
 the vendor-issued activation materials. Keep master-key values out of logs
 and version control.
+
+See [offline licence activation](qbt_offline_license_activation.md) for the
+tested transfer, secret staging, activation and verification commands.
+Activation removed the licence wait on both EVOs, exposing the next gate:
+missing server private keys prevent their ETSI TLS listeners from starting.
 
 Inspect an instance on its host, substituting its container name:
 

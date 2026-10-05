@@ -11,8 +11,11 @@ The previous lab deployment has been cleaned from EVO1, EVO2 and the Linux
 host, including the simulated KMEs, PostgreSQL containers and dedicated data
 volumes. Juniper infrastructure containers and networks were preserved.
 
-QBT installation and ETSI GS QKD 014 integration are not implemented or
-validated yet. Generic code and tests inherited from the original project
+Four persistent QBT containers have been manually prepared: one per EVO and
+two on Linux. Offline licence activation succeeded on both EVOs; their ETSI
+TLS listeners await PKI provisioning. Linux licensing, networking, paired
+ETSI GS QKD 014 delivery and MACsec integration remain unvalidated.
+Generic code and tests inherited from the original project
 remain for evaluation; their presence does not establish QBT compatibility.
 
 ## Embedded EVO integration plan
@@ -23,8 +26,10 @@ implementation and acceptance sequence.
 
 The [bundle assessment](docs/qbt_bundle_assessment.md) records the supplied
 image metadata, documented KME capabilities, licensing requirements and
-outstanding EVO compatibility checks. Temporary diagnostic containers have
-executed successfully on both EVOs; no persistent QBT service is running.
+outstanding EVO compatibility checks.
+See [offline licence activation](docs/qbt_offline_license_activation.md) for
+the tested EVO transfer and activation procedure, secret handling and the
+distinction between successful licensing and ETSI readiness.
 
 The initial [QBT orchestrator](qbt_orchestrator.py) supports `--help`,
 `--check-env`, `--copy`, `--check-image`, `--status`, scoped container
