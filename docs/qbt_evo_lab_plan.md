@@ -4,7 +4,11 @@ Date: 2026-10-04
 
 Branch: `docker/qbt_ver1.0`
 
-Status: design only; QBT has not been installed or validated.
+Status: bundle statically inspected on 2026-10-05; QBT has not been installed
+or validated on EVO.
+
+See [the bundle assessment](qbt_bundle_assessment.md) for verified archive
+metadata, vendor-documented features and outstanding runtime/licence gates.
 
 ## 1. Goal and feasibility
 
@@ -47,9 +51,11 @@ EVO1 10.38.97.218                         EVO2 10.38.97.228
       +---------- MACsec et-0/0/1 -------------+
 ```
 
-QBT-to-QBT key correlation is a required logical connection; its protocol,
-ports and storage model are unknown until the bundle/vendor documentation
-is inspected. The Linux host is not assumed to host a key database.
+QBT-to-QBT key correlation uses vendor-documented mesh and authenticated key
+exchange (default ports 4004 and 4005). The supplied standalone profile stores
+encrypted state in a local persistent volume, with no external PostgreSQL
+service. Paired ETSI output still requires live verification. The Linux host
+is not assumed to host a key database.
 
 Each QBT instance may comprise several containers. "One KME per router" does
 not imply a single container or an embedded database.
@@ -106,9 +112,10 @@ Docker daemon. Do not install another daemon or change router kernel/system
 settings to bypass an incompatibility.
 
 The supplied `qbtbuildtool.com` site documents an unrelated build tool.
-Product APIs, PQC/hybrid support, licensing, simulator capability and supported
-host platforms remain unverified. The alpha release must not be described as
-production-qualified.
+The supplied bundle now provides vendor runbooks for PKI, SAE registration,
+peering/AKE, software RNG and online/offline licensing. These are not proof of
+EVO compatibility or successful paired key delivery. The alpha release must
+not be described as production-qualified.
 
 ## 5. Implementation phases
 
@@ -200,6 +207,67 @@ containers and their dedicated volumes were removed. Infrastructure networks
 and Juniper containers were preserved.
 
 No QBT deployment, new keyring runtime or QBT acceptance test has been run.
-The immediate prerequisite is the actual deployment bundle and correct vendor
-documentation. Do not infer product functionality from its name or from the
-previous KME implementations.
+The deployment bundle and its operator documentation have now been inspected.
+Next prerequisites are a read-only EVO environment check and authorised
+licence activation for both KME instances. Do not infer product functionality
+from its name or from the previous KME implementations.
+
+## 7. Incremental orchestrator interface
+
+`qbt_orchestrator.py --help` gives a short how-to and identifies which phases
+are implemented. Both positional commands and action flags are supported,
+for example `check-env` and `--check-env`. Select exactly one action.
+
+| Action | Current behaviour |
+| --- | --- |
+| `--check-env` | Read-only Linux Compose and EVO architecture/Docker/resource checks |
+| `--check-image` | Temporary network-isolated container executes version and licence CLI help, then is removed |
+| `--copy` / `--images` | Verify supplied archives; load image on Linux, export it, transfer to EVO and verify the loaded image ID |
+| `--status` | Inspect loaded images and EVO container state |
+| `--clean` | Remove only named QBT containers carrying the orchestrator ownership label; retain data, images and configuration |
+| `--bootstrap --dry-run` | Validate generated per-EVO Compose profiles on Linux without creating persistent containers, secrets or networks |
+| `--bootstrap` | Live deployment is gated; activation requirements and remote Compose transport remain unresolved |
+| `--pki`, `--peer`, `--probe`, `--deploy` | Reserved; return a non-zero error without changing the lab |
+
+Credentials come from `EVO_PASSWORD`, with `QBT_LINUX_PASSWORD` for a different
+Linux password, or an interactive prompt. SSH rejects unknown host keys; an
+additional verified file can be supplied with `--known-hosts`.
+
+Vendor archives remain outside the repository on both the local machine and
+Linux staging. Image copying does not start containers or copy persistent
+databases, certificates or licence identities.
+
+Read-only inspection found both EVOs running x86_64 and Docker
+`20.10.25-ce`; neither has Compose. Linux has Docker `28.1.1` and Compose
+`v2.35.1`. The intended next step is to validate Linux-hosted Compose against
+the EVO Docker daemons over SSH, not install another daemon on Junos.
+
+The supplied image was loaded on Linux during initial preparation and its
+ID was `sha256:f6505aa10688ee022149211c731b227c88a28b8d5d6f1a95327121c879dc642f`.
+The same image ID was subsequently verified on both EVOs using `--copy`.
+
+### Initial implementation validation, 2026-10-05
+
+- `--check-image` successfully ran the binary on both EVOs in temporary,
+  network-isolated, read-only containers with dropped capabilities.
+- The executable's `version` returned `Version: 0.0.0, Git: HEAD`.
+  This does not match the archive release metadata: retain image ID and
+  archive hashes as the verified build identifiers and seek vendor clarification.
+- Licence CLI help exposes host-ID, status, activate and deactivate commands.
+  CLI availability is not evidence of a licence requirement being waived or
+  satisfied. No activation was attempted.
+- Generated Compose profiles for both EVOs passed Linux Compose
+  `config --quiet`. Profiles pin the image ID, preserve file-secret handling,
+  scope persistent paths under `/var/db/qbt/<device>` and label ownership.
+- Proposed host mappings are management IP ports 8443 (ETSI), 4004 (mesh)
+  and 4005 (AKE), not yet approved or tested for actual host exposure.
+  The default bridge path may need adaptation to EVO constraints; do not
+  interpret successful Compose parsing as network/runtime acceptance.
+- Fourteen targeted offline tests passed. No persistent QBT KME is running,
+  and PKI, peer exchange, ETSI probes and MACsec batches remain unimplemented.
+
+The user expects this supplied build to operate without a separate licence.
+The bundle documents activation, so this discrepancy remains open pending
+runtime/vendor confirmation. Do not invent licence material or bypass
+activation checks. No image rebuild is required to move the supplied image
+from Linux into EVO.

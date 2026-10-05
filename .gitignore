@@ -54,6 +54,16 @@ archive/
 *[pP][hH][iI][oO][tT][xX]*.[tT][aA][rR].[gG][zZ]
 *[pP][hH][iI][oO][tT][xX]*.[tT][gG][zZ]
 
+# QBT vendor bundles, extracted deployment material and activation files
+*[qQ][bB][tT]*.[tT][aA][rR]
+*[qQ][bB][tT]*.[tT][aA][rR].[gG][zZ]
+*[qQ][bB][tT]*.[tT][gG][zZ]
+*[qQ][bB][tT]*.[zZ][iI][pP]
+qbt-kme-deploy-*/
+qbt-vendor*/
+license.machine
+license-staging/
+
 # Legacy local backups
 *.orig.py
 
