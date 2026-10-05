@@ -17,6 +17,11 @@ import yaml
 from scp import SCPClient
 
 from lib.qbt.deployment import render_profile
+from lib.qbt.network import attach_networks, check_networks, probe_address
+from lib.qbt.pki import prepare_pki, import_pki
+from lib.qbt.hierarchical import prepare_hierarchical
+from lib.qbt.peer import configure_peers
+from lib.qbt.probe import paired_probe
 
 LINUX_HOST = "10.38.98.181"
 DEVICES = {"EVO1": "10.38.97.218", "EVO2": "10.38.97.228"}
@@ -155,6 +160,30 @@ def status(args, linux, password):
             print(name, "image:", inspect_image(evo))
 
 
+def network(args, password):
+    """Check the fleet before attaching the existing containers in place."""
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        linux = stack.enter_context(connect(
+            args.linux_host, args.linux_username,
+            os.getenv("QBT_LINUX_PASSWORD") or password, args.known_hosts
+        ))
+        def probe(address):
+            print(probe_address(linux, address, run))
+
+        clients = {
+            name: stack.enter_context(connect(
+                DEVICES[name], args.username, password, args.known_hosts
+            ))
+            for name in args.only or DEVICES
+        }
+        for name, client in clients.items():
+            check_networks(client, name, run, probe)
+        for name, client in clients.items():
+            print(name, json.dumps(attach_networks(client, name, run, probe)))
+
+
 def clean(args, linux, password):
     """Remove only explicitly named QBT resources, never Juniper infrastructure."""
     for name in args.only or DEVICES:
@@ -229,6 +258,7 @@ def bootstrap_plan(args, linux, password):
 
 
 COMMANDS = {
+    "network": "Attach existing EVO containers to internal ETSI and OOB macvlan networks",
     "check-env": "Read-only Linux/EVO environment and compatibility checks",
     "check-image": "Run QBT version/licence help on EVO without network or volumes",
     "images": "Verify archives, load on Linux, export and copy/load on EVO",
@@ -236,10 +266,11 @@ COMMANDS = {
     "status": "Inspect loaded images and current EVO containers",
     "clean": "Remove owned QBT containers only; retain images/data/config",
     "bootstrap": "Validate deployment with --dry-run; live bootstrap remains gated",
-    "pki": "Reserved certificate and SAE provisioning phase",
-    "peer": "Reserved bilateral KME mesh/AKE provisioning phase",
-    "probe": "Reserved authenticated paired ETSI enc/dec acceptance phase",
-    "deploy": "Reserved four-slot Junos keyring deployment phase",
+    "pki": "Prepare external lab PKI and import server credentials into existing EVO KMEs",
+    "peer": "Configure reciprocal QBT peers, AKE public keys and local/remote SAEs",
+    "probe": "Verify an authenticated paired batch of four 256-bit ETSI keys",
+    "create": "Generate the standalone on-box script and EVO1/EVO2 profiles from router inventory",
+    "deploy": "Install the EVO1/EVO2 on-box runtime and configure the Junos rotation timer",
 }
 
 HOWTO = """Quick start:
@@ -255,15 +286,130 @@ HOWTO = """Quick start:
   6. Test binary: python qbt_orchestrator.py --check-image
   7. Validate profile: python qbt_orchestrator.py --bootstrap --dry-run
 
+Existing licensed EVO containers (no container recreation):
+  Connect the approved internal ETSI and OOB peer networks:
+    python qbt_orchestrator.py --network
+  Generate/import dual Root -> Issuing -> Leaf PKI:
+    python qbt_orchestrator.py --pki --pki-profile hierarchical_ca \\
+      --pki-config config/pki/hierarchical_ca.yml \\
+      --pki-dir /private/qbt-hierarchical
+  Alternatively, generate/import single-CA lab PKI:
+    python qbt_orchestrator.py --pki --pki-profile self_signed \\
+      --pki-dir /private/qbt-single-ca
+  Explicitly replace already tracked server PKI:
+    python qbt_orchestrator.py --pki --pki-profile hierarchical_ca \\
+      --pki-dir /private/qbt-hierarchical --rotate-pki
+
+Replace /private/... with a private writable path OUTSIDE this repository.
+Use separate directories for the two profiles. Retries preserve existing keys;
+changing tracked server PKI requires --rotate-pki. No licence keys are printed.
+PKI import alone does not prove that the running TLS listener is ready.
+
 Commands can also be positional, e.g. 'check-env' instead of '--check-env'.
 Use --only EVO1 to target one router; --linux-only with copy/images stops
 after loading the Linux image. --clean removes only owned QBT containers,
 NOT the Junos configuration, volumes, licences, staging or images.
 
-Live bootstrap/pki/peer/probe/deploy are NOT working deployment helpers yet.
-They return an explicit error until implemented and validated.
+The on-box pair always targets EVO1 and EVO2 from
+config/inventory/input/lab_vmm.yaml; `create` writes the standalone script and
+two JSON profiles, and `deploy` installs them without recreating containers:
+  python qbt_orchestrator.py create
+  python qbt_orchestrator.py deploy --pki-dir /private/qbt-lab-pki
+Use `deploy --dry-run` to validate the local profiles and PKI without connecting.
+`create` and `deploy` always operate on the pair; do not pass `--only`.
+Bootstrap remains gated and does not start containers. Peer, probe and deploy
+have separate prerequisites and acceptance checks in their action help.
+PKI: --pki --pki-profile self_signed|hierarchical_ca --pki-dir /private/pki
+Hierarchical generation uses --pki-config; --rotate-pki explicitly replaces
+tracked server credentials. Paired SAE/mTLS and four-key ENC/DEC are verified;
+live MACsec rotation still requires observation after deploy.
+Network: --network attaches approved lab networks without container recreation.
 No container is started by --copy. No bulk/PQC/hybrid selector is used.
+Detailed reproduction: docs/qbt_lab_reproduction.md
 """
+
+
+ACTION_HELP = {
+    "check-env": """Read-only checks:
+  python qbt_orchestrator.py check-env
+  python qbt_orchestrator.py check-env --only EVO1
+Requires trusted SSH host keys and EVO/Linux credentials.
+Checks architecture, Docker, Compose, storage and existing containers.""",
+    "check-image": """Isolated binary diagnostics:
+  python qbt_orchestrator.py check-image --only EVO1
+Requires the supplied image already loaded. Runs temporary diagnostics without
+network or persistent mounts; does not remove the persistent KME containers.""",
+    "images": """Prepare on Linux and deliver to EVO:
+  python qbt_orchestrator.py images --image-archive /private/qbt-image.tar \\
+    --deployment-archive /private/qbt-deploy.tar.gz
+Add --linux-only to stop after loading Linux, or --only EVO1 for one router.
+Requires the original supplied archives and verified checksums.
+Loads images only; does not start, recreate or activate KME containers.""",
+    "status": """Read-only image and container inspection:
+  python qbt_orchestrator.py status
+  python qbt_orchestrator.py status --only EVO2
+Container running state is not proof of licensing or ETSI readiness.""",
+    "clean": """DESTRUCTIVE: removes owned persistent QBT containers:
+  python qbt_orchestrator.py clean --only EVO1
+Retains data, secrets, licences, images and Junos configuration.
+Do NOT run during the current integration without explicit operator approval.
+This is not a full lab teardown or a backup procedure.""",
+    "bootstrap": """Compose profile validation only:
+  python qbt_orchestrator.py bootstrap --dry-run
+Requires Linux Compose, SSH access and the loaded EVO images.
+Live bootstrap is NOT implemented; it fails explicitly.
+Use existing licensed containers for the current integration.""",
+    "network": """Attach approved networks to existing containers without recreation:
+  python qbt_orchestrator.py network
+  python qbt_orchestrator.py network --only EVO1
+Requires owned running KMEs and Linux root access for ARP conflict probes.
+Internal ETSI: 9.1.1.10 / 9.1.1.11 on jnpr_cntrz_net.
+Peer macvlan: 10.38.112.10 / 10.38.112.11 on vmb0.
+Host-to-own-macvlan traffic is not a valid connectivity test.
+See docs/qbt_lab_reproduction.md for safety and retry details.""",
+    "pki": """Generate and import server PKI into existing licensed KMEs:
+  python qbt_orchestrator.py pki --pki-profile hierarchical_ca \\
+    --pki-config config/pki/hierarchical_ca.yml --pki-dir /private/qbt-hierarchical
+  python qbt_orchestrator.py pki --pki-profile self_signed \\
+    --pki-dir /private/qbt-single-ca
+Use separate private output directories OUTSIDE the repository.
+Retries preserve generated keys. To replace tracked server credentials,
+explicitly add --rotate-pki. Untracked credentials are not overwritten.
+Does not recreate containers, change licences or deploy the SAE runtime.
+Import success alone does not establish a running TLS listener.""",
+    "peer": """Configure the reciprocal peer/AKE relationship:
+  python qbt_orchestrator.py peer
+Requires licensed KMEs, verified inter-container connectivity, registered
+SAEs and valid PKI. It registers reciprocal KME identities, configures the
+selected AKE exchange and exchanges public-key material; it does not transfer
+application key bytes.""",
+    "probe": """Run the paired ETSI key acceptance check:
+  python qbt_orchestrator.py probe
+Requires verified PKI/SAE registration, networking and bilateral peering.
+Acceptance is four authenticated 256-bit ENC keys and their matching DEC
+results by Key-ID on the peer. Key bytes are never logged.""",
+    "create": """Generate local runtime artifacts only:
+  python qbt_orchestrator.py create
+  python qbt_orchestrator.py create --router-inventory config/inventory/input/lab_vmm.yaml
+Reads the source router inventory, selects only EVO1/EVO2 and their direct
+MACsec link, then writes artifacts/qbt_onbox.py and the two profiles under
+config/runtime/EVO1 and config/runtime/EVO2. It does not connect to routers,
+change the input inventory or overwrite unrelated runtime profiles.""",
+    "deploy": """Install the existing-container EVO1/EVO2 on-box runtime:
+  python qbt_orchestrator.py create
+  python qbt_orchestrator.py deploy --pki-dir /private/qbt-lab-pki
+  python qbt_orchestrator.py deploy --pki-dir /private/qbt-lab-pki --dry-run
+Requires trusted SSH host keys, EVO credentials, the external PKI bundle and
+profiles generated by `create`. Live deployment installs one standalone
+qbt_onbox.py plus two JSON sidecars, the separate ETSI socket helper, and a
+60-second Junos event timer. It uses the QBT_EVO/QKD_QBT_EVO association,
+preserves a matching existing key-0 seed, and refuses asymmetric/partial state.
+It removes only the three known old QBT helper scripts from `op`; any other
+Python file left there stops deployment rather than being deleted. It does not
+restart, recreate or remove either KME container. Rotation/MKA must be observed
+after deployment before being reported as verified.""",
+}
+ACTION_HELP["copy"] = ACTION_HELP["images"]
 
 
 def main(argv=None):
@@ -273,7 +419,9 @@ def main(argv=None):
             f"  {name}: {description}" for name, description in COMMANDS.items()
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,
     )
+    parser.add_argument("-h", "--help", action="store_true", help="Show general or selected-action instructions and exit")
     parser.add_argument("command", nargs="?", choices=list(COMMANDS))
     actions = parser.add_mutually_exclusive_group()
     for command in COMMANDS:
@@ -290,21 +438,44 @@ def main(argv=None):
     parser.add_argument("--image-archive", type=Path)
     parser.add_argument("--deployment-archive", type=Path)
     parser.add_argument("--license-file", type=Path, help="External licence file; never committed")
-    parser.add_argument("--dry-run", action="store_true", help="Validate bootstrap profiles without deployment")
+    parser.add_argument("--pki-dir", type=Path, help="Private PKI directory OUTSIDE the repository")
+    parser.add_argument("--pki-profile", choices=["self_signed", "hierarchical_ca"], default="hierarchical_ca")
+    parser.add_argument("--pki-config", type=Path, default=Path(__file__).resolve().parent / "config/pki/hierarchical_ca.yml")
+    parser.add_argument("--rotate-pki", action="store_true", help="Explicitly replace tracked server PKI; preserves container and licence")
+    parser.add_argument(
+        "--router-inventory",
+        type=Path,
+        default=Path(__file__).resolve().parent / "config/inventory/input/lab_vmm.yaml",
+        help="Source router inventory; generated config/runtime files are not inputs",
+    )
+    parser.add_argument(
+        "--runtime-root",
+        type=Path,
+        default=Path(__file__).resolve().parent / "config/runtime",
+        help="Directory for generated runtime profiles",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate bootstrap or local QBT deployment inputs without remote changes",
+    )
     args = parser.parse_args(argv)
+    if args.help:
+        selected = args.command or args.action
+        if selected:
+            parser.description = COMMANDS[selected]
+            parser.epilog = ACTION_HELP[selected]
+        parser.print_help()
+        parser.exit()
     if bool(args.command) == bool(args.action):
         parser.error("Select exactly one command or action flag; see --help")
     args.command = args.command or args.action
-    if args.dry_run and args.command != "bootstrap":
-        parser.error("--dry-run is currently supported only for bootstrap")
+    if args.dry_run and args.command not in ("bootstrap", "deploy"):
+        parser.error("--dry-run is supported only for bootstrap and deploy")
     if args.linux_only and args.command not in ("images", "copy"):
         parser.error("--linux-only is supported only for images/copy")
-    if args.command in ("pki", "peer", "probe", "deploy"):
-        print(
-            f"ERROR: {args.command} is not implemented or validated yet; no changes made",
-            file=sys.stderr,
-        )
-        return 1
+    if args.command in ("create", "deploy") and args.only:
+        parser.error(f"{args.command} always targets the EVO1/EVO2 pair; omit --only")
     if args.command == "bootstrap":
         try:
             require_bootstrap_inputs(args)
@@ -315,6 +486,49 @@ def main(argv=None):
         args.command = "images"
     if args.command == "images" and (not args.image_archive or not args.deployment_archive):
         parser.error("images requires --image-archive and --deployment-archive")
+    if args.command == "pki":
+        if not args.pki_dir:
+            parser.error("pki requires --pki-dir outside the repository")
+        if args.pki_dir.resolve().is_relative_to(Path(__file__).resolve().parent):
+            parser.error("PKI private keys must be stored outside the repository")
+    if args.command == "deploy":
+        if not args.pki_dir:
+            parser.error("deploy requires --pki-dir outside the repository")
+        if args.pki_dir.resolve().is_relative_to(Path(__file__).resolve().parent):
+            parser.error("PKI private keys must be stored outside the repository")
+    if args.command == "create":
+        try:
+            from lib.qbt.macsec import create_runtime_profiles
+
+            profiles = create_runtime_profiles(
+                runtime_root=args.runtime_root,
+                inventory_path=args.router_inventory,
+            )
+            for name, directory in profiles.items():
+                print(f"[OK] {name}: generated standalone runtime and JSON profiles in {directory}")
+            return 0
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+    if args.command == "deploy" and args.dry_run:
+        try:
+            from lib.qbt.macsec import (
+                load_target_devices,
+                validate_pki_bundle,
+                validate_runtime_profiles,
+            )
+
+            load_target_devices(args.router_inventory)
+            validate_runtime_profiles(args.runtime_root, args.router_inventory)
+            pki = validate_pki_bundle(args.pki_dir)
+            print(
+                "[DRY-RUN] EVO1/EVO2 profiles and PKI are valid; "
+                f"inventory={args.router_inventory}, pki={pki}. No remote connection made."
+            )
+            return 0
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
     password = os.getenv("EVO_PASSWORD")
     if not password and sys.stdin.isatty():
         password = getpass.getpass("EVO password: ")
@@ -322,6 +536,56 @@ def main(argv=None):
     if not password or not linux_password:
         parser.error("Set EVO_PASSWORD and, if different, QBT_LINUX_PASSWORD")
     try:
+        if args.command == "deploy":
+            from contextlib import ExitStack
+            from lib.qbt.macsec import deploy_runtime, load_target_devices
+
+            devices = load_target_devices(args.router_inventory)
+            with ExitStack() as stack:
+                clients = {
+                    name: stack.enter_context(connect(
+                        devices[name]["ip"],
+                        args.username,
+                        password,
+                        args.known_hosts,
+                    ))
+                    for name in ("EVO1", "EVO2")
+                }
+                deploy_runtime(
+                    clients,
+                    args.router_inventory,
+                    password,
+                    args.pki_dir,
+                    args.runtime_root,
+                    run,
+                    transfer,
+                )
+            return 0
+        if args.command in ("peer", "probe"):
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                clients = {
+                    name: stack.enter_context(connect(
+                        DEVICES[name], args.username, password, args.known_hosts
+                    )) for name in args.only or DEVICES
+                }
+                if args.command == "peer":
+                    configure_peers(clients, run)
+                else:
+                    paired_probe(clients, run, transfer)
+            return 0
+        if args.command == "pki":
+            directory = (
+                prepare_hierarchical(args.pki_dir, args.pki_config)
+                if args.pki_profile == "hierarchical_ca" else prepare_pki(args.pki_dir)
+            )
+            for name in args.only or DEVICES:
+                with connect(DEVICES[name], args.username, password, args.known_hosts) as evo:
+                    import_pki(evo, name, directory, run, transfer, rotate=args.rotate_pki)
+            return 0
+        if args.command == "network":
+            network(args, password)
+            return 0
         with connect(args.linux_host, args.linux_username, linux_password, args.known_hosts) as linux:
             if args.command == "images":
                 prepare_images(args, linux, password)
@@ -339,7 +603,7 @@ def main(argv=None):
                     with connect(DEVICES[name], args.username, password, args.known_hosts) as evo:
                         print(name, json.dumps(check_environment(evo), indent=2))
         return 0
-    except (QbtError, paramiko.SSHException, OSError, tarfile.TarError, ValueError, KeyError) as error:
+    except (RuntimeError, paramiko.SSHException, OSError, tarfile.TarError, ValueError, KeyError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
 

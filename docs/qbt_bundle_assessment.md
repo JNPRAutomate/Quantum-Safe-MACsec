@@ -4,8 +4,10 @@ Date: 2026-10-05
 
 Status: initial static assessment, followed by image transfer and temporary
 binary checks recorded in the [integration plan](qbt_evo_lab_plan.md).
-No vendor installer or licence activation has been run; no persistent KME
-service has been deployed.
+The vendor installer has not been run. Subsequent manual deployment and offline
+activation succeeded on both EVOs; networking and PKI progress is recorded in
+the [reproduction runbook](qbt_lab_reproduction.md). Paired four-key acceptance
+is verified; the four-slot MACsec runtime and rotation remain unverified.
 
 ## Inspected inputs
 
@@ -47,6 +49,10 @@ integration findings, not a copy of the vendor documentation.
 
 ## Product capabilities documented in this bundle
 
+See [key flow and AKE/mesh terminology](qbt_key_flow.md) for the detailed
+control-plane/application-delivery flow and the distinction between AKE keys,
+DSKE PSRD, application-key inventory and the Junos keyring.
+
 These are vendor-documented capabilities, not live acceptance results:
 
 - ETSI GS QKD 014 application-key service.
@@ -70,8 +76,8 @@ These are vendor-documented capabilities, not live acceptance results:
 The peering helper gives an example preset combining ECDHE, ML-KEM and DSKE.
 That is not evidence that this lab has all prerequisites or entitlements for
 that preset. Determine a mutually supported exchange configuration from the
-actual CLI before using it. Do not map these mechanisms to PhioTX's
-`bulk`/`pqc`/`hybrid` application-method syntax.
+actual QBT CLI before using it; do not infer application-key method syntax
+from an AKE preset name.
 
 ETSI 020 is disabled in the example environment; its comments state that the
 stock image does not compile it in. Do not claim stock ETSI 020 support.
@@ -144,7 +150,7 @@ and licence key. Separate EVO instances need their own stable machine
 identities and appropriately authorised activation. No licence or machine
 file was found in the inspected deployment archive.
 
-## Provisioning sequence to validate
+## Provisioning sequence and runtime status
 
 1. Start the standalone KME with stable identity, master key and authorised
    licence, on a verified EVO-compatible runtime profile.
@@ -154,9 +160,12 @@ file was found in the inspected deployment archive.
 5. Configure supported AKE settings and register each remote SAE against
    its peer KME.
 6. Verify diagnostics and paired ETSI delivery without exposing key material.
-7. Only then implement/deploy the four-slot MACsec runtime.
+7. Generate the standalone runtime and per-router JSON profiles with
+   `qbt_orchestrator.py create`, then install with `qbt_orchestrator.py deploy`
+   only after the paired ETSI test passes. Runtime generation is implemented;
+   live keyring rotation and secured MKA remain unverified.
 
 See [the EVO integration plan](qbt_evo_lab_plan.md) for keyring parameters
 and acceptance gates. No physical QKD source, Security Hub or Cortex service
-is assumed for the initial software-RNG lab; actual key exchange operation
-without those dependencies remains a live test requirement.
+is assumed for the initial software-RNG lab; paired application-key delivery
+has been verified in that configuration.

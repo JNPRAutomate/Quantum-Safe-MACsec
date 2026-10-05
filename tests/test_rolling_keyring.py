@@ -24,7 +24,7 @@ def load_functions(*names):
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name in names
     ]
-    namespace = {}
+    namespace = {"RUNTIME_SCRIPT": "qkd_onbox.py"}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(ONBOX), "exec"), namespace)
     return namespace
 

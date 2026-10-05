@@ -49,13 +49,23 @@ def test_help_contains_howto_without_credentials(capsys):
     output = capsys.readouterr().out
     assert "Quick start:" in output
     assert "--copy" in output
-    assert "NOT working deployment" in output
+    assert "config/inventory/input/lab_vmm.yaml" in output
+    assert "deploy --dry-run" in output
+    assert "always operate on the pair" in output
+    assert "--pki --pki-profile hierarchical_ca" in output
+    assert "--pki --pki-profile self_signed" in output
+    assert "--pki-config config/pki/hierarchical_ca.yml" in output
+    assert "--network" in output
+    assert "--rotate-pki" in output
+    assert "OUTSIDE this repository" in output
 
 
-def test_unimplemented_deploy_fails_without_connecting(monkeypatch, capsys):
+def test_deploy_requires_external_pki_before_connecting(monkeypatch, capsys):
     monkeypatch.setattr(qbt, "connect", lambda *_a: pytest.fail("must not connect"))
-    assert qbt.main(["--deploy"]) == 1
-    assert "not implemented" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as error:
+        qbt.main(["--deploy"])
+    assert error.value.code == 2
+    assert "deploy requires --pki-dir" in capsys.readouterr().err
 
 
 def test_bootstrap_requires_licence(monkeypatch, capsys):
@@ -68,6 +78,19 @@ def test_multiple_action_forms_rejected():
     with pytest.raises(SystemExit) as error:
         qbt.main(["check-env", "--status"])
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize("command", list(qbt.COMMANDS))
+@pytest.mark.parametrize("flag_form", [False, True])
+def test_action_help_has_specific_instructions_without_connecting(command, flag_form, monkeypatch, capsys):
+    monkeypatch.setattr(qbt, "connect", lambda *_a: pytest.fail("help must not connect"))
+    selector = "--" + command if flag_form else command
+    with pytest.raises(SystemExit) as error:
+        qbt.main([selector, "--help"])
+    assert error.value.code == 0
+    output = capsys.readouterr().out
+    assert qbt.ACTION_HELP[command] in output
+    assert "Quick start:" not in output
 
 
 def test_profile_isolated_no_inline_secrets():

@@ -5,8 +5,8 @@ QKD on-box MACsec keychain/MKA controller.
 Runtime configuration is loaded from external JSON files preloaded on the router.
 
 Default file locations:
-    - /var/db/scripts/op/qkd_onbox_config.json
-    - /var/db/scripts/op/qkd_onbox_inventory.json
+    - /var/db/scripts/op/qbt_onbox_config.json
+    - /var/db/scripts/op/qbt_onbox_inventory.json
 
 These can be overridden with environment variables:
     - QKD_ONBOX_CONFIG_PATH
@@ -29,27 +29,32 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import calendar
-EARLY_SCRIPT_VERSION = "ver3.3.4.1"
+EARLY_SCRIPT_VERSION = "qbt_ver1.0"
 TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
     print(
-        f"qkd_onbox.py {EARLY_SCRIPT_VERSION} "
+        f"qbt_onbox.py {EARLY_SCRIPT_VERSION} "
         f"timestamp_protocol={TIMESTAMP_PROTOCOL_VERSION}"
     )
     raise SystemExit(0)
 if "--help" in _EARLY_ARGS or "-h" in _EARLY_ARGS:
-    print("qkd_onbox.py %s" % EARLY_SCRIPT_VERSION)
+    print("qbt_onbox.py %s" % EARLY_SCRIPT_VERSION)
     print("Usage:")
-    print("  op qkd_onbox.py")
-    print("  op qkd_onbox.py action status iface <iface>")
-    print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
-    print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
-    print("  op qkd_onbox.py --version")
+    print("  op qbt_onbox.py")
+    print("  op qbt_onbox.py action status iface <iface>")
+    print("  op qbt_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
+    print("  op qbt_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
+    print("  op qbt_onbox.py --version")
     raise SystemExit(0)
 import time
 import datetime
 import requests
+import array
+import http.client
+import socket
+import ssl
+import urllib.parse
 import base64
 import re
 import subprocess
@@ -65,26 +70,26 @@ import stat
 
 urllib3.disable_warnings()
 SCRIPT_VERSION = EARLY_SCRIPT_VERSION
-DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qkd_onbox_config.json"
-DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
+DEFAULT_CONFIG_PATH = "/var/db/scripts/op/qbt_onbox_config.json"
+DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qbt_onbox_inventory.json"
 
 
 def _print_cli_usage():
-    print("qkd_onbox.py %s" % SCRIPT_VERSION)
+    print("qbt_onbox.py %s" % SCRIPT_VERSION)
     print("Usage:")
-    print("  op qkd_onbox.py")
-    print("  op qkd_onbox.py action status iface <iface>")
-    print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
-    print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
-    print("  op qkd_onbox.py action prepare-rpc-pubkey device <device> pubkey-b64 <payload>")
-    print("  op qkd_onbox.py action finalize-rpc-pubkey device <device> pubkey-b64 <payload>")
-    print("  op qkd_onbox.py --version")
+    print("  op qbt_onbox.py")
+    print("  op qbt_onbox.py action status iface <iface>")
+    print("  op qbt_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
+    print("  op qbt_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
+    print("  op qbt_onbox.py action prepare-rpc-pubkey device <device> pubkey-b64 <payload>")
+    print("  op qbt_onbox.py action finalize-rpc-pubkey device <device> pubkey-b64 <payload>")
+    print("  op qbt_onbox.py --version")
 
 
 def _early_info_exit():
     args = set(sys.argv[1:])
     if "--version" in args or "-V" in args:
-        print(f"qkd_onbox.py {SCRIPT_VERSION}")
+        print(f"qbt_onbox.py {SCRIPT_VERSION}")
         raise SystemExit(0)
     if "--help" in args or "-h" in args:
         _print_cli_usage()
@@ -186,7 +191,7 @@ SCRIPT_DIR = CONFIG["script_dir"]
 SSH_KEY = CONFIG["ssh_key"]
 RPC_SSH_KEY = str(CONFIG.get("rpc_ssh_key", SSH_KEY) or SSH_KEY)
 OP_RUNTIME_DIR = f"{SCRIPT_DIR}/op"
-RUNTIME_SCRIPT = CONFIG.get("runtime_script", "qkd_onbox.py")
+RUNTIME_SCRIPT = CONFIG.get("runtime_script", "qbt_onbox.py")
 
 LOG_FILE = CONFIG["log_file"]
 LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
@@ -293,7 +298,7 @@ def _set_mode_if_needed(path_obj, target_mode):
 def enforce_runtime_file_permissions():
     """
     Runtime local hardening performed on-box at each invocation:
-      - qkd_onbox.py in op/event must be executable but non-writable
+      - qbt_onbox.py in op/event must be executable but non-writable
       - runtime JSON sidecars in op must remain owner-writable only
 
     This guard does not rely on offbox provisioning scripts.
@@ -417,7 +422,7 @@ def log(msg, level="INFO", iface=None, mode=None):
 
     if iface:
         safe_iface = iface.replace("/", "_")
-        link_log_file = f"{LOG_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
+        link_log_file = f"{LOG_DIR}/qbt_debug_{DEVICE}_{safe_iface}.log"
         write_log_line(link_log_file)
 
 
@@ -3319,9 +3324,9 @@ def parse_mka_session_fields(mka_block):
     }
     if not mka_block:
         return fields
-    
+
     parse_log_lines = []
-    
+
     for raw_line in mka_block.splitlines():
         line = raw_line.strip()
         if line.startswith("Interface State:"):
@@ -3369,21 +3374,20 @@ def parse_mka_session_fields(mka_block):
             except Exception:
                 pass
             continue
-    
+
     if parse_log_lines:
         log(f"MKA_PARSE_SUMMARY {' '.join(parse_log_lines)}", "DEBUG", None, "MKA")
-    
+
     # Validation: Check CAK format
     cak_name = fields.get("cak_name")
     if cak_name:
-        # Junos can surface the CAK name in different normalized hex lengths
-        # depending on platform/output format. Accept the observed 32/64-char
-        # forms and only warn on truly unexpected lengths.
-        if len(cak_name) not in (32, 64):
+        # EVO Junos may display the CAK name as a shortened 62-character token.
+        # MKA confirmation still requires a matching configured CKN prefix or suffix.
+        if len(cak_name) not in (32, 62, 64):
             log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)}", "WARN", None, "MKA")
         if not all(c in '0123456789abcdef' for c in cak_name.lower()):
             log("MKA_PARSE CAK NOT HEX", "WARN", None, "MKA")
-    
+
     return fields
 
 
@@ -3591,7 +3595,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
         # promote it to prevent deadlock.
         router_ckn = normalize_hex_string(cak_name)
         router_key_id = find_key_id_for_ckn(state, router_ckn)
-         
+
         reconciliation_idx = None
         if router_key_id:
             # Find if router's active key is in our pending list
@@ -3604,7 +3608,7 @@ def promote_pending_key_if_mka_confirmed(peer, iface, state):
                         reconciliation_idx = idx
                         confirmed_item = item
                         break
-         
+
         if confirmed_item is not None:
             # Reconciliation promoted the pending key
             confirmed_idx = reconciliation_idx
@@ -3972,7 +3976,7 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
         return False
 
     cli_cmds = ["configure"]
-    
+
     # PHASE 1: Non-destructive update path.
     # Keep CA <-> keychain binding stable and update keys in place to reduce MACsec flap risk.
     log(f"KEYCHAIN INSTALL PHASE1 ca={ca_name} action=in_place_update", "DEBUG", iface, "MACSEC")
@@ -4101,13 +4105,13 @@ def install_keychain_batch(iface, entries, ca_name, keychain_name, state=None, c
 
         stdout = result.stdout.decode(errors="ignore").strip()
         stderr = result.stderr.decode(errors="ignore").strip()
-        
+
         # Log CLI output for debugging
         if stdout:
             log(f"KEYCHAIN INSTALL STDOUT len={len(stdout)} first_200={stdout[:200]}", "DEBUG", iface, "MACSEC")
         if stderr:
             log(f"KEYCHAIN INSTALL STDERR len={len(stderr)} first_200={stderr[:200]}", "DEBUG", iface, "MACSEC")
-        
+
         if result.returncode != 0 or junos_output_has_error(stdout, stderr):
             log(
                 f"KEYCHAIN INSTALL FAIL ca={ca_name} keychain={keychain_name} entries={len(entries)} "
@@ -4290,10 +4294,72 @@ def kme_url(peer_sae, endpoint, query):
 
 
 def etsi_get(url):
-    if CONFIG.get("etsi_transport") == "qbt-local-socket":
-        from qbt_etsi_client import get
-        return get(url, cert=(CERT, KEY), verify=CA, timeout=60)
-    return requests.get(url, cert=(CERT, KEY), verify=CA, timeout=5)
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname not in ("9.1.1.10", "9.1.1.11") or parsed.port != 443:
+        raise ValueError("Unapproved local QBT ETSI endpoint")
+    endpoint = parsed.path.rsplit("/", 1)[-1]
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    body = None
+    method = "GET"
+    headers = {}
+    if endpoint == "enc_keys":
+        query["number"] = ["1"]
+        if "key_size" in query:
+            query["size"] = query.pop("key_size")
+    elif endpoint == "dec_keys":
+        identifiers = query.pop("key_ID", [])
+        if not identifiers:
+            raise ValueError("QBT DEC request requires a Key-ID")
+        body = json.dumps({"key_IDs": [{"key_ID": value} for value in identifiers]})
+        method = "POST"
+        headers["Content-Type"] = "application/json"
+        query.pop("key_size", None)
+    else:
+        raise ValueError("Only ETSI enc_keys/dec_keys are allowed")
+    control = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        control.settimeout(10)
+        control.connect("/run/qbt-etsi/transport.sock")
+        message, ancillary, flags, _address = control.recvmsg(
+            256, socket.CMSG_SPACE(array.array("i").itemsize), socket.MSG_CMSG_CLOEXEC
+        )
+    finally:
+        control.close()
+    descriptors = array.array("i")
+    for level, kind, data in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            descriptors.frombytes(data[:len(data) - len(data) % descriptors.itemsize])
+    if message != b"OK" or flags & socket.MSG_CTRUNC or len(descriptors) != 1:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise RuntimeError("QBT ETSI socket helper rejected the connection")
+    transport = socket.socket(fileno=descriptors[0])
+    try:
+        transport.settimeout(60)
+        context = ssl.create_default_context(cafile=CA)
+        context.load_cert_chain(CERT, KEY)
+        secured = context.wrap_socket(transport, server_hostname=parsed.hostname)
+    except BaseException:
+        transport.close()
+        raise
+    connection = http.client.HTTPSConnection(parsed.hostname, timeout=60)
+    connection.sock = secured
+    path = parsed.path
+    encoded_query = urllib.parse.urlencode(query, doseq=True)
+    if encoded_query:
+        path += "?" + encoded_query
+    try:
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        result = requests.Response()
+        result.status_code = response.status
+        result.reason = response.reason
+        result._content = response.read()
+        result.url = url
+        result.headers.update(response.getheaders())
+        return result
+    finally:
+        connection.close()
 
 
 def do_enc(peer_sae, return_details=False):

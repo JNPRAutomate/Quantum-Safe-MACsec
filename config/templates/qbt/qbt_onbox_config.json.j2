@@ -1,0 +1,23 @@
+{
+  "local_sae": {{ local_sae | tojson }},
+  "device_name": {{ device_name | tojson }},
+  "kme_ip": {{ kme_ip | tojson }},
+  "kme_port": {{ kme_port }},
+  "ca_cert": "qbt-ca.pem",
+  "script_user": {{ script_user | tojson }},
+  "script_dir": "/var/db/scripts",
+  "ssh_home_base": "/var/home",
+  "ssh_key": {{ rpc_ssh_key | tojson }},
+  "rpc_ssh_key": {{ rpc_ssh_key | tojson }},
+  "state_dir": {{ ("/var/home/" ~ script_user ~ "/qbt-state") | tojson }},
+  "log_dir": {{ ("/var/home/" ~ script_user ~ "/logs") | tojson }},
+  "log_file": {{ ("/var/home/" ~ script_user ~ "/logs/qbt_debug.log") | tojson }},
+  "log_max_bytes": 5000000,
+  "log_backup_count": 3,
+  "peer_status_dir": "/var/tmp/qbt_peer_status",
+  "dec_retry": 3,
+  "log_level": "DEBUG",
+  "runtime_script": "qbt_onbox.py",
+  "qkd_policy": {{ qkd_policy | tojson(indent=2) }},
+  "links": {{ links | tojson(indent=2) }}
+}
