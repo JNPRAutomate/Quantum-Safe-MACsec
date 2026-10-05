@@ -383,6 +383,10 @@ def _junos_commands(public_key, seed, policy, script_user, script_user_class, in
     return commands
 
 
+def _progress(message):
+    print(f"[deploy] {message}", flush=True)
+
+
 def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, transfer):
     if set(clients) != set(TARGET_DEVICES):
         raise ValueError("Runtime deployment requires both EVO1 and EVO2")
@@ -396,6 +400,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
     script_user_class = secrets_config["script_user_class"]
     rpc_key = secrets_config["rpc_ssh_key_name"]
 
+    _progress("1/5 reading Junos MACsec state on EVO1/EVO2 (read-only)")
     states = {}
     seed_names = {}
     for name in TARGET_DEVICES:
@@ -418,6 +423,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
         raise ValueError("EVO1/EVO2 MACsec state differs; refusing partial deployment")
     if not states["EVO1"] and seed_names["EVO1"] != seed_names["EVO2"]:
         raise ValueError("EVO1/EVO2 QBT seed key names differ; refusing unsynchronized deployment")
+    _progress("2/5 checking /var/db/scripts/op for unexpected scripts")
     allowed_op_scripts = {RUNTIME_NAME, *OLD_QBT_HELPERS}
     for name in TARGET_DEVICES:
         scripts = _op_python_files(clients[name], run)
@@ -432,6 +438,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
         seed_value = secrets.token_hex(32)
         seed = (hashlib.sha256(bytes.fromhex(seed_value)).hexdigest(), seed_value)
 
+    _progress("3/5 preparing the SSH identities used for peer key exchange")
     keys = {}
     for name in TARGET_DEVICES:
         keys[name] = _peer_public_key(clients[name], run, script_user, rpc_key)
@@ -442,6 +449,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
         host_key = clients[peer].get_transport().get_remote_server_key()
         known = hosts[peer] + " " + host_key.get_name() + " " + host_key.get_base64() + "\n"
         local = runtime_dirs[name]
+        _progress(f"4/5 {name}: copying runtime, sidecars and certificates")
         staging = run(client, "mktemp -d /var/tmp/qbt-runtime.XXXXXX")
         try:
             for filename in (RUNTIME_NAME, "qbt_onbox_config.json", "qbt_onbox_inventory.json"):
@@ -498,6 +506,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
         except BaseException:
             run(client, f"rm -rf {shlex.quote(staging)}")
             raise
+        _progress(f"4/5 {name}: installing the ETSI socket helper service")
         install_transport(
             client,
             name,
@@ -508,6 +517,7 @@ def deploy_runtime(clients, inventory_path, password, pki, runtime_root, run, tr
         )
 
     for name in TARGET_DEVICES:
+        _progress(f"5/5 {name}: loading and committing the Junos configuration")
         peer = "EVO2" if name == "EVO1" else "EVO1"
         with Device(host=hosts[name], user="root", passwd=password, gather_facts=False) as dev:
             policy = json.loads(

@@ -453,10 +453,10 @@ active licences, identities, current image and all bind mounts; validates both
 create commands before stopping either KME; uses the already-loaded image
 (pull_policy=never), reuses the same data/secrets/licence mounts and approved
 networks, and retains each stopped original under a rollback name. No
-docker rm/down or persistent-directory deletion is performed. It then verifies
-Docker/licence state, paired ETSI ENC/DEC and bilateral MACsec rollover. On a
-failed gate it attempts to restore the originals and preserves failed
-replacements for diagnosis.""",
+docker rm/down or persistent-directory deletion is performed. Its success gate
+is Docker/licence/identity continuity; ETSI and MACsec are separate follow-up
+actions (`probe`, `verify`). Progress is printed at each step. On a failed gate
+it attempts to restore the originals and preserves failed replacements.""",
     "license-activate": """Guarded offline activation (only for a genuinely missing licence):
   python qbt_orchestrator.py license-activate --only EVO1 \\
     --confirm-manual-backup --confirm-license-activation

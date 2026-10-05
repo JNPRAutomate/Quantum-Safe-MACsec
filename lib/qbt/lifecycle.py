@@ -813,6 +813,10 @@ def _restore_recreated(
     return retained_failed
 
 
+def _progress(message):
+    print(f"[recreate] {message}", flush=True)
+
+
 def build_create_command(device, image_ref, name):
     """Render the approved profile as an explicit `docker create` command.
 
@@ -867,6 +871,7 @@ def recreate_pair(
     detached from the lab networks and renamed; the replacement is created with
     the same image, bind mounts and security profile.
     """
+    _progress("1/4 checking licence, identity, image and mounts on both EVOs (read-only)")
     current = preflight_pair(clients, run, run_private, image_ref)
     operation_errors = (
         OSError,
@@ -900,6 +905,7 @@ def recreate_pair(
         if plans[device]["rollback_name"] in names or plans[device]["failed_name"] in names:
             raise LifecycleError(f"{device}: rollback container name is already in use")
 
+    _progress("2/4 plans validated; originals will be kept as rollback containers")
     transitions = []
     after = {}
     try:
@@ -907,6 +913,7 @@ def recreate_pair(
             client = clients[device]
             container = "qbt-" + device.lower()
             plan = plans[device]
+            _progress(f"3/4 {device}: stopping the original (data stays in place)")
             old = current[device]
             transitions.append({
                 "device": device,
@@ -921,14 +928,18 @@ def recreate_pair(
                 raise LifecycleError(f"{device}: original container did not stop")
             _disconnect_lab_networks(client, container, run)
             run(client, shlex.join(["docker", "rename", container, plan["rollback_name"]]))
+            _progress(f"3/4 {device}: original renamed {plan['rollback_name']}; creating the replacement")
             run(client, plan["command"])
             run(client, "docker start " + shlex.quote(container))
+            _progress(f"3/4 {device}: replacement started; attaching ETSI and OOB networks")
             attach_networks(client, device, run, probe)
+            _progress(f"3/4 {device}: waiting for the active licence and identity checks")
             replacement = _wait_for_replacement_preflight(
                 client, device, run, run_private, image_ref
             )
             assert_activation_continuity(old, replacement)
             after[device] = replacement
+        _progress("4/4 final licence and identity comparison on both EVOs")
         acceptance = verify_after(clients, current)
     except operation_errors as error:
         rollback_failures = []
