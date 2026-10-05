@@ -5,12 +5,9 @@ import re
 import shlex
 import time
 from collections import Counter
-import tempfile
 import uuid
-from pathlib import Path
 
 import paramiko
-import yaml
 from scp import SCPException
 
 from lib.qbt.deployment import KME_ENVIRONMENT, OWNER, render_profile
@@ -231,7 +228,7 @@ def _validate_mounts(info, device):
     return normalized
 
 
-def _validate_container(info, device, image_ref, image, require_compose=False):
+def _validate_container(info, device, image_ref, image):
     container = "qbt-" + device.lower()
     if info.get("Name") != "/" + container:
         raise LifecycleError(f"{device}: container name mismatch")
@@ -245,13 +242,6 @@ def _validate_container(info, device, image_ref, image, require_compose=False):
         or labels.get("io.qbt.lab.device") != device.lower()
     ):
         raise LifecycleError(f"{device}: container ownership labels do not match")
-    if require_compose and (
-        not (labels.get("com.docker.compose.project") or "").startswith(
-            "qbt-" + device.lower() + "-replacement-"
-        )
-        or labels.get("com.docker.compose.service") != "kme"
-    ):
-        raise LifecycleError(f"{device}: replacement was not created by the QBT Compose profile")
     if config.get("Image") not in (image_ref, image_id):
         raise LifecycleError(f"{device}: container image reference differs")
     host = info.get("HostConfig") or {}
@@ -316,7 +306,6 @@ def preflight_device(
     *,
     require_networks=True,
     allow_inactive_license=False,
-    require_compose=False,
 ):
     container = "qbt-" + device.lower()
     info_list = json.loads(run(client, "docker inspect " + shlex.quote(container)))
@@ -331,9 +320,7 @@ def preflight_device(
     image = image_list[0]
     if image.get("Architecture") != "amd64" or image.get("Os") != "linux":
         raise LifecycleError(f"{device}: QBT image must be linux/amd64")
-    environment = _validate_container(
-        info, device, image_ref, image, require_compose=require_compose
-    )
+    environment = _validate_container(info, device, image_ref, image)
     mounts = _validate_mounts(info, device)
     network_addresses = _network_state(info, device, require_networks)
     root = _device_root(device)
@@ -431,7 +418,6 @@ def _wait_for_replacement_preflight(
                 run,
                 run_private,
                 image_ref,
-                require_compose=True,
             )
         except LifecycleError as error:
             if not any(message in str(error).casefold() for message in retryable):
@@ -827,20 +813,42 @@ def _restore_recreated(
     return retained_failed
 
 
-def _cleanup_compose_profiles(prepared, run):
-    failures = []
-    for device, profile in prepared.items():
-        try:
-            run(
-                profile["client"],
-                "rm -f "
-                + shlex.quote(profile["remote_file"])
-                + " && rmdir "
-                + shlex.quote(profile["remote_dir"]),
-            )
-        except (OSError, RuntimeError, EOFError, paramiko.SSHException):
-            failures.append(device)
-    return failures
+def build_create_command(device, image_ref, name):
+    """Render the approved profile as an explicit `docker create` command.
+
+    The EVO Docker engine has no Compose plugin, and the existing containers
+    were created with plain Docker, so this reproduces that profile exactly.
+    """
+    service = render_profile(device, MANAGEMENT_ADDRESSES[device], image_ref)[
+        "services"
+    ]["kme"]
+    args = [
+        "docker", "create", "--name", name,
+        "--restart", service["restart"],
+        "--network", service["network_mode"],
+        "--read-only",
+        "--workdir", service["working_dir"],
+    ]
+    for capability in service["cap_drop"]:
+        args += ["--cap-drop", capability]
+    for capability in service["cap_add"]:
+        args += ["--cap-add", capability]
+    for option in service["security_opt"]:
+        args += ["--security-opt", option]
+    for target in service["tmpfs"]:
+        args += ["--tmpfs", target]
+    for key, value in sorted(service["labels"].items()):
+        args += ["--label", f"{key}={value}"]
+    for key, value in sorted(service["environment"].items()):
+        args += ["--env", f"{key}={value}"]
+    for volume in service["volumes"]:
+        mount = f"type=bind,src={volume['source']},dst={volume['target']}"
+        if volume.get("read_only"):
+            mount += ",readonly"
+        args += ["--mount", mount]
+    args.append(service["image"])
+    args += service["command"]
+    return shlex.join(args)
 
 
 def recreate_pair(
@@ -853,10 +861,13 @@ def recreate_pair(
     image_ref,
     verify_after,
 ):
-    """Replace both licensed containers with Compose, retaining originals."""
+    """Replace both licensed containers, retaining the originals for rollback.
+
+    No container or persistent directory is removed. Each original is stopped,
+    detached from the lab networks and renamed; the replacement is created with
+    the same image, bind mounts and security profile.
+    """
     current = preflight_pair(clients, run, run_private, image_ref)
-    prepared = {}
-    transitions = []
     operation_errors = (
         OSError,
         RuntimeError,
@@ -866,148 +877,59 @@ def recreate_pair(
         paramiko.SSHException,
         SCPException,
     )
-
     for device in ("EVO1", "EVO2"):
         if before[device]["container_id"] != current[device]["container_id"]:
             raise LifecycleError(f"{device}: container changed after the preflight")
         assert_continuity(before[device], current[device])
 
+    suffix = uuid.uuid4().hex[:8]
+    plans = {}
+    for device in ("EVO1", "EVO2"):
+        client = clients[device]
+        names = _container_names(client, run)
+        plans[device] = {
+            "rollback_name": (
+                "qbt-" + device.lower() + "-rollback-"
+                + current[device]["container_id"][:12]
+            ),
+            "failed_name": "qbt-" + device.lower() + "-failed-" + suffix,
+            "command": build_create_command(
+                device, image_ref, "qbt-" + device.lower()
+            ),
+        }
+        if plans[device]["rollback_name"] in names or plans[device]["failed_name"] in names:
+            raise LifecycleError(f"{device}: rollback container name is already in use")
+
+    transitions = []
+    after = {}
     try:
-        with tempfile.TemporaryDirectory(prefix="qbt-compose-") as folder:
-            for device in ("EVO1", "EVO2"):
-                client = clients[device]
-                current_id = current[device]["image_id"]
-                profile = render_profile(
-                    device, MANAGEMENT_ADDRESSES[device], image_ref
-                )
-                local_file = Path(folder) / f"{device}.yml"
-                local_file.write_text(
-                    yaml.safe_dump(profile, sort_keys=False), encoding="utf-8"
-                )
-                local_file.chmod(0o600)
-                remote_dir = run(
-                    client, "mktemp -d /var/tmp/qbt-compose.XXXXXX"
-                ).strip()
-                if not re.fullmatch(r"/var/tmp/qbt-compose\.[A-Za-z0-9]+", remote_dir):
-                    raise LifecycleError(f"{device}: unsafe Compose staging directory")
-                remote_file = remote_dir + "/compose.yml"
-                prepared[device] = {
-                    "client": client,
-                    "remote_dir": remote_dir,
-                    "remote_file": remote_file,
-                }
-                transfer(client, local_file, remote_file)
-                project = (
-                    "qbt-"
-                    + device.lower()
-                    + "-replacement-"
-                    + uuid.uuid4().hex[:8]
-                )
-                compose = [
-                    "docker",
-                    "compose",
-                    "--project-name",
-                    project,
-                    "--file",
-                    remote_file,
-                ]
-                run(client, shlex.join(["docker", "compose", "version"]))
-                run(client, shlex.join([*compose, "config", "--quiet"]))
-                image_info = json.loads(
-                    run(
-                        client,
-                        "docker image inspect " + shlex.quote(image_ref),
-                    )
-                )
-                if (
-                    not isinstance(image_info, list)
-                    or len(image_info) != 1
-                    or image_info[0].get("Id") != current_id
-                ):
-                    raise LifecycleError(
-                        f"{device}: local image changed before Compose deployment"
-                    )
-                rollback_name = (
-                    "qbt-"
-                    + device.lower()
-                    + "-rollback-"
-                    + current[device]["container_id"][:12]
-                )
-                failed_name = project + "-failed-" + uuid.uuid4().hex[:8]
-                names = _container_names(client, run)
-                if rollback_name in names or failed_name in names:
-                    raise LifecycleError(
-                        f"{device}: rollback container name is already in use"
-                    )
-                prepared[device].update(
-                    {
-                        "project": project,
-                        "rollback_name": rollback_name,
-                        "failed_name": failed_name,
-                    }
-                )
-
-            after = {}
-            for device in ("EVO1", "EVO2"):
-                client = clients[device]
-                container = "qbt-" + device.lower()
-                profile = prepared[device]
-                old = current[device]
-                transitions.append(
-                    {
-                        "device": device,
-                        "original_id": old["container_id"],
-                        "rollback_name": profile["rollback_name"],
-                        "failed_name": profile["failed_name"],
-                        "network_addresses": old["network_addresses"],
-                    }
-                )
-                run(client, "docker stop " + shlex.quote(container))
-                run(
-                    client,
-                    shlex.join(
-                        ["docker", "rename", container, profile["rollback_name"]]
-                    ),
-                )
-                _disconnect_lab_networks(client, profile["rollback_name"], run)
-                compose = [
-                    "docker",
-                    "compose",
-                    "--project-name",
-                    profile["project"],
-                    "--file",
-                    profile["remote_file"],
-                ]
-                run(
-                    client,
-                    shlex.join([*compose, "up", "--detach", "--no-build"]),
-                    timeout=300,
-                )
-                attach_networks(client, device, run, probe)
-                replacement = _wait_for_replacement_preflight(
-                    client,
-                    device,
-                    run,
-                    run_private,
-                    image_ref,
-                )
-                assert_activation_continuity(old, replacement)
-                after[device] = replacement
-
-            acceptance = verify_after(clients, current)
-            cleanup_failures = _cleanup_compose_profiles(prepared, run)
-            return {
-                "containers": {
-                    device: {
-                        **public_summary(after[device]),
-                        "rollback_container": prepared[device]["rollback_name"],
-                    }
-                    for device in ("EVO1", "EVO2")
-                },
-                "verification": acceptance,
-                "original_containers_retained": True,
-                "temporary_compose_profiles_retained_on": cleanup_failures,
-            }
+        for device in ("EVO1", "EVO2"):
+            client = clients[device]
+            container = "qbt-" + device.lower()
+            plan = plans[device]
+            old = current[device]
+            transitions.append({
+                "device": device,
+                "original_id": old["container_id"],
+                "rollback_name": plan["rollback_name"],
+                "failed_name": plan["failed_name"],
+                "network_addresses": old["network_addresses"],
+            })
+            run(client, "docker stop " + shlex.quote(container))
+            stopped = json.loads(run(client, "docker inspect " + shlex.quote(container)))
+            if (stopped[0].get("State") or {}).get("Status") != "exited":
+                raise LifecycleError(f"{device}: original container did not stop")
+            _disconnect_lab_networks(client, container, run)
+            run(client, shlex.join(["docker", "rename", container, plan["rollback_name"]]))
+            run(client, plan["command"])
+            run(client, "docker start " + shlex.quote(container))
+            attach_networks(client, device, run, probe)
+            replacement = _wait_for_replacement_preflight(
+                client, device, run, run_private, image_ref
+            )
+            assert_activation_continuity(old, replacement)
+            after[device] = replacement
+        acceptance = verify_after(clients, current)
     except operation_errors as error:
         rollback_failures = []
         retained_failed = {}
@@ -1025,11 +947,9 @@ def recreate_pair(
                 )
             except operation_errors:
                 rollback_failures.append(device)
-        cleanup_failures = _cleanup_compose_profiles(prepared, run)
         details = (
-            f"Recreation failed: {error}. "
-            "The original containers were retained and automatic rollback "
-            "was attempted."
+            f"Recreation failed: {error}. The original containers were retained "
+            "and automatic rollback was attempted."
         )
         if rollback_failures:
             details += (
@@ -1037,21 +957,21 @@ def recreate_pair(
                 + ", ".join(rollback_failures)
                 + ". Do not remove any container or data directory."
             )
-        if cleanup_failures:
-            details += (
-                " Temporary Compose files remain on: "
-                + ", ".join(cleanup_failures)
-                + "."
-            )
-        if retained_failed:
-            preserved = [
-                f"{device}={name}"
-                for device, name in retained_failed.items()
-                if name
-            ]
-            if preserved:
-                details += " Failed replacements retained as " + ", ".join(preserved) + "."
+        preserved = [f"{d}={n}" for d, n in retained_failed.items() if n]
+        if preserved:
+            details += " Failed replacements retained as " + ", ".join(preserved) + "."
         raise LifecycleError(details) from error
+    return {
+        "containers": {
+            device: {
+                **public_summary(after[device]),
+                "rollback_container": plans[device]["rollback_name"],
+            }
+            for device in ("EVO1", "EVO2")
+        },
+        "verification": acceptance,
+        "original_containers_retained": True,
+    }
 
 
 def verify_pair(

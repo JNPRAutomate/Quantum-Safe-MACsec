@@ -65,7 +65,7 @@ protected as secrets, stored outside Git and checked before recreation. Follow
 the manual tar, SHA-256, encryption and restore safety guidance in
 [qbt_evo_manual_backup.md](qbt_evo_manual_backup.md). The orchestrator's
 `recreate` command requires explicit manual-backup confirmation, validates the
-active licences and persistent identities, then uses Compose to create
+active licences and persistent identities, then uses `docker create` (EVO has no Compose plugin) to create
 replacement containers with the same mounts and loaded image. It retains the
 stopped original containers for rollback and does not delete Docker containers
 or persistent data. The live recreation itself has not been run or verified.

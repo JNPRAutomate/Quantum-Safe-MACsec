@@ -288,7 +288,7 @@ COMMANDS = {
     "create": "Generate the standalone on-box script and EVO1/EVO2 profiles from router inventory",
     "deploy": "Install the EVO1/EVO2 on-box runtime and configure the Junos rotation timer",
     "preflight": "Read-only validation of EVO Docker, mounts, identity and QBT licence state",
-    "recreate": "Recreate the licensed EVO pair with Compose and retain rollback containers",
+    "recreate": "Recreate the licensed EVO pair with docker create and retain rollback containers",
     "license-activate": "Activate an offline licence only when QBT explicitly reports it missing",
     "verify": "Verify Docker/licence, paired ETSI keys, secured MKA and a fresh bilateral MACsec rollover",
 }
@@ -445,12 +445,12 @@ network addresses, host ID == machine-id, licence state/expiry and fingerprints
 of identity/licence files. Licence status output is redacted from logs/output.
 `No feature in file` is reported as unknown entitlements, not as a proven block.
 Does not stop or modify containers.""",
-    "recreate": """Compose-recreate the licensed EVO1/EVO2 pair without deleting data:
+    "recreate": """Recreate the licensed EVO1/EVO2 pair without deleting data:
   python qbt_orchestrator.py recreate --confirm-manual-backup --confirm-recreate
 First create and verify a manual backup using docs/qbt_evo_manual_backup.md.
 Requires both confirmations and an interactive typed phrase. Preflights the
 active licences, identities, current image and all bind mounts; validates both
-Compose profiles before stopping either KME; uses the already-loaded image
+create commands before stopping either KME; uses the already-loaded image
 (pull_policy=never), reuses the same data/secrets/licence mounts and approved
 networks, and retains each stopped original under a rollback name. No
 docker rm/down or persistent-directory deletion is performed. It then verifies
@@ -512,7 +512,7 @@ def main(argv=None):
     parser.add_argument(
         "--confirm-recreate",
         action="store_true",
-        help="Acknowledge Compose recreation with retained rollback containers",
+        help="Acknowledge recreation with retained rollback containers",
     )
     parser.add_argument("--confirm-license-activation", action="store_true", help="Acknowledge guarded offline activation on a confirmed missing licence")
     parser.add_argument("--confirm-verify", action="store_true", help="Acknowledge that end-to-end verification requests ETSI keys")

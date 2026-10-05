@@ -255,7 +255,7 @@ def _lifecycle_stubs(license_output, missing_replacement=None):
             containers[device][new_name] = info
             return ""
         if fields[:3] == ["docker", "network", "disconnect"]:
-            _docker, _network, network, name = fields
+            _docker, _noun, _verb, network, name = fields
             containers[device][name]["NetworkSettings"]["Networks"].pop(
                 network, None
             )
@@ -268,29 +268,22 @@ def _lifecycle_stubs(license_output, missing_replacement=None):
                 "IPAddress": address
             }
             return ""
-        if "mktemp -d" in command:
-            return f"/var/tmp/qbt-compose.{device.lower()}01"
-        if "compose" in command and "up --detach --no-build" in command:
-            project_index = fields.index("--project-name") + 1
-            project = fields[project_index]
+        if fields[:2] == ["docker", "create"]:
+            name = fields[fields.index("--name") + 1]
             replacement = container_info(device)
-            replacement["Config"]["Labels"].update({
-                "com.docker.compose.project": project,
-                "com.docker.compose.service": "kme",
-            })
-            containers[device]["qbt-" + device.lower()] = replacement
-            return ""
-        if "compose" in command:
-            return ""
-        if command.startswith("rm -f ") and "rmdir " in command:
-            return ""
+            replacement["Id"] = "replacement-id-" + device.lower()
+            replacement["Name"] = "/" + name
+            replacement["State"]["Status"] = "created"
+            replacement["Config"]["Labels"]["test.replacement"] = "1"
+            containers[device][name] = replacement
+            return replacement["Id"]
         if "sha256sum" in command:
             root = f"/var/db/qbt/{device.lower()}"
             files = list(lifecycle.REQUIRED_FILES)
             current = containers[device]["qbt-" + device.lower()]
             is_missing_replacement = (
                 missing_replacement == device
-                and "com.docker.compose.project" in current["Config"]["Labels"]
+                and "test.replacement" in current["Config"]["Labels"]
             )
             if (
                 not is_missing_replacement
@@ -311,7 +304,7 @@ def _lifecycle_stubs(license_output, missing_replacement=None):
         current = containers[client.device]["qbt-" + client.device.lower()]
         if (
             missing_replacement == client.device
-            and "com.docker.compose.project" in current["Config"]["Labels"]
+            and "test.replacement" in current["Config"]["Labels"]
         ):
             return "No valid license found"
         return license_output[client.device]
@@ -386,3 +379,85 @@ def test_recreate_refuses_missing_license_before_mutating_containers():
         "docker stop" in command or "docker rename" in command
         for _device, command in commands
     )
+
+
+def _active_status():
+    return {
+        device: (
+            f"Host ID: machine-id-{device.lower()}\n"
+            "Expiration Date: 2099-04-04"
+        )
+        for device in ("EVO1", "EVO2")
+    }
+
+
+def test_create_command_matches_the_existing_container_profile():
+    command = lifecycle.build_create_command(
+        "EVO1", "registry.example/qbt:fixture", "qbt-evo1"
+    )
+
+    for expected in (
+        "--read-only", "--network none", "--restart unless-stopped",
+        "--cap-drop ALL", "--cap-add NET_BIND_SERVICE",
+        "--security-opt no-new-privileges:true",
+        "--label io.qbt.lab.device=evo1",
+        "KME_LICENSE_ACTIVATION_MODE=offline",
+        "src=/var/db/qbt/evo1/data,dst=/var/lib/qbt-kme ",
+        "dst=/run/license-staging,readonly",
+    ):
+        assert expected in command
+    assert "compose" not in command and "--init" not in command
+    assert "-p " not in command and "--publish" not in command
+
+
+def test_recreate_keeps_originals_and_never_removes_anything(monkeypatch):
+    clients, run, run_private, commands, containers, _info = _lifecycle_stubs(
+        _active_status()
+    )
+    monkeypatch.setattr(lifecycle, "attach_networks", lambda *_a, **_k: None)
+    image = "registry.example/qbt:fixture"
+    before = lifecycle.preflight_pair(clients, run, run_private, image)
+
+    result = lifecycle.recreate_pair(
+        clients, before, run, run_private, None, None, image,
+        lambda _clients, _before: {"checked": True},
+    )
+
+    for device in ("EVO1", "EVO2"):
+        names = set(containers[device])
+        rollback = result["containers"][device]["rollback_container"]
+        assert {"qbt-" + device.lower(), rollback} <= names
+        assert containers[device][rollback]["State"]["Status"] == "exited"
+        assert containers["EVO1"].get("qbt-evo1") is not containers["EVO1"][
+            result["containers"]["EVO1"]["rollback_container"]
+        ]
+    assert not any(
+        " rm " in " " + command + " " or "compose" in command
+        for _device, command in commands
+    )
+
+
+def test_failed_gate_restores_the_original_containers(monkeypatch):
+    clients, run, run_private, commands, containers, _info = _lifecycle_stubs(
+        _active_status()
+    )
+    monkeypatch.setattr(lifecycle, "attach_networks", lambda *_a, **_k: None)
+    image = "registry.example/qbt:fixture"
+    before = lifecycle.preflight_pair(clients, run, run_private, image)
+
+    def failing_gate(_clients, _before):
+        raise lifecycle.LifecycleError("simulated acceptance failure")
+
+    with pytest.raises(lifecycle.LifecycleError, match="automatic rollback"):
+        lifecycle.recreate_pair(
+            clients, before, run, run_private, None, None, image, failing_gate
+        )
+
+    for device in ("EVO1", "EVO2"):
+        restored = containers[device]["qbt-" + device.lower()]
+        assert restored["Id"] == "container-id-" + device.lower()
+        assert restored["State"]["Status"] == "running"
+        assert any(
+            "test.replacement" in info["Config"]["Labels"]
+            for info in containers[device].values()
+        )

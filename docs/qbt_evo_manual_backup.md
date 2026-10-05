@@ -144,7 +144,8 @@ on the routers by their exact paths; do not delete anything below `/var/db/qbt`.
 The orchestrator asks for `--confirm-manual-backup` and
 `--confirm-recreate`, followed by typed confirmations. Recreate preflights
 active licence state and identity before mutation, reuses the existing bind
-mounts and locally loaded image with Compose, and keeps the original stopped
+mounts and locally loaded image with `docker create` (the EVO Docker 20.10 engine
+has no Compose plugin), and keeps the original stopped
 containers under rollback names. It never removes a container or persistent
 directory.
 
