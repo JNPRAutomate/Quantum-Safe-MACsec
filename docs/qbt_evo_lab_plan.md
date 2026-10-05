@@ -4,8 +4,10 @@ Date: 2026-10-04
 
 Branch: `docker/qbt_ver1.0`
 
-Status: bundle statically inspected on 2026-10-05; QBT has not been installed
-or validated on EVO.
+Status: on 2026-10-05, four persistent, isolated KME containers were started:
+one on each EVO and two on Linux. Database initialization and migration passed,
+but all four wait for offline licence activation. Networking, ETSI key delivery
+and MACsec integration remain unvalidated.
 
 See [the bundle assessment](qbt_bundle_assessment.md) for verified archive
 metadata, vendor-documented features and outstanding runtime/licence gates.
@@ -36,7 +38,7 @@ it is not a silent substitute for the embedded-EVO goal.
 ## 2. Target topology
 
 ```text
-Linux 10.38.98.181: QBT orchestration, bundle staging and PKI provisioning
+Linux 10.38.98.181: orchestration, bundle staging, two isolated evaluation KMEs
                 | management SSH/NETCONF
         +-------+--------------------------------+
         |                                        |
@@ -54,11 +56,58 @@ EVO1 10.38.97.218                         EVO2 10.38.97.228
 QBT-to-QBT key correlation uses vendor-documented mesh and authenticated key
 exchange (default ports 4004 and 4005). The supplied standalone profile stores
 encrypted state in a local persistent volume, with no external PostgreSQL
-service. Paired ETSI output still requires live verification. The Linux host
-is not assumed to host a key database.
+service. Paired ETSI output still requires live verification. The two Linux
+evaluation KMEs have their own local databases, independent of the EVO instances.
 
 Each QBT instance may comprise several containers. "One KME per router" does
 not imply a single container or an embedded database.
+
+### Persistent evaluation instances (2026-10-05)
+
+| Host | Container | Persistent root |
+| --- | --- | --- |
+| EVO1 `10.38.97.218` | `qbt-evo1` | `/var/db/qbt/evo1` |
+| EVO2 `10.38.97.228` | `qbt-evo2` | `/var/db/qbt/evo2` |
+| Linux `10.38.98.181` | `qbt-linux1` | `/var/lib/qbt/linux1` |
+| Linux `10.38.98.181` | `qbt-linux2` | `/var/lib/qbt/linux2` |
+
+Each root contains `data/`, `secrets/` and `license-staging/`. Secrets include a
+separate persistent `machine-id`, master-key ID and randomly generated 32-byte
+master key stored as base64. No licence key or machine file has been fabricated
+or installed. Actual database files include `data/dske-sdk/config.sqlite`;
+licensing state is stored separately under `data/license.storage`.
+
+All containers use the previously verified image ID, `--network none`, no
+published ports, a read-only root filesystem and `unless-stopped` restart policy.
+The data directory is a writable bind mount, not tmpfs; secret and licence-staging
+bind mounts are read-only. These are activation-preparation deployments, not
+networked services or a completed orchestrator bootstrap implementation.
+
+All four completed initialization and migrations, then reported:
+
+```text
+No valid license found; the KME is idling until a license is activated.
+```
+
+Host IDs, machine IDs, master-key IDs and master-key file digests were verified
+distinct across all four instances. Each container was restarted and its host ID
+verified unchanged. In this build the reported host ID equals the mounted
+machine ID. `license status` reports `No license found` on every instance.
+Do not regenerate these secrets or replace their databases when obtaining
+the vendor-issued activation materials. Keep master-key values out of logs
+and version control.
+
+Inspect an instance on its host, substituting its container name:
+
+```sh
+docker logs qbt-evo1
+docker exec qbt-evo1 qbt-kme license host-id
+docker exec qbt-evo1 qbt-kme license status
+```
+
+The earlier `qbt-evo1-license-test` is a separate temporary-data diagnostic
+container retained at the user's request. Its host ID must not be used for
+the persistent EVO1 deployment.
 
 ## 3. Lab invariants
 
