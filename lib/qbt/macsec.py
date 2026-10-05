@@ -387,6 +387,11 @@ def _progress(message):
     print(f"[deploy] {message}", flush=True)
 
 
+def bootstrap_seed_key_name():
+    # Must match qbt_onbox.bootstrap_seed_key_id/ckn_from_key_id or the runtime refuses to adopt the seed.
+    return hashlib.sha256(f"{KEYCHAIN}:bootstrap:key-name:0".encode()).hexdigest()
+
+
 def _reset_commands(interface):
     return [
         f"delete security macsec interfaces {interface}",
@@ -468,7 +473,7 @@ def deploy_runtime(
     seed = None
     if states["EVO1"]:
         seed_value = secrets.token_hex(32)
-        seed = (hashlib.sha256(bytes.fromhex(seed_value)).hexdigest(), seed_value)
+        seed = (bootstrap_seed_key_name(), seed_value)
 
     _progress("3/5 preparing the SSH identities used for peer key exchange")
     keys = {}

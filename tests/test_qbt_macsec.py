@@ -77,6 +77,24 @@ def test_python_script_user_is_configured_only_for_event_script():
     )
 
 
+def test_seed_key_name_matches_the_runtime_derivation():
+    import ast
+    import hashlib
+
+    source = (Path(__file__).resolve().parents[1] / "artifacts/qbt_onbox.py").read_text()
+    wanted = {"ckn_from_key_id", "bootstrap_seed_key_id"}
+    functions = [
+        node for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    namespace = {"hashlib": hashlib}
+    exec(compile(ast.Module(body=functions, type_ignores=[]), "qbt_onbox", "exec"), namespace)
+
+    assert macsec.bootstrap_seed_key_name() == namespace["ckn_from_key_id"](
+        namespace["bootstrap_seed_key_id"]("QKD_QBT_EVO", 0)
+    )
+
+
 def test_reset_commands_remove_only_the_qbt_macsec_objects():
     assert macsec._reset_commands("et-0/0/1") == [
         "delete security macsec interfaces et-0/0/1",
