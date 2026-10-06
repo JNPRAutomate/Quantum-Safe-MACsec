@@ -1135,11 +1135,11 @@ python qbt_orchestrator.py preflight           # licences still active, same con
 | `peer` | **failed twice** on KMEs that were already peered (see 9); fixed, then passed |
 | `create` and `deploy` | passed. Junos commit at 07:05:09 PDT; the first timer run adopted the seed at 07:06:10 and `RING_COMPLETION DONE` (3 keys) followed 8 seconds later; MKA `Secured - Primary` with a live peer; the first real key became active at 07:09-07:10, about 4 minutes after the commit; no WARN or ERROR |
 | `probe` | **failed** on the clean router: the probe client directory did not exist (it had been created by hand earlier); fixed so `probe` installs it, then passed |
-| `verify` | see the result recorded below |
+| `verify` | **passed**: four paired ETSI keys matched, both routers moved to the same new active key (`6ddcf012-…`), Latest SAK KI changed on both, MACsec `inuse` and MKA `Secured`; licences `active`, container IDs unchanged (`9bcb1a33b974` / `67d03037569a`), identity files verified |
 
-The two failures are the reason this test is worth repeating after any change to
-`peer`, `probe`, `deploy` or the runtime: both bugs were invisible on routers that
-had been set up by hand.
+The failures of `peer` (two errors, one fix) and `probe` are the reason this test is
+worth repeating after any change to `peer`, `probe`, `deploy` or the runtime: both
+bugs were invisible on routers that had been set up by hand.
 
 ## 18. Troubleshooting table
 
