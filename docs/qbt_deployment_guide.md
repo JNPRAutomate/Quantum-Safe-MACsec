@@ -1150,6 +1150,18 @@ teardown script was extracted from this guide and run as written):
 | Fix | a generation 0 write is accepted only for a seeded state while the router keychain still holds just the seed (`_state_write_is_stale`); otherwise it is dropped like any stale write. Four unit tests, including this exact interleaving |
 | 3rd rebuild, with the fix | clean on both routers: seed adopted 07:43:42, `RING_COMPLETION DONE` (3 keys) 07 seconds later, slave `PEER_PENDING_KEY_BATCH_INSTALLED generation=3`, both routers on the same new active key at 07:46-07:47, MKA `Secured - Primary` with a live peer, no WARN or ERROR. `verify` then passed: shared new active key `7cfdf012-…`, Latest SAK KI changed on both, MACsec `inuse`, licences `active`, same container IDs |
 
+After the fix the first-start path was exercised three more times, back to back,
+with `deploy --reset-rotation-state` (a fresh seed and state on both routers, about
+7 minutes each). Each run had to show `RING_COMPLETION DONE` on the master,
+`PEER_PENDING_KEY_BATCH_INSTALLED` on the slave, both routers moving to the same
+new active key, no `ROTATION BLOCKED` and no ERROR:
+
+| Run | Result | Active key on both | Notes |
+| --- | --- | --- | --- |
+| 1 | pass | `2c1cf012` | no WARN, no ERROR |
+| 2 | pass | `3283f012` | one `STATE SAVE DROPPED`: the guard discarding the stale write that broke the second rebuild |
+| 3 | pass | `174af012` | no WARN, no ERROR |
+
 This is a race, so one clean run does not prove it is gone: the first rebuild had
 also passed, by luck of timing. What proves the fix is the unit test of the
 interleaving; repeat the rebuild a few times if you change the state handling again.
