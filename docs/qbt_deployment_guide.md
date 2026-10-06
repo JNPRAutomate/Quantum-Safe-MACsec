@@ -463,7 +463,7 @@ What lands on each router:
 * the runtime and two JSON files in `/var/db/scripts/op/` (and a copy of the script in `/var/db/scripts/event/`);
 * the CA and SAE certificate in `/var/db/scripts/certs/`;
 * a dedicated SSH identity and `authorized_keys` entry for the peer (`etsi_user`);
-* a small root-owned service, `qbt-etsi-socket`, that opens the TCP connection to the KME on the bridge and hands the socket to the runtime;
+* a small root-owned service, `qbt-etsi-socket`, that opens the TCP connection to the KME on the bridge and hands the socket to the runtime (explained in [11.1](#111-the-etsi-socket-helper));
 * Junos configuration: the MACsec association `QBT_EVO` with the key chain `QKD_QBT_EVO` seeded with key 0, and a 60-second event timer that runs the script.
 
 `deploy` also imports the PKI into the containers (reusing a valid one, creating
@@ -473,6 +473,72 @@ run when only one router has the configuration or when unknown scripts sit in
 
 Within about 30 minutes the logs show the seed being adopted, slots 1-3 being
 filled (`RING_COMPLETION`) and the first rolling replacements (section 15).
+
+### 11.1 The ETSI socket helper
+
+The runtime (`qbt_onbox.py`) runs as the unprivileged Junos user `etsi_user`, yet
+it has to talk to a KME that lives behind a Docker bridge. The helper solves this
+without giving the runtime any network privileges.
+
+```text
+ qbt_onbox.py (etsi_user, unprivileged)              qbt-etsi-socket (root service)
+   1. connect to /run/qbt-etsi/transport.sock  ---->  2. check who is calling (SO_PEERCRED): must be etsi_user
+                                                      3. find the bridge that carries 9.1.1.1, bind to it
+                                                         (SO_BINDTODEVICE), connect TCP 9.1.1.1 -> 9.1.1.10:443
+   5. receive the *connected socket*  <------------   4. hand it over (SCM_RIGHTS) and close its own copy
+   6. TLS handshake and ETSI request, using the SAE certificate and key in /var/db/scripts/certs
+```
+
+What this buys you:
+
+* **The helper does no TLS and never sees a key.** The certificates stay with the
+  runtime; the helper's unit even makes `/var/db/scripts/certs` inaccessible to it.
+  All it ever does is open one TCP connection and pass it on.
+* **The runtime needs no special rights.** Binding a socket to a bridge interface
+  needs privileges that `etsi_user` does not have.
+* **It is endpoint-limited.** The helper refuses anything but source `9.1.1.1`,
+  destination `9.1.1.10` or `9.1.1.11`, port 443, and a caller whose UID is the
+  configured script user. Its configuration must be owned by root and not
+  writable by others, or it will not start. On the runtime side, `etsi_get` accepts
+  only `enc_keys` and `dec_keys` URLs on those two addresses.
+
+Installed by `deploy` (section 11); `deploy` also restarts it and waits until the
+socket exists:
+
+| File | Content |
+| --- | --- |
+| `/var/db/qbt-etsi/helper.py` | the service itself (`artifacts/qbt_etsi_socket_helper.py` in the repository, identical on the router) |
+| `/var/db/qbt-etsi/config.json` | `{"source_ip": "9.1.1.1", "destination_ip": "9.1.1.10", "port": 443, "script_user": "etsi_user"}` (`9.1.1.11` on EVO2) |
+| `/etc/systemd/system/qbt-etsi-socket.service` | the unit; restarts on failure, `NoNewPrivileges`, read-only filesystem except its own runtime directory, only `CAP_NET_RAW` and `CAP_CHOWN` |
+| `/run/qbt-etsi/transport.sock` | the Unix socket, mode `660`, owner `root`, group `etsi_user` |
+
+Look at it:
+
+```sh
+systemctl status qbt-etsi-socket --no-pager | head -8      # active (running)
+journalctl -u qbt-etsi-socket -n 20 --no-pager              # "QBT ETSI helper ready for UID 2001"
+ls -l /run/qbt-etsi/transport.sock                          # srw-rw---- root etsi_user
+```
+
+Restarting it is safe (`systemctl restart qbt-etsi-socket`): connections are made
+one per request, nothing is kept in the helper. Its failures are logged in that
+journal with `ETSI socket preparation failed`. If the helper is not running, the
+runtime cannot reach the KME, so it cannot obtain new keys and the key ring slowly
+runs dry (section 19). This failure path follows from the code; it was not
+provoked on the lab routers.
+
+### 11.2 What is in `artifacts/`
+
+| File | Role | Goes to the router? |
+| --- | --- | --- |
+| `qbt_onbox.py` | the generated runtime, a single self-contained file (written by `create`) | yes, `/var/db/scripts/op/` and `/event/` |
+| `qkd_onbox.py` | the shared core inherited from the original project: the **source** that `create` patches (`lib/qbt/runtime_builder.py`) to produce `qbt_onbox.py`. It is not deployed | no |
+| `qbt_etsi_socket_helper.py` | the helper of 11.1 | yes, as the separate service `/var/db/qbt-etsi/helper.py` |
+| `qbt_etsi_client.py`, `qbt_etsi_probe.py` | leftovers of an earlier design that kept separate helper scripts next to the runtime. Nothing uses them any more: their logic is now inside `qbt_onbox.py` (`etsi_get`). `deploy` only removes files with these names from `op` if it finds them | no |
+
+Edit the runtime's behaviour in `lib/qbt/runtime_builder.py` (QBT-only patches) and
+regenerate with `create`; never edit `artifacts/qbt_onbox.py` by hand, the next
+`create` overwrites it.
 
 ## 12. See the MACsec link
 
@@ -788,7 +854,7 @@ docker network inspect jnpr_cntrz_net -f '{{json .IPAM.Config}}'
 docker network inspect qbt_oob -f '{{json .IPAM.Config}} {{json .Options}}'
 docker inspect qbt-evo1 -f '{{json .NetworkSettings.Networks}}' | python3 -c "import sys,json; [print(k, v['IPAddress'], v.get('MacAddress')) for k,v in json.load(sys.stdin).items()]"
 docker exec qbt-evo1 qbt-kme license host-id                 # safe
-systemctl status qbt-etsi-socket --no-pager | head -5         # the bridge helper
+systemctl status qbt-etsi-socket --no-pager | head -5         # the bridge helper (section 11.1)
 cat /var/db/qbt-etsi/config.json                              # source 9.1.1.1, destination 9.1.1.10, port 443
 ```
 
