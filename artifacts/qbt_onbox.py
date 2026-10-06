@@ -2726,7 +2726,52 @@ def peer_states_aligned_strict(local_state, peer_state):
     return True
 
 
+STATE_SAVE_POLICY = {"force": False}
+
+
+def _state_write_is_stale(path, state):
+    # A run that loaded the state before a bilateral install must not write it
+    # back afterwards: that silently reverts the router/state alignment.
+    try:
+        new_generation = int(state.get("generation") or 0)
+        if new_generation == 0:
+            return False
+        disk_generation = int(json.loads(path.read_text()).get("generation") or 0)
+    except Exception:
+        return False
+    return new_generation < disk_generation
+
+
 def save_db_state(peer, iface, state):
+    import fcntl
+
+    path = Path(db_state_file(peer, iface))
+    handle = None
+    try:
+        handle = open(f"{path.parent}/qbt_statelock_{path.name}", "a")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except Exception:
+        handle = None
+    try:
+        if not STATE_SAVE_POLICY["force"] and _state_write_is_stale(path, state):
+            log(
+                f"STATE SAVE DROPPED stale write file={path} generation={state.get('generation')}",
+                "WARN",
+                iface,
+                "STATE",
+            )
+            return True
+        return _save_db_state_unlocked(peer, iface, state)
+    finally:
+        if handle is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                handle.close()
+            except Exception:
+                pass
+
+
+def _save_db_state_unlocked(peer, iface, state):
     state = normalize_pending_keys(state)
     state = normalize_slot_ring(state)
     path = Path(db_state_file(peer, iface))
@@ -6451,6 +6496,7 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
+                STATE_SAVE_POLICY["force"] = True
                 ok = run_slave_install_key(key_id, iface, generation, start_time)
             finally:
                 release_action_lock(iface, action)
@@ -6470,6 +6516,7 @@ def main():
                 print(f"ERROR ACTION LOCK BUSY action={action} iface={iface}")
                 sys.exit(1)
             try:
+                STATE_SAVE_POLICY["force"] = True
                 ok = run_slave_install_key_batch(batch_b64, iface)
             finally:
                 release_action_lock(iface, action)

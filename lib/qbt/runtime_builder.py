@@ -77,6 +77,73 @@ def etsi_get(url):
 '''
 
 
+STATE_WRITE_GUARD = """STATE_SAVE_POLICY = {"force": False}
+
+
+def _state_write_is_stale(path, state):
+    # A run that loaded the state before a bilateral install must not write it
+    # back afterwards: that silently reverts the router/state alignment.
+    try:
+        new_generation = int(state.get("generation") or 0)
+        if new_generation == 0:
+            return False
+        disk_generation = int(json.loads(path.read_text()).get("generation") or 0)
+    except Exception:
+        return False
+    return new_generation < disk_generation
+
+
+def save_db_state(peer, iface, state):
+    import fcntl
+
+    path = Path(db_state_file(peer, iface))
+    handle = None
+    try:
+        handle = open(f"{path.parent}/qbt_statelock_{path.name}", "a")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except Exception:
+        handle = None
+    try:
+        if not STATE_SAVE_POLICY["force"] and _state_write_is_stale(path, state):
+            log(
+                f"STATE SAVE DROPPED stale write file={path} generation={state.get('generation')}",
+                "WARN",
+                iface,
+                "STATE",
+            )
+            return True
+        return _save_db_state_unlocked(peer, iface, state)
+    finally:
+        if handle is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                handle.close()
+            except Exception:
+                pass
+
+
+"""
+
+
+def _guard_state_writes(source):
+    save = "def save_db_state(peer, iface, state):\n"
+    if source.count(save) != 1:
+        raise ValueError("Unexpected shared runtime state-save layout")
+    source = source.replace(
+        save, STATE_WRITE_GUARD + "def _save_db_state_unlocked(peer, iface, state):\n", 1
+    )
+    for call in (
+        "ok = run_slave_install_key(key_id, iface, generation, start_time)",
+        "ok = run_slave_install_key_batch(batch_b64, iface)",
+    ):
+        if source.count(call) != 1:
+            raise ValueError("Unexpected shared runtime install dispatch layout")
+        source = source.replace(
+            call, 'STATE_SAVE_POLICY["force"] = True\n                ' + call, 1
+        )
+    return source
+
+
 def build_qbt_onbox(output=None):
     source = CORE.read_text(encoding="utf-8")
     source = source.replace("qkd_onbox.py", "qbt_onbox.py")
@@ -125,6 +192,7 @@ def build_qbt_onbox(output=None):
     if source.count(old_transport) != 1:
         raise ValueError("Unexpected shared on-box ETSI transport layout")
     source = source.replace(old_transport, TRANSPORT.lstrip(), 1)
+    source = _guard_state_writes(source)
     if "from qbt_etsi_client import" in source or "qbt_runtime_core.py" in source:
         raise ValueError("QBT runtime must be a single self-contained script")
     source = "\n".join(line.rstrip(" \t") for line in source.splitlines()) + "\n"
