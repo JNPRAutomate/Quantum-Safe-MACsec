@@ -163,3 +163,13 @@ def import_pki(client, name, directory, run, transfer, rotate=False):
     ):
         print(name, run(client, admin_command(container, *arguments)))
     run(client, f"printf %s {shlex.quote(identity)} > {marker} && chmod 600 {marker}")
+    # The KME loads its TLS certificate at start; without a restart it keeps
+    # serving the previous one and peers reject it against the new CA.
+    print(f"{name}: restarting {container} so it serves the imported certificate", flush=True)
+    run(client, f"docker restart {container} >/dev/null")
+    run(
+        client,
+        f"i=0; while [ $i -lt 30 ]; do "
+        f"test \"$(docker inspect -f '{{{{.State.Running}}}}' {container})\" = true && exit 0; "
+        "sleep 1; i=$((i+1)); done; exit 1",
+    )

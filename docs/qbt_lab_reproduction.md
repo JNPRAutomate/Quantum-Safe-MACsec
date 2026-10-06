@@ -128,6 +128,13 @@ Rotation removes only the tracked server certificate/key through QBT's PKI CLI,
 then imports the new trust bundle, key and certificate and validates the result.
 `--rotate-pki` also regenerates the bundle itself: the previous directory is
 renamed `<dir>.superseded-<UTC time>` and never deleted.
+
+Every PKI import restarts the KME container (data, secrets and licence are
+bind-mounted and survive): the KME reads its TLS certificate only at start, so
+without the restart it keeps serving the previous certificate and the on-box
+runtime fails with `CERTIFICATE_VERIFY_FAILED ... unable to get local issuer
+certificate` against the new CA. Run `preflight` afterwards to confirm the
+licence is still `active`.
 It does not remove the container, database, licence, machine ID or master key.
 The initial lab CA remains trusted after this migration; removal of obsolete
 trust anchors is a separate operation, not an implicit side effect.
