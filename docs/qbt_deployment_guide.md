@@ -741,7 +741,7 @@ Normal, no action needed:
 | `PEER_PENDING_KEY_BATCH_INSTALLED generation=21 key_count=2` | the slave finished installing |
 | `ROLLING_REPLACEMENT DONE ... ring_phase=ready` | the master saw the acknowledgement; cycle complete |
 | `RPC KEY ROTATION COMPLETED rotation_count=N` | one SSH identity rotation finished |
-| `STATE SAVE DROPPED stale write generation=N` | a run that read the state before an install tried to save it afterwards; the runtime refused to overwrite the newer state. It is the safeguard working. Occasional lines are fine |
+| `STATE SAVE DROPPED stale write generation=N` | a run that read the state before an install tried to save it afterwards; the runtime refused to overwrite the newer state. It is the safeguard working. Occasional lines are fine; `generation=0` means a run that had adopted the seed just before an install |
 | `RPC-KEY VERIFY ATTEMPT FAILED ... rc=255` | the new SSH key was not accepted yet; it retries up to 4 times |
 
 At first start only:
@@ -1135,11 +1135,24 @@ python qbt_orchestrator.py preflight           # licences still active, same con
 | `peer` | **failed twice** on KMEs that were already peered (see 9); fixed, then passed |
 | `create` and `deploy` | passed. Junos commit at 07:05:09 PDT; the first timer run adopted the seed at 07:06:10 and `RING_COMPLETION DONE` (3 keys) followed 8 seconds later; MKA `Secured - Primary` with a live peer; the first real key became active at 07:09-07:10, about 4 minutes after the commit; no WARN or ERROR |
 | `probe` | **failed** on the clean router: the probe client directory did not exist (it had been created by hand earlier); fixed so `probe` installs it, then passed |
-| `verify` | **passed**: four paired ETSI keys matched, both routers moved to the same new active key (`6ddcf012-…`), Latest SAK KI changed on both, MACsec `inuse` and MKA `Secured`; licences `active`, container IDs unchanged (`9bcb1a33b974` / `67d03037569a`), identity files verified |
+| `verify` (first rebuild) | **passed**: four paired ETSI keys matched, both routers moved to the same new active key (`6ddcf012-…`), Latest SAK KI changed on both, MACsec `inuse` and MKA `Secured`; licences `active`, container IDs unchanged (`9bcb1a33b974` / `67d03037569a`), identity files verified |
 
 The failures of `peer` (two errors, one fix) and `probe` are the reason this test is
 worth repeating after any change to `peer`, `probe`, `deploy` or the runtime: both
 bugs were invisible on routers that had been set up by hand.
+
+**The rebuild was then repeated twice, following this section literally** (the
+teardown script was extracted from this guide and run as written):
+
+| Run | Result |
+| --- | --- |
+| 2nd rebuild | every command passed, but the key ring did not complete: `RING_COMPLETION START` without `DONE`, then `ROTATION BLOCKED reason=SLOT_METADATA_NOT_BILATERALLY_ALIGNED`. On the slave, the install saved generation 3 and a run that had adopted the seed a moment earlier then saved generation 0 over it. The state guard exempted every generation 0 write so that a seed re-adoption keeps working. |
+| Fix | a generation 0 write is accepted only for a seeded state while the router keychain still holds just the seed (`_state_write_is_stale`); otherwise it is dropped like any stale write. Four unit tests, including this exact interleaving |
+| 3rd rebuild, with the fix | clean on both routers: seed adopted 07:43:42, `RING_COMPLETION DONE` (3 keys) 07 seconds later, slave `PEER_PENDING_KEY_BATCH_INSTALLED generation=3`, both routers on the same new active key at 07:46-07:47, MKA `Secured - Primary` with a live peer, no WARN or ERROR |
+
+This is a race, so one clean run does not prove it is gone: the first rebuild had
+also passed, by luck of timing. What proves the fix is the unit test of the
+interleaving; repeat the rebuild a few times if you change the state handling again.
 
 ## 18. Troubleshooting table
 

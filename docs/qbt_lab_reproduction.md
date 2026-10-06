@@ -311,6 +311,10 @@ source. The deployed file is byte-identical.)
   misaligned (`ACTIVE_NOT_BILATERALLY_CONFIRMED` / `NO_ROUTER_MATCH`).
   `save_db_state` now takes a file lock and drops writes older than the
   generation on disk (`STATE SAVE DROPPED`); install handlers stay authoritative.
+  A generation 0 write (seed adoption) is accepted only while the router keychain
+  still holds nothing but the seed: rebuilding the routers from empty showed a run
+  that had adopted the seed just before the slave's install saving generation 0
+  over generation 3, and the ring never completed.
 * **RPC key verification race.** The staged key is added to `authorized_keys`
   without a Junos commit, verification retries four times with rc/stderr logged,
   and finalize falls back to the previous key (same fix as the PhioTX runtime).
