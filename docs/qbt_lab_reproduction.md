@@ -38,8 +38,8 @@ for example `python qbt_orchestrator.py --pki --help`. Help is read-only;
 | Bilateral peer/AKE configuration | Verified with `ECDHE521-MLKEM1024` |
 | Four-key paired ETSI acceptance | Verified: four 256-bit keys recovered by Key-ID with byte-for-byte equality |
 | Direct router-shell ENC/DEC | Verified: EVO1 ENC and EVO2 DEC returned the same Key-ID and key digest |
-| Four-slot MACsec runtime and rotation | Deployed on EVO1/EVO2; timer commit reported by orchestrator; live key rotation and secured MKA remain unverified |
-| Full clean-state replay | Pending |
+| Four-slot MACsec runtime and rotation | Verified 2026-10-06: `verify` passed (see acceptance gates); rotation observed over several hours without WARN/ERROR after the runtime fixes below |
+| Full clean-state replay | Partly: licence-safe recreate, PKI rotation and reset-and-redeploy were replayed; creation of the very first container remains manual |
 
 The EVO containers now have internal bridge and OOB macvlan interfaces, with
 no Docker published-port mappings. KME-to-KME connectivity, authenticated SAE
@@ -284,8 +284,40 @@ installed the key in the MACsec keychain or completed an MKA rollover.
    Verified.
 4. Four 256-bit ENC keys are recovered by peer Key-ID with byte-for-byte
    equality; key bytes are never logged. Verified.
-5. Both routers show secured MKA and the intended four-slot keyring. Pending.
+5. Both routers show secured MKA and the intended four-slot keyring. Verified:
+   `Secured - Primary` with a live peer, four `inuse` associations and four
+   key-chain slots whose key names match the runtime state on both routers.
 6. Active and pending entries remain protected during rolling replacement,
-   using the 60-second timer and 300-second activation spacing. Pending.
+   using the 60-second timer and 300-second activation spacing. Verified over
+   repeated 10-minute batches; no `ROTATION BLOCKED`, no `POST-COMMIT VERIFY FAILED`.
 7. Observe actual MACsec rollover, bilateral synchronization and independent
-   600-second SSH identity rotation, not just successful config commits. Pending.
+   600-second SSH identity rotation, not just successful config commits.
+   Verified: `python qbt_orchestrator.py verify --confirm-verify` passed on
+   2026-10-06 with a shared new active key on both routers, a changed Latest
+   SAK KI on both, MACsec in use and MKA Secured; RPC identity rotation
+   completed every cycle with no `RPC-KEY VERIFY FAIL`.
+
+### Runtime fixes found during acceptance (2026-10-06)
+
+All are applied in `lib/qbt/runtime_builder.py`, which patches the shared
+`artifacts/qkd_onbox.py` core for the QBT runtime only:
+
+* **Stale state writes.** A periodic run that loaded the state before an
+  `install-key-batch` saved it back afterwards, reverting generation 11 to 9 on
+  the slave while the router keychain kept the new keys; the pair stayed
+  misaligned (`ACTIVE_NOT_BILATERALLY_CONFIRMED` / `NO_ROUTER_MATCH`).
+  `save_db_state` now takes a file lock and drops writes older than the
+  generation on disk (`STATE SAVE DROPPED`); install handlers stay authoritative.
+* **RPC key verification race.** The staged key is added to `authorized_keys`
+  without a Junos commit, verification retries four times with rc/stderr logged,
+  and finalize falls back to the previous key (same fix as the PhioTX runtime).
+* **Master/slave pending purge.** The master now uses the slave's slot-based
+  rule, which removes `POST-COMMIT VERIFY FAILED` after every rolling batch.
+* **Fresh seed name.** A fresh seed must be named
+  `sha256("<keychain>:bootstrap:key-name:0")` or the runtime refuses to adopt it
+  (`SEED ADOPTION BLOCKED reason=CKN_MISMATCH`).
+
+Orchestrator fixes: `deploy` generates, imports and installs the PKI and
+`--rotate-pki` forces regeneration; every PKI import restarts the KME so it
+serves the new certificate; the probe refreshes its own CA/SAE copy; `verify`
+accepts the evidence this runtime actually produces.
