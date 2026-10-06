@@ -23,8 +23,8 @@ implemented and unit-tested but **not** exercised on the routers, the text says 
 7. [Attach the container networks](#7-attach-the-container-networks)
 8. [Create the PKI](#8-create-the-pki)
 9. [Peer the two KMEs](#9-peer-the-two-kmes)
-10. [Test ENC/DEC: the orchestrator probe and manual curl](#10-test-encdec-the-orchestrator-probe-and-manual-curl)
-11. [Install the on-box runtime that rotates the MACsec keys](#11-install-the-on-box-runtime-that-rotates-the-macsec-keys)
+10. [Install the on-box runtime that rotates the MACsec keys](#10-install-the-on-box-runtime-that-rotates-the-macsec-keys)
+11. [Test ENC/DEC: the orchestrator probe and manual curl](#11-test-encdec-the-orchestrator-probe-and-manual-curl)
 12. [See the MACsec link](#12-see-the-macsec-link)
 13. [Prove it end to end](#13-prove-it-end-to-end)
 14. [How the rotation works](#14-how-the-rotation-works)
@@ -368,9 +368,128 @@ then hold identical key material for any Key-ID, which is what makes ENC on one
 side and DEC on the other return the same key. Architecture and key classes:
 [qbt_key_flow.md](qbt_key_flow.md).
 
-## 10. Test ENC/DEC: the orchestrator probe and manual curl
+It is safe to run again on KMEs that are already peered, and it was run again
+after a clean-slate rebuild (section 17.5): existing key pairs are recognised
+from the types `ake list-keys` reports (`ECDSA_P384` and `CRYSPEN_ML_KEM_1024`
+self key pairs; the requested names `ecdhe-p521` and `cryspen-ml-kem1024` do not
+appear in that listing), the peer's URL is set again with `kme update-peer`
+(`kme list-peers` shows only the name and the ID), and the public-key import and
+exchange configuration are simply repeated. It does not generate new key pairs
+once they exist.
 
-### 10.1 The orchestrator probe
+## 10. Install the on-box runtime that rotates the MACsec keys
+
+The order that works on a clean router is: network (7), PKI (8), peer (9), then
+this section, **then** the ENC/DEC tests of section 11. The probe and the manual
+curl need the certificates that `deploy` installs on the routers.
+
+Two steps: generate the files locally, then deploy them.
+
+```sh
+.venv/bin/python qbt_orchestrator.py create
+.venv/bin/python qbt_orchestrator.py deploy --pki-dir ~/qbt-private/qbt-pki --dry-run   # no remote connection
+.venv/bin/python qbt_orchestrator.py deploy --pki-dir ~/qbt-private/qbt-pki
+```
+
+`create` reads the router inventory, takes the EVO1-EVO2 link and renders
+`artifacts/qbt_onbox.py` plus per-router JSON profiles in `config/runtime/EVO1`
+and `config/runtime/EVO2`. `deploy` prints its progress:
+
+```text
+[deploy] 1/5 reading Junos MACsec state on EVO1/EVO2 (read-only)
+[deploy] 2/5 checking /var/db/scripts/op for unexpected scripts
+[deploy] 3/5 preparing the SSH identities used for peer key exchange
+[deploy] 4/5 EVO1: copying runtime, sidecars and certificates
+[deploy] 4/5 EVO1: installing the ETSI socket helper service
+[deploy] 5/5 EVO1: loading and committing the Junos configuration
+```
+
+What lands on each router:
+
+* the runtime and two JSON files in `/var/db/scripts/op/` (and a copy of the script in `/var/db/scripts/event/`);
+* the CA and SAE certificate in `/var/db/scripts/certs/`;
+* a dedicated SSH identity and `authorized_keys` entry for the peer (`etsi_user`);
+* a small root-owned service, `qbt-etsi-socket`, that opens the TCP connection to the KME on the bridge and hands the socket to the runtime (explained in [10.1](#101-the-etsi-socket-helper));
+* Junos configuration: the MACsec association `QBT_EVO` with the key chain `QKD_QBT_EVO` seeded with key 0, and a 60-second event timer that runs the script.
+
+`deploy` also imports the PKI into the containers (reusing a valid one, creating
+it if absent), so on a clean lab you may run it right after `peer`. It refuses to
+run when only one router has the configuration or when unknown scripts sit in
+`/var/db/scripts/op`.
+
+Within about 30 minutes the logs show the seed being adopted, slots 1-3 being
+filled (`RING_COMPLETION`) and the first rolling replacements (section 15).
+
+### 10.1 The ETSI socket helper
+
+The runtime (`qbt_onbox.py`) runs as the unprivileged Junos user `etsi_user`, yet
+it has to talk to a KME that lives behind a Docker bridge. The helper solves this
+without giving the runtime any network privileges.
+
+```text
+ qbt_onbox.py (etsi_user, unprivileged)              qbt-etsi-socket (root service)
+   1. connect to /run/qbt-etsi/transport.sock  ---->  2. check who is calling (SO_PEERCRED): must be etsi_user
+                                                      3. find the bridge that carries 9.1.1.1, bind to it
+                                                         (SO_BINDTODEVICE), connect TCP 9.1.1.1 -> 9.1.1.10:443
+   5. receive the *connected socket*  <------------   4. hand it over (SCM_RIGHTS) and close its own copy
+   6. TLS handshake and ETSI request, using the SAE certificate and key in /var/db/scripts/certs
+```
+
+What this buys you:
+
+* **The helper does no TLS and never sees a key.** The certificates stay with the
+  runtime; the helper's unit even makes `/var/db/scripts/certs` inaccessible to it.
+  All it ever does is open one TCP connection and pass it on.
+* **The runtime needs no special rights.** Binding a socket to a bridge interface
+  needs privileges that `etsi_user` does not have.
+* **It is endpoint-limited.** The helper refuses anything but source `9.1.1.1`,
+  destination `9.1.1.10` or `9.1.1.11`, port 443, and a caller whose UID is the
+  configured script user. Its configuration must be owned by root and not
+  writable by others, or it will not start. On the runtime side, `etsi_get` accepts
+  only `enc_keys` and `dec_keys` URLs on those two addresses.
+
+Installed by `deploy` (section 10); `deploy` also restarts it and waits until the
+socket exists:
+
+| File | Content |
+| --- | --- |
+| `/var/db/qbt-etsi/helper.py` | the service itself (`artifacts/qbt_etsi_socket_helper.py` in the repository, identical on the router) |
+| `/var/db/qbt-etsi/config.json` | `{"source_ip": "9.1.1.1", "destination_ip": "9.1.1.10", "port": 443, "script_user": "etsi_user"}` (`9.1.1.11` on EVO2) |
+| `/etc/systemd/system/qbt-etsi-socket.service` | the unit; restarts on failure, `NoNewPrivileges`, read-only filesystem except its own runtime directory, only `CAP_NET_RAW` and `CAP_CHOWN` |
+| `/run/qbt-etsi/transport.sock` | the Unix socket, mode `660`, owner `root`, group `etsi_user` |
+
+Look at it:
+
+```sh
+systemctl status qbt-etsi-socket --no-pager | head -8      # active (running)
+journalctl -u qbt-etsi-socket -n 20 --no-pager              # "QBT ETSI helper ready for UID 2001"
+ls -l /run/qbt-etsi/transport.sock                          # srw-rw---- root etsi_user
+```
+
+Restarting it is safe (`systemctl restart qbt-etsi-socket`): connections are made
+one per request, nothing is kept in the helper. Its failures are logged in that
+journal with `ETSI socket preparation failed`. If the helper is not running, the
+runtime cannot reach the KME, so it cannot obtain new keys and the key ring slowly
+runs dry (section 19). This failure path follows from the code; it was not
+provoked on the lab routers.
+
+### 10.2 What is in `artifacts/`
+
+| File | Role | Goes to the router? |
+| --- | --- | --- |
+| `qbt_onbox.py` | the runtime: the single, maintained, self-contained source file. `create` copies it next to each router's JSON profile | yes, `/var/db/scripts/op/` and `/event/` |
+| `qbt_etsi_socket_helper.py` | the helper of 10.1 | yes, as the separate service `/var/db/qbt-etsi/helper.py` |
+| `qbt_etsi_probe.py` | the client run by the `probe` command (and by `verify`) on each router | yes, uploaded by `probe` as `/var/db/qbt-etsi/client/probe.py` |
+
+`artifacts/` holds exactly three files, and all go to the routers. To change the
+runtime's behaviour edit `artifacts/qbt_onbox.py` directly, run the tests, then
+`create` (copies it to `config/runtime/EVO1` and `EVO2`) and `deploy`. The module
+`lib/qbt/runtime_builder.py` only checks that the file is a single self-contained
+script with the expected version before `create` and `deploy` use it.
+
+## 11. Test ENC/DEC: the orchestrator probe and manual curl
+
+### 11.1 The orchestrator probe
 
 ```sh
 .venv/bin/python qbt_orchestrator.py probe
@@ -381,15 +500,17 @@ side and DEC on the other return the same key. Architecture and key classes:
 
 EVO1 requests four keys for `sae-002` (ENC), EVO2 recovers the same four by
 Key-ID for `sae-001` (DEC), and the orchestrator checks that they are identical
-byte for byte without printing them. Before each run it refreshes the probe's
-own copy of the CA and SAE identity from `/var/db/scripts/certs`, so it always
-tests the PKI that is currently deployed. It needs the certificates installed by
-`deploy` (section 11), so on a clean lab run it after that step.
+byte for byte without printing them. On every run it installs the probe client in
+`/var/db/qbt-etsi/client/` (the script, plus its own copy of the CA and of the SAE
+identity taken from `/var/db/scripts/certs`), so it works on a clean router and
+always tests the PKI that is currently deployed. It needs the certificates and the
+`/var/db/qbt-etsi` directory that `deploy` creates (section 10): run it after that
+step.
 
-### 10.2 Manual curl from the routers
+### 11.2 Manual curl from the routers
 
 Do it by hand once, to see the real API. Both calls use the SAE's client
-certificate that `deploy` (section 11) installs in `/var/db/scripts/certs`.
+certificate that `deploy` (section 10) installs in `/var/db/scripts/certs`.
 
 On each router, open the host shell (`ssh root@<router>`, then `sh`) and find the
 Docker bridge that carries `9.1.1.1`. The ETSI socket is bound to that bridge:
@@ -434,111 +555,6 @@ docker logs --tail 6 qbt-evo1
 #  INFO ... finished processing request, latency: 1 ms, status: 200
 #     in qbt_kme::run::request-etsi-014 with method=GET uri=/api/v1/keys/sae-002/enc_keys?number=1&size=256
 ```
-
-## 11. Install the on-box runtime that rotates the MACsec keys
-
-Two steps: generate the files locally, then deploy them.
-
-```sh
-.venv/bin/python qbt_orchestrator.py create
-.venv/bin/python qbt_orchestrator.py deploy --pki-dir ~/qbt-private/qbt-pki --dry-run   # no remote connection
-.venv/bin/python qbt_orchestrator.py deploy --pki-dir ~/qbt-private/qbt-pki
-```
-
-`create` reads the router inventory, takes the EVO1-EVO2 link and renders
-`artifacts/qbt_onbox.py` plus per-router JSON profiles in `config/runtime/EVO1`
-and `config/runtime/EVO2`. `deploy` prints its progress:
-
-```text
-[deploy] 1/5 reading Junos MACsec state on EVO1/EVO2 (read-only)
-[deploy] 2/5 checking /var/db/scripts/op for unexpected scripts
-[deploy] 3/5 preparing the SSH identities used for peer key exchange
-[deploy] 4/5 EVO1: copying runtime, sidecars and certificates
-[deploy] 4/5 EVO1: installing the ETSI socket helper service
-[deploy] 5/5 EVO1: loading and committing the Junos configuration
-```
-
-What lands on each router:
-
-* the runtime and two JSON files in `/var/db/scripts/op/` (and a copy of the script in `/var/db/scripts/event/`);
-* the CA and SAE certificate in `/var/db/scripts/certs/`;
-* a dedicated SSH identity and `authorized_keys` entry for the peer (`etsi_user`);
-* a small root-owned service, `qbt-etsi-socket`, that opens the TCP connection to the KME on the bridge and hands the socket to the runtime (explained in [11.1](#111-the-etsi-socket-helper));
-* Junos configuration: the MACsec association `QBT_EVO` with the key chain `QKD_QBT_EVO` seeded with key 0, and a 60-second event timer that runs the script.
-
-`deploy` also imports the PKI into the containers (reusing a valid one, creating
-it if absent), so on a clean lab you may run it right after `peer`. It refuses to
-run when only one router has the configuration or when unknown scripts sit in
-`/var/db/scripts/op`.
-
-Within about 30 minutes the logs show the seed being adopted, slots 1-3 being
-filled (`RING_COMPLETION`) and the first rolling replacements (section 15).
-
-### 11.1 The ETSI socket helper
-
-The runtime (`qbt_onbox.py`) runs as the unprivileged Junos user `etsi_user`, yet
-it has to talk to a KME that lives behind a Docker bridge. The helper solves this
-without giving the runtime any network privileges.
-
-```text
- qbt_onbox.py (etsi_user, unprivileged)              qbt-etsi-socket (root service)
-   1. connect to /run/qbt-etsi/transport.sock  ---->  2. check who is calling (SO_PEERCRED): must be etsi_user
-                                                      3. find the bridge that carries 9.1.1.1, bind to it
-                                                         (SO_BINDTODEVICE), connect TCP 9.1.1.1 -> 9.1.1.10:443
-   5. receive the *connected socket*  <------------   4. hand it over (SCM_RIGHTS) and close its own copy
-   6. TLS handshake and ETSI request, using the SAE certificate and key in /var/db/scripts/certs
-```
-
-What this buys you:
-
-* **The helper does no TLS and never sees a key.** The certificates stay with the
-  runtime; the helper's unit even makes `/var/db/scripts/certs` inaccessible to it.
-  All it ever does is open one TCP connection and pass it on.
-* **The runtime needs no special rights.** Binding a socket to a bridge interface
-  needs privileges that `etsi_user` does not have.
-* **It is endpoint-limited.** The helper refuses anything but source `9.1.1.1`,
-  destination `9.1.1.10` or `9.1.1.11`, port 443, and a caller whose UID is the
-  configured script user. Its configuration must be owned by root and not
-  writable by others, or it will not start. On the runtime side, `etsi_get` accepts
-  only `enc_keys` and `dec_keys` URLs on those two addresses.
-
-Installed by `deploy` (section 11); `deploy` also restarts it and waits until the
-socket exists:
-
-| File | Content |
-| --- | --- |
-| `/var/db/qbt-etsi/helper.py` | the service itself (`artifacts/qbt_etsi_socket_helper.py` in the repository, identical on the router) |
-| `/var/db/qbt-etsi/config.json` | `{"source_ip": "9.1.1.1", "destination_ip": "9.1.1.10", "port": 443, "script_user": "etsi_user"}` (`9.1.1.11` on EVO2) |
-| `/etc/systemd/system/qbt-etsi-socket.service` | the unit; restarts on failure, `NoNewPrivileges`, read-only filesystem except its own runtime directory, only `CAP_NET_RAW` and `CAP_CHOWN` |
-| `/run/qbt-etsi/transport.sock` | the Unix socket, mode `660`, owner `root`, group `etsi_user` |
-
-Look at it:
-
-```sh
-systemctl status qbt-etsi-socket --no-pager | head -8      # active (running)
-journalctl -u qbt-etsi-socket -n 20 --no-pager              # "QBT ETSI helper ready for UID 2001"
-ls -l /run/qbt-etsi/transport.sock                          # srw-rw---- root etsi_user
-```
-
-Restarting it is safe (`systemctl restart qbt-etsi-socket`): connections are made
-one per request, nothing is kept in the helper. Its failures are logged in that
-journal with `ETSI socket preparation failed`. If the helper is not running, the
-runtime cannot reach the KME, so it cannot obtain new keys and the key ring slowly
-runs dry (section 19). This failure path follows from the code; it was not
-provoked on the lab routers.
-
-### 11.2 What is in `artifacts/`
-
-| File | Role | Goes to the router? |
-| --- | --- | --- |
-| `qbt_onbox.py` | the runtime: the single, maintained, self-contained source file. `create` copies it next to each router's JSON profile | yes, `/var/db/scripts/op/` and `/event/` |
-| `qbt_etsi_socket_helper.py` | the helper of 11.1 | yes, as the separate service `/var/db/qbt-etsi/helper.py` |
-
-`artifacts/` holds exactly two files, and both go to the routers. To change the
-runtime's behaviour edit `artifacts/qbt_onbox.py` directly, run the tests, then
-`create` (copies it to `config/runtime/EVO1` and `EVO2`) and `deploy`. The module
-`lib/qbt/runtime_builder.py` only checks that the file is a single self-contained
-script with the expected version before `create` and `deploy` use it.
 
 ## 12. See the MACsec link
 
@@ -854,7 +870,7 @@ docker network inspect jnpr_cntrz_net -f '{{json .IPAM.Config}}'
 docker network inspect qbt_oob -f '{{json .IPAM.Config}} {{json .Options}}'
 docker inspect qbt-evo1 -f '{{json .NetworkSettings.Networks}}' | python3 -c "import sys,json; [print(k, v['IPAddress'], v.get('MacAddress')) for k,v in json.load(sys.stdin).items()]"
 docker exec qbt-evo1 qbt-kme license host-id                 # safe
-systemctl status qbt-etsi-socket --no-pager | head -5         # the bridge helper (section 11.1)
+systemctl status qbt-etsi-socket --no-pager | head -5         # the bridge helper (section 10.1)
 cat /var/db/qbt-etsi/config.json                              # source 9.1.1.1, destination 9.1.1.10, port 443
 ```
 
@@ -1024,6 +1040,107 @@ It checks licence, identity, image and mounts, creates replacements with the sam
 mounts, and keeps each old container renamed `qbt-evoN-rollback-<id>`. Never
 delete the rollback containers without a deliberate decision.
 
+### 17.5 Return the routers to a clean state and rebuild (nothing is deleted)
+
+Use this to prove that a deployment works from empty routers, or to start over.
+It removes the **runtime and its configuration** and keeps the licensed
+containers, their identity and their licences untouched. Everything it removes is
+moved aside or saved first.
+
+What stays: `qbt-evo1`/`qbt-evo2` (and `/var/db/qbt/`), the Docker networks, the
+interface address on `et-0/0/1`, the Junos login user `etsi_user` (only its SSH
+keys are removed) and `set system scripts language python3`.
+
+**1. Check the starting point** (and write down the container IDs):
+
+```sh
+.venv/bin/python qbt_orchestrator.py preflight
+```
+
+**2. Save the Junos configuration of each router to your workstation.** The
+file contains key-chain secrets in Junos' reversible `$9$` form: keep it private
+(directory `700`, file `600`) and never commit it.
+
+```sh
+TS=$(date +%Y%m%d-%H%M%S); mkdir -p ~/qbt-backups; chmod 700 ~/qbt-backups
+for ip in 10.38.97.218 10.38.97.228; do
+  ssh root@$ip "cli -c 'show configuration | save /var/tmp/pre-clean-slate-$TS.conf'"
+  scp -O root@$ip:/var/tmp/pre-clean-slate-$TS.conf ~/qbt-backups/$ip-pre-clean-slate-$TS.conf
+  chmod 600 ~/qbt-backups/$ip-pre-clean-slate-$TS.conf
+done
+```
+
+**3. On each router run this script** (`ssh root@<router> 'sh -s' -- "$TS" < teardown.sh`).
+The Junos change is a single commit; the timer is removed first so no run starts
+while files are moved.
+
+```sh
+set -eu
+TS="$1"
+A=/var/home/etsi_user/clean-slate-$TS
+cli -c "configure; \
+delete security macsec interfaces et-0/0/1; \
+delete security macsec connectivity-association QBT_EVO; \
+delete security authentication-key-chains key-chain QKD_QBT_EVO; \
+delete event-options policy QBT_POLICY; \
+delete event-options generate-event QBT_TIMER; \
+delete event-options event-script file qbt_onbox.py; \
+delete system scripts op file qbt_onbox.py; \
+delete system login user etsi_user authentication; \
+commit comment \"clean-slate test: remove the QBT runtime\"; exit"
+sleep 8                                           # let an in-flight run finish
+systemctl disable --now qbt-etsi-socket >/dev/null 2>&1 || true
+mkdir -p "$A/op" "$A/event" "$A/certs"; chmod 700 "$A"
+for src in /var/db/qbt-etsi /etc/systemd/system/qbt-etsi-socket.service; do test -e "$src" && mv "$src" "$A/"; done
+for f in /var/db/scripts/op/qbt_onbox.py /var/db/scripts/op/qbt_onbox_config.json /var/db/scripts/op/qbt_onbox_inventory.json; do test -e "$f" && mv "$f" "$A/op/"; done
+test -e /var/db/scripts/event/qbt_onbox.py && mv /var/db/scripts/event/qbt_onbox.py "$A/event/"
+for f in /var/db/scripts/certs/qbt-ca.pem /var/db/scripts/certs/sae-*.crt /var/db/scripts/certs/sae-*.key; do test -e "$f" && mv "$f" "$A/certs/"; done
+for d in /var/home/etsi_user/logs /var/home/etsi_user/qbt-state /var/home/etsi_user/.ssh /var/tmp/qbt_peer_status; do
+  test -e "$d" && mv "$d" "$A/$(basename $d)-$(echo $d | cut -d/ -f3-4 | tr / _)"
+done
+systemctl daemon-reload
+```
+
+Expect harmless `mv: setting attribute 'security.SMACK64'` warnings: the move
+crosses a filesystem boundary and the label cannot be copied; the files are moved.
+Afterwards `show security mka sessions` is empty, `show configuration security
+macsec` and `show configuration event-options` print nothing, and the archive
+(`/var/home/etsi_user/clean-slate-<TS>/`) holds the old logs, state, SSH keys,
+scripts, certificates and helper. The saved `.conf` and Junos' own commit history
+are your way back; restoring from them was **not** tested.
+
+**4. Rebuild with the guide, from section 7.** A new PKI directory is used, so
+the PKI step needs `--rotate-pki` (the containers still hold the previous one):
+
+```sh
+python qbt_orchestrator.py network
+python qbt_orchestrator.py pki --pki-profile hierarchical_ca --pki-config config/pki/hierarchical_ca.yml \
+  --pki-dir ~/qbt-private/qbt-pki-2 --rotate-pki
+python qbt_orchestrator.py peer
+python qbt_orchestrator.py create
+python qbt_orchestrator.py deploy --pki-dir ~/qbt-private/qbt-pki-2
+python qbt_orchestrator.py probe
+python qbt_orchestrator.py verify --confirm-verify --rotation-timeout-seconds 1200
+python qbt_orchestrator.py preflight           # licences still active, same container IDs
+```
+
+**What happened when this was run (2026-10-06, both routers):**
+
+| Step | Result |
+| --- | --- |
+| `preflight` before | containers `9bcb1a33b974` / `67d03037569a`, licences `active` |
+| Teardown | one commit per router, everything moved to the archive, MKA gone |
+| `network` | no change needed, addresses `9.1.1.10/.11` and `10.38.112.10/.11` |
+| `pki --rotate-pki` | new PKI generated, imported, both KMEs restarted |
+| `peer` | **failed twice** on KMEs that were already peered (see 9); fixed, then passed |
+| `create` and `deploy` | passed. Junos commit at 07:05:09 PDT; the first timer run adopted the seed at 07:06:10 and `RING_COMPLETION DONE` (3 keys) followed 8 seconds later; MKA `Secured - Primary` with a live peer; the first real key became active at 07:09-07:10, about 4 minutes after the commit; no WARN or ERROR |
+| `probe` | **failed** on the clean router: the probe client directory did not exist (it had been created by hand earlier); fixed so `probe` installs it, then passed |
+| `verify` | see the result recorded below |
+
+The two failures are the reason this test is worth repeating after any change to
+`peer`, `probe`, `deploy` or the runtime: both bugs were invisible on routers that
+had been set up by hand.
+
 ## 18. Troubleshooting table
 
 | Symptom | Likely cause | What to do |
@@ -1034,7 +1151,7 @@ delete the rollback containers without a deliberate decision.
 | Container idles: `No valid license found` | licence not activated | section 6 |
 | `preflight` says labels or identity do not match | container not created by this suite | compare with section 5; do not recreate a licensed one |
 | `ENC ERROR [SSL: CERTIFICATE_VERIFY_FAILED]` | the KME serves a certificate the CA does not match, usually after a PKI change | restart the KME (17.3); check `deploy` copied the same `ca.pem` |
-| Manual curl: `could not resolve`/timeout | wrong bridge for `--interface` | rediscover with the `br-` command of 10.2 |
+| Manual curl: `could not resolve`/timeout | wrong bridge for `--interface` | rediscover with the `br-` command of 11.2 |
 | `ROTATION BLOCKED ...` repeating | master and slave disagree about the active key | compare the state tables of 16.5; reset (17.2) |
 | `Secured - Preceding` that does not clear, or MKA down | the two key chains hold different keys | check key-chain start times and names on both; reset (17.2) |
 | All key-chain start times in the past | ring ran dry (ENC failing >20 min) | fix the cause (certificates, KME up), then reset (17.2) |
@@ -1048,7 +1165,10 @@ delete the rollback containers without a deliberate decision.
   MKA state and `inuse` associations are the evidence used; whether the platform
   simply does not populate these counters has not been established.
 * The orchestrator's `license-activate` and `bootstrap` are not exercised live;
-  the first container (section 5) is created by hand.
+  the first container (section 5) is created by hand. A clean-slate rebuild of
+  everything **above** the licensed containers was run and passed (section 17.5);
+  creating a container with a new identity and activating a new licence was not
+  repeated, because the licences are bound to the existing identities.
 * The licence reports `No feature in file`; entitlements cannot be listed. ENC and
   DEC work.
 * The ring stalls if ENC is unavailable for longer than the key horizon (about 20
@@ -1072,6 +1192,7 @@ delete the rollback containers without a deliberate decision.
 | Install runtime and PKI | `deploy --pki-dir ...` (`--dry-run`, `--rotate-pki`, `--reset-rotation-state`) |
 | End-to-end acceptance | `verify --confirm-verify` |
 | Recreate containers | `recreate --confirm-manual-backup --confirm-recreate` |
+| Clean-slate rebuild without deleting anything | section 17.5 |
 
 All are `python qbt_orchestrator.py <command>`; add `--help` to any of them.
 
