@@ -1148,7 +1148,7 @@ teardown script was extracted from this guide and run as written):
 | --- | --- |
 | 2nd rebuild | every command passed, but the key ring did not complete: `RING_COMPLETION START` without `DONE`, then `ROTATION BLOCKED reason=SLOT_METADATA_NOT_BILATERALLY_ALIGNED`. On the slave, the install saved generation 3 and a run that had adopted the seed a moment earlier then saved generation 0 over it. The state guard exempted every generation 0 write so that a seed re-adoption keeps working. |
 | Fix | a generation 0 write is accepted only for a seeded state while the router keychain still holds just the seed (`_state_write_is_stale`); otherwise it is dropped like any stale write. Four unit tests, including this exact interleaving |
-| 3rd rebuild, with the fix | clean on both routers: seed adopted 07:43:42, `RING_COMPLETION DONE` (3 keys) 07 seconds later, slave `PEER_PENDING_KEY_BATCH_INSTALLED generation=3`, both routers on the same new active key at 07:46-07:47, MKA `Secured - Primary` with a live peer, no WARN or ERROR |
+| 3rd rebuild, with the fix | clean on both routers: seed adopted 07:43:42, `RING_COMPLETION DONE` (3 keys) 07 seconds later, slave `PEER_PENDING_KEY_BATCH_INSTALLED generation=3`, both routers on the same new active key at 07:46-07:47, MKA `Secured - Primary` with a live peer, no WARN or ERROR. `verify` then passed: shared new active key `7cfdf012-…`, Latest SAK KI changed on both, MACsec `inuse`, licences `active`, same container IDs |
 
 This is a race, so one clean run does not prove it is gone: the first rebuild had
 also passed, by luck of timing. What proves the fix is the unit test of the
