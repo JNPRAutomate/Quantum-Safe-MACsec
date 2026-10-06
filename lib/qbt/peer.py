@@ -8,6 +8,20 @@ from lib.qbt.network import ADDRESSES
 from lib.qbt.runtime import admin_command
 
 
+# `ake generate-key-pairs --algorithms ecdhe-p521,cryspen-ml-kem1024` stores these
+# self key pairs; `ake list-keys` reports the stored types, not the requested names.
+REQUIRED_SELF_KEY_TYPES = ("ECDSA_P384", "CRYSPEN_ML_KEM_1024")
+
+
+def has_ake_key_pairs(listing):
+    """Return True when every required self key pair is present in `ake list-keys`."""
+    rows = [line for line in listing.splitlines() if "Self Key Pair" in line]
+    return all(
+        any(key_type in row.upper() for row in rows)
+        for key_type in REQUIRED_SELF_KEY_TYPES
+    )
+
+
 def configure_peers(clients, run):
     if set(clients) != {"EVO1", "EVO2"}:
         raise ValueError("Peer configuration requires both EVO1 and EVO2")
@@ -22,7 +36,7 @@ def configure_peers(clients, run):
                 container, "ake", "generate-key-pairs",
                 "--algorithms", "ecdhe-p521,cryspen-ml-kem1024",
             ), timeout=300)
-        elif not all(algorithm in keys.lower() for algorithm in ("ecdhe", "ml")):
+        elif not has_ake_key_pairs(keys):
             raise ValueError(f"{name}: partial AKE inventory; explicit inspection required")
         export_path = "/tmp/qbt-public-keys.json"
         run(client, admin_command(container, "ake", "export-public-keys", "-f", export_path))
@@ -39,8 +53,12 @@ def configure_peers(clients, run):
                 container, "kme", "add-peer-id-string", identities[remote],
                 "-n", peer_name, "-u", url,
             )))
-        elif url not in peers:
-            raise ValueError(f"{name}: existing peer address mismatch")
+        else:
+            # `kme list-peers` shows only the name and ID, so the stored URL
+            # cannot be compared; asserting it makes a rerun idempotent.
+            run(client, admin_command(
+                container, "kme", "update-peer", peer_name, "-u", url,
+            ))
         path = "/tmp/qbt-peer-public.json"
         run(client, shlex.join([
             "docker", "exec", container, "/bin/sh", "-c",

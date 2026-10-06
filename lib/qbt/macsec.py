@@ -582,11 +582,12 @@ def deploy_runtime(
                 cu.commit_check()
                 _progress(f"5/5 {name}: committing")
                 cu.commit(comment="QBT on-box runtime and key rotation event")
-        seed_note = (
-            "fresh QBT seed installed; rotation state reset"
-            if reset_rotation_state
-            else "existing QBT seed preserved"
-        )
+        if reset_rotation_state:
+            seed_note = "fresh QBT seed installed; rotation state reset"
+        elif states[name]:
+            seed_note = "fresh QBT seed installed"
+        else:
+            seed_note = "existing QBT seed preserved"
         print(
             f"{name}: installed one op script, two JSON sidecars, QBT ETSI helper, "
             f"and 60-second event timer; {seed_note}"

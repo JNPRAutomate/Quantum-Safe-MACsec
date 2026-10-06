@@ -10,18 +10,29 @@ import uuid
 from scp import SCPClient
 
 
+PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "artifacts/qbt_etsi_probe.py"
+
+
 def paired_probe(clients, run, transfer):
     if set(clients) != {"EVO1", "EVO2"}:
         raise ValueError("Paired acceptance requires both EVOs")
     root = "/var/db/qbt-etsi/client"
-    # The probe client keeps its own copy of the CA and SAE identity; refresh it
-    # from the certificates deployed for the runtime, or a PKI rotation would
-    # leave the probe testing the previous PKI.
+    # The probe client is installed here on every run: its script and its own
+    # copy of the CA and SAE identity, taken from the certificates deployed for
+    # the runtime, so a clean router works and a PKI rotation is never tested
+    # against the previous PKI.
     for name, sae in (("EVO1", "sae-001"), ("EVO2", "sae-002")):
         certs = "/var/db/scripts/certs"
         run(
             clients[name],
+            "set -eu; test -d /var/db/qbt-etsi; "
+            f"mkdir -p {root}; chown etsi_user {root}; chmod 700 {root}",
+        )
+        transfer(clients[name], PROBE_SCRIPT, f"{root}/probe.py")
+        run(
+            clients[name],
             "set -eu; "
+            f"chown etsi_user {root}/probe.py; chmod 600 {root}/probe.py; "
             f"cat {certs}/qbt-ca.pem > {root}/ca.pem; "
             f"cat {certs}/{sae}.crt > {root}/sae.pem; "
             f"cat {certs}/{sae}.key > {root}/sae.key; "
