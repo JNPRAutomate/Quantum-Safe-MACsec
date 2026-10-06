@@ -35,3 +35,58 @@ def test_runtime_clean_retains_shared_docker_targets(tmp_path, monkeypatch):
     docker_clean.handle_clean(args)
     assert captured[0]["_phiotx_defaults"] == defaults
     assert captured[0]["phiotx"]["container"] == "phiotx01"
+
+
+def test_parse_scripts_using_users_finds_event_and_op_references():
+    display_set_output = "\n".join(
+        [
+            "set event-options event-script file old_timer.py python-script-user etsi_user",
+            "set system scripts op file old_status.py python-script-user etsi_peer_view",
+            "set event-options event-script file unrelated.py python-script-user root",
+        ]
+    )
+
+    event_scripts, op_scripts = docker_clean.parse_scripts_using_users(
+        display_set_output,
+        target_users={"etsi_user", "etsi_peer_view"},
+    )
+
+    assert event_scripts == {"old_timer.py": {"etsi_user"}}
+    assert op_scripts == {"old_status.py": {"etsi_peer_view"}}
+
+
+def test_parse_scripts_using_users_handles_quoted_filenames_and_deduplicates():
+    display_set_output = "\n".join(
+        [
+            'set event-options event-script file "old timer.py" python-script-user etsi_user',
+            'set event-options event-script file "old timer.py" python-script-user etsi_user',
+        ]
+    )
+
+    event_scripts, op_scripts = docker_clean.parse_scripts_using_users(
+        display_set_output,
+        target_users={"etsi_user"},
+    )
+
+    assert event_scripts == {"old timer.py": {"etsi_user"}}
+    assert op_scripts == {}
+
+
+def test_cleanup_plan_preserves_users_referenced_by_unmanaged_scripts():
+    event_scripts = {
+        "phiotx_qkd_onbox.py": {"etsi_user"},
+        "site_health_check.py": {"etsi_user"},
+    }
+    op_scripts = {"phiotx_qkd_onbox.py": {"etsi_user"}}
+
+    event_to_delete, op_to_delete, preserved_users = (
+        docker_clean.plan_managed_script_cleanup(
+            event_scripts,
+            op_scripts,
+            managed_scripts={"phiotx_qkd_onbox.py", "qkd_onbox.py"},
+        )
+    )
+
+    assert event_to_delete == ["phiotx_qkd_onbox.py"]
+    assert op_to_delete == ["phiotx_qkd_onbox.py"]
+    assert preserved_users == {"etsi_user"}

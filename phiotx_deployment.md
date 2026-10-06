@@ -169,7 +169,7 @@ not a sequence that must all be run for every deployment.
 | `phiotx-up` | Load/start and configure PhioTX containers, including network, licence, PKI, layers, and PQC setup. | Yes; changes Docker resources on EVO routers. | Container lifecycle work when runtime artifacts already exist. |
 | `deploy` | Run the PhioTX bring-up workflow, then deploy Junos configuration and runtime scripts. | Yes; changes containers and Junos configuration/runtime. | A planned deployment or redeployment when its effects are understood. It may reseed the MACsec keyring. |
 | `bootstrap` | Perform a complete greenfield deployment: generate a fresh fleet CA and certificates, prepare artifacts, install PhioTX, then deploy Junos/runtime. | Yes; performs the complete initial installation. | Once, for a planned installation from zero across the complete managed fleet. |
-| `clean` | Remove managed local and remote deployment state. | Usually yes; can remove router configuration, scripts, certificates, containers, network, image, and persistent PhioTX data. | Only for a planned cleanup after reviewing its full scope. |
+| `clean` | Remove managed local and remote deployment state. | Yes; removes PhioTX-managed configuration, runtime, certificates, container, network, image, and data. | Only for a planned cleanup after reviewing its full scope. |
 
 For this from-zero guide, run `validate` first and then `bootstrap` once. A
 successful `bootstrap` already includes PhioTX container setup and Junos/runtime
@@ -250,6 +250,15 @@ deployment. `clean` can remove managed router configuration, runtime files,
 certificates, containers, the OOB network, image, and persistent data; review
 its effects before running it. For the initial installation in this guide, use
 only the `validate` and `bootstrap` commands in the following sections.
+
+The on-box runtime account is selected by `secrets.script_user` in
+`config/inventory/inventory_base.yaml`; the default is `etsi_user`. Junos uses
+the `python-script-user` statement to name that actual login account for a
+registered script. During cleanup, managed PhioTX script registrations are
+removed before their account. If a remaining registered script still refers
+to the same account, `clean` preserves that account and its shared home and
+certificate files, reports the dependency, and continues removing PhioTX-owned
+resources. It does not delete the remaining script registration.
 
 ### 6.2 Read-Only Platform Preflight
 
@@ -467,26 +476,18 @@ confidential values to them.
 
 ## 8. Test `enc_keys` and `dec_keys` with curl
 
-Run this test from the EVO shell. It verifies that a key requested from A's
-local KME can be retrieved from B's KME. Find the KME addresses and SAE IDs in
-the corresponding inventory sidecars. For the current lab inventory, EVO1 is
-KME A at `9.1.1.5` with SAE `sae-001`, and EVO2 is KME B at `9.1.1.6` with
-SAE `sae-002`. These are the internal Docker-network addresses; the OOB
-addresses are not used by this local ETSI test. If your inventory differs,
-change these values to match it.
-
-These exact command blocks match the current lab inventory: EVO1 uses
-`9.1.1.5`/`sae-001`, and EVO2 uses `9.1.1.6`/`sae-002`. Run the first block in
-Bash on EVO1. Then copy only the printed `KEY_ID` into the second block and
-run it in Bash on EVO2. The commands require `curl`, `ip`, `awk`, and Python 3,
-which were checked during this lab. Do not enable shell tracing (`set -x`).
+This test requests one key from EVO1 and retrieves the matching key from EVO2.
+For the current inventory, EVO1 uses internal KME `9.1.1.5` and SAE `sae-001`;
+EVO2 uses `9.1.1.6` and `sae-002`. These are internal-network addresses, not
+OOB addresses. Run the commands in Bash on the named router. If the Junos shell
+is active, type `bash` and wait for the `bash-5.1#` prompt before pasting each
+block. Do not enable shell tracing.
 
 ### 8.1 Request a Key on A
 
-On EVO1, type `bash` if the prompt is still the Junos `root@evo1:~#` shell;
-continue only when the prompt changes to Bash. Then run this tested block. It
-prints the HTTP status and, after parsing the saved response, the key ID,
-encoded length, and digest. It never prints the key material.
+On EVO1, run this tested block. It prints the HTTP status, then extracts and
+prints only the returned key ID, encoded length, and digest. It never prints
+the key material.
 
 ```bash
 set +x
@@ -498,13 +499,21 @@ chmod 600 "$RESPONSE"
 umask 077
 trap 'rm -f "$RESPONSE"' EXIT
 
-curl --interface "$BR" --silent --show-error \
+HTTP_STATUS=$(curl --interface "$BR" --silent --show-error \
   --cert "$C/sae-001.crt" \
   --key "$C/sae-001.key" \
   --cacert "$C/ca.pem" \
   --output "$RESPONSE" \
-  --write-out 'HTTP_STATUS=%{http_code}\n' \
-  'https://9.1.1.5/api/v1/keys/sae-002/enc_keys?number=1&size=256'
+  --write-out '%{http_code}' \
+  'https://9.1.1.5/api/v1/keys/sae-002/enc_keys?number=1&size=256') || {
+  echo "ERROR: curl request failed"
+  exit 1
+}
+printf 'HTTP_STATUS=%s\n' "$HTTP_STATUS"
+if [ "$HTTP_STATUS" != 200 ]; then
+  echo "ERROR: expected HTTP 200; response was not parsed"
+  exit 1
+fi
 
 RESPONSE="$RESPONSE" python3 - <<'PY'
 import hashlib
@@ -520,24 +529,33 @@ print(f"ENC_SHA256={hashlib.sha256(encoded_key.encode()).hexdigest()}")
 PY
 ```
 
-Record only the printed `KEY_ID`, `ENC_LEN`, and `ENC_SHA256`. The response
-file is private to the shell session and is removed when Bash exits. Do not
-display it or print the key value.
+Record only the printed `KEY_ID`, `ENC_LEN`, and `ENC_SHA256`. Keep the
+response file private; do not display it or print the key value.
 
 ### 8.2 Retrieve It on B
 
-On EVO2, type `bash` if the prompt is still the Junos `root@evo2:~#` shell;
-continue only when the prompt changes to Bash. The block prompts for the
-`KEY_ID` printed by EVO1. Paste the identifier itself at the prompt: do not
-type the placeholder text and do not prefix the identifier with `$`.
+On EVO2, enter the key ID in a separate step. Run this command by itself in
+Bash:
+
+```bash
+read -r -p 'Paste KEY_ID from EVO1: ' KEY_ID
+```
+
+Paste only the UUID printed by EVO1 and press Enter. Wait for the Bash prompt
+to return before pasting the next block. Do not paste the curl block at the
+`KEY_ID` prompt, type placeholder text, or prefix the UUID with `$`.
+
+Then run this block in the same Bash session on EVO2:
 
 ```bash
 set +x
 C=/var/db/scripts/certs
 BR=$(ip -br addr | awk '$3 ~ /^9\.1\.1\.1\// {print $1}')
 if [ -z "$BR" ]; then echo "ERROR: bridge interface not found"; exit 1; fi
-read -r -p 'Paste KEY_ID from EVO1: ' KEY_ID
-if [ -z "$KEY_ID" ]; then echo "ERROR: KEY_ID is empty"; exit 1; fi
+if [[ ! "$KEY_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+  echo "ERROR: KEY_ID is empty or is not a UUID"
+  exit 1
+fi
 CERT_B="$C/sae-002.crt"
 KEY_B="$C/sae-002.key"
 RESPONSE=$(mktemp /tmp/phiotx-dec.XXXXXX)
@@ -545,13 +563,21 @@ chmod 600 "$RESPONSE"
 umask 077
 trap 'rm -f "$RESPONSE"' EXIT
 
-curl --interface "$BR" --silent --show-error \
+HTTP_STATUS=$(curl --interface "$BR" --silent --show-error \
   --cert "$CERT_B" \
   --key "$KEY_B" \
   --cacert "$C/ca.pem" \
   --output "$RESPONSE" \
-  --write-out 'HTTP_STATUS=%{http_code}\n' \
-  "https://9.1.1.6/api/v1/keys/sae-001/dec_keys?key_ID=${KEY_ID}"
+  --write-out '%{http_code}' \
+  "https://9.1.1.6/api/v1/keys/sae-001/dec_keys?key_ID=${KEY_ID}") || {
+  echo "ERROR: curl request failed"
+  exit 1
+}
+printf 'HTTP_STATUS=%s\n' "$HTTP_STATUS"
+if [ "$HTTP_STATUS" != 200 ]; then
+  echo "ERROR: expected HTTP 200; response was not parsed"
+  exit 1
+fi
 
 RESPONSE="$RESPONSE" python3 - <<'PY'
 import hashlib
@@ -568,18 +594,18 @@ PY
 
 Expected result: both calls return HTTP 200, the lengths match, and the
 `ENC_SHA256`/`DEC_SHA256` digests match. Never print, copy, or save the JSON
-body or the `key` value as an artifact.
+body or the `key` value.
 
 ### 8.3 Verify Single-Use Consumption
 
-Repeat the `dec_keys` request on B with the same ID, without saving the
-response body:
+In the same Bash session on EVO2, repeat the `dec_keys` request with the same
+`KEY_ID`, without saving the response body:
 
 ```bash
 HTTP_STATUS=$(curl --interface "$BR" --silent --show-error \
   --cert "$CERT_B" --key "$KEY_B" --cacert "$C/ca.pem" \
   --output /dev/null --write-out '%{http_code}' \
-  "https://$KME_B/api/v1/keys/$SAE_A/dec_keys?key_ID=$KEY_ID")
+  "https://9.1.1.6/api/v1/keys/sae-001/dec_keys?key_ID=${KEY_ID}")
 printf 'SECOND_DEC_HTTP_STATUS=%s\n' "$HTTP_STATUS"
 ```
 

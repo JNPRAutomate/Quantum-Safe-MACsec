@@ -250,6 +250,55 @@ def parse_orphan_connectivity_associations(display_set_output, target_keychains,
                 orphans.append(ca_name)
     return orphans
 
+
+def parse_scripts_using_users(display_set_output, target_users):
+    """Map registered event/op script filenames to their configured script users."""
+    target_users = set(target_users or [])
+    event_scripts = {}
+    op_scripts = {}
+
+    for line in (display_set_output or "").splitlines():
+        try:
+            parts = shlex.split(line.strip())
+        except ValueError:
+            continue
+
+        if (
+            len(parts) >= 7
+            and parts[:3] == ["set", "event-options", "event-script"]
+            and parts[3] == "file"
+            and parts[5] == "python-script-user"
+            and parts[6] in target_users
+        ):
+            event_scripts.setdefault(parts[4], set()).add(parts[6])
+        elif (
+            len(parts) >= 8
+            and parts[:4] == ["set", "system", "scripts", "op"]
+            and parts[4] == "file"
+            and parts[6] == "python-script-user"
+            and parts[7] in target_users
+        ):
+            op_scripts.setdefault(parts[5], set()).add(parts[7])
+
+    return event_scripts, op_scripts
+
+
+def plan_managed_script_cleanup(event_scripts, op_scripts, managed_scripts):
+    """Return managed registrations to delete and users still needed by others."""
+    managed_scripts = set(managed_scripts or [])
+    event_to_delete = sorted(set(event_scripts) & managed_scripts)
+    op_to_delete = sorted(set(op_scripts) & managed_scripts)
+    preserved_users = set()
+
+    for filename, users in event_scripts.items():
+        if filename not in managed_scripts:
+            preserved_users.update(users)
+    for filename, users in op_scripts.items():
+        if filename not in managed_scripts:
+            preserved_users.update(users)
+
+    return event_to_delete, op_to_delete, preserved_users
+
 # ----------------------------------------
 # CLEAN ONE REMOTE DEVICE
 # ----------------------------------------
@@ -340,6 +389,59 @@ def clean_device(name, device, full_macsec=False):
                 )
                 ca_candidates.extend(orphan_cas)
 
+        def discover_scripts_using_removed_users(target_users):
+            """Find Junos scripts that would block deletion of managed users."""
+            probe = Device(host=ip, user=user, passwd=passwd, port=22)
+            try:
+                probe.open()
+                event_rsp = probe.rpc.cli(
+                    "show configuration event-options event-script | display set",
+                    format="text",
+                )
+                op_rsp = probe.rpc.cli(
+                    "show configuration system scripts op | display set",
+                    format="text",
+                )
+                output = "\n".join(
+                    etree.tostring(rsp, encoding="unicode", method="text").strip()
+                    for rsp in (event_rsp, op_rsp)
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"[{name}] could not inspect scripts referencing cleanup users: {exc}"
+                ) from exc
+            finally:
+                try:
+                    probe.close()
+                except Exception:
+                    pass
+
+            return parse_scripts_using_users(output, target_users)
+
+        event_script_users, op_script_users = discover_scripts_using_removed_users(
+            {script_user, peer_cmd_user}
+        )
+        event_scripts_to_delete, op_scripts_to_delete, preserved_users = (
+            plan_managed_script_cleanup(
+                event_script_users, op_script_users, script_names
+            )
+        )
+        if preserved_users:
+            print(
+                f"[{name}] preserving login user(s) still referenced by registered scripts: "
+                f"{sorted(preserved_users)}",
+                flush=True,
+            )
+
+        users_to_remove = [
+            account
+            for account in (script_user, peer_cmd_user)
+            if account not in preserved_users
+        ]
+        preserve_script_home = script_user in preserved_users
+        preserve_peer_cmd_home = peer_cmd_user in preserved_users
+        preserve_remote_certs = bool(preserved_users)
+
         def safe_iface_name(iface):
             return iface.replace("/", "_")
 
@@ -413,16 +515,31 @@ def clean_device(name, device, full_macsec=False):
                 ]
             )
         config_cmds.extend(
-            [
-                f"delete system login user {script_user}",
-                f"delete system login user {peer_cmd_user}",
-                f"delete system login class {peer_cmd_user_class}",
-                "delete system login class qkd-script-class",
-            ]
+            f"delete event-options event-script file {script}"
+            for script in event_scripts_to_delete
+            if script not in script_names
         )
+        config_cmds.extend(
+            f"delete system scripts op file {script}"
+            for script in op_scripts_to_delete
+            if script not in script_names
+        )
+        config_cmds.extend(
+            f"delete system login user {account}" for account in users_to_remove
+        )
+        if peer_cmd_user in users_to_remove:
+            config_cmds.append(
+                f"delete system login class {peer_cmd_user_class}"
+            )
+        if script_user in users_to_remove:
+            config_cmds.append("delete system login class qkd-script-class")
         # Only delete script_user_class if it's a custom class (not a Junos built-in)
         builtin_classes = {"super-user", "operator", "read-only", "unauthorized"}
-        if script_user_class and script_user_class.lower() not in builtin_classes:
+        if (
+            script_user in users_to_remove
+            and script_user_class
+            and script_user_class.lower() not in builtin_classes
+        ):
             config_cmds.append(f"delete system login class {script_user_class}")
 
         if full_macsec:
@@ -462,13 +579,20 @@ def clean_device(name, device, full_macsec=False):
             "rm -rf /var/tmp/qkd_tests_*",
             "rm -f /var/tmp/phiotx-*.json",
             "rm -f /var/db/scripts/event/qkd.conf",
-            f"rm -rf {remote_cert_dir}",
-            f"rm -rf {script_dir}/certs",
-            f"rm -rf {op_script_dir}/certs",
-            f"rm -rf {event_script_dir}/certs",
-            f"rm -rf {script_home_dir}",
-            f"rm -rf {peer_cmd_home_dir}",
         ]
+        if not preserve_remote_certs:
+            file_cleanup_parts.extend(
+                [
+                    f"rm -rf {remote_cert_dir}",
+                    f"rm -rf {script_dir}/certs",
+                    f"rm -rf {op_script_dir}/certs",
+                    f"rm -rf {event_script_dir}/certs",
+                ]
+            )
+        if not preserve_script_home:
+            file_cleanup_parts.append(f"rm -rf {script_home_dir}")
+        if not preserve_peer_cmd_home:
+            file_cleanup_parts.append(f"rm -rf {peer_cmd_home_dir}")
         for sidecar_name in ONBOX_SIDECAR_NAMES:
             file_cleanup_parts.extend(
                 [
@@ -487,12 +611,14 @@ def clean_device(name, device, full_macsec=False):
             )
 
         for path in runtime_paths:
-            if path.endswith(".lock"):
-                file_cleanup_parts.append(f"rm -rf {path}")
-            else:
-                file_cleanup_parts.append(f"rm -f {path}")
+            if not preserve_script_home:
+                if path.endswith(".lock"):
+                    file_cleanup_parts.append(f"rm -rf {path}")
+                else:
+                    file_cleanup_parts.append(f"rm -f {path}")
         for path in soft_runtime_paths:
-            file_cleanup_parts.append(f"rm -f {path}")
+            if not (preserve_script_home and path.startswith(f"{script_log_dir}/")):
+                file_cleanup_parts.append(f"rm -f {path}")
 
         file_cleanup_cmd = "; ".join(file_cleanup_parts)
         shared_transport_paths = [
@@ -778,14 +904,20 @@ def clean_device(name, device, full_macsec=False):
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
                 "/var/db/scripts/event/qkd.conf",
-                remote_cert_dir,
-                f"{script_dir}/certs",
-                f"{op_script_dir}/certs",
-                f"{event_script_dir}/certs",
-                script_log_dir,
-                script_home_dir,
-                peer_cmd_home_dir,
             ]
+            if not preserve_remote_certs:
+                peer_cleanup_paths.extend(
+                    [
+                        remote_cert_dir,
+                        f"{script_dir}/certs",
+                        f"{op_script_dir}/certs",
+                        f"{event_script_dir}/certs",
+                    ]
+                )
+            if not preserve_script_home:
+                peer_cleanup_paths.extend([script_log_dir, script_home_dir])
+            if not preserve_peer_cmd_home:
+                peer_cleanup_paths.append(peer_cmd_home_dir)
             for sidecar_name in ONBOX_SIDECAR_NAMES:
                 peer_cleanup_paths.extend(
                     [
@@ -802,9 +934,10 @@ def clean_device(name, device, full_macsec=False):
                         f"/var/tmp/{candidate_script}",
                     ]
                 )
-            for path in runtime_paths:
-                if path not in peer_cleanup_paths:
-                    peer_cleanup_paths.append(path)
+            if not preserve_script_home:
+                for path in runtime_paths:
+                    if path not in peer_cleanup_paths:
+                        peer_cleanup_paths.append(path)
             peer_cleanup_ok = clean_peer_re_files(peer_cleanup_paths)
 
             for attempt in range(1, 4):
@@ -852,7 +985,6 @@ def clean_device(name, device, full_macsec=False):
                         f"set system scripts op file {candidate_script}",
                     ]
                 )
-
             if full_macsec:
                 forbidden_patterns.extend(
                     [
@@ -902,13 +1034,20 @@ def clean_device(name, device, full_macsec=False):
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
                 "/var/db/scripts/event/qkd.conf",
-                remote_cert_dir,
-                f"{script_dir}/certs",
-                f"{op_script_dir}/certs",
-                f"{event_script_dir}/certs",
-                script_log_dir,
-                script_home_dir,
             ]
+            if not preserve_remote_certs:
+                paths_should_be_absent.extend(
+                    [
+                        remote_cert_dir,
+                        f"{script_dir}/certs",
+                        f"{op_script_dir}/certs",
+                        f"{event_script_dir}/certs",
+                    ]
+                )
+            if not preserve_script_home:
+                paths_should_be_absent.extend([script_log_dir, script_home_dir])
+            if not preserve_peer_cmd_home:
+                paths_should_be_absent.append(peer_cmd_home_dir)
             for sidecar_name in ONBOX_SIDECAR_NAMES:
                 paths_should_be_absent.extend(
                     [
@@ -926,9 +1065,10 @@ def clean_device(name, device, full_macsec=False):
                     ]
                 )
 
-            for path in runtime_paths:
-                if path not in paths_should_be_absent:
-                    paths_should_be_absent.append(path)
+            if not preserve_script_home:
+                for path in runtime_paths:
+                    if path not in paths_should_be_absent:
+                        paths_should_be_absent.append(path)
 
             file_leftovers = []
 
@@ -953,6 +1093,8 @@ def clean_device(name, device, full_macsec=False):
             soft_leftovers = []
 
             for path in soft_runtime_paths:
+                if preserve_script_home and path.startswith(f"{script_log_dir}/"):
+                    continue
                 if remote_path_exists(path):
                     soft_leftovers.append(path)
 
