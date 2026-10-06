@@ -523,7 +523,7 @@ def _event_command(sae_id, interface, script_user):
         "set -eu; found=0; "
         f"for file in {prefix}*; do "
         'if [ -f "$file" ]; then found=1; '
-        "if grep -hE 'MKA KEY CONFIRMED|SAK_ROLLOVER|KEYCHAIN INSTALL OK' \"$file\"; "
+        "if grep -hE 'MKA KEY CONFIRMED|SAK_ROLLOVER|KEYCHAIN INSTALL OK|STATE RECONCILED FROM ROUTER' \"$file\"; "
         "then :; else code=$?; if [ \"$code\" -ne 1 ]; then exit \"$code\"; fi; fi; "
         "fi; done; "
         'if [ "$found" -eq 0 ]; then printf "NO_QBT_ROTATION_LOG\\n"; fi'
@@ -539,13 +539,16 @@ def parse_rotation_events(output):
             kind = "rollover"
         elif "KEYCHAIN INSTALL OK" in line:
             kind = "keychain"
+        elif "STATE RECONCILED FROM ROUTER" in line:
+            kind = "activated"
         else:
             continue
         fields = dict(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)=([^ ]+)", line))
+        key_id = fields.get("new_active_key_id" if kind == "activated" else "key_id", "")
         events.append({
             "line": line.strip(),
             "kind": kind,
-            "key_id": fields.get("key_id", "").lower(),
+            "key_id": key_id.lower(),
             "latest_sak_an": fields.get("latest_sak_an"),
             "previous_sak_an": fields.get("previous_sak_an"),
         })
@@ -604,6 +607,15 @@ def parse_mka_secured(output, interface):
     )
 
 
+def parse_mka_latest_sak(output, interface):
+    """Return the Latest SAK key identifier MKA reports for the interface."""
+    for line in _target_interface_block(output, interface):
+        match = re.search(r"Latest SAK KI:\s*(\S+)", line)
+        if match:
+            return match.group(1).upper()
+    return None
+
+
 def _fresh_events(events, baseline):
     seen = Counter()
     for event in events:
@@ -612,7 +624,16 @@ def _fresh_events(events, baseline):
             yield event
 
 
-def _rotation_evidence(events, baseline):
+def _rotation_evidence(events, baseline, sak_changed=None):
+    """Require, per EVO, a fresh keychain install and a key change seen twice.
+
+    A key change is proven either by the runtime's own MKA confirmation with a
+    SAK association change, or by the runtime following the router onto a new
+    active key (`STATE RECONCILED FROM ROUTER`) together with a changed Latest
+    SAK KI read from the router. The QBT runtime normally reconciles before it
+    can log the MKA confirmation, so the second form is the usual evidence.
+    Both EVOs must have moved to the same key.
+    """
     rollovers = {}
     for device in ("EVO1", "EVO2"):
         fresh = list(_fresh_events(events[device], baseline[device]))
@@ -629,9 +650,16 @@ def _rotation_evidence(events, baseline):
             and event["previous_sak_an"] is not None
             and event["latest_sak_an"] != event["previous_sak_an"]
         }
-        if not installs or not confirmed or not (confirmed & changed_saks):
+        activated = {
+            event["key_id"] for event in fresh
+            if event["kind"] == "activated" and event["key_id"]
+        }
+        proven = confirmed & changed_saks
+        if not proven and sak_changed and sak_changed.get(device):
+            proven = activated
+        if not installs or not proven:
             return False, f"{device}: fresh keychain/MKA/SAK rollover evidence is incomplete"
-        rollovers[device] = confirmed & changed_saks
+        rollovers[device] = proven
     common = rollovers["EVO1"] & rollovers["EVO2"]
     if not common:
         return False, "No shared SAK rollover Key-ID was confirmed on both EVOs"
@@ -660,6 +688,16 @@ def verify_rotation(
         baselines[device] = Counter(
             event["line"] for event in parse_rotation_events(output)
         )
+    base_sak = {}
+    for device in ("EVO1", "EVO2"):
+        base_sak[device] = parse_mka_latest_sak(
+            run(
+                clients[device],
+                "cli -c " + shlex.quote("show security mka sessions"),
+            ),
+            devices[device]["link"]["interface"],
+        )
+    sak_changed = {"EVO1": False, "EVO2": False}
     deadline = time.monotonic() + timeout
     last_reason = "fresh bilateral rollover not observed"
     while True:
@@ -684,14 +722,18 @@ def verify_rotation(
                 parse_macsec_inuse(connections, link["interface"])
                 and parse_mka_secured(mka, link["interface"])
             )
-        complete, evidence = _rotation_evidence(events, baselines)
+            current_sak = parse_mka_latest_sak(mka, link["interface"])
+            if base_sak[device] and current_sak and current_sak != base_sak[device]:
+                sak_changed[device] = True
+        complete, evidence = _rotation_evidence(events, baselines, sak_changed)
         if complete and all(operational.values()):
             return {
                 "shared_sak_key_id": evidence,
                 "macsec_inuse": operational,
+                "sak_changed": dict(sak_changed),
                 "fresh_rollovers": {
                 device: sum(
-                    event["kind"] == "rollover"
+                    event["kind"] in ("rollover", "activated")
                     for event in _fresh_events(events[device], baselines[device])
                 )
                 for device in ("EVO1", "EVO2")

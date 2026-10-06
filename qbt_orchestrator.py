@@ -479,9 +479,11 @@ use it to reapply an already-active licence.""",
   python qbt_orchestrator.py verify --confirm-verify --rotation-timeout-seconds 900
 Requires a typed interactive confirmation because the ETSI acceptance probe
 requests keys. Checks Docker/image/licence state, performs paired four-key
-256-bit ETSI ENC/DEC equality, then requires fresh keychain installation,
-matching bilateral MKA confirmation, a SAK AN rollover, MACsec in-use and
-MKA Secured on both EVOs. Timeout or missing evidence is a failure, not a pass.
+256-bit ETSI ENC/DEC equality, then requires on both EVOs a fresh keychain
+installation, the runtime following the router onto the same new active key
+(or its own MKA confirmation with a SAK AN change), a changed Latest SAK KI read
+from `show security mka sessions`, MACsec in-use and MKA Secured.
+Timeout or missing evidence is a failure, not a pass.
 It does not recreate containers or print key bytes/licence keys.""",
 }
 ACTION_HELP["copy"] = ACTION_HELP["images"]

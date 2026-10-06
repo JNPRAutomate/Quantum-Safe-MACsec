@@ -461,3 +461,111 @@ def test_failed_gate_restores_the_original_containers(monkeypatch):
             "test.replacement" in info["Config"]["Labels"]
             for info in containers[device].values()
         )
+
+
+RECONCILE = (
+    "2026-10-06 04:49:32 [INFO] [STATE][sae-001][et-0/0/1] STATE RECONCILED FROM ROUTER "
+    "old_active_key_id=7810F012-a974-8e5c-a148-e21249883320 "
+    "new_active_key_id=34EEF012-a974-8d2c-b915-1253333a05e4"
+)
+INSTALL = (
+    "2026-10-06 04:49:36 [INFO] [MACSEC][sae-001][et-0/0/1] KEYCHAIN INSTALL OK "
+    "ca=QBT_EVO keychain=QKD_QBT_EVO entries=2 installed_indices=[0, 1, 2, 3]"
+)
+MKA_SESSION = """\
+  Interface name: et-0/0/1
+     Interface State: Secured - Primary
+     MKA suspended: 0(s)
+     Key server: yes            Key server priority: 16
+     Latest SAK AN: 3           Latest SAK KI: FBA5D3AA3D2A731311DE8ADA/1
+     Previous SAK AN: 2         Previous SAK KI: 712DDC3E0B4AA51C8D748A46/1
+  Interface name: et-0/0/2
+     Latest SAK AN: 1           Latest SAK KI: 000000000000000000000000/1
+"""
+
+
+def test_runtime_reconcile_line_is_parsed_as_a_key_activation():
+    (event,) = lifecycle.parse_rotation_events(RECONCILE)
+
+    assert event["kind"] == "activated"
+    assert event["key_id"] == "34eef012-a974-8d2c-b915-1253333a05e4"
+
+
+def test_latest_sak_is_read_for_the_requested_interface_only():
+    assert lifecycle.parse_mka_latest_sak(MKA_SESSION, "et-0/0/1") == "FBA5D3AA3D2A731311DE8ADA/1"
+    assert lifecycle.parse_mka_latest_sak(MKA_SESSION, "et-0/0/3") is None
+
+
+def test_event_command_collects_the_reconcile_lines():
+    command = lifecycle._event_command("sae-001", "et-0/0/1", "etsi_user")
+
+    assert "STATE RECONCILED FROM ROUTER" in command
+
+
+def _runtime_events(*lines):
+    return {
+        device: lifecycle.parse_rotation_events("\n".join(lines))
+        for device in ("EVO1", "EVO2")
+    }
+
+
+def test_router_followed_activation_with_sak_change_is_accepted():
+    events = _runtime_events(INSTALL, RECONCILE)
+    baseline = {device: Counter() for device in events}
+
+    ok, key = lifecycle._rotation_evidence(
+        events, baseline, {"EVO1": True, "EVO2": True}
+    )
+
+    assert ok and key == "34eef012-a974-8d2c-b915-1253333a05e4"
+
+
+def test_activation_without_a_sak_change_is_not_enough():
+    events = _runtime_events(INSTALL, RECONCILE)
+    baseline = {device: Counter() for device in events}
+
+    assert not lifecycle._rotation_evidence(events, baseline, {"EVO1": True, "EVO2": False})[0]
+    assert not lifecycle._rotation_evidence(events, baseline)[0]
+
+
+def test_both_routers_must_activate_the_same_key():
+    other = RECONCILE.replace("34EEF012", "99AAF012")
+    events = {
+        "EVO1": lifecycle.parse_rotation_events(INSTALL + "\n" + RECONCILE),
+        "EVO2": lifecycle.parse_rotation_events(INSTALL + "\n" + other),
+    }
+    baseline = {device: Counter() for device in events}
+
+    ok, reason = lifecycle._rotation_evidence(events, baseline, {"EVO1": True, "EVO2": True})
+
+    assert not ok and "shared" in reason.lower()
+
+
+def test_verify_rotation_waits_for_a_fresh_reconcile_and_a_new_sak():
+    devices = {
+        name: {"sae_id": sae, "link": {"interface": "et-0/0/1"}}
+        for name, sae in (("EVO1", "sae-001"), ("EVO2", "sae-002"))
+    }
+    clients = {name: SimpleNamespace(device=name) for name in devices}
+    state = {"polls": 0}
+    connections = "Interface name: et-0/0/1\nCA name: QBT_EVO\nAN: 0 Status: inuse\n"
+
+    def run(client, command, **_kwargs):
+        if "grep -hE" in command:
+            return "" if state["polls"] < 2 else INSTALL + "\n" + RECONCILE
+        if "show security macsec connections" in command:
+            return connections
+        state["polls"] += 1 if client.device == "EVO2" else 0
+        ki = "AAAA/1" if state["polls"] < 3 else "BBBB/1"
+        return (
+            "Interface name: et-0/0/1\nInterface State: Secured - Primary\n"
+            f"MKA suspended: 0(s)\nLatest SAK AN: 1 Latest SAK KI: {ki}\n"
+        )
+
+    result = lifecycle.verify_rotation(
+        clients, run, devices, "etsi_user", timeout=600, poll_interval=1,
+        sleep=lambda _seconds: None,
+    )
+
+    assert result["shared_sak_key_id"] == "34eef012-a974-8d2c-b915-1253333a05e4"
+    assert result["sak_changed"] == {"EVO1": True, "EVO2": True}
