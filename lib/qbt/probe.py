@@ -14,6 +14,20 @@ def paired_probe(clients, run, transfer):
     if set(clients) != {"EVO1", "EVO2"}:
         raise ValueError("Paired acceptance requires both EVOs")
     root = "/var/db/qbt-etsi/client"
+    # The probe client keeps its own copy of the CA and SAE identity; refresh it
+    # from the certificates deployed for the runtime, or a PKI rotation would
+    # leave the probe testing the previous PKI.
+    for name, sae in (("EVO1", "sae-001"), ("EVO2", "sae-002")):
+        certs = "/var/db/scripts/certs"
+        run(
+            clients[name],
+            "set -eu; "
+            f"cat {certs}/qbt-ca.pem > {root}/ca.pem; "
+            f"cat {certs}/{sae}.crt > {root}/sae.pem; "
+            f"cat {certs}/{sae}.key > {root}/sae.key; "
+            f"chown etsi_user {root}/ca.pem {root}/sae.pem {root}/sae.key; "
+            f"chmod 600 {root}/ca.pem {root}/sae.pem {root}/sae.key",
+        )
     suffix = uuid.uuid4().hex
     enc_path = root + "/enc-" + suffix + ".json"
     dec_path = root + "/dec-" + suffix + ".json"
