@@ -2,6 +2,9 @@
 
 **QKD-assisted MACsec automation for Juniper devices.**
 
+> **Deploying PhioTX on Junos EVO from scratch?** Start with the repository-root
+> [PhioTX deployment guide](phiotx_deployment.md).
+
 This repository brings together the KME and QKD orchestrators, the
 router-side `phiotx_qkd_onbox.py` runtime, PKI and identity management, and
 operational tools for secure key rotation and service validation.
@@ -46,13 +49,15 @@ and system boundaries, see [QKD architecture](docs/qkd/architecture.md) and
 The documentation preserves the project's detailed design and version
 history while providing a beginner-oriented route through it:
 
-1. [First Steps](docs/getting_started.md) — component overview and safe
+1. [PhioTX deployment from zero](phiotx_deployment.md) — complete EVO deployment,
+   validation, ETSI key test, and rotation walkthrough.
+2. [First Steps](docs/getting_started.md) — component overview and safe
    deployment sequence.
-2. [Documentation map](docs/readme.md) — the canonical `pqc`, `kme`, `qkd`,
+3. [Documentation map](docs/readme.md) — the canonical `pqc`, `kme`, `qkd`,
    `onbox`, and `tools` domains.
-3. [Architecture evolution](docs/architecture_evolution.md) — why transport,
+4. [Architecture evolution](docs/architecture_evolution.md) — why transport,
    PKI, topology, and runtime state evolved.
-4. [Release history](docs/qkd/release_history.md) — changes by release.
+5. [Release history](docs/qkd/release_history.md) — changes by release.
 
 ## Building the documentation site locally
 

@@ -3,6 +3,10 @@
 Automated workflow that runs one PhioTX KME container **inside** each Junos EVO
 router and drives QKD/MACsec from it.
 
+For a beginner-oriented, linear installation walkthrough, start with
+the repository-root `phiotx_deployment.md`. This document remains the complete
+technical reference for the suite.
+
 This guide documents the complete suite: prerequisites, vendor asset handling,
 licensing limits, the command line, the greenfield bring-up order, and
 troubleshooting.
