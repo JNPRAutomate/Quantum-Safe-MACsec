@@ -1,4 +1,0 @@
-platform: mx
-
-macsec:
-  cipher: gcm-aes-xpn-256
