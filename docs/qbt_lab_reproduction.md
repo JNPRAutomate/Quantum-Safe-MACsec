@@ -236,7 +236,7 @@ The QBT runtime writes its shared log to
 `qbt_debug_` prefix. Existing `qkd_debug_*` files are historical and are
 retained; deployment does not rename or delete them.
 
-The generated standalone runtime identifies as `qbt_ver1.0`. The routers need
+The standalone runtime (`artifacts/qbt_onbox.py`) identifies as `qbt_ver1.0`. The routers need
 a subsequent `deploy` to report that version; the local generated artifact
 alone does not update an already-installed script.
 
@@ -299,8 +299,11 @@ installed the key in the MACsec keychain or completed an MKA rollover.
 
 ### Runtime fixes found during acceptance (2026-10-06)
 
-All are applied in `lib/qbt/runtime_builder.py`, which patches the shared
-`artifacts/qkd_onbox.py` core for the QBT runtime only:
+All are applied directly in `artifacts/qbt_onbox.py`, the only runtime kept in
+this branch. (Until 2026-10-06 the runtime was generated from the shared
+`artifacts/qkd_onbox.py` core by `lib/qbt/runtime_builder.py`, which patched it;
+the core and the generator were removed and the patched result became the
+source. The deployed file is byte-identical.)
 
 * **Stale state writes.** A periodic run that loaded the state before an
   `install-key-batch` saved it back afterwards, reverting generation 11 to 9 on

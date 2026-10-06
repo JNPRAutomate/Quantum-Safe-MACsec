@@ -531,14 +531,14 @@ provoked on the lab routers.
 
 | File | Role | Goes to the router? |
 | --- | --- | --- |
-| `qbt_onbox.py` | the generated runtime, a single self-contained file (written by `create`) | yes, `/var/db/scripts/op/` and `/event/` |
-| `qkd_onbox.py` | the shared core inherited from the original project: the **source** that `create` patches (`lib/qbt/runtime_builder.py`) to produce `qbt_onbox.py`. It is not deployed | no |
+| `qbt_onbox.py` | the runtime: the single, maintained, self-contained source file. `create` copies it next to each router's JSON profile | yes, `/var/db/scripts/op/` and `/event/` |
 | `qbt_etsi_socket_helper.py` | the helper of 11.1 | yes, as the separate service `/var/db/qbt-etsi/helper.py` |
-| `qbt_etsi_client.py`, `qbt_etsi_probe.py` | leftovers of an earlier design that kept separate helper scripts next to the runtime. Nothing uses them any more: their logic is now inside `qbt_onbox.py` (`etsi_get`). `deploy` only removes files with these names from `op` if it finds them | no |
 
-Edit the runtime's behaviour in `lib/qbt/runtime_builder.py` (QBT-only patches) and
-regenerate with `create`; never edit `artifacts/qbt_onbox.py` by hand, the next
-`create` overwrites it.
+`artifacts/` holds exactly two files, and both go to the routers. To change the
+runtime's behaviour edit `artifacts/qbt_onbox.py` directly, run the tests, then
+`create` (copies it to `config/runtime/EVO1` and `EVO2`) and `deploy`. The module
+`lib/qbt/runtime_builder.py` only checks that the file is a single self-contained
+script with the expected version before `create` and `deploy` use it.
 
 ## 12. See the MACsec link
 

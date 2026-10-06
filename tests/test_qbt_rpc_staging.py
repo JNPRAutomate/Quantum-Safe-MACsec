@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-from lib.qbt.runtime_builder import build_qbt_onbox
+from lib.qbt.runtime_builder import qbt_onbox_path
 
 NAMES = {
     "_script_user_authorized_keys_path", "_read_authorized_keys_file",
@@ -28,7 +28,7 @@ class Commit:
 
 
 def _functions(tmp_path, names):
-    source = build_qbt_onbox(tmp_path / "qbt_onbox.py").read_text()
+    source = qbt_onbox_path().read_text()
     return [
         node for node in ast.parse(source).body
         if isinstance(node, ast.FunctionDef) and node.name in names
@@ -122,6 +122,6 @@ def test_verify_gives_up_after_all_attempts(tmp_path):
 
 
 def test_rotation_cycle_falls_back_to_the_previous_key(tmp_path):
-    source = build_qbt_onbox(tmp_path / "qbt_onbox.py").read_text()
+    source = qbt_onbox_path().read_text()
 
     assert "RPC-KEY FINALIZE VIA PREVIOUS KEY" in source

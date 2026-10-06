@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
-from lib.qbt.runtime_builder import build_qbt_onbox
+from lib.qbt.runtime_builder import qbt_onbox_path
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMES = {
@@ -18,9 +18,7 @@ def start_epoch(value):
 
 
 def load(namespace):
-    import tempfile
-
-    source = build_qbt_onbox(Path(tempfile.mkdtemp()) / "qbt_onbox.py").read_text()
+    source = qbt_onbox_path().read_text()
     tree = ast.parse(source)
     selected = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in NAMES]
     exec(compile(ast.Module(body=selected, type_ignores=[]), "runtime", "exec"), namespace)

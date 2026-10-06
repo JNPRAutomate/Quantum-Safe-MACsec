@@ -14,7 +14,7 @@ from lib.qkd.inventory_builder import validate_qkd_policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ONBOX = ROOT / "artifacts" / "qkd_onbox.py"
+ONBOX = ROOT / "artifacts" / "qbt_onbox.py"
 
 
 def load_functions(*names):
@@ -24,7 +24,7 @@ def load_functions(*names):
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name in names
     ]
-    namespace = {"RUNTIME_SCRIPT": "qkd_onbox.py"}
+    namespace = {"RUNTIME_SCRIPT": "qbt_onbox.py"}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(ONBOX), "exec"), namespace)
     return namespace
 
@@ -525,7 +525,7 @@ class TestRollingKeyringPlan:
 
         assert send_index < rpc_success_index < finalize_index
 
-    def test_master_finalize_purges_stale_pending_before_appending_batch(self):
+    def test_master_finalize_purges_replaced_slots_before_appending_batch(self):
         finalize = load_functions("_finalize_bilateral_install")[
             "_finalize_bilateral_install"
         ]
@@ -538,9 +538,9 @@ class TestRollingKeyringPlan:
                     "new-1": 200,
                     "new-2": 300,
                 }.get(value),
-                "purge_pending_older_than_start_time": (
-                    lambda state, start_time, **kwargs: (
-                        calls.append((start_time, kwargs)),
+                "purge_pending_in_replaced_slots": (
+                    lambda state, records, **kwargs: (
+                        calls.append(([item["slot"] for item in records], kwargs)),
                         {**state, "pending_keys": []},
                     )[1]
                 ),
@@ -594,7 +594,7 @@ class TestRollingKeyringPlan:
             "ROLLING_REPLACEMENT",
         )
 
-        assert calls == [("new-1", {"mode_ctx": "MASTER"})]
+        assert calls == [([2, 3], {"mode_ctx": "MASTER"})]
         assert [item["key_id"] for item in result["pending_keys"]] == [
             "new-key-1",
             "new-key-2",
@@ -652,12 +652,16 @@ class TestTransactionalRpcKeyRotation:
 
     def test_finalize_deletes_only_old_key_for_source(self):
         functions = load_functions(
-            "_decode_rpc_pubkey", "_apply_rpc_pubkey", "_public_keys_match"
+            "_decode_rpc_pubkey", "_apply_rpc_pubkey", "_public_keys_match",
+            "_script_user_authorized_keys_path", "_read_authorized_keys_file",
+            "_stage_rpc_pubkey_in_authorized_keys",
         )
         commands = []
         new_key = "ssh-ed25519 AAAANEW qkd-rpc@EVO1"
         functions.update(
             {
+                "os": os,
+                "SSH_HOME_BASE": "/nonexistent-qbt-test-home",
                 "base64": base64,
                 "re": __import__("re"),
                 "SCRIPT_USER": "etsi_user",
@@ -695,10 +699,11 @@ class TestTransactionalRpcKeyRotation:
         assert "orchestrator@linux" not in commands[0]
 
     def test_verify_physically_uses_next_private_key(self):
-        functions = load_functions("_verify_rpc_next_key")
+        functions = load_functions("_verify_rpc_next_key_once", "_verify_rpc_next_key")
         calls = []
         functions.update(
             {
+                "time": SimpleNamespace(sleep=lambda _seconds: None),
                 "RPC_SSH_KEY": "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
                 "SCRIPT_USER": "etsi_user",
                 "json": json,
@@ -1002,10 +1007,15 @@ class TestTransactionalRpcKeyRotation:
             "_decode_rpc_pubkey",
             "_apply_rpc_pubkey",
             "_public_keys_match",
+            "_script_user_authorized_keys_path",
+            "_read_authorized_keys_file",
+            "_stage_rpc_pubkey_in_authorized_keys",
         )
         commands = []
         functions.update(
             {
+                "os": os,
+                "SSH_HOME_BASE": "/nonexistent-qbt-test-home",
                 "base64": base64,
                 "re": __import__("re"),
                 "SCRIPT_USER": "etsi_user",
@@ -1259,7 +1269,7 @@ class TestRpcPeerStatus:
             "-i",
             "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
             "etsi_user@100.123.113.1",
-            "op qkd_onbox.py action status iface et-0/0/7",
+            "op qbt_onbox.py action status iface et-0/0/7",
         ]
         assert timeout == 10
         assert all("SCP" not in str(entry) for entry in self.logs)

@@ -2,11 +2,11 @@ import ast
 import json
 from pathlib import Path
 
-from lib.qbt.runtime_builder import build_qbt_onbox
+from lib.qbt.runtime_builder import qbt_onbox_path
 
 
 def _load_guard(tmp_path):
-    source = build_qbt_onbox(tmp_path / "qbt_onbox.py").read_text()
+    source = qbt_onbox_path().read_text()
     wanted = {"_state_write_is_stale", "save_db_state"}
     nodes = []
     for node in ast.parse(source).body:
@@ -74,6 +74,6 @@ def test_bilateral_install_handlers_are_authoritative(tmp_path):
 
 
 def test_install_dispatch_marks_the_process_as_authoritative(tmp_path):
-    source = build_qbt_onbox(tmp_path / "qbt_onbox.py").read_text()
+    source = qbt_onbox_path().read_text()
 
     assert source.count('STATE_SAVE_POLICY["force"] = True') == 2

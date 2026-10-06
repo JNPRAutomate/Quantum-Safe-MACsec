@@ -5,7 +5,7 @@ import pytest
 
 import qbt_orchestrator as qbt
 from lib.qbt import macsec
-from lib.qbt.runtime_builder import build_qbt_onbox
+from lib.qbt.runtime_builder import qbt_onbox_path
 
 
 INVENTORY = Path(__file__).resolve().parents[1] / "config/inventory/input/lab_vmm.yaml"
@@ -14,13 +14,11 @@ INVENTORY = Path(__file__).resolve().parents[1] / "config/inventory/input/lab_vm
 def use_standalone_fixture(monkeypatch, tmp_path):
     artifact = tmp_path / "qbt_onbox.py"
     artifact.write_text("print('standalone')\n", encoding="utf-8")
-    monkeypatch.setattr(macsec, "build_qbt_onbox", lambda _output: artifact)
+    monkeypatch.setattr(macsec, "qbt_onbox_path", lambda: artifact)
 
 
-def test_generated_qbt_runtime_uses_qbt_debug_log_prefix(tmp_path):
-    artifact = build_qbt_onbox(tmp_path / "qbt_onbox.py")
-
-    source = artifact.read_text(encoding="utf-8")
+def test_qbt_runtime_uses_qbt_debug_log_prefix():
+    source = qbt_onbox_path().read_text(encoding="utf-8")
     assert 'link_log_file = f"{LOG_DIR}/qbt_debug_' in source
     assert "qkd_debug_" not in source
     assert 'EARLY_SCRIPT_VERSION = "qbt_ver1.0"' in source

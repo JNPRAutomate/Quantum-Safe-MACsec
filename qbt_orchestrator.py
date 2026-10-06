@@ -285,7 +285,7 @@ COMMANDS = {
     "pki": "Prepare external lab PKI and import server credentials into existing EVO KMEs",
     "peer": "Configure reciprocal QBT peers, AKE public keys and local/remote SAEs",
     "probe": "Verify an authenticated paired batch of four 256-bit ETSI keys",
-    "create": "Generate the standalone on-box script and EVO1/EVO2 profiles from router inventory",
+    "create": "Generate the EVO1/EVO2 profiles from router inventory and stage the on-box script",
     "deploy": "Install the EVO1/EVO2 on-box runtime and configure the Junos rotation timer",
     "preflight": "Read-only validation of EVO Docker, mounts, identity and QBT licence state",
     "recreate": "Recreate the licensed EVO pair with docker create and retain rollback containers",
@@ -422,8 +422,10 @@ results by Key-ID on the peer. Key bytes are never logged.""",
   python qbt_orchestrator.py create
   python qbt_orchestrator.py create --router-inventory config/inventory/input/lab_vmm.yaml
 Reads the source router inventory, selects only EVO1/EVO2 and their direct
-MACsec link, then writes artifacts/qbt_onbox.py and the two profiles under
-config/runtime/EVO1 and config/runtime/EVO2. It does not connect to routers,
+MACsec link, then copies the maintained runtime artifacts/qbt_onbox.py and
+writes the two profiles under config/runtime/EVO1 and config/runtime/EVO2.
+The runtime itself is not generated: edit artifacts/qbt_onbox.py directly. It
+does not connect to routers,
 change the input inventory or overwrite unrelated runtime profiles.""",
     "deploy": """Install the existing-container EVO1/EVO2 on-box runtime:
   python qbt_orchestrator.py create

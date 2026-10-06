@@ -17,7 +17,7 @@ from jnpr.junos.utils.config import Config
 import yaml
 
 from lib.qbt.network import ADDRESSES
-from lib.qbt.runtime_builder import build_qbt_onbox
+from lib.qbt.runtime_builder import qbt_onbox_path
 from lib.qbt.transport import install_transport
 
 
@@ -194,7 +194,7 @@ def _load_inventory_base():
 def create_runtime_profiles(runtime_root=None, inventory_path=None):
     devices = load_target_devices(inventory_path)
     runtime_root = Path(runtime_root or BASE / "config/runtime").resolve()
-    artifact = build_qbt_onbox(BASE / "artifacts/qbt_onbox.py")
+    artifact = qbt_onbox_path()
     policy = yaml.safe_load(
         (BASE / "config/inventory/qkd_policy.yaml").read_text(encoding="utf-8")
     )["qkd_policy"]
