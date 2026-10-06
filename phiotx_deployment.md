@@ -551,35 +551,40 @@ Then run this block in the same Bash session on EVO2:
 set +x
 C=/var/db/scripts/certs
 BR=$(ip -br addr | awk '$3 ~ /^9\.1\.1\.1\// {print $1}')
-if [ -z "$BR" ]; then echo "ERROR: bridge interface not found"; exit 1; fi
+READY=1
+if [ -z "$BR" ]; then
+  echo "ERROR: bridge interface not found"
+  READY=0
+fi
 if [[ ! "$KEY_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
   echo "ERROR: KEY_ID is empty or is not a UUID"
-  exit 1
+  READY=0
 fi
-CERT_B="$C/sae-002.crt"
-KEY_B="$C/sae-002.key"
-RESPONSE=$(mktemp /tmp/phiotx-dec.XXXXXX)
-chmod 600 "$RESPONSE"
-umask 077
-trap 'rm -f "$RESPONSE"' EXIT
+if [ "$READY" -eq 1 ]; then
+  CERT_B="$C/sae-002.crt"
+  KEY_B="$C/sae-002.key"
+  RESPONSE=$(mktemp /tmp/phiotx-dec.XXXXXX)
+  chmod 600 "$RESPONSE"
+  umask 077
+  trap 'rm -f "$RESPONSE"' EXIT
 
-HTTP_STATUS=$(curl --interface "$BR" --silent --show-error \
-  --cert "$CERT_B" \
-  --key "$KEY_B" \
-  --cacert "$C/ca.pem" \
-  --output "$RESPONSE" \
-  --write-out '%{http_code}' \
-  "https://9.1.1.6/api/v1/keys/sae-001/dec_keys?key_ID=${KEY_ID}") || {
-  echo "ERROR: curl request failed"
-  exit 1
-}
-printf 'HTTP_STATUS=%s\n' "$HTTP_STATUS"
-if [ "$HTTP_STATUS" != 200 ]; then
-  echo "ERROR: expected HTTP 200; response was not parsed"
-  exit 1
-fi
+  CURL_EXIT=0
+  HTTP_STATUS=$(curl --interface "$BR" --silent --show-error \
+    --cert "$CERT_B" \
+    --key "$KEY_B" \
+    --cacert "$C/ca.pem" \
+    --output "$RESPONSE" \
+    --write-out '%{http_code}' \
+    "https://9.1.1.6/api/v1/keys/sae-001/dec_keys?key_ID=${KEY_ID}") || CURL_EXIT=$?
+  printf 'HTTP_STATUS=%s\n' "$HTTP_STATUS"
 
-RESPONSE="$RESPONSE" python3 - <<'PY'
+  if [ "$CURL_EXIT" -ne 0 ]; then
+    echo "ERROR: curl request failed; Bash remains open"
+  elif [ "$HTTP_STATUS" != 200 ]; then
+    echo "ERROR: first dec_keys request must return HTTP 200. Do not parse the response or retry this ID blindly."
+    echo "Use a fresh KEY_ID from a successful enc_keys request on EVO1, then try dec_keys once on EVO2."
+  else
+    RESPONSE="$RESPONSE" python3 - <<'PY'
 import hashlib
 import json
 import os
@@ -590,11 +595,17 @@ encoded_key = item["key"]
 print(f"DEC_LEN={len(encoded_key)}")
 print(f"DEC_SHA256={hashlib.sha256(encoded_key.encode()).hexdigest()}")
 PY
+  fi
+fi
 ```
 
 Expected result: both calls return HTTP 200, the lengths match, and the
-`ENC_SHA256`/`DEC_SHA256` digests match. Never print, copy, or save the JSON
-body or the `key` value.
+`ENC_SHA256`/`DEC_SHA256` digests match. A `400` on the first `dec_keys` call
+is a failure, commonly because the ID is stale, already consumed, or not
+available on EVO2. The expected `400` applies only to the deliberate second
+request in section 8.3. The command keeps the interactive Bash session open on
+errors; wait for the `bash-5.1#` prompt before entering another command. Never
+print, copy, or save the JSON body or the `key` value.
 
 ### 8.3 Verify Single-Use Consumption
 
