@@ -309,6 +309,39 @@ def _stage_rpc_key_rotation(source):
     return source.replace(RPC_FINALIZE_OLD, RPC_FINALIZE_NEW, 1)
 
 
+MASTER_PURGE_OLD = """    start_times = [
+        item.get("start_time")
+        for item in records
+        if epoch_from_junos_start_time(item.get("start_time")) is not None
+    ]
+    if start_times:
+        incoming_start_time = min(
+            start_times,
+            key=lambda value: epoch_from_junos_start_time(value),
+        )
+        state = purge_pending_older_than_start_time(
+            state,
+            incoming_start_time,
+            mode_ctx="MASTER",
+        )
+
+    for item in records:
+        state = append_pending_key("""
+
+MASTER_PURGE_NEW = """    # Use the same slot-based rule as the peer: a pending key in an untouched
+    # slot is still configured on both routers and must stay queued.
+    state = purge_pending_in_replaced_slots(state, records, mode_ctx="MASTER")
+
+    for item in records:
+        state = append_pending_key("""
+
+
+def _align_master_pending_purge(source):
+    if source.count(MASTER_PURGE_OLD) != 1:
+        raise ValueError("Unexpected shared runtime master purge layout")
+    return source.replace(MASTER_PURGE_OLD, MASTER_PURGE_NEW, 1)
+
+
 def build_qbt_onbox(output=None):
     source = CORE.read_text(encoding="utf-8")
     source = source.replace("qkd_onbox.py", "qbt_onbox.py")
@@ -359,6 +392,7 @@ def build_qbt_onbox(output=None):
     source = source.replace(old_transport, TRANSPORT.lstrip(), 1)
     source = _guard_state_writes(source)
     source = _stage_rpc_key_rotation(source)
+    source = _align_master_pending_purge(source)
     if "from qbt_etsi_client import" in source or "qbt_runtime_core.py" in source:
         raise ValueError("QBT runtime must be a single self-contained script")
     source = "\n".join(line.rstrip(" \t") for line in source.splitlines()) + "\n"

@@ -5731,21 +5731,9 @@ def select_ring_update_slots(
 
 
 def _finalize_bilateral_install(state, records, operation):
-    start_times = [
-        item.get("start_time")
-        for item in records
-        if epoch_from_junos_start_time(item.get("start_time")) is not None
-    ]
-    if start_times:
-        incoming_start_time = min(
-            start_times,
-            key=lambda value: epoch_from_junos_start_time(value),
-        )
-        state = purge_pending_older_than_start_time(
-            state,
-            incoming_start_time,
-            mode_ctx="MASTER",
-        )
+    # Use the same slot-based rule as the peer: a pending key in an untouched
+    # slot is still configured on both routers and must stay queued.
+    state = purge_pending_in_replaced_slots(state, records, mode_ctx="MASTER")
 
     for item in records:
         state = append_pending_key(
