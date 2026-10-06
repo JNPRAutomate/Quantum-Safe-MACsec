@@ -17,7 +17,11 @@ def _load_guard(tmp_path):
         ):
             nodes.append(node)
     written = []
+    seed_only = {"value": True}
     namespace = {
+        "seed_only": seed_only,
+        "link_by_interface": lambda iface: {"interface": iface},
+        "configured_bootstrap_seed_only": lambda link, iface: seed_only["value"],
         "Path": Path,
         "json": json,
         "db_state_file": lambda peer, iface: str(tmp_path / "state.json"),
@@ -54,13 +58,48 @@ def test_newer_or_equal_generation_is_written(tmp_path):
     assert _disk(tmp_path) == 11
 
 
-def test_seed_adoption_generation_zero_and_missing_file_are_written(tmp_path):
+SEEDED = {"generation": 0, "ring_phase": "seeded"}
+
+
+def test_seed_adoption_is_written_while_the_keychain_holds_only_the_seed(tmp_path):
     guard, _ = _load_guard(tmp_path)
 
     guard["save_db_state"]("EVO1", "et-0/0/1", {"generation": 5})
-    guard["save_db_state"]("EVO1", "et-0/0/1", {"generation": 0})
+    guard["save_db_state"]("EVO1", "et-0/0/1", dict(SEEDED))
 
     assert _disk(tmp_path) == 0
+
+
+def test_a_run_that_adopted_the_seed_before_an_install_cannot_erase_it(tmp_path):
+    # Seen on a router rebuilt from empty: the slave saved generation 3 after
+    # installing the batch, then a run that had adopted the seed earlier saved
+    # generation 0 and the pair never aligned.
+    guard, logs = _load_guard(tmp_path)
+    (tmp_path / "state.json").write_text(json.dumps({"generation": 3}))
+    guard["seed_only"]["value"] = False
+
+    guard["save_db_state"]("EVO1", "et-0/0/1", dict(SEEDED))
+
+    assert _disk(tmp_path) == 3
+    assert any("STATE SAVE DROPPED" in line for line in logs)
+
+
+def test_a_missing_state_file_is_always_written(tmp_path):
+    guard, _ = _load_guard(tmp_path)
+    guard["seed_only"]["value"] = False
+
+    guard["save_db_state"]("EVO1", "et-0/0/1", dict(SEEDED))
+
+    assert _disk(tmp_path) == 0
+
+
+def test_generation_zero_without_the_seeded_phase_is_still_stale(tmp_path):
+    guard, _ = _load_guard(tmp_path)
+    (tmp_path / "state.json").write_text(json.dumps({"generation": 3}))
+
+    guard["save_db_state"]("EVO1", "et-0/0/1", {"generation": 0, "ring_phase": "ready"})
+
+    assert _disk(tmp_path) == 3
 
 
 def test_bilateral_install_handlers_are_authoritative(tmp_path):

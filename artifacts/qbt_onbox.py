@@ -2802,17 +2802,24 @@ def peer_states_aligned_strict(local_state, peer_state):
 STATE_SAVE_POLICY = {"force": False}
 
 
-def _state_write_is_stale(path, state):
+def _state_write_is_stale(path, state, iface=None):
     # A run that loaded the state before a bilateral install must not write it
     # back afterwards: that silently reverts the router/state alignment.
     try:
         new_generation = int(state.get("generation") or 0)
-        if new_generation == 0:
-            return False
         disk_generation = int(json.loads(path.read_text()).get("generation") or 0)
     except Exception:
         return False
-    return new_generation < disk_generation
+    if new_generation >= disk_generation:
+        return False
+    if new_generation == 0 and state.get("ring_phase") == "seeded":
+        # A seed (re-)adoption legitimately restarts at generation 0, but only
+        # while the router keychain still holds nothing but the seed. If an
+        # install already filled the ring, this is a run that adopted the seed
+        # before it and is now stale: writing it would erase the install.
+        link = link_by_interface(iface) if iface else None
+        return not (link and configured_bootstrap_seed_only(link, iface))
+    return True
 
 
 def save_db_state(peer, iface, state):
@@ -2826,7 +2833,7 @@ def save_db_state(peer, iface, state):
     except Exception:
         handle = None
     try:
-        if not STATE_SAVE_POLICY["force"] and _state_write_is_stale(path, state):
+        if not STATE_SAVE_POLICY["force"] and _state_write_is_stale(path, state, iface):
             log(
                 f"STATE SAVE DROPPED stale write file={path} generation={state.get('generation')}",
                 "WARN",
