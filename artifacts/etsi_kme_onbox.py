@@ -29,7 +29,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import calendar
-EARLY_SCRIPT_VERSION = "ver3.3.4.1"
+EARLY_SCRIPT_VERSION = "etsi14_docker_kme_ver1.0"
 TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
