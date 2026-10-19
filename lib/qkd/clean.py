@@ -321,6 +321,7 @@ def clean_device(name, device, full_macsec=False):
             "delete event-options policy QKD",
             "delete event-options policy QKD_POLICY",
             f"delete event-options event-script file {script_name}",
+            "delete event-options event-script file qbt_onbox.py",
             f"delete system scripts op file {script_name}",
             f"delete system login user {script_user}",
             f"delete system login user {peer_cmd_user}",
