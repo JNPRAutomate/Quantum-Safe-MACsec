@@ -461,14 +461,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_args(p_validate)
     p_validate.set_defaults(func=cmd_validate)
 
-    p_install_onbox_certs = subparsers.add_parser("install-onbox-certs", help="Install generated PKI into embedded KME containers")
-    p_install_onbox_certs.add_argument("--dry-run", action="store_true")
-    p_install_onbox_certs.set_defaults(func=cmd_install_onbox_certs)
-
-    p_configure_onbox_network = subparsers.add_parser("configure-onbox-network", help="Configure host access to embedded KME containers")
-    p_configure_onbox_network.add_argument("--dry-run", action="store_true")
-    p_configure_onbox_network.set_defaults(func=cmd_configure_onbox_network)
-
     p_onbox_deploy = subparsers.add_parser("onbox-deploy", help="Deploy embedded KME containers onto selected routers")
     add_onbox_args(p_onbox_deploy)
     p_onbox_deploy.set_defaults(func=cmd_onbox_deploy)
