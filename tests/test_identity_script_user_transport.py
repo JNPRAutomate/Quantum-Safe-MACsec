@@ -22,7 +22,7 @@ def test_script_user_check_uses_orchestrator_key_directly(monkeypatch, tmp_path)
 
     result = identity.ssh_script_user_onbox_cmd(
         {"name": "EVO1", "ip": "192.0.2.1"},
-        "op qkd_onbox.py action status",
+        "op etsi_kme_onbox.py action status",
         timeout=12,
         include_failed_marker=False,
     )
@@ -39,7 +39,7 @@ def test_script_user_check_uses_orchestrator_key_directly(monkeypatch, tmp_path)
         "-o",
         "BatchMode=yes",
         "etsi_user@192.0.2.1",
-        "op qkd_onbox.py action status",
+        "op etsi_kme_onbox.py action status",
     ]
     assert kwargs["timeout"] == 12
     assert result.returncode == 0
@@ -59,7 +59,7 @@ def test_script_user_check_fails_when_orchestrator_key_is_missing(
 
     result = identity.ssh_script_user_onbox_cmd(
         {"name": "EVO1", "ip": "192.0.2.1"},
-        "op qkd_onbox.py action status",
+        "op etsi_kme_onbox.py action status",
     )
 
     assert result.returncode == 1

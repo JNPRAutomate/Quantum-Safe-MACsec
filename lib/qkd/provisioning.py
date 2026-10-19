@@ -35,7 +35,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = BASE_DIR / CONFIG["inventory_dir"]
 RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 PLATFORM_DIR = CONFIG_DIR / "platforms"
-ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
 
 
 def resolve_certs_dir():
@@ -249,7 +249,7 @@ def copy_file_to_other_re(dev, name, src_path, dst_name=None):
 
 def sync_qkd_scripts_dual_re(dev, name, script_name):
     """
-    Ensure qkd_onbox.py exists on both routing engines before commit synchronize.
+    Ensure etsi_kme_onbox.py exists on both routing engines before commit synchronize.
     """
     op_script_dir = "/var/db/scripts/op"
     event_script_dir = "/var/db/scripts/event"

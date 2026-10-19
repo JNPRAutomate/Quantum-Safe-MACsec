@@ -675,8 +675,8 @@ def build_script_user_class_commands(script_user_class: str) -> List[str]:
         "set system login class %s permissions security" % script_user_class,
         "set system login class %s permissions view" % script_user_class,
         "set system login class %s permissions view-configuration" % script_user_class,
-        "set system login class %s allow-commands \"op qkd_onbox.py\"" % script_user_class,
-        "set system login class %s allow-commands \"op qkd_onbox.py .*\"" % script_user_class,
+        "set system login class %s allow-commands \"op etsi_kme_onbox.py\"" % script_user_class,
+        "set system login class %s allow-commands \"op etsi_kme_onbox.py .*\"" % script_user_class,
         "set system login class %s allow-commands \"start shell\"" % script_user_class,
         "set system login class %s allow-commands \"start shell command .*\"" % script_user_class,
     ]

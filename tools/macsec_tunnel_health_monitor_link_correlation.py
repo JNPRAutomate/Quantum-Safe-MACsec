@@ -535,7 +535,7 @@ def parse_key_status_via_python_json(json_data_str, all_json_str, verbose=False)
             print(f"[DEBUG] JSON keys available: {list(data.keys())}")
         
         # Try multiple possible field names for key IDs
-        # (in case qkd_onbox.py changed the naming)
+        # (in case etsi_kme_onbox.py changed the naming)
         
         # Option 1: direct fields
         if 'active_key_id' in data and data['active_key_id']:

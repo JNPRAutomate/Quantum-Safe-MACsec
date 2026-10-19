@@ -7,7 +7,7 @@ from lib.common.settings import CONFIG, QKD
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
 
 TEMPLATE_DIR = BASE_DIR / CONFIG["templates_dir"]
 
@@ -140,7 +140,7 @@ def build_device_config(device_name, device, platform, base, topology):
     #   - CA to pre-shared-key-chain binding
     #
     # Authentication-key-chain key entries are NOT pre-generated here.
-    # qkd_onbox.py installs and rotates those runtime keys according
+    # etsi_kme_onbox.py installs and rotates those runtime keys according
     # to config/runtime/qkd_policy.yaml.
     #
 ###
@@ -196,7 +196,7 @@ def build_device_config(device_name, device, platform, base, topology):
                     )
                 else:
                     # Keep a single deterministic bootstrap key in config.
-                    # Runtime qkd_onbox.py manages rotating operational keys.
+                    # Runtime etsi_kme_onbox.py manages rotating operational keys.
                     for stale_idx in (1, 2, 3, 4, 5):
                         add(
                             f"delete security authentication-key-chains "
@@ -252,14 +252,6 @@ def build_device_config(device_name, device, platform, base, topology):
     # Script and event integration
     # -------------------------------------------------
     #
-    # In ring/chain topology, a device can be master on one link
-    # and slave on another link.
-    #
-    # Therefore:
-    #   - if the device is master on at least one link, add event script config
-    #   - if the device is slave on at least one link, add op script config
-    #
-
     roles = {
         link.get("role")
         for link in links
@@ -269,10 +261,13 @@ def build_device_config(device_name, device, platform, base, topology):
     # Users and authentication (always include)
     render_and_add("common/users.j2")
 
-    if "master" in roles:
+    if roles.intersection({"master", "slave"}):
+        for legacy_script in ("qkd_onbox.py", "phiotx_qkd_onbox.py"):
+            add(f"delete event-options policy QKD then event-script {legacy_script}")
+            add(f"delete event-options event-script file {legacy_script}")
+            add(f"delete system scripts op file {legacy_script}")
+        # Both peers need timer ticks and incoming RPC actions.
         render_and_add("common/event.j2")
-
-    if "slave" in roles:
         render_and_add("common/op_script.j2")
 
     return commands

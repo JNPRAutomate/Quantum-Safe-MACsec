@@ -34,18 +34,18 @@ TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
     print(
-        f"qkd_onbox.py {EARLY_SCRIPT_VERSION} "
+        f"etsi_kme_onbox.py {EARLY_SCRIPT_VERSION} "
         f"timestamp_protocol={TIMESTAMP_PROTOCOL_VERSION}"
     )
     raise SystemExit(0)
 if "--help" in _EARLY_ARGS or "-h" in _EARLY_ARGS:
-    print("qkd_onbox.py %s" % EARLY_SCRIPT_VERSION)
+    print("etsi_kme_onbox.py %s" % EARLY_SCRIPT_VERSION)
     print("Usage:")
-    print("  op qkd_onbox.py")
-    print("  op qkd_onbox.py action status iface <iface>")
-    print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
-    print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
-    print("  op qkd_onbox.py --version")
+    print("  op etsi_kme_onbox.py")
+    print("  op etsi_kme_onbox.py action status iface <iface>")
+    print("  op etsi_kme_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
+    print("  op etsi_kme_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
+    print("  op etsi_kme_onbox.py --version")
     raise SystemExit(0)
 import time
 import datetime
@@ -70,21 +70,21 @@ DEFAULT_INVENTORY_PATH = "/var/db/scripts/op/qkd_onbox_inventory.json"
 
 
 def _print_cli_usage():
-    print("qkd_onbox.py %s" % SCRIPT_VERSION)
+    print("etsi_kme_onbox.py %s" % SCRIPT_VERSION)
     print("Usage:")
-    print("  op qkd_onbox.py")
-    print("  op qkd_onbox.py action status iface <iface>")
-    print("  op qkd_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
-    print("  op qkd_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
-    print("  op qkd_onbox.py action prepare-rpc-pubkey device <device> pubkey-b64 <payload>")
-    print("  op qkd_onbox.py action finalize-rpc-pubkey device <device> pubkey-b64 <payload>")
-    print("  op qkd_onbox.py --version")
+    print("  op etsi_kme_onbox.py")
+    print("  op etsi_kme_onbox.py action status iface <iface>")
+    print("  op etsi_kme_onbox.py action install-key iface <iface> key-id <uuid> [generation <int>] [start-time <YYYY-MM-DD.HH:MM[:SS]>]")
+    print("  op etsi_kme_onbox.py action install-key-batch iface <iface> batch-b64 <payload>")
+    print("  op etsi_kme_onbox.py action prepare-rpc-pubkey device <device> pubkey-b64 <payload>")
+    print("  op etsi_kme_onbox.py action finalize-rpc-pubkey device <device> pubkey-b64 <payload>")
+    print("  op etsi_kme_onbox.py --version")
 
 
 def _early_info_exit():
     args = set(sys.argv[1:])
     if "--version" in args or "-V" in args:
-        print(f"qkd_onbox.py {SCRIPT_VERSION}")
+        print(f"etsi_kme_onbox.py {SCRIPT_VERSION}")
         raise SystemExit(0)
     if "--help" in args or "-h" in args:
         _print_cli_usage()
@@ -292,13 +292,13 @@ def _set_mode_if_needed(path_obj, target_mode):
 def enforce_runtime_file_permissions():
     """
     Runtime local hardening performed on-box at each invocation:
-      - qkd_onbox.py in op/event must be executable but non-writable
+      - etsi_kme_onbox.py in op/event must be executable but non-writable
       - runtime JSON sidecars in op must remain owner-writable only
 
     This guard does not rely on offbox provisioning scripts.
     """
-    op_script = Path(OP_RUNTIME_DIR) / "qkd_onbox.py"
-    event_script = Path(SCRIPT_DIR) / "event" / "qkd_onbox.py"
+    op_script = Path(OP_RUNTIME_DIR) / "etsi_kme_onbox.py"
+    event_script = Path(SCRIPT_DIR) / "event" / "etsi_kme_onbox.py"
     config_json = Path(CONFIG_PATH)
     inventory_json = Path(INVENTORY_PATH)
 
@@ -1194,7 +1194,7 @@ def _rpc_rotation_peers():
 def _run_rpc_key_action(peer, action, pubkey_line, key_path):
     encoded = base64.urlsafe_b64encode(pubkey_line.encode()).decode()
     cmd = (
-        f"op qkd_onbox.py action {action} "
+        f"op etsi_kme_onbox.py action {action} "
         f"device {DEVICE_NAME} pubkey-b64 {encoded}"
     )
     try:
@@ -1235,7 +1235,7 @@ def _run_rpc_key_action(peer, action, pubkey_line, key_path):
 
 
 def _verify_rpc_next_key(peer):
-    cmd = f"op qkd_onbox.py action status iface {peer['interface']}"
+    cmd = f"op etsi_kme_onbox.py action status iface {peer['interface']}"
     try:
         result = subprocess.run(
             [
@@ -4516,7 +4516,7 @@ def send_command(
 
     peer_ip = link["peer_ip"]
     peer_iface = link["peer_interface"]
-    cmd = f"op qkd_onbox.py action {action} iface {peer_iface}"
+    cmd = f"op etsi_kme_onbox.py action {action} iface {peer_iface}"
     if key_id:
         cmd += f" key-id {key_id}"
     if generation is not None:
@@ -4660,7 +4660,7 @@ def get_peer_status(link, iface):
 
     peer_ip = link["peer_ip"]
     peer_iface = link["peer_interface"]
-    cmd = f"op qkd_onbox.py action status iface {peer_iface}"
+    cmd = f"op etsi_kme_onbox.py action status iface {peer_iface}"
     log(
         f"SSH RPC EXEC {SCRIPT_USER}@{peer_ip} action=status "
         f"local_iface={iface} peer_iface={peer_iface} cmd=\"{cmd}\"",

@@ -107,7 +107,7 @@ def generate_macsec_keys() -> Dict[str, str]:
     """
     Generate shared static MACsec keys for legacy static mode.
 
-    QKD mode does not use this because qkd_onbox.py installs and rotates
+    QKD mode does not use this because etsi_kme_onbox.py installs and rotates
     authentication-key-chain entries at runtime.
     """
     return {

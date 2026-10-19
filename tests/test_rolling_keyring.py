@@ -14,7 +14,7 @@ from lib.qkd.inventory_builder import validate_qkd_policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ONBOX = ROOT / "artifacts" / "qkd_onbox.py"
+ONBOX = ROOT / "artifacts" / "etsi_kme_onbox.py"
 
 
 def load_functions(*names):
@@ -1259,7 +1259,7 @@ class TestRpcPeerStatus:
             "-i",
             "/var/home/etsi_user/.ssh/qkd_rpc_id_ed25519",
             "etsi_user@100.123.113.1",
-            "op qkd_onbox.py action status iface et-0/0/7",
+            "op etsi_kme_onbox.py action status iface et-0/0/7",
         ]
         assert timeout == 10
         assert all("SCP" not in str(entry) for entry in self.logs)

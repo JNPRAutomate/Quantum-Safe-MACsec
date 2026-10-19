@@ -21,6 +21,47 @@ bootstrap was separated from package installation. Build environment and image
 became explicit phases. Status and validation were separated so visibility is
 not confused with correctness.
 
+### ETSI KME on-box branch: current integration status
+
+On `docker/etsi14_kme`, the responsibilities remain separate:
+
+- `kme_orchestrator.py` owns KME containers, database lifecycle, and KME
+  certificate installation.
+- `qkd_orchestrator.py` owns generated QKD runtime, SAE certificates, router
+  script installation, MACsec configuration, and key rotation.
+- Inventory selects all managed routers and links; the implementation is not
+  restricted to the two routers used in this experiment.
+
+From the repository working directory on the Linux orchestrator:
+
+```sh
+python qkd_orchestrator.py create --inventory etsi_kme_evo
+python qkd_orchestrator.py bootstrap
+python kme_orchestrator.py install-onbox-certs
+python qkd_orchestrator.py deploy
+```
+
+`create` generates `config/runtime/<device>/etsi_kme_onbox.py` and the existing
+`qkd_onbox_config.json` / `qkd_onbox_inventory.json` sidecars. Runtime and PKI
+remain local, Git-ignored output. `deploy` refreshes the generated script,
+installs it in both `/var/db/scripts/event` and `/var/db/scripts/op`, and
+migrates QKD configuration references from the legacy script names.
+
+`install-onbox-certs` currently requires existing `etsi14-kme` containers,
+the `etsi-kme:local` image, and certificate mounts at `/var/db/etsi14-kme`.
+It uses the managed runtime inventory, generated self-signed PKI, and the
+bootstrapped script-user SSH identity. It does not create the containers.
+The full EVO container lifecycle is not yet integrated.
+
+The October 19 lab deployment uses KME endpoints `10.38.100.20:8443` and
+`10.38.100.21:8443`, with shared PostgreSQL at `10.38.98.181:5432`.
+Bidirectional 256-bit ETSI key exchange from Ubuntu and mutual TLS were
+verified. Router script deployment and post-deploy validation passed.
+Automatic CAK rotation is **not yet verified**: the on-box runtime reported
+a connection timeout to its local macvlan KME and RPC SSH-key verification
+failures. The secured MKA session and its SAK rekey do not establish
+successful KME-driven CAK rotation.
+
 ## Database evolution
 
 The old dual/per-KME database model was replaced by shared PostgreSQL plus

@@ -146,7 +146,7 @@ capture_qkd_state()
 
     for iface in $QKD_IFACES; do
         run_cli "qkd_onbox status iface $iface" \
-            "op qkd_onbox.py action status iface $iface"
+            "op etsi_kme_onbox.py action status iface $iface"
     done
 }
 

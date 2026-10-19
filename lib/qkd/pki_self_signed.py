@@ -94,7 +94,7 @@ def build_client_certificate(cert_path, key_path, ca_cert_path, ca_key_path, cn,
         DNS:<kme_name>
         IP:<kme_ip>
 
-      Otherwise HTTPS verification fails when qkd_onbox.py calls:
+      Otherwise HTTPS verification fails when etsi_kme_onbox.py calls:
         https://<kme_ip>:8443
     """
 

@@ -21,7 +21,7 @@ def command_result(returncode=0, stdout="", stderr=""):
 
 
 def write_runtime_script(tmp_path, protocol):
-    script = tmp_path / "runtime" / DEVICE["name"] / "qkd_onbox.py"
+    script = tmp_path / "runtime" / DEVICE["name"] / "etsi_kme_onbox.py"
     script.parent.mkdir(parents=True)
     script.write_text(
         f'TIMESTAMP_PROTOCOL_VERSION = "{protocol}"\n',
@@ -79,7 +79,7 @@ def test_timestamp_protocol_check_uses_runtime_value_and_deploy_transport(
     device, command, kwargs = calls[0]
     assert device["name"] == "MX301-P1"
     assert "TIMESTAMP_PROTOCOL_VERSION = \"future-v2\"" in command
-    assert "/var/db/scripts/op/qkd_onbox.py" in command
+    assert "/var/db/scripts/op/etsi_kme_onbox.py" in command
     assert kwargs == {
         "timeout": 20,
         "include_failed_marker": False,

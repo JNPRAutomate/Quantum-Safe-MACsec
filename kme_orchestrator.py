@@ -389,6 +389,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_cert_args(p_install_certs)
     p_install_certs.set_defaults(func=cmd_install_certs)
 
+    p_onbox_certs = subparsers.add_parser(
+        "install-onbox-certs",
+        help="Install generated self-signed PKI into existing etsi14-kme containers on EVO",
+    )
+    p_onbox_certs.add_argument("--dry-run", action="store_true")
+    p_onbox_certs.set_defaults(
+        func=lambda args: load_symbol("lib.kme.onbox_certs", "run_install_onbox_certs")(
+            dry_run=args.dry_run
+        )
+    )
+
     p_cert_install = subparsers.add_parser("cert-install", help="Alias for install-certs")
     add_common_args(p_cert_install)
     add_cert_args(p_cert_install)

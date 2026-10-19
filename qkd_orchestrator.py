@@ -65,7 +65,7 @@ from lib.qkd.clean import handle_clean
 from lib.kme.instructions import print_manual_kme_copy_instructions
 
 
-ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
 SCRIPT_VERSION = "ver3.3.4.1"
@@ -279,7 +279,7 @@ def parse_args():
             "  config/runtime/topology.yaml\n"
             "  config/runtime/pki_profile.yaml\n"
             "  config/runtime/qkd_policy.yaml\n"
-            "  config/runtime/<device>/qkd_onbox.py\n\n"
+            "  config/runtime/<device>/etsi_kme_onbox.py\n\n"
             "Example:\n"
             "  python3 qkd_orchestrator.py create \\\n"
             "    --inventory ring_6_mx_link_driven_with_acx \\\n"
@@ -378,10 +378,10 @@ def parse_args():
             "Normal deploy order:\n"
             "  1. bootstrap SCRIPT_USER on managed devices (separate 'bootstrap' command)\n"
             "  2. predeploy validation\n"
-            "  3. deploy qkd_onbox.py\n"
+            "  3. deploy etsi_kme_onbox.py\n"
             "  4. render/push/commit Junos configuration\n"
             "  5. postdeploy validation\n\n"
-            "Use --onbox-only to publish and validate qkd_onbox.py without changing Junos/MACsec configuration.\n\n"
+            "Use --onbox-only to publish and validate etsi_kme_onbox.py without changing Junos/MACsec configuration.\n\n"
             "Preview and dry-run do not bootstrap users or push config."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -418,14 +418,14 @@ def parse_args():
         "--shipment-preload",
         action="store_true",
         help=(
-            "Preload only the minimal on-box runtime files needed by qkd_onbox.py "
+            "Preload only the minimal on-box runtime files needed by etsi_kme_onbox.py "
             "as empty JSON placeholders (qkd_onbox_config.json and qkd_onbox_inventory.json)."
         ),
     )
     deploy.add_argument(
         "--onbox-only",
         action="store_true",
-        help="Deploy and validate qkd_onbox.py only; skip Junos/MACsec provisioning.",
+        help="Deploy and validate etsi_kme_onbox.py only; skip Junos/MACsec provisioning.",
     )
     deploy.add_argument(
         "--skip-pre-validation",
@@ -562,13 +562,13 @@ def deploy_onbox(
     shipment_preload=False,
 ):
     """
-    Upload qkd_onbox.py through the selected transport user, then install it
+    Upload etsi_kme_onbox.py through the selected transport user, then install it
     through the privileged bootstrap user.
 
     Critical behavior:
       - The upload user writes only to /var/tmp.
       - The bootstrap user performs privileged install and dual-RE file sync.
-      - On dual-RE MX, copy qkd_onbox.py to re1:/var/db/scripts/op and event.
+      - On dual-RE MX, copy etsi_kme_onbox.py to re1:/var/db/scripts/op and event.
       - Only print ONBOX deploy OK after local install and dual-RE sync are successful.
     """
 
@@ -1279,7 +1279,7 @@ def handle_create(args):
         if "script" in artifact:
             print(f"  {dev_name}: {repo_path(artifact['script'])}")
         else:
-            print(f"  {dev_name}: no qkd_onbox.py artifact required")
+            print(f"  {dev_name}: no etsi_kme_onbox.py artifact required")
 
     runtime_pki = load_runtime_pki_profile()
     profile = runtime_pki["pki"]["profile"]
@@ -1653,7 +1653,7 @@ def handle_deploy(args):
         "Collect generated on-box script artifacts for managed QKD devices.",
     )
     # Always refresh runtime on-box artifacts at deploy time so the latest
-    # qkd_onbox.py logic is applied even when create is not re-run.
+    # etsi_kme_onbox.py logic is applied even when create is not re-run.
     artifacts = build_onbox_artifacts(devices)
     for name, device in devices.items():
         if device.get("managed") is False:
@@ -1672,7 +1672,7 @@ def handle_deploy(args):
         "3/5",
         "ONBOX FILE DEPLOY",
         "START",
-        "Copy and install qkd_onbox.py on target devices (including dual-RE sync).",
+        "Copy and install etsi_kme_onbox.py on target devices (including dual-RE sync).",
     )
     deploy_onbox(
         log,

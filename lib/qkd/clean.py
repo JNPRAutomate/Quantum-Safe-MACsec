@@ -14,7 +14,7 @@ from lib.common.settings import CONFIG, PKI, QKD
 from lib.common.config import load_inventory_base
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
 
 
 # ----------------------------------------

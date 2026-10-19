@@ -13,7 +13,7 @@ import time
 import os
 from pathlib import Path
 
-ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
@@ -696,7 +696,7 @@ def check_event_script_path(device):
     path = qkd_remote_event_script()
     result = ssh_deploy_cmd(device, f"ls -l {path}", timeout=20)
     if result.returncode != 0:
-        raise RuntimeError(f"qkd_onbox.py missing on {name} at {path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(f"etsi_kme_onbox.py missing on {name} at {path}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(f"[OK] event script exists on {name}: {path}")
     print_if_verbose(result.stdout)
 
@@ -707,7 +707,7 @@ def check_event_script_permissions(device):
     path = qkd_remote_event_script()
     result = ssh_deploy_cmd(device, f"chmod 755 {path}; ls -l {path}", timeout=30)
     if result.returncode != 0:
-        raise RuntimeError(f"event qkd_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(f"event etsi_kme_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(f"[OK] event script permissions set: {path}")
     print_if_verbose(result.stdout)
 
@@ -718,7 +718,7 @@ def check_op_script_path(device):
     path = qkd_remote_op_script()
     result = ssh_deploy_cmd(device, f"ls -l {path}", timeout=20)
     if result.returncode != 0:
-        raise RuntimeError(f"qkd_onbox.py missing on {name} at {path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(f"etsi_kme_onbox.py missing on {name} at {path}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(f"[OK] op script exists on {name}: {path}")
     print_if_verbose(result.stdout)
 
@@ -729,7 +729,7 @@ def check_op_script_permissions(device):
     path = qkd_remote_op_script()
     result = ssh_deploy_cmd(device, f"chmod 755 {path}", timeout=30)
     if result.returncode != 0:
-        raise RuntimeError(f"qkd_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
+        raise RuntimeError(f"etsi_kme_onbox.py permission check failed on {name}\npath={path}\nstdout={result.stdout}\nstderr={result.stderr}")
     print(f"[OK] op script permissions set: {path}")
 
 
@@ -978,7 +978,7 @@ def check_qkd_status_as_script_user(device):
         print(f"[INFO] qkd status check skipped on {name} (POSTDEPLOY_QKD_STATUS_ENABLED=false)")
         return
     started = time.perf_counter()
-    cmd = "op qkd_onbox.py action status"
+    cmd = "op etsi_kme_onbox.py action status"
     result = None
     for attempt in range(1, max_attempts + 1):
         result = ssh_script_user_onbox_cmd(

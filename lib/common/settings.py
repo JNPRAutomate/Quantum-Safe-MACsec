@@ -56,13 +56,13 @@ PKI = {
 
 QKD = {
     # On-box script
-    "SCRIPT_NAME": "qkd_onbox.py",
+    "SCRIPT_NAME": "etsi_kme_onbox.py",
 
     # Single runtime identity.
     #
     # This user must be used consistently for:
     #   - Junos event-options python-script-user
-    #   - qkd_onbox.py runtime execution
+    #   - etsi_kme_onbox.py runtime execution
     #   - peer SSH-exec from one router to another
     #   - runtime state/log/lock ownership under /var/home/{SCRIPT_USER}
     #
@@ -88,7 +88,7 @@ QKD = {
     "EVENT_SCRIPT_DIR": "/var/db/scripts/event",
 
     # Full remote path where the op script must exist
-    "REMOTE_OP_SCRIPT_PATH": "/var/db/scripts/op/qkd_onbox.py",
+    "REMOTE_OP_SCRIPT_PATH": "/var/db/scripts/op/etsi_kme_onbox.py",
 
     # Runtime files on Junos
     "REMOTE_TMP_DIR": "/var/tmp",
@@ -96,7 +96,7 @@ QKD = {
     "STATE_FILE_PREFIX": "/var/home/etsi_user/qkd_db",
     "LOCK_FILE_PREFIX": "/var/home/etsi_user/qkd_onbox",
 
-    # Log rotation inside qkd_onbox.py
+    # Log rotation inside etsi_kme_onbox.py
     "LOG_MAX_BYTES": 10485760,
     "LOG_BACKUP_COUNT": 5,
 
@@ -147,7 +147,7 @@ QKD = {
     # continuing silently with the remaining peers.
     "POSTDEPLOY_PEER_SSH_MAX_TIMEOUTS_PER_DEVICE": 0,
 
-    # If True, qkd_onbox.py must refuse runtime actions when executed
+    # If True, etsi_kme_onbox.py must refuse runtime actions when executed
     # as root or as a user different from SCRIPT_USER.
     #
     # Important: action=status is NOT read-only anymore because it can

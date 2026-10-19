@@ -385,7 +385,7 @@ def test_deploy_onbox_separates_upload_and_install_sessions(
         def error(self, _message):
             pass
 
-    script = tmp_path / "qkd_onbox.py"
+    script = tmp_path / "etsi_kme_onbox.py"
     script.write_text("# test\n", encoding="utf-8")
     monkeypatch.setattr(qkd_orchestrator, "Device", Device)
     monkeypatch.setattr(qkd_orchestrator, "SCP", Scp)

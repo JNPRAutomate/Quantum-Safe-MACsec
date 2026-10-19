@@ -15,14 +15,14 @@ from lib.common.config import load_runtime_pki_profile, load_runtime_qkd_policy
 # this file is expected under:
 #   <repo>/lib/qkd/<this_file>.py
 BASE_DIR = Path(__file__).resolve().parents[2]
-ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
 
 # Source onbox template:
-#   artifacts/qkd_onbox.py
+#   artifacts/etsi_kme_onbox.py
 ARTIFACTS_DIR = BASE_DIR / CONFIG["artifacts_dir"]
 
 # Runtime output:
-#   config/runtime/<device>/qkd_onbox.py
+#   config/runtime/<device>/etsi_kme_onbox.py
 RUNTIME_DIR = BASE_DIR / CONFIG["runtime_dir"]
 
 
@@ -121,7 +121,7 @@ def _keychain_name_for_link(link, ca_name):
 
 def normalize_onbox_link(link):
     """
-    Normalize one runtime link for embedding into qkd_onbox.py.
+    Normalize one runtime link for embedding into etsi_kme_onbox.py.
 
     The on-box script should not need to know whether the link came from:
       - generated ring link
@@ -231,7 +231,7 @@ def resolve_pki_runtime():
 
 def build_onbox_config(name, device):
     """
-        Build the shared runtime config payload for qkd_onbox.py.
+        Build the shared runtime config payload for etsi_kme_onbox.py.
 
         This file is intentionally kept separate from inventory data so operators
         can inspect or adjust runtime-wide policy and identity values without
@@ -294,7 +294,7 @@ def build_onbox_config(name, device):
 
 def build_onbox_inventory(name, device):
     """
-    Build the per-device inventory payload for qkd_onbox.py.
+    Build the per-device inventory payload for etsi_kme_onbox.py.
 
     This holds device-specific values only: identity, transport endpoint and
     link topology.
@@ -320,13 +320,13 @@ def build_onbox_inventory(name, device):
 
 def generate_onbox_script(name, device, out_dir):
     """
-    Render qkd_onbox.py for a single device.
+    Render etsi_kme_onbox.py for a single device.
 
     Source template:
-        artifacts/qkd_onbox.py
+        artifacts/etsi_kme_onbox.py
 
     Destination:
-        config/runtime/<device>/qkd_onbox.py
+        config/runtime/<device>/etsi_kme_onbox.py
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -349,7 +349,7 @@ def generate_onbox_script(name, device, out_dir):
 
 def generate_onbox_sidecars(name, device, out_dir):
     """
-    Generate runtime JSON files consumed by qkd_onbox.py on device.
+    Generate runtime JSON files consumed by etsi_kme_onbox.py on device.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -380,7 +380,7 @@ def build_onbox_artifacts(devices):
         runtime devices dictionary from config/runtime/devices.yaml
 
     Output structure:
-        config/runtime/<device>/qkd_onbox.py
+        config/runtime/<device>/etsi_kme_onbox.py
 
     Returns:
         {
@@ -422,7 +422,7 @@ def build_onbox_artifacts(devices):
             outputs[name]["sidecars"] = sidecars
 
         elif mode == "static":
-            # Static mode does not need qkd_onbox.py.
+            # Static mode does not need etsi_kme_onbox.py.
             # Keep empty output entry for backward compatibility.
             pass
 
