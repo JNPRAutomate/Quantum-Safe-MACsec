@@ -3330,8 +3330,8 @@ def parse_mka_session_fields(mka_block):
         if line.startswith("CAK name:"):
             raw_cak = line.split("CAK name:", 1)[1].strip()
             fields["cak_name"] = normalize_hex_string(raw_cak)
-            parse_log_lines.append(f"cak_raw={raw_cak}")
-            log(f"MKA_PARSE CAK raw={raw_cak} normalized={fields['cak_name']} len_raw={len(raw_cak)} len_norm={len(fields['cak_name'])}", "DEBUG", None, "MKA")
+            parse_log_lines.append(f"ckn_raw={raw_cak}")
+            log(f"MKA_PARSE CKN raw={raw_cak} normalized={fields['cak_name']} len_raw={len(raw_cak)} len_norm={len(fields['cak_name'])}", "DEBUG", None, "MKA")
             continue
         if line.startswith("CAK type:"):
             fields["cak_type"] = line.split("CAK type:", 1)[1].strip()
@@ -3372,16 +3372,14 @@ def parse_mka_session_fields(mka_block):
     if parse_log_lines:
         log(f"MKA_PARSE_SUMMARY {' '.join(parse_log_lines)}", "DEBUG", None, "MKA")
     
-    # Validation: Check CAK format
     cak_name = fields.get("cak_name")
     if cak_name:
-        # Junos can surface the CAK name in different normalized hex lengths
-        # depending on platform/output format. Accept the observed 32/64-char
-        # forms and only warn on truly unexpected lengths.
-        if len(cak_name) not in (32, 64):
-            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)}", "WARN", None, "MKA")
+        # Junos can surface shortened CAK names as 32 or 62 hex characters.
+        # Keep full 64-character names valid as well.
+        if len(cak_name) not in (32, 62, 64):
+            log(f"MKA_PARSE CKN LENGTH UNEXPECTED len={len(cak_name)}", "WARN", None, "MKA")
         if not all(c in '0123456789abcdef' for c in cak_name.lower()):
-            log("MKA_PARSE CAK NOT HEX", "WARN", None, "MKA")
+            log("MKA_PARSE CKN NOT HEX", "WARN", None, "MKA")
     
     return fields
 
@@ -3454,9 +3452,18 @@ def mka_key_number_matches_expected_slot(observed_key_number, expected_slot):
     return False
 
 
+def key_id_format(key_id):
+    uuid_pattern = (
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    )
+    return "uuid" if re.fullmatch(uuid_pattern, str(key_id or "")) else "opaque"
+
+
 def mka_confirms_key(iface, key_id, generation=None):
     expected_ckn = ckn_from_key_id(key_id)
     expected_ckn_norm = normalize_hex_string(expected_ckn)
+    key_id_kind = key_id_format(key_id)
     mka_block = get_mka_session_block_for_iface(iface)
     if not mka_block:
         log(f"MKA BLOCK NOT FOUND iface={iface}", "DEBUG", iface, "MKA")
@@ -3475,7 +3482,8 @@ def mka_confirms_key(iface, key_id, generation=None):
         latest_an = fields.get("latest_sak_an")
         previous_an = fields.get("previous_sak_an")
         log(
-            f"MKA KEY CONFIRMED key_id={key_id} key_number={key_number} "
+            f"MKA KEY CONFIRMED key_id_format={key_id_kind} key_id={key_id} "
+            f"key_number={key_number} "
             f"latest_sak_an={latest_an} previous_sak_an={previous_an} "
             "confirm_path=ckn",
             "INFO",
@@ -3505,7 +3513,8 @@ def mka_confirms_key(iface, key_id, generation=None):
         return True
 
     log(
-        f"MKA KEY NOT CONFIRMED key_id={key_id} secured={secured} ckn_match={ckn_match} "
+        f"MKA KEY NOT CONFIRMED key_id_format={key_id_kind} key_id={key_id} "
+        f"secured={secured} ckn_match={ckn_match} "
         f"key_number={key_number} expected_key_number={expected_key_number} key_number_match={key_number_match} interface_state={fields.get('interface_state')} "
         f"mka_suspended={fields.get('mka_suspended')}",
         "INFO",
@@ -3514,7 +3523,8 @@ def mka_confirms_key(iface, key_id, generation=None):
     )
     # Debug mismatch without exposing CKN/CAK values.
     log(
-        f"MKA CKN_DEBUG expected_len={len(expected_ckn_norm)} cak_len={len(cak_name_norm)} "
+        f"MKA CKN_DEBUG key_id_format={key_id_kind} "
+        f"expected_ckn_len={len(expected_ckn_norm)} observed_ckn_len={len(cak_name_norm)} "
         f"match={ckn_match} expected_prefix_match={expected_ckn_norm.startswith(cak_name_norm) if cak_name_norm else False} "
         f"expected_suffix_match={expected_ckn_norm.endswith(cak_name_norm) if cak_name_norm else False}",
         "DEBUG",
