@@ -8,6 +8,12 @@ devices:
     hostname: evo1
     platform: ptx
     ip: 10.38.97.218
+    metadata:
+      kme_onbox:
+        host_access_ip: 10.38.100.24
+        parent: vmb0
+        vrf: vrf0
+        network: evokme_oob
     qkd:
       sae_id: sae-001
     kme:
@@ -20,6 +26,12 @@ devices:
     hostname: evo2
     platform: ptx
     ip: 10.38.97.228
+    metadata:
+      kme_onbox:
+        host_access_ip: 10.38.100.23
+        parent: vmb0
+        vrf: vrf0
+        network: evokme_oob
     qkd:
       sae_id: sae-002
     kme:

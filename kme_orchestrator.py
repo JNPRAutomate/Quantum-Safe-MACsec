@@ -400,6 +400,17 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
 
+    p_onbox_network = subparsers.add_parser(
+        "configure-onbox-network",
+        help="Configure inventory-defined host access to local macvlan KME containers",
+    )
+    p_onbox_network.add_argument("--dry-run", action="store_true")
+    p_onbox_network.set_defaults(
+        func=lambda args: load_symbol("lib.kme.onbox_network", "run_configure_onbox_network")(
+            dry_run=args.dry_run
+        )
+    )
+
     p_cert_install = subparsers.add_parser("cert-install", help="Alias for install-certs")
     add_common_args(p_cert_install)
     add_cert_args(p_cert_install)

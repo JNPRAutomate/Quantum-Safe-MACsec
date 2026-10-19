@@ -38,6 +38,7 @@ From the repository working directory on the Linux orchestrator:
 python qkd_orchestrator.py create --inventory etsi_kme_evo
 python qkd_orchestrator.py bootstrap
 python kme_orchestrator.py install-onbox-certs
+python kme_orchestrator.py configure-onbox-network
 python qkd_orchestrator.py deploy
 ```
 
@@ -57,10 +58,25 @@ The October 19 lab deployment uses KME endpoints `10.38.100.20:8443` and
 `10.38.100.21:8443`, with shared PostgreSQL at `10.38.98.181:5432`.
 Bidirectional 256-bit ETSI key exchange from Ubuntu and mutual TLS were
 verified. Router script deployment and post-deploy validation passed.
-Automatic CAK rotation is **not yet verified**: the on-box runtime reported
-a connection timeout to its local macvlan KME and RPC SSH-key verification
-failures. The secured MKA session and its SAK rekey do not establish
-successful KME-driven CAK rotation.
+The first automatic cycle exposed host-to-macvlan isolation. The
+`configure-onbox-network` command now creates an inventory-defined host
+macvlan interface and a VRF-scoped `/32` route to the local KME. Parameters
+are in each device's `metadata.kme_onbox`: `host_access_ip`, `parent`, and
+`vrf`. The lab uses host-access addresses `10.38.100.24` and `10.38.100.23`;
+these are separate from the KME container addresses. The operation validates
+all managed inventory records before connecting, supports arbitrary fleet
+size, and can be reapplied. Linux host interface/route state must be reapplied
+after a router reboot; reboot persistence is not implemented yet.
+
+After applying host access, automatic ENC and DEC requests succeeded from
+the two routers, and three future keys were installed bilaterally. The
+observation at 15:07, 15:10, and 15:16 UTC on October 19 confirmed two
+successive primary CAK changes with matching CKNs on both peers. Both peers
+were `Secured - Primary` at every snapshot. A subsequent rolling transaction
+installed two replacement slots, and RPC SSH-key rotation completed.
+Pending-key messages before their scheduled start time are expected.
+This verifies CAK activation and rolling key provisioning, not continuous
+traffic loss measurements or recovery after router reboot.
 
 ## Database evolution
 
