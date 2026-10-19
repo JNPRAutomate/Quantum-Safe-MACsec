@@ -11,12 +11,21 @@ from jnpr.junos import Device
 from lib.common.config import load_runtime_devices
 
 
+def _device_kme_ip(device: dict) -> str:
+    value = device.get("kme_ip")
+    if value is None and isinstance(device.get("kme"), dict):
+        value = device["kme"].get("ip")
+    if value is None:
+        raise ValueError("Missing runtime KME IP")
+    return str(ipaddress.IPv4Address(value))
+
+
 def network_command(device: dict) -> str:
     config = device.get("metadata", {}).get("kme_onbox")
     if not isinstance(config, dict):
         raise ValueError("Missing inventory metadata.kme_onbox for managed router")
     host_ip = str(ipaddress.IPv4Address(config["host_access_ip"]))
-    kme_ip = str(ipaddress.IPv4Address(device["kme_ip"]))
+    kme_ip = _device_kme_ip(device)
     if host_ip == kme_ip:
         raise ValueError("Host-access and KME IP addresses must differ")
     parent, vrf = config["parent"], config["vrf"]

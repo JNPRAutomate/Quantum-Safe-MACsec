@@ -20,18 +20,26 @@ CONTAINER = "etsi14-kme"
 CERT_DIR = "/var/db/etsi14-kme"
 
 
-def run_install_onbox_certs(dry_run: bool = False) -> None:
+def _device_kme_ip(device: dict) -> str:
+    value = device.get("kme_ip")
+    if value is None and isinstance(device.get("kme"), dict):
+        value = device["kme"].get("ip")
+    if value is None:
+        raise ValueError("Missing runtime KME IP")
+    return str(ipaddress.ip_address(value))
+
+
+def certificate_plans(devices: dict) -> list[tuple[str, str, dict[str, Path]]]:
     profile = load_runtime_pki_profile()["pki"]["profile"]
     if profile != "self_signed":
         raise ValueError("install-onbox-certs requires the self_signed PKI profile")
-    devices = load_runtime_devices()
     managed = [device for device in devices.values() if device.get("managed") is not False]
     kmes = {item["ip"]: item["name"] for item in build_unique_kme_inventory(list(devices.values()))}
     pki = REPO_ROOT / "certs" / "self_signed"
     plans = []
     for device in managed:
         address = str(ipaddress.ip_address(device["ip"]))
-        kme_ip = str(ipaddress.ip_address(device["kme_ip"]))
+        kme_ip = _device_kme_ip(device)
         name = kmes[kme_ip]
         sources = {
             "root.crt": pki / "offbox_rootCA.crt",
@@ -46,7 +54,11 @@ def run_install_onbox_certs(dry_run: bool = False) -> None:
         if ipaddress.ip_address(kme_ip) not in addresses.get_values_for_type(x509.IPAddress):
             raise ValueError(f"{name}: certificate SAN does not contain {kme_ip}")
         plans.append((address, name, sources))
+    return plans
 
+
+def run_install_onbox_certs(dry_run: bool = False) -> None:
+    plans = certificate_plans(load_runtime_devices())
     identity = str(qkd_orchestrator_private_key())
     options = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-i", identity,
                "-o", "IdentitiesOnly=yes"]

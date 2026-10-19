@@ -1,0 +1,17 @@
+deployment:
+  backend: onbox
+
+# Run on the Linux orchestrator where this image has been built.
+docker:
+  image: etsi-kme:local
+
+database:
+  # Existing shared PostgreSQL service; never started on the routers.
+  host: 10.38.98.181
+  port: 5432
+  db_name: key_store
+  # Local, untracked file with POSTGRES_USER and POSTGRES_PASSWORD.
+  credentials_file: /root/etsi14-kme-lab/postgres.env
+
+kme:
+  worker_threads: 2

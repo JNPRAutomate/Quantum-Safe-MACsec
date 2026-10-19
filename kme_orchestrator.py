@@ -51,6 +51,7 @@ from lib.common.command_output import capture_command_output
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "kme" / "lab.yaml"
+DEFAULT_ONBOX_CONFIG = REPO_ROOT / "config" / "kme" / "onbox.yaml"
 SCRIPT_VERSION = "ver3.3.4.1"
 
 StepFunc = Callable[..., Any]
@@ -288,6 +289,24 @@ def cmd_validate(args: argparse.Namespace) -> None:
     run_validate(config_path=args.config, dry_run=args.dry_run)
 
 
+def cmd_install_onbox_certs(args: argparse.Namespace) -> None:
+    run_install_onbox_certs = load_symbol("lib.kme.onbox_certs", "run_install_onbox_certs")
+    banner("KME: install-onbox-certs")
+    run_install_onbox_certs(dry_run=args.dry_run)
+
+
+def cmd_configure_onbox_network(args: argparse.Namespace) -> None:
+    run_configure_onbox_network = load_symbol("lib.kme.onbox_network", "run_configure_onbox_network")
+    banner("KME: configure-onbox-network")
+    run_configure_onbox_network(dry_run=args.dry_run)
+
+
+def cmd_onbox_deploy(args: argparse.Namespace) -> None:
+    run_onbox_deploy = load_symbol("lib.kme.onbox", "run_onbox_deploy")
+    banner("KME: onbox-deploy")
+    run_onbox_deploy(config_path=args.onbox_config, dry_run=args.dry_run)
+
+
 def cmd_stop(args: argparse.Namespace) -> None:
     run_stop = load_symbol("lib.kme.stop", "run_stop", required=False)
     if run_stop is None:
@@ -312,6 +331,10 @@ def cmd_destroy(args: argparse.Namespace) -> None:
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="KME config YAML")
     parser.add_argument("--dry-run", action="store_true", help="Show intended actions without changing anything")
+
+
+def add_onbox_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--onbox-config", default=str(DEFAULT_ONBOX_CONFIG), help="On-box KME config YAML")
 
 
 def add_count_arg(parser: argparse.ArgumentParser) -> None:
@@ -437,6 +460,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate = subparsers.add_parser("validate", help="Validate deployed KME lab")
     add_common_args(p_validate)
     p_validate.set_defaults(func=cmd_validate)
+
+    p_install_onbox_certs = subparsers.add_parser("install-onbox-certs", help="Install generated PKI into embedded KME containers")
+    p_install_onbox_certs.add_argument("--dry-run", action="store_true")
+    p_install_onbox_certs.set_defaults(func=cmd_install_onbox_certs)
+
+    p_configure_onbox_network = subparsers.add_parser("configure-onbox-network", help="Configure host access to embedded KME containers")
+    p_configure_onbox_network.add_argument("--dry-run", action="store_true")
+    p_configure_onbox_network.set_defaults(func=cmd_configure_onbox_network)
+
+    p_onbox_deploy = subparsers.add_parser("onbox-deploy", help="Deploy embedded KME containers onto selected routers")
+    add_onbox_args(p_onbox_deploy)
+    p_onbox_deploy.set_defaults(func=cmd_onbox_deploy)
 
     p_stop = subparsers.add_parser("stop", help="Stop KME lab")
     add_common_args(p_stop)

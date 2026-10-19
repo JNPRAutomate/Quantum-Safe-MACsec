@@ -14,6 +14,8 @@ devices:
         parent: vmb0
         vrf: vrf0
         network: evokme_oob
+        subnet: 10.38.96.0/19
+        gateway: 10.38.127.254
     qkd:
       sae_id: sae-001
     kme:
@@ -32,6 +34,8 @@ devices:
         parent: vmb0
         vrf: vrf0
         network: evokme_oob
+        subnet: 10.38.96.0/19
+        gateway: 10.38.127.254
     qkd:
       sae_id: sae-002
     kme:
