@@ -927,6 +927,9 @@ def save_rpc_key_rotation_state(state):
     transaction = state.get("transaction")
     if transaction is not None and not isinstance(transaction, dict):
         raise ValueError("RPC key rotation transaction must be an object or null")
+    if transaction is not None:
+        transaction = dict(transaction)
+        transaction["created_at_time"] = format_epoch_human(transaction.get("created_at"))
 
     payload = {
         "last_rotation_timestamp": last_rotation,

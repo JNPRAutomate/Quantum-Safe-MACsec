@@ -673,6 +673,37 @@ class TestRollingKeyringPlan:
 
 
 class TestTransactionalRpcKeyRotation:
+    @pytest.mark.parametrize("transaction", [None, {"phase": "prepared", "created_at": 1792514104}])
+    def test_saved_transaction_includes_readable_creation_time(self, tmp_path, transaction):
+        functions = load_functions(
+            "rpc_key_rotation_state_file",
+            "save_rpc_key_rotation_state",
+            "load_rpc_key_rotation_state",
+        )
+        functions.update(
+            {
+                "STATE_DIR": str(tmp_path),
+                "Path": Path,
+                "json": json,
+                "os": os,
+                "format_epoch_human": lambda value: f"readable:{value}",
+            }
+        )
+        state = {"rotation_count": 1, "transaction": transaction}
+
+        functions["save_rpc_key_rotation_state"](state)
+
+        payload = json.loads((tmp_path / "qkd_rpc_key_rotation.json").read_text())
+        restored = functions["load_rpc_key_rotation_state"]()
+        assert restored["transaction"] == payload["transaction"]
+        if transaction is None:
+            assert payload["transaction"] is None
+        else:
+            assert payload["transaction"]["created_at"] == 1792514104
+            assert payload["transaction"]["created_at_time"] == "readable:1792514104"
+            assert payload["transaction"]["phase"] == "prepared"
+            assert "created_at_time" not in transaction
+
     def test_corrupt_rotation_state_blocks_new_transaction(self, tmp_path):
         functions = load_functions(
             "rpc_key_rotation_state_file",
