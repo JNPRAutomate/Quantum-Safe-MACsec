@@ -3,7 +3,7 @@ system:
 secrets:
   default_user: admin
   bootstrap_user: root
-  script_user: admin
+  script_user: etsi_user
   script_user_class: super-user
   rpc_ssh_key_name: qkd_rpc_id_ed25519
   script_user_auth_mode: key-only
