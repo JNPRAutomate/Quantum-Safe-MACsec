@@ -48,6 +48,7 @@ from lib.common.config import (
 )
 from lib.common.script_user_bootstrap import (
     bootstrap_script_users,
+    get_script_user,
     ensure_local_script_user_keypair,
     mirror_local_script_user_keypair_to_ssh,
     write_local_ssh_alias_config,
@@ -1161,7 +1162,8 @@ def handle_create(args):
         raise ValueError(f"Unsupported PKI profile: {pki_profile}")
 
     base = load_inventory_base()
-    script_user = QKD["SCRIPT_USER"]
+    script_user = get_script_user(base)
+    QKD["SCRIPT_USER"] = script_user
 
     secrets = base.get("secrets", {}) if isinstance(base.get("secrets", {}), dict) else {}
     device_auth_map = base.get("devices", {})
@@ -1394,7 +1396,7 @@ def handle_bootstrap(args):
     print_step_banner(
         "SCRIPT_USER",
         "START",
-        "Bootstrap etsi_user on all managed devices.",
+        f"Bootstrap {get_script_user(inventory_base)} on all managed devices.",
     )
     
     print(f"Bootstrap credentials resolved for user={bootstrap_user}")
@@ -1466,12 +1468,7 @@ def handle_deploy(args):
         or None
     )
 
-    script_user = (
-        os.getenv("QKD_SCRIPT_USER")
-        or secrets.get("script_user")
-        or QKD.get("SCRIPT_USER")
-        or "etsi_user"
-    )
+    script_user = get_script_user(inventory_base)
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
@@ -1757,12 +1754,7 @@ def handle_validate(args):
     if not isinstance(secrets, dict):
         secrets = {}
 
-    QKD["SCRIPT_USER"] = (
-        os.getenv("QKD_SCRIPT_USER")
-        or secrets.get("script_user")
-        or QKD.get("SCRIPT_USER")
-        or "etsi_user"
-    )
+    QKD["SCRIPT_USER"] = get_script_user(inventory_base)
 
     # Match deploy logic: prefer bootstrap credentials for predeploy validation
     bootstrap_user = (

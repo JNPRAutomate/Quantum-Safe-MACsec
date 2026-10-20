@@ -201,6 +201,55 @@ def test_bootstrap_dry_run_does_not_prompt(monkeypatch):
     assert calls[0]["dry_run"] is True
 
 
+@pytest.mark.parametrize(
+    "environment_user,inventory_user,expected_user",
+    [("admin", "etsi_user", "admin"), (None, "admin", "admin"), (None, None, "etsi_user")],
+)
+def test_create_uses_resolved_script_identity(
+    monkeypatch, environment_user, inventory_user, expected_user
+):
+    monkeypatch.setitem(qkd_orchestrator.QKD, "SCRIPT_USER", "etsi_user")
+    if environment_user:
+        monkeypatch.setenv("QKD_SCRIPT_USER", environment_user)
+    else:
+        monkeypatch.delenv("QKD_SCRIPT_USER", raising=False)
+    inventory = {
+        "topology": "links",
+        "platform": "ptx",
+        "mode": "qkd",
+        "devices": [
+            {
+                "name": "EVO1",
+                "ip": "192.0.2.1",
+                "kme": {"ip": "192.0.2.11"},
+                "interfaces": ["et-0/0/1"],
+                "auth": {"username": "root", "password": "test-only"},
+            }
+        ],
+    }
+    monkeypatch.setattr(qkd_orchestrator, "resolve_inventory", lambda _name: "test.yaml")
+    monkeypatch.setattr(qkd_orchestrator, "load_inventory_file", lambda _path: inventory)
+    monkeypatch.setattr(qkd_orchestrator, "validate_link_driven_inventory", lambda *_args: None)
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "load_inventory_base",
+        lambda: {"secrets": {"script_user": inventory_user, "default_user": "labuser"}},
+    )
+    monkeypatch.setattr(qkd_orchestrator, "reset_local_runtime_for_create", lambda: None)
+
+    class InventoryCaptured(Exception):
+        pass
+
+    def capture_inventory(devices, **_kwargs):
+        assert devices[0]["script_user"] == expected_user
+        assert qkd_orchestrator.QKD["SCRIPT_USER"] == expected_user
+        raise InventoryCaptured
+
+    monkeypatch.setattr(qkd_orchestrator, "build_full_inventory", capture_inventory)
+    with pytest.raises(InventoryCaptured):
+        qkd_orchestrator.handle_create(SimpleNamespace(inventory="test", pki_profile="hierarchical_ca"))
+
+
 def test_create_resolves_credentials_before_runtime_cleanup():
     tree = ast.parse(ORCHESTRATOR.read_text(encoding="utf-8"))
     handle_create = next(

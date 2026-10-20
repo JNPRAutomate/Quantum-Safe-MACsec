@@ -30,7 +30,7 @@ def test_script_config_honors_resolved_runtime_user(monkeypatch, runtime_user):
         def load(self, commands, **_kwargs):
             loaded.extend(commands.splitlines())
 
-    monkeypatch.setenv("QKD_SCRIPT_USER", "admin")
+    monkeypatch.setenv("QKD_SCRIPT_USER", "other-user" if runtime_user else "admin")
     monkeypatch.setattr(provisioning, "Config", FakeConfig)
     monkeypatch.setattr(provisioning, "rollback_candidate", lambda *_args: None)
     monkeypatch.setattr(provisioning, "has_dual_re", lambda *_args: False)
@@ -89,7 +89,10 @@ def test_rpc_key_provisioning_rejects_missing_direct_peer_key(monkeypatch):
         )
 
 
-def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch):
+@pytest.mark.parametrize("runtime_user", [None, "admin"])
+def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch, runtime_user):
+    monkeypatch.delenv("QKD_SCRIPT_USER", raising=False)
+    expected_user = runtime_user or "etsi_user"
     loaded = []
     commits = []
     current = "\n".join(
@@ -143,15 +146,15 @@ def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch):
     provisioning.apply_script_user_rpc_keys_config(
         dev,
         "EVO1",
-        {"links": [{"peer": "EVO2"}]},
+        {"script_user": runtime_user, "links": [{"peer": "EVO2"}]},
         DEVICES,
-        {},
+        {"secrets": {"script_user": "etsi_user"}},
     )
 
     # Additive only: an in-flight on-box rotation of EVO2 must not lose the
     # key it just prepared (AAAAOLD here stands for any other EVO2 key).
     assert loaded == [
-        'set system login user etsi_user authentication ssh-ed25519 "ssh-ed25519 AAAANEW qkd-rpc@EVO2"',
+        f'set system login user {expected_user} authentication ssh-ed25519 "ssh-ed25519 AAAANEW qkd-rpc@EVO2"',
     ]
     assert all(not command.startswith("delete") for command in loaded)
     assert all("qkd-rpc@EVO3" not in command for command in loaded)
