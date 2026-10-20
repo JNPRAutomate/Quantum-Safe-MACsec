@@ -28,6 +28,9 @@ dist/
 # macOS
 .DS_Store
 
+# VS Code workspace-local settings/tasks
+.vscode/
+
 # Local defect-analysis artifacts
 errata/
 
