@@ -9,6 +9,7 @@ import time
 
 import pytest
 import subprocess
+import sys
 
 from lib.qkd.inventory_builder import validate_qkd_policy
 
@@ -27,6 +28,39 @@ def load_functions(*names):
     namespace = {}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(ONBOX), "exec"), namespace)
     return namespace
+
+
+@pytest.mark.parametrize(
+    "actual_user,expected_message",
+    [
+        ("admin", "PERM GUARD FAILED"),
+        ("etsi_user", "WRONG RUNTIME USER runtime_user=etsi_user expected=admin"),
+        ("root", "WRONG RUNTIME USER runtime_user=root expected=admin"),
+    ],
+)
+def test_onbox_identity_guard_accepts_admin_and_rejects_other_users(
+    actual_user, expected_message
+):
+    functions = load_functions("main")
+    messages = []
+    functions.update(
+        {
+            "SCRIPT_USER": "admin",
+            "SCRIPT_VERSION": "test",
+            "runtime_user": lambda: actual_user,
+            "log": lambda message, *_args: messages.append(message),
+            "enforce_runtime_file_permissions": lambda: False,
+            "sys": sys,
+        }
+    )
+
+    with pytest.raises(SystemExit) as error:
+        functions["main"]()
+
+    assert error.value.code == 1
+    assert any(expected_message in message for message in messages)
+    if actual_user == "admin":
+        assert not any("WRONG RUNTIME USER" in message for message in messages)
 
 
 class TestRollingKeyringPlan:

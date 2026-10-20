@@ -1,0 +1,14 @@
+system:
+  threads: 1
+secrets:
+  default_user: admin
+  bootstrap_user: root
+  script_user: admin
+  script_user_class: super-user
+  rpc_ssh_key_name: qkd_rpc_id_ed25519
+  script_user_auth_mode: key-only
+  # Passwords are intentionally absent. Supply them at runtime through
+  # QKD_BOOTSTRAP_PASSWORD / QKD_SCRIPT_PASSWORD / QKD_DEFAULT_PASSWORD, or
+  # let the orchestrator prompt for them interactively.
+kme:
+  port: 8443
