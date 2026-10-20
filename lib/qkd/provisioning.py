@@ -19,6 +19,7 @@ from lib.common.settings import QKD
 from lib.common.config import load_inventory, load_platform
 from lib.common.config import load_runtime_pki_profile
 from lib.common.config import load_runtime_qkd_policy
+from lib.common.script_user_bootstrap import get_script_user
 from jinja2 import Environment, FileSystemLoader
 
 
@@ -717,10 +718,10 @@ def rollback_candidate(dev, name):
 # ----------------------------------------
 
 
-def configure_qkd_scripts(dev, name, base):
+def configure_qkd_scripts(dev, name, base, script_user=None):
     script_name = ONBOX_SCRIPT_NAME
     secrets = base.get("secrets", {})
-    script_user = secrets.get("script_user") or secrets.get("default_user") or "etsi_user"
+    script_user = get_script_user(base, override=script_user)
     script_user_class = secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS", "super-user")
     runtime_policy = load_runtime_qkd_policy()
     qkd_policy = runtime_policy.get("qkd_policy", {}) if isinstance(runtime_policy, dict) else {}
@@ -849,10 +850,8 @@ def apply_script_user_rpc_keys_config(dev, device_name, device_dict, all_devices
     secrets = base.get("secrets", {}) if isinstance(base, dict) else {}
     if not isinstance(secrets, dict):
         secrets = {}
-    script_user = str(
-        secrets.get("script_user")
-        or device_dict.get("script_user")
-        or qkd_script_user()
+    script_user = get_script_user(
+        base, override=device_dict.get("script_user")
     ).strip()
     direct_peer_names = direct_rpc_peer_names(
         device_name,
@@ -1105,7 +1104,9 @@ def push_config(device_name, device, commands, base, devices_dict=None):
             pass
 
         push_certs(dev, device_name, device)
-        configure_qkd_scripts(dev, device_name, base)
+        configure_qkd_scripts(
+            dev, device_name, base, script_user=device.get("script_user")
+        )
 
         # Do not rollback again here; configure_qkd_scripts() already starts from a clean candidate.
         max_lock_retries = 6

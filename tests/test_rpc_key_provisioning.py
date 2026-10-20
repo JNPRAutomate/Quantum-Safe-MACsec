@@ -13,6 +13,41 @@ DEVICES = {
 }
 
 
+@pytest.mark.parametrize("runtime_user", [None, "admin"])
+def test_script_config_honors_resolved_runtime_user(monkeypatch, runtime_user):
+    loaded = []
+
+    class FakeConfig:
+        def __init__(self, _dev):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def load(self, commands, **_kwargs):
+            loaded.extend(commands.splitlines())
+
+    monkeypatch.setenv("QKD_SCRIPT_USER", "admin")
+    monkeypatch.setattr(provisioning, "Config", FakeConfig)
+    monkeypatch.setattr(provisioning, "rollback_candidate", lambda *_args: None)
+    monkeypatch.setattr(provisioning, "has_dual_re", lambda *_args: False)
+    monkeypatch.setattr(provisioning, "commit_safely", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(provisioning, "load_runtime_qkd_policy", lambda: {})
+
+    provisioning.configure_qkd_scripts(
+        SimpleNamespace(),
+        "EVO2",
+        {"secrets": {"script_user": "etsi_user"}},
+        script_user=runtime_user,
+    )
+
+    assert any("python-script-user admin" in command for command in loaded)
+    assert not any("etsi_user" in command for command in loaded)
+
+
 def test_direct_rpc_peers_resolve_names_ips_and_duplicates():
     device = {
         "links": [

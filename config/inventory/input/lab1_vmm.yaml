@@ -11,7 +11,7 @@ devices:
     qkd:
       sae_id: sae-001
     kme:
-      ip: 10.38.100.10
+      ip: 10.38.100.11
       port: 8443
     interfaces:
       - et-0/0/1
@@ -24,7 +24,7 @@ devices:
     qkd:
       sae_id: sae-002
     kme:
-      ip: 10.38.100.11
+      ip: 10.38.100.12
       port: 8443
     interfaces:
       - et-0/0/1

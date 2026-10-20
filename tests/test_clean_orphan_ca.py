@@ -1,4 +1,15 @@
-from lib.qkd.clean import collect_qkd_clean_candidates, parse_orphan_connectivity_associations
+from lib.qkd.clean import (
+    cleanup_script_names,
+    collect_qkd_clean_candidates,
+    parse_orphan_connectivity_associations,
+)
+
+
+def test_cleanup_script_names_include_legacy_kme_script():
+    assert cleanup_script_names("qkd_onbox.py") == [
+        "qkd_onbox.py",
+        "etsi_kme_onbox.py",
+    ]
 
 
 def test_parse_orphan_connectivity_associations_finds_legacy_ca():

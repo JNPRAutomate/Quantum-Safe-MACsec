@@ -15,6 +15,11 @@ from lib.common.config import load_inventory_base
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
+LEGACY_KME_ONBOX_SCRIPT_NAME = "etsi_kme_onbox.py"
+
+
+def cleanup_script_names(script_name):
+    return list(dict.fromkeys((script_name, ONBOX_SCRIPT_NAME, LEGACY_KME_ONBOX_SCRIPT_NAME)))
 
 
 # ----------------------------------------
@@ -192,6 +197,7 @@ def clean_device(name, device, full_macsec=False):
         passwd = device["auth"]["password"]
 
         script_name = ONBOX_SCRIPT_NAME
+        script_names_to_clean = cleanup_script_names(script_name)
         secrets = device.get("secrets") or {}
         script_user = str(device.get("script_user") or secrets.get("script_user") or QKD.get("SCRIPT_USER") or "etsi_user")
         script_user_class = str(secrets.get("script_user_class") or QKD.get("SCRIPT_USER_CLASS") or "")
@@ -317,11 +323,11 @@ def clean_device(name, device, full_macsec=False):
             "/var/tmp/qkd_debug_*.log",
         ]
         config_cmds = [
-            "delete event-options generate-event QKD_TIMER",
-            "delete event-options policy QKD",
-            "delete event-options policy QKD_POLICY",
-            f"delete event-options event-script file {script_name}",
-            f"delete system scripts op file {script_name}",
+            "delete event-options",
+            *[
+                f"delete system scripts op file {cleanup_script_name}"
+                for cleanup_script_name in script_names_to_clean
+            ],
             f"delete system login user {script_user}",
             f"delete system login user {peer_cmd_user}",
             f"delete system login class {peer_cmd_user_class}",
@@ -363,11 +369,20 @@ def clean_device(name, device, full_macsec=False):
         )
 
         file_cleanup_parts = [
-            f"rm -f {event_script_dir}/{script_name}",
-            f"rm -f {op_script_dir}/{script_name}",
+            *[
+                f"rm -f {event_script_dir}/{cleanup_script_name}"
+                for cleanup_script_name in script_names_to_clean
+            ],
+            *[
+                f"rm -f {op_script_dir}/{cleanup_script_name}"
+                for cleanup_script_name in script_names_to_clean
+            ],
             f"rm -f {op_script_dir}/qkd_onbox_inventory.json",
             f"rm -f {op_script_dir}/qkd_onbox_config.json",
-            f"rm -f /var/tmp/{script_name}",
+            *[
+                f"rm -f /var/tmp/{cleanup_script_name}"
+                for cleanup_script_name in script_names_to_clean
+            ],
             "rm -rf /var/tmp/qkd_peer_inbox",
             "rm -rf /var/tmp/qkd_peer_status",
             "rm -rf /var/tmp/qkd_peer_ack",
@@ -590,11 +605,20 @@ def clean_device(name, device, full_macsec=False):
             )
 
             peer_cleanup_paths = [
-                f"{event_script_dir}/{script_name}",
-                f"{op_script_dir}/{script_name}",
+                *[
+                    f"{event_script_dir}/{cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
+                *[
+                    f"{op_script_dir}/{cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
                 f"{op_script_dir}/qkd_onbox_inventory.json",
                 f"{op_script_dir}/qkd_onbox_config.json",
-                f"/var/tmp/{script_name}",
+                *[
+                    f"/var/tmp/{cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
                 "/var/tmp/qkd_peer_inbox",
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
@@ -641,11 +665,11 @@ def clean_device(name, device, full_macsec=False):
             )
 
             forbidden_patterns = [
-                "set event-options generate-event QKD_TIMER",
-                "set event-options policy QKD",
-                "set event-options policy QKD_POLICY",
-                f"set event-options event-script file {script_name}",
-                f"set system scripts op file {script_name}",
+                "set event-options ",
+                *[
+                    f"set system scripts op file {cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
             ]
 
             if full_macsec:
@@ -693,11 +717,20 @@ def clean_device(name, device, full_macsec=False):
                 )
 
             paths_should_be_absent = [
-                f"{op_script_dir}/{script_name}",
-                f"{event_script_dir}/{script_name}",
+                *[
+                    f"{op_script_dir}/{cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
+                *[
+                    f"{event_script_dir}/{cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
                 f"{op_script_dir}/qkd_onbox_inventory.json",
                 f"{op_script_dir}/qkd_onbox_config.json",
-                f"/var/tmp/{script_name}",
+                *[
+                    f"/var/tmp/{cleanup_script_name}"
+                    for cleanup_script_name in script_names_to_clean
+                ],
                 "/var/tmp/qkd_peer_inbox",
                 "/var/tmp/qkd_peer_status",
                 "/var/tmp/qkd_peer_ack",
