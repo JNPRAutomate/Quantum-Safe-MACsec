@@ -29,7 +29,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import calendar
-EARLY_SCRIPT_VERSION = "ver3.3.4.1"
+EARLY_SCRIPT_VERSION = "ver3.3.4.2"
 TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
@@ -3330,8 +3330,8 @@ def parse_mka_session_fields(mka_block):
         if line.startswith("CAK name:"):
             raw_cak = line.split("CAK name:", 1)[1].strip()
             fields["cak_name"] = normalize_hex_string(raw_cak)
-            parse_log_lines.append(f"cak_raw={raw_cak}")
-            log(f"MKA_PARSE CAK raw={raw_cak} normalized={fields['cak_name']} len_raw={len(raw_cak)} len_norm={len(fields['cak_name'])}", "DEBUG", None, "MKA")
+            parse_log_lines.append(f"ckn_raw={raw_cak}")
+            log(f"MKA_PARSE CKN raw={raw_cak} normalized={fields['cak_name']} len_raw={len(raw_cak)} len_norm={len(fields['cak_name'])}", "DEBUG", None, "MKA")
             continue
         if line.startswith("CAK type:"):
             fields["cak_type"] = line.split("CAK type:", 1)[1].strip()
@@ -3372,16 +3372,12 @@ def parse_mka_session_fields(mka_block):
     if parse_log_lines:
         log(f"MKA_PARSE_SUMMARY {' '.join(parse_log_lines)}", "DEBUG", None, "MKA")
     
-    # Validation: Check CAK format
-    cak_name = fields.get("cak_name")
-    if cak_name:
-        # Junos can surface the CAK name in different normalized hex lengths
-        # depending on platform/output format. Accept the observed 32/64-char
-        # forms and only warn on truly unexpected lengths.
-        if len(cak_name) not in (32, 64):
-            log(f"MKA_PARSE CAK LENGTH INVALID len={len(cak_name)}", "WARN", None, "MKA")
-        if not all(c in '0123456789abcdef' for c in cak_name.lower()):
-            log("MKA_PARSE CAK NOT HEX", "WARN", None, "MKA")
+    ckn_name = fields.get("cak_name")
+    if ckn_name:
+        if not 2 <= len(ckn_name) <= 64 or len(ckn_name) % 2:
+            log(f"MKA_PARSE CKN LENGTH INVALID len={len(ckn_name)} expected_hex_chars=2..64 even_length_required=True", "WARN", None, "MKA")
+        if not all(character in '0123456789abcdef' for character in ckn_name.lower()):
+            log("MKA_PARSE CKN NOT HEX", "WARN", None, "MKA")
     
     return fields
 
@@ -3514,7 +3510,7 @@ def mka_confirms_key(iface, key_id, generation=None):
     )
     # Debug mismatch without exposing CKN/CAK values.
     log(
-        f"MKA CKN_DEBUG expected_len={len(expected_ckn_norm)} cak_len={len(cak_name_norm)} "
+        f"MKA CKN_DEBUG expected_len={len(expected_ckn_norm)} ckn_len={len(cak_name_norm)} "
         f"match={ckn_match} expected_prefix_match={expected_ckn_norm.startswith(cak_name_norm) if cak_name_norm else False} "
         f"expected_suffix_match={expected_ckn_norm.endswith(cak_name_norm) if cak_name_norm else False}",
         "DEBUG",

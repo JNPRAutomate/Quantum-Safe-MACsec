@@ -63,6 +63,42 @@ def test_onbox_identity_guard_accepts_admin_and_rejects_other_users(
         assert not any("WRONG RUNTIME USER" in message for message in messages)
 
 
+@pytest.mark.parametrize("hex_length", [2, 32, 62, 64])
+def test_mka_parser_accepts_valid_ckn_byte_lengths(hex_length):
+    functions = load_functions("normalize_hex_string", "parse_mka_session_fields")
+    messages = []
+    functions["log"] = lambda *args: messages.append(args)
+    ckn = "AB" * (hex_length // 2)
+
+    fields = functions["parse_mka_session_fields"](
+        f"Interface State: Secured\nCAK name: {ckn}\nCAK type: Static"
+    )
+
+    assert fields["cak_name"] == ckn
+    assert not any(message[1] == "WARN" for message in messages)
+
+
+@pytest.mark.parametrize(
+    "ckn,expected_warning",
+    [
+        ("A" * 63, "CKN LENGTH INVALID"),
+        ("A" * 66, "CKN LENGTH INVALID"),
+        ("GG" * 31, "CKN NOT HEX"),
+    ],
+)
+def test_mka_parser_reports_malformed_ckn_not_secret_cak(ckn, expected_warning):
+    functions = load_functions("normalize_hex_string", "parse_mka_session_fields")
+    messages = []
+    functions["log"] = lambda *args: messages.append(args)
+
+    functions["parse_mka_session_fields"](f"CAK name: {ckn}")
+
+    assert any(
+        expected_warning in message[0] and message[1] == "WARN"
+        for message in messages
+    )
+
+
 class TestRollingKeyringPlan:
     @classmethod
     def setup_class(cls):
