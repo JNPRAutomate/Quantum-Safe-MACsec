@@ -109,6 +109,13 @@ def remote_run(
     dry_run: bool = False,
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess:
+    if (config.get("ssh", {}) or {}).get("local") is True:
+        return run_local(
+            ["/bin/sh", "-c", remote_command],
+            dry_run=dry_run,
+            input_text=input_text,
+        )
+
     return run_local(
         ssh_cmd(config, remote_command),
         dry_run=dry_run,
@@ -176,12 +183,20 @@ def run_db_init(
     config_path: str | Path,
     dry_run: bool = False,
     recreate: bool = False,
+    recreate_volume: bool = False,
     content_type: str = "BYTEA",
 ) -> dict[str, Any]:
     config = load_yaml(config_path)
     service_name, container_name, user, database, password = get_db_settings(config)
     content_type = normalize_content_type(content_type)
     schema_sql = build_schema_sql(content_type=content_type, recreate=recreate)
+    db_config = config.get("database", {}) or {}
+    volume_name = db_config.get("volume_name")
+
+    if recreate_volume and not volume_name:
+        raise ValueError("--recreate-volume requires database.volume_name in the config")
+    if recreate_volume and (config.get("ssh", {}) or {}).get("local") is not True:
+        raise ValueError("--recreate-volume is only supported for local database configs")
 
     print("=== KME db-init ===")
     print(f"compose service : {service_name}")
@@ -189,6 +204,15 @@ def run_db_init(
     print(f"database        : {database}")
     print(f"user            : {user}")
     print(f"content         : {content_type}")
+    if recreate_volume:
+        print(f"volume          : {volume_name} (will be recreated)")
+
+    if recreate_volume:
+        remote_run(
+            config,
+            docker_compose(config, "down --volumes"),
+            dry_run=dry_run,
+        )
     
     # start postgres container
     # docker compose uses the service name, not the container_name.

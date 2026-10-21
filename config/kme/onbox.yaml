@@ -1,8 +1,14 @@
 deployment:
   backend: onbox
 
-# Run on the Linux orchestrator where this image has been built.
+ssh:
+  local: true
+
+paths:
+  project_dir: /root/etsi_kme_docker_etsi14_kme
+
 docker:
+  compose_file: config/kme/onbox-postgres-compose.yaml
   image: etsi-kme:local
 
 database:
@@ -12,6 +18,10 @@ database:
   db_name: key_store
   # Local, untracked file with POSTGRES_USER and POSTGRES_PASSWORD.
   credentials_file: /root/etsi14-kme-lab/postgres.env
+  service_name: qkd-postgres
+  container_name: etsi14-postgres
+  username: db_user
+  volume_name: etsi14-postgres-data
 
 kme:
   worker_threads: 2

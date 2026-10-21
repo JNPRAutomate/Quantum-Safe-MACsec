@@ -1,0 +1,17 @@
+services:
+  qkd-postgres:
+    image: postgres:15
+    container_name: etsi14-postgres
+    env_file:
+      - /root/etsi14-kme-lab/postgres.env
+    environment:
+      POSTGRES_DB: key_store
+    ports:
+      - "10.38.98.181:5432:5432"
+    volumes:
+      - etsi14-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  etsi14-postgres-data:
+    name: etsi14-postgres-data

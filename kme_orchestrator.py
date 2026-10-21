@@ -257,6 +257,7 @@ def cmd_db_init(args: argparse.Namespace) -> None:
         config_path=args.config,
         dry_run=args.dry_run,
         recreate=args.recreate_db,
+        recreate_volume=args.recreate_volume,
         content_type=args.content_type,
     )
 
@@ -442,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_db_init = subparsers.add_parser("db-init", help="Initialize PostgreSQL schema")
     add_common_args(p_db_init)
     add_db_args(p_db_init)
+    p_db_init.add_argument(
+        "--recreate-volume",
+        action="store_true",
+        help="Recreate the configured local database volume before initialization",
+    )
     p_db_init.set_defaults(func=cmd_db_init)
 
     p_deploy = subparsers.add_parser("deploy", help="Deploy KME containers")
