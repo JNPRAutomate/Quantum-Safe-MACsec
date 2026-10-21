@@ -459,7 +459,7 @@ def test_bgp_ao_discovery_accepts_neighbor_output_with_license_warning_and_inlin
         "  Type: External    State: Established    Flags: <Sync>\n"
         "  Last Error: None\n"
         "  Last State: OpenConfirm   Last Event: RecvKeepAlive\n"
-    )
+    ).replace("\n", "\r\n")
     monkeypatch.setattr(
         subprocess,
         "run",
