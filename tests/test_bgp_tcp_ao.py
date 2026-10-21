@@ -457,13 +457,14 @@ def test_bgp_ao_discovery_accepts_neighbor_output_with_license_warning_and_inlin
         "Peer: 10.255.0.1+179 AS 65002 Local: 10.255.0.0+51884 AS 65001\n"
         "  Group: LAB-EVO               Routing-Instance: master\n"
         "  Type: External    State: Established    Flags: <Sync>\n"
+        "  Last Error: None\n"
         "  Last State: OpenConfirm   Last Event: RecvKeepAlive\n"
     )
     monkeypatch.setattr(
         subprocess,
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
-            args=[], returncode=256, stdout=output.encode(), stderr=b""
+            args=[], returncode=0, stdout=output.encode(), stderr=b""
         ),
     )
     discover.__globals__["re"] = re
