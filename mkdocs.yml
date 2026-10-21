@@ -77,6 +77,8 @@ nav:
           - Configuration and lifecycle: kme/configuration_and_lifecycle.md
           - Security and certificates: kme/security_and_certificates.md
           - First-run guide: kme/first_run_guide.md
+          - Full EVO lab deployment: full_deploy.md
+          - EVO lab reset runbook: kme/etsi_kme_evo_runbook.md
           - CLI reference: kme/cli_reference.md
           - Operations and troubleshooting: kme/operations_and_troubleshooting.md
           - Vault integration: kme/vault_localhost_8200_setup.md
@@ -97,6 +99,7 @@ nav:
           - Certificates and PKI: qkd/certificates_and_pki.md
           - Platform differences: qkd/platform_differences_mx_acx_evo.md
           - CLI reference: qkd/cli_reference.md
+          - Runtime logs and state files: qkd/logs/runtime_logs_and_state_files.md
           - Release history: qkd/release_history.md
       - On-box runtime:
           - Guide overview: onbox/toc.md

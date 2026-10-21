@@ -21,6 +21,8 @@ SAE](pqc/mka_qkd_kme.md) for the terminology used throughout the guide.
 
 - [KME orchestrator](kme/first_run_guide.md): prepare and operate the KME
   service host, its containers, database, and certificates.
+- [Full EVO lab deployment](full_deploy.md): reset and redeploy the embedded
+  KME and QKD/MACsec services on EVO1 and EVO2.
 - [QKD orchestrator](qkd/qkd_deploy_phases.md): validate inventory, generate
   artifacts, deploy to the devices, and validate the result.
 - [On-box runtime](onbox/runtime_model.md): understand link roles, rolling
@@ -46,7 +48,7 @@ rolling-keyring, synchronous RPC, and hierarchical-PKI architecture.
 ## What the components do
 
 | Component | Responsibility | Start reading |
-|---|---|---|
+| --- | --- | --- |
 | KME orchestrator | Builds and operates ETSI GS QKD 014 KME services on their host | [KME first-run guide](kme/first_run_guide.md) |
 | QKD orchestrator | Owns inventory, PKI, generated configuration, deployment, and validation | [QKD architecture](qkd/architecture.md) |
 | `qkd_onbox.py` | Runs on Juniper devices and coordinates key retrieval, peer synchronization, and MACsec rotation | [On-box runtime](onbox/runtime_model.md) |
