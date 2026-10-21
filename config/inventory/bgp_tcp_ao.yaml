@@ -1,0 +1,24 @@
+bgp_tcp_ao:
+  keychain_prefix: QKD_AO
+  cryptographic_algorithm: aes-128-cmac-96
+  tolerance_seconds: 30
+  sessions:
+    # Each entry is one existing eBGP neighbor session. `devices` are the two
+    # local routers receiving AO config; `neighbor_address` is that router's
+    # existing BGP peer, not a link/interface address to be created here.
+    EVO1-EVO2:
+      group_name: LAB-EVO
+      devices:
+        - EVO1
+        - EVO2
+      endpoints:
+        EVO1:
+          neighbor_address: 10.255.0.1
+          peer_as: 65002
+          send_id_base: 0
+          recv_id_base: 128
+        EVO2:
+          neighbor_address: 10.255.0.0
+          peer_as: 65001
+          send_id_base: 128
+          recv_id_base: 0

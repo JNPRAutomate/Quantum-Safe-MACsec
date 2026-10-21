@@ -29,7 +29,7 @@ Legacy double-buffer actions program/activate are intentionally unsupported.
 
 import sys
 import calendar
-EARLY_SCRIPT_VERSION = "ver3.3.4.2"
+EARLY_SCRIPT_VERSION = "ver3.3.4.3"
 TIMESTAMP_PROTOCOL_VERSION = "utc-v1"
 _EARLY_ARGS = set(sys.argv[1:])
 if "--version" in _EARLY_ARGS or "-V" in _EARLY_ARGS:
@@ -58,6 +58,7 @@ from pathlib import Path
 import json
 import os
 import hashlib
+import hmac
 import pwd
 import shutil
 import stat
@@ -192,6 +193,8 @@ LOG_MAX_BYTES = int(CONFIG["log_max_bytes"])
 LOG_BACKUP_COUNT = int(CONFIG["log_backup_count"])
 STATE_DIR = CONFIG.get("state_dir", f"/var/home/{SCRIPT_USER}")
 LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
+BGP_TCP_AO_CONFIG = CONFIG.get("bgp_tcp_ao", {}) or {}
+BGP_TCP_AO_LOG_FILE = CONFIG.get("bgp_tcp_ao_log_file", f"{LOG_DIR}/bgp-tcp-ao.log")
 PEER_STATUS_DIR = CONFIG.get("peer_status_dir", f"{STATE_DIR}/peer_status")
 PIPELINE_TIMING_DIR = CONFIG.get("pipeline_timing_dir", f"{LOG_DIR}/pipeline_timing")
 PIPELINE_TIMING_FILE = CONFIG.get(
@@ -418,6 +421,38 @@ def log(msg, level="INFO", iface=None, mode=None):
         safe_iface = iface.replace("/", "_")
         link_log_file = f"{LOG_DIR}/qkd_debug_{DEVICE}_{safe_iface}.log"
         write_log_line(link_log_file)
+
+
+def log_bgp_tcp_ao(msg, level="INFO"):
+    """Write TCP-AO lifecycle messages only to its independent log."""
+    levels = {"DEBUG": 10, "INFO": 20, "WARN": 25, "WARNING": 25, "ERROR": 30}
+    level = str(level or "INFO").upper()
+    if levels.get(level, 20) < levels.get(str(LOG_LEVEL or "INFO").upper(), 20):
+        return
+
+    line = (
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{level}] "
+        f"[BGP-TCP-AO][{DEVICE}] {msg}\n"
+    )
+    path = Path(BGP_TCP_AO_LOG_FILE)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size >= LOG_MAX_BYTES:
+            for index in range(LOG_BACKUP_COUNT - 1, 0, -1):
+                old = Path(f"{path}.{index}")
+                new = Path(f"{path}.{index + 1}")
+                if old.exists():
+                    if new.exists():
+                        new.unlink()
+                    old.rename(new)
+            first = Path(f"{path}.1")
+            if first.exists():
+                first.unlink()
+            path.rename(first)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception:
+        pass
 
 
 # ----------------------------
@@ -942,6 +977,745 @@ def save_rpc_key_rotation_state(state):
     tmp = Path(f"{path}.tmp")
     tmp.write_text(json.dumps(payload, indent=2))
     os.replace(str(tmp), str(path))
+
+
+def bgp_tcp_ao_session_config(session_id):
+    if not BGP_TCP_AO_CONFIG.get("enabled"):
+        raise RuntimeError("BGP TCP-AO is not enabled in the runtime config")
+    session = (BGP_TCP_AO_CONFIG.get("sessions") or {}).get(str(session_id))
+    if not isinstance(session, dict):
+        raise RuntimeError(f"BGP TCP-AO session not found: {session_id}")
+    return session
+
+
+def bgp_tcp_ao_state_file(session_id):
+    safe_session = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_id))
+    return f"{STATE_DIR}/qkd_bgp_tcp_ao_{safe_session}.json"
+
+
+def load_bgp_tcp_ao_state(session_id):
+    path = Path(bgp_tcp_ao_state_file(session_id))
+    if not path.exists():
+        return {"session_id": str(session_id), "phase": "uninitialized", "ring": [], "rotation_count": 0}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"invalid BGP TCP-AO state file={path}: {exc}") from exc
+    if not isinstance(state, dict) or state.get("session_id") != str(session_id):
+        raise RuntimeError(f"invalid BGP TCP-AO state identity file={path}")
+    if not isinstance(state.get("ring", []), list):
+        raise RuntimeError(f"invalid BGP TCP-AO ring file={path}")
+    return state
+
+
+def save_bgp_tcp_ao_state(session_id, state):
+    payload = dict(state or {})
+    payload["session_id"] = str(session_id)
+    path = Path(bgp_tcp_ao_state_file(session_id))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(f"{path}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    os.replace(str(tmp), str(path))
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def discover_bgp_tcp_ao_neighbor(session, local_device, require_unauthenticated=True):
+    endpoint = (session.get("endpoints") or {}).get(local_device)
+    if not isinstance(endpoint, dict):
+        raise RuntimeError(f"BGP TCP-AO endpoint missing for device={local_device}")
+    neighbor = str(endpoint.get("neighbor_address") or "")
+    expected_group = str(session.get("group_name") or "")
+    expected_peer_as = int(endpoint.get("peer_as", 0))
+    if not neighbor or not expected_group or not expected_peer_as:
+        raise RuntimeError(f"incomplete BGP TCP-AO endpoint for device={local_device}")
+    result = subprocess.run(
+        [CLI_PATH, "-c", f"show bgp neighbor {neighbor} extensive"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+    )
+    stdout = result.stdout.decode(errors="ignore")
+    stderr = result.stderr.decode(errors="ignore")
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        raise RuntimeError(f"BGP neighbor query failed device={local_device} neighbor={neighbor}")
+    group_match = re.search(r"^\s*Group:\s*(\S+)", stdout, re.MULTILINE | re.IGNORECASE)
+    peer_line = next((line for line in stdout.splitlines() if re.search(r"^\s*Peer:\s*", line, re.IGNORECASE)), "")
+    as_match = re.search(r"\bAS\s+(\d+)\b", peer_line)
+    state_match = re.search(r"^\s*(?:BGP )?State:\s*(\w+)", stdout, re.MULTILINE | re.IGNORECASE)
+    if not group_match or group_match.group(1) != expected_group:
+        raise RuntimeError(
+            f"BGP group mismatch device={local_device} expected={expected_group} "
+            f"observed={group_match.group(1) if group_match else 'missing'}"
+        )
+    if not as_match or int(as_match.group(1)) != expected_peer_as:
+        raise RuntimeError(
+            f"BGP peer ASN mismatch device={local_device} expected={expected_peer_as} "
+            f"observed={as_match.group(1) if as_match else 'missing'}"
+        )
+    if not state_match or state_match.group(1).lower() != "established":
+        raise RuntimeError(
+            f"BGP peer is not Established device={local_device} neighbor={neighbor} "
+            f"state={state_match.group(1) if state_match else 'unknown'}"
+        )
+    auth_lines = [
+        line.strip() for line in stdout.splitlines()
+        if re.search(r"Authentication (?:algorithm|key chain|key is configured)", line, re.IGNORECASE)
+        and not re.search(r":\s*(?:none|not configured)\s*$", line, re.IGNORECASE)
+    ]
+    if require_unauthenticated and auth_lines:
+        raise RuntimeError(
+            f"BGP peer already has TCP authentication device={local_device} neighbor={neighbor}; "
+            "refusing to replace an existing authentication method"
+        )
+    return {
+        "neighbor_address": neighbor,
+        "group_name": expected_group,
+        "peer_as": expected_peer_as,
+        "state": state_match.group(1),
+        "authenticated": bool(auth_lines),
+        "auth_lines": auth_lines,
+    }
+
+
+def derive_bgp_tcp_ao_secret(material, session_id, slot, key_id, cryptographic_algorithm):
+    raw = base64.b64decode(material) if isinstance(material, str) else bytes(material)
+    if len(raw) < 16:
+        raise ValueError("ETSI 014 key material is shorter than 128 bits")
+    context = f"QKD-BGP-TCP-AO-v1|{session_id}|{int(slot)}|{key_id}".encode("utf-8")
+    derived = hmac.new(raw, context, hashlib.sha256).digest()
+    if cryptographic_algorithm == "aes-128-cmac-96":
+        derived = derived[:16]
+    return derived.hex()
+
+
+def commit_bgp_tcp_ao_commands(session_id, commands, confirmed_seconds=None):
+    if not commands:
+        return True
+    comment = f"QKD: BGP TCP-AO session={session_id}"
+    commit_command = (
+        f"commit confirmed {int(confirmed_seconds)} comment \"{comment}\""
+        if confirmed_seconds
+        else f"commit comment \"{comment}\""
+    )
+    cli_commands = ["configure", *commands, commit_command, "exit"]
+    if not acquire_junos_commit_lock():
+        log_bgp_tcp_ao(f"COMMIT DEFERRED session={session_id} reason=junos_commit_lock_busy", "WARN")
+        return False
+    try:
+        try:
+            result = subprocess.run(
+                [CLI_PATH, "-c", "; ".join(cli_commands)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=35,
+            )
+        except Exception as exc:
+            log_bgp_tcp_ao(f"COMMIT FAILED session={session_id} error_type={type(exc).__name__}", "ERROR")
+            return False
+        stdout = result.stdout.decode(errors="ignore")
+        stderr = result.stderr.decode(errors="ignore")
+        if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+            log_bgp_tcp_ao(
+                f"COMMIT FAILED session={session_id} rc={result.returncode} "
+                f"stdout={stdout[-500:]} stderr={stderr[-500:]}",
+                "ERROR",
+            )
+            return False
+        log_bgp_tcp_ao(f"COMMIT OK session={session_id} confirmed={bool(confirmed_seconds)}")
+        return True
+    finally:
+        release_junos_commit_lock()
+
+
+def bgp_tcp_ao_local_link(session):
+    names = list(session.get("devices") or [])
+    if DEVICE_NAME not in names:
+        raise RuntimeError(f"device={DEVICE_NAME} is not part of BGP TCP-AO session")
+    peer_names = [name for name in names if name != DEVICE_NAME]
+    if len(peer_names) != 1:
+        raise RuntimeError("BGP TCP-AO currently requires exactly one direct peer")
+    peer_name = peer_names[0]
+    candidates = [link for link in managed_links() if link.get("peer") == peer_name]
+    if len(candidates) != 1:
+        raise RuntimeError(f"expected exactly one runtime QKD transport link to peer={peer_name}")
+    link = candidates[0]
+    if not link.get("peer_ip") or not link.get("peer_sae"):
+        raise RuntimeError(f"runtime QKD link has no RPC/KME peer metadata for peer={peer_name}")
+    return peer_name, link
+
+
+def _bgp_tcp_ao_rpc(link, action, session_id, entries=None, timeout=60):
+    action_tokens = {
+        "check": "bgp-tcp-ao-check",
+        "prepare-ring": "bgp-tcp-ao-prepare-ring",
+        "install-key": "bgp-tcp-ao-install-key",
+        "activate": "bgp-tcp-ao-activate",
+        "confirm": "bgp-tcp-ao-confirm",
+    }
+    action_token = action_tokens.get(action)
+    if not action_token:
+        raise ValueError(f"unsupported BGP TCP-AO peer RPC action: {action}")
+    session_token = str(session_id)
+    if not session_token or not all(c.isalnum() or c in "_.-" for c in session_token):
+        raise ValueError("invalid TCP-AO session id")
+    command = f"op qkd_onbox.py action {action_token} session {session_token}"
+    if entries is not None:
+        payload = base64.urlsafe_b64encode(
+            json.dumps(entries, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        command += f" entries-b64 {payload}"
+    peer_ip = str(link["peer_ip"])
+    log_bgp_tcp_ao(f"RPC SEND action={action} peer={peer_ip} session={session_token}")
+    try:
+        result = subprocess.run(
+            [
+                "ssh",
+                *ssh_transport_options(RPC_SSH_KEY),
+                "-o", "ConnectTimeout=10",
+                f"{SCRIPT_USER}@{peer_ip}",
+                command,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        log_bgp_tcp_ao(
+            f"RPC FAILED action={action} peer={peer_ip} error_type={type(exc).__name__}",
+            "ERROR",
+        )
+        return False, ""
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    if result.returncode != 0 or f"OK BGP-TCP-AO {action_token}" not in stdout:
+        log_bgp_tcp_ao(
+            f"RPC FAILED action={action} peer={peer_ip} rc={result.returncode} "
+            f"stdout={stdout[-400:]} stderr={stderr[-400:]}",
+            "ERROR",
+        )
+        return False, stdout
+    log_bgp_tcp_ao(f"RPC OK action={action} peer={peer_ip}")
+    return True, stdout
+
+
+def _bgp_tcp_ao_entries_for_install(session_id, session, link, descriptors, key_material_by_slot=None):
+    result = []
+    algorithm = str(session.get("cryptographic_algorithm", "aes-128-cmac-96"))
+    key_material_by_slot = key_material_by_slot or {}
+    for descriptor in descriptors:
+        slot = int(descriptor["slot"])
+        key_id = str(descriptor["key_id"])
+        if key_id == "bootstrap-seed":
+            try:
+                material = bytes.fromhex(str(session["seed_secret"]))
+            except Exception as exc:
+                raise RuntimeError(f"invalid persisted TCP-AO bootstrap seed for session={session_id}") from exc
+        elif str(slot) in key_material_by_slot:
+            material = base64.b64decode(key_material_by_slot[str(slot)])
+        else:
+            encoded = do_dec(link["peer_sae"], key_id)
+            if not encoded:
+                raise RuntimeError(f"ETSI 014 dec_keys failed session={session_id} slot={slot}")
+            material = base64.b64decode(encoded)
+        secret = derive_bgp_tcp_ao_secret(material, session_id, slot, key_id, algorithm)
+        result.append(
+            {
+                "slot": slot,
+                "key_id": key_id,
+                "secret": secret,
+                "start_epoch": int(descriptor["start_epoch"]),
+            }
+        )
+    return result
+
+
+def install_bgp_tcp_ao_entries(session_id, session, entries, activate=False, confirmed_seconds=None):
+    local_device = DEVICE_NAME
+    endpoint = (session.get("endpoints") or {}).get(local_device)
+    if not isinstance(endpoint, dict):
+        raise RuntimeError(f"missing TCP-AO local endpoint device={local_device}")
+    commands = build_bgp_tcp_ao_junos_commands(
+        session,
+        local_device,
+        session["group_name"],
+        endpoint["neighbor_address"],
+        entries,
+        activate=activate,
+    )
+    if not commit_bgp_tcp_ao_commands(session_id, commands, confirmed_seconds=confirmed_seconds):
+        return False
+    log_bgp_tcp_ao(
+        f"KEYS INSTALLED session={session_id} slots={[int(item['slot']) for item in entries]} "
+        f"activate={activate} keychain={session['keychain_name']}"
+    )
+    return True
+
+
+def _bgp_tcp_ao_peer_link(session):
+    peer_names = [name for name in session.get("devices", []) if name != DEVICE_NAME]
+    if len(peer_names) != 1:
+        raise RuntimeError("BGP TCP-AO session must have exactly one remote peer")
+    peer_name = peer_names[0]
+    links = [link for link in managed_links() if link.get("peer") == peer_name]
+    if len(links) != 1:
+        raise RuntimeError(f"expected one QKD transport link for BGP TCP-AO peer={peer_name}")
+    link = links[0]
+    if not link.get("peer_ip") or not link.get("peer_sae"):
+        raise RuntimeError(f"QKD link lacks peer_ip/peer_sae for BGP TCP-AO peer={peer_name}")
+    return peer_name, link
+
+
+def _bgp_tcp_ao_check(session_id, session, require_unauthenticated):
+    info = discover_bgp_tcp_ao_neighbor(
+        session,
+        DEVICE_NAME,
+        require_unauthenticated=require_unauthenticated,
+    )
+    if info["authenticated"]:
+        auth_text = " ".join(info["auth_lines"]).lower()
+        if session["keychain_name"].lower() not in auth_text or not re.search(r"algorithm\s*:?\s*ao\b", auth_text):
+            raise RuntimeError(
+                f"BGP neighbor has unexpected authentication device={DEVICE_NAME} "
+                f"neighbor={info['neighbor_address']}"
+            )
+    elif not require_unauthenticated:
+        raise RuntimeError(
+            f"BGP neighbor lost TCP-AO authentication device={DEVICE_NAME} "
+            f"neighbor={info['neighbor_address']}"
+        )
+    return info
+
+
+def _bgp_tcp_ao_peer_action(session_id, action, entries=None):
+    session = bgp_tcp_ao_session_config(session_id)
+    local_device = DEVICE_NAME
+    state = load_bgp_tcp_ao_state(session_id)
+    require_unauth = state.get("phase") in ("uninitialized", "prepared")
+
+    if action == "bgp-tcp-ao-check":
+        info = _bgp_tcp_ao_check(session_id, session, require_unauthenticated=require_unauth)
+        payload = {
+            "device": local_device,
+            "neighbor_address": info["neighbor_address"],
+            "group_name": info["group_name"],
+            "peer_as": info["peer_as"],
+            "authenticated": info["authenticated"],
+            "auth_lines": info["auth_lines"],
+            "state": "Established",
+        }
+        encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+        print(f"OK BGP-TCP-AO bgp-tcp-ao-check {encoded}")
+        return True
+
+    if action == "bgp-tcp-ao-prepare-ring":
+        if state.get("phase") not in ("uninitialized", "preparing", "prepared"):
+            raise RuntimeError(f"cannot bootstrap TCP-AO from phase={state.get('phase')}")
+        _bgp_tcp_ao_check(session_id, session, require_unauthenticated=True)
+        if not isinstance(entries, list) or len(entries) != int(session["key_count"]):
+            raise RuntimeError("TCP-AO bootstrap ring entry count does not match --keys")
+        local_link = next(
+            link for link in managed_links()
+            if link.get("peer") in session["devices"] and link.get("peer") != local_device
+        )
+        local_entries = _bgp_tcp_ao_entries_for_install(session_id, session, local_link, entries)
+        if not install_bgp_tcp_ao_entries(session_id, session, local_entries, activate=False):
+            raise RuntimeError("TCP-AO peer keychain preparation commit failed")
+        state["phase"] = "prepared"
+        state["ring"] = [{key: item[key] for key in ("slot", "key_id", "start_epoch")} for item in entries]
+        state["rotation_count"] = 0
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"RING PREPARED session={session_id} key_count={len(entries)} keychain={session['keychain_name']}")
+        print("OK BGP-TCP-AO bgp-tcp-ao-prepare-ring")
+        return True
+
+    if action == "bgp-tcp-ao-install-key":
+        if state.get("phase") != "active":
+            raise RuntimeError(f"cannot rotate TCP-AO key when phase={state.get('phase')}")
+        _bgp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+        if not isinstance(entries, list) or len(entries) != 1:
+            raise RuntimeError("TCP-AO rotation must install exactly one key")
+        requested = entries[0]
+        existing = next(
+            (
+                item for item in state.get("ring", [])
+                if int(item.get("slot", -1)) == int(requested.get("slot", -2))
+            ),
+            None,
+        )
+        if (
+            existing
+            and str(existing.get("key_id")) == str(requested.get("key_id"))
+            and int(existing.get("start_epoch", 0)) == int(requested.get("start_epoch", 0))
+        ):
+            log_bgp_tcp_ao(
+                f"PEER KEY ALREADY INSTALLED session={session_id} slot={requested['slot']} "
+                f"key_id={requested['key_id']} action=retry_noop"
+            )
+            print("OK BGP-TCP-AO bgp-tcp-ao-install-key")
+            return True
+        local_link = next(
+            link for link in managed_links()
+            if link.get("peer") in session["devices"] and link.get("peer") != local_device
+        )
+        local_entries = _bgp_tcp_ao_entries_for_install(session_id, session, local_link, entries)
+        if not install_bgp_tcp_ao_entries(session_id, session, local_entries, activate=False):
+            raise RuntimeError("TCP-AO peer rotation key commit failed")
+        ring = list(state.get("ring") or [])
+        slot = int(entries[0]["slot"])
+        ring = [item for item in ring if int(item["slot"]) != slot]
+        ring.append({key: entries[0][key] for key in ("slot", "key_id", "start_epoch")})
+        state["ring"] = ring
+        state["rotation_count"] = int(state.get("rotation_count", 0)) + 1
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"PEER KEY INSTALLED session={session_id} slot={slot} rotation_count={state['rotation_count']}")
+        print("OK BGP-TCP-AO bgp-tcp-ao-install-key")
+        return True
+
+    if action == "bgp-tcp-ao-activate":
+        if state.get("phase") not in ("prepared", "activation_pending"):
+            raise RuntimeError(f"cannot activate TCP-AO when phase={state.get('phase')}")
+        if not install_bgp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_seconds=10):
+            raise RuntimeError("TCP-AO peer activation commit failed")
+        state["phase"] = "activation_pending"
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"ACTIVATION COMMIT-CONFIRMED session={session_id} timeout_seconds=600")
+        print("OK BGP-TCP-AO bgp-tcp-ao-activate")
+        return True
+
+    if action == "bgp-tcp-ao-confirm":
+        if state.get("phase") != "activation_pending":
+            raise RuntimeError(f"cannot confirm TCP-AO when phase={state.get('phase')}")
+        if not confirm_bgp_tcp_ao_commit(session_id):
+            raise RuntimeError("TCP-AO peer commit confirmation failed")
+        state["phase"] = "active"
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"ACTIVATION CONFIRMED session={session_id}")
+        print("OK BGP-TCP-AO bgp-tcp-ao-confirm")
+        return True
+
+    raise ValueError(f"unknown BGP TCP-AO peer action: {action}")
+
+
+def confirm_bgp_tcp_ao_commit(session_id):
+    if not acquire_junos_commit_lock():
+        log_bgp_tcp_ao(f"COMMIT CONFIRM DEFERRED session={session_id} reason=junos_commit_lock_busy", "WARN")
+        return False
+    try:
+        result = subprocess.run(
+            [CLI_PATH, "-c", "configure; commit; exit"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=35,
+        )
+        stdout = result.stdout.decode(errors="ignore")
+        stderr = result.stderr.decode(errors="ignore")
+        if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+            log_bgp_tcp_ao(f"COMMIT CONFIRM FAILED session={session_id} rc={result.returncode} stdout={stdout[-300:]} stderr={stderr[-300:]}", "ERROR")
+            return False
+        return True
+    except Exception as exc:
+        log_bgp_tcp_ao(f"COMMIT CONFIRM FAILED session={session_id} error_type={type(exc).__name__}", "ERROR")
+        return False
+    finally:
+        release_junos_commit_lock()
+
+
+def _bgp_tcp_ao_decode_peer_check(output):
+    marker = "OK BGP-TCP-AO bgp-tcp-ao-check "
+    index = output.find(marker)
+    if index < 0:
+        raise RuntimeError("remote peer did not return BGP TCP-AO check result")
+    encoded = output[index + len(marker):].splitlines()[0].strip()
+    payload = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("remote BGP TCP-AO check payload is invalid")
+    return payload
+
+
+def _bgp_tcp_ao_wait_established(session_id, session, link, timeout_seconds=45):
+    deadline = time.time() + int(timeout_seconds)
+    last_error = "not checked"
+    while time.time() < deadline:
+        try:
+            local = _bgp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+            peer_ok, peer_output = _bgp_tcp_ao_rpc(link, "check", session_id, timeout=15)
+            if peer_ok:
+                remote = _bgp_tcp_ao_decode_peer_check(peer_output)
+                local_chain = " ".join(local.get("auth_lines") or []).lower()
+                remote_chain = " ".join(remote.get("auth_lines") or []).lower()
+                expected_chain = session["keychain_name"].lower()
+                if (
+                    local["authenticated"]
+                    and remote.get("authenticated")
+                    and expected_chain in local_chain
+                    and expected_chain in remote_chain
+                    and "ao" in local_chain
+                    and "ao" in remote_chain
+                ):
+                    return True
+                last_error = "TCP-AO keychain/algorithm not effective on both peers"
+            else:
+                last_error = peer_output[-250:]
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(2)
+    log_bgp_tcp_ao(f"BGP VERIFY TIMEOUT session={session_id} timeout_seconds={timeout_seconds} detail={last_error}", "ERROR")
+    return False
+
+
+def _bgp_tcp_ao_apply_seed_ring(session_id, session, link, descriptors):
+    ok, output = _bgp_tcp_ao_rpc(link, "prepare-ring", session_id, descriptors, timeout=180)
+    if not ok:
+        return False
+    local_entries = _bgp_tcp_ao_entries_for_install(
+        session_id,
+        session,
+        link,
+        descriptors,
+        key_material_by_slot=load_bgp_tcp_ao_state(session_id).get("pending_key_material", {}),
+    )
+    if not install_bgp_tcp_ao_entries(session_id, session, local_entries, activate=False):
+        return False
+    return True
+
+
+def run_bgp_tcp_ao_start(session_id):
+    session = bgp_tcp_ao_session_config(session_id)
+    if str(session.get("master")) != DEVICE_NAME:
+        raise RuntimeError(f"TCP-AO bootstrap must run on designated master={session.get('master')}")
+    peer_name, link = _bgp_tcp_ao_peer_link(session)
+    state = load_bgp_tcp_ao_state(session_id)
+    if state.get("phase") == "active":
+        log_bgp_tcp_ao(f"START ALREADY ACTIVE session={session_id} rotation_count={state.get('rotation_count', 0)}")
+        return run_bgp_tcp_ao_rotation_tick(session_id)
+
+    if state.get("phase") == "uninitialized":
+        local = _bgp_tcp_ao_check(session_id, session, require_unauthenticated=True)
+        peer_ok, peer_output = _bgp_tcp_ao_rpc(link, "check", session_id, timeout=15)
+        if not peer_ok:
+            raise RuntimeError(f"remote BGP peer discovery failed: {peer_output[-300:]}")
+        remote = _bgp_tcp_ao_decode_peer_check(peer_output)
+        if remote.get("authenticated"):
+            raise RuntimeError("remote BGP peer already has authentication configured")
+        now = int(time.time())
+        key_count = int(session["key_count"])
+        key_ids = []
+        pending_key_material = {}
+        for slot in range(1, key_count):
+            key_id, key_material = do_enc(link["peer_sae"], return_details=False)
+            if not key_id or not key_material:
+                log_bgp_tcp_ao(f"BOOTSTRAP ABORTED session={session_id} reason=enc_keys_failed slot={slot}", "ERROR")
+                raise RuntimeError(f"ETSI 014 enc_keys failed while filling TCP-AO slot={slot}")
+            key_ids.append(str(key_id))
+            pending_key_material[str(slot)] = str(key_material)
+            log_bgp_tcp_ao(f"KME ENC OK session={session_id} slot={slot} key_id={key_id}")
+        activation_base = int(time.time())
+        descriptors = build_bgp_tcp_ao_initial_ring(
+            key_ids,
+            activation_base,
+            int(session["rotation_interval_seconds"]),
+        )
+        for descriptor in descriptors[1:]:
+            log_bgp_tcp_ao(
+                f"KEY SCHEDULED session={session_id} slot={descriptor['slot']} "
+                f"key_id={descriptor['key_id']} activation_time={format_epoch_human(descriptor['start_epoch'])}"
+            )
+        state.update({
+            "phase": "preparing",
+            "ring": descriptors,
+            "pending_key_material": pending_key_material,
+            "rotation_count": 0,
+            "bootstrap_epoch": activation_base,
+        })
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"BOOTSTRAP START session={session_id} key_count={key_count} timer_seconds={session['rotation_interval_seconds']} peer={peer_name}")
+    else:
+        descriptors = list(state.get("ring") or [])
+
+    if state.get("phase") == "preparing":
+        if not _bgp_tcp_ao_apply_seed_ring(session_id, session, link, descriptors):
+            raise RuntimeError("TCP-AO keyring preparation failed on one or both peers")
+        state["phase"] = "prepared"
+        save_bgp_tcp_ao_state(session_id, state)
+
+    if state.get("phase") in ("prepared", "activation_pending"):
+        peer_ok, peer_output = _bgp_tcp_ao_rpc(link, "activate", session_id, timeout=60)
+        if not peer_ok:
+            raise RuntimeError(f"remote TCP-AO activation failed: {peer_output[-300:]}")
+        if state.get("phase") != "activation_pending":
+            if not install_bgp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_seconds=10):
+                raise RuntimeError("local TCP-AO activation commit failed")
+            state["phase"] = "activation_pending"
+            save_bgp_tcp_ao_state(session_id, state)
+        if not _bgp_tcp_ao_wait_established(session_id, session, link):
+            raise RuntimeError("TCP-AO BGP session did not establish on both peers; confirmed commits will roll back")
+        peer_ok, peer_output = _bgp_tcp_ao_rpc(link, "confirm", session_id, timeout=60)
+        if not peer_ok:
+            raise RuntimeError(f"remote TCP-AO commit confirmation failed: {peer_output[-300:]}")
+        if not confirm_bgp_tcp_ao_commit(session_id):
+            raise RuntimeError("local TCP-AO commit confirmation failed")
+        state["phase"] = "active"
+        state["transaction"] = None
+        state.pop("pending_key_material", None)
+        state["activated_at"] = int(time.time())
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"BOOTSTRAP COMPLETE session={session_id} key_count={len(descriptors)} rotation_count=0")
+    print("OK BGP-TCP-AO start")
+    return True
+
+
+def plan_bgp_tcp_ao_rotation(ring, now_epoch, rotation_interval_seconds, tolerance_seconds):
+    started = sorted(
+        [item for item in ring or [] if int(item.get("start_epoch", 0)) <= int(now_epoch)],
+        key=lambda item: int(item["start_epoch"]),
+    )
+    if len(started) < 2:
+        return {"action": "wait", "reason": "NEXT_KEY_NOT_ACTIVE"}
+    active = started[-1]
+    retry_epoch = int(active["start_epoch"]) + int(tolerance_seconds)
+    if int(now_epoch) < retry_epoch:
+        return {
+            "action": "wait",
+            "reason": "KEY_TOLERANCE",
+            "active_slot": int(active["slot"]),
+            "retry_epoch": retry_epoch,
+        }
+    recyclable = started[-2]
+    next_start = max(int(item["start_epoch"]) for item in ring) + int(rotation_interval_seconds)
+    return {
+        "action": "rotate",
+        "active_slot": int(active["slot"]),
+        "entry": {"slot": int(recyclable["slot"]), "start_epoch": int(next_start)},
+    }
+
+
+def build_bgp_tcp_ao_initial_ring(key_ids, activation_epoch, rotation_interval_seconds):
+    interval = int(rotation_interval_seconds)
+    if interval < 1:
+        raise ValueError("TCP-AO rotation interval must be positive")
+    ring = [{"slot": 0, "key_id": "bootstrap-seed", "start_epoch": int(activation_epoch) - 60}]
+    for slot, key_id in enumerate(key_ids, start=1):
+        ring.append(
+            {
+                "slot": slot,
+                "key_id": str(key_id),
+                "start_epoch": int(activation_epoch) + (slot * interval),
+            }
+        )
+    return ring
+
+
+def run_bgp_tcp_ao_rotation_tick(session_id):
+    session = bgp_tcp_ao_session_config(session_id)
+    if str(session.get("master")) != DEVICE_NAME:
+        return True
+    state = load_bgp_tcp_ao_state(session_id)
+    if state.get("phase") in ("preparing", "prepared", "activation_pending"):
+        return run_bgp_tcp_ao_start(session_id)
+    if state.get("phase") != "active":
+        log_bgp_tcp_ao(f"ROTATION SKIP session={session_id} reason=not_initialized", "WARN")
+        return True
+
+    _bgp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+    peer_name, link = _bgp_tcp_ao_peer_link(session)
+    transaction = state.get("transaction")
+    if not isinstance(transaction, dict):
+        now = int(time.time())
+        plan = plan_bgp_tcp_ao_rotation(
+            state.get("ring", []),
+            now,
+            int(session["rotation_interval_seconds"]),
+            int(session.get("tolerance_seconds", 30)),
+        )
+        if plan["action"] == "wait":
+            log_bgp_tcp_ao(
+                f"ROTATION WAIT session={session_id} reason={plan['reason']} "
+                f"active_slot={plan.get('active_slot')} retry_time={format_epoch_human(plan.get('retry_epoch'))}",
+                "INFO",
+            )
+            return True
+        key_id, key_material = do_enc(link["peer_sae"], return_details=False)
+        if not key_id or not key_material:
+            log_bgp_tcp_ao(f"ROTATION ABORTED session={session_id} reason=ENC_FAILED slot={plan['entry']['slot']}", "ERROR")
+            return False
+        entry = dict(plan["entry"])
+        entry.update({
+            "key_id": str(key_id),
+            "key_material": str(key_material),
+        })
+        transaction = {"phase": "installing", "entry": entry}
+        state["transaction"] = transaction
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(
+            f"KME ENC OK session={session_id} peer={peer_name} slot={entry['slot']} "
+            f"key_id={entry['key_id']} start_time={format_epoch_human(entry['start_epoch'])}"
+        )
+    else:
+        entry = transaction.get("entry")
+        if not isinstance(entry, dict):
+            log_bgp_tcp_ao(f"ROTATION BLOCKED session={session_id} reason=INVALID_TRANSACTION", "ERROR")
+            return False
+
+    descriptor = [{key: entry[key] for key in ("slot", "key_id", "start_epoch")}]
+    peer_ok, peer_output = _bgp_tcp_ao_rpc(link, "install-key", session_id, descriptor, timeout=90)
+    if not peer_ok:
+        state["transaction"]["phase"] = "installing"
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"ROTATION RETRY session={session_id} phase=peer_install result=failed", "WARN")
+        return False
+
+    try:
+        local_entries = _bgp_tcp_ao_entries_for_install(
+            session_id,
+            session,
+            link,
+            descriptor,
+            key_material_by_slot={str(entry["slot"]): entry["key_material"]},
+        )
+    except Exception as exc:
+        log_bgp_tcp_ao(f"ROTATION RETRY session={session_id} phase=local_dec error_type={type(exc).__name__}", "ERROR")
+        return False
+    if not install_bgp_tcp_ao_entries(session_id, session, local_entries, activate=False):
+        state["transaction"]["phase"] = "installing"
+        save_bgp_tcp_ao_state(session_id, state)
+        log_bgp_tcp_ao(f"ROTATION RETRY session={session_id} phase=local_install result=failed", "WARN")
+        return False
+
+    ring = [item for item in state.get("ring", []) if int(item.get("slot", -1)) != int(entry["slot"])]
+    ring.append(descriptor[0])
+    state["ring"] = ring
+    state["rotation_count"] = int(state.get("rotation_count", 0)) + 1
+    state["last_rotation_timestamp"] = int(time.time())
+    state["transaction"] = None
+    save_bgp_tcp_ao_state(session_id, state)
+    log_bgp_tcp_ao(
+        f"ROTATION COMPLETE session={session_id} slot={entry['slot']} "
+        f"rotation_count={state['rotation_count']} next_start_time={format_epoch_human(entry['start_epoch'])}"
+    )
+    return True
+
+
+def run_master_bgp_tcp_ao():
+    if not BGP_TCP_AO_CONFIG.get("enabled"):
+        return
+    sessions = BGP_TCP_AO_CONFIG.get("sessions") or {}
+    for session_id, session in sessions.items():
+        if session.get("master") != DEVICE_NAME:
+            continue
+        try:
+            run_bgp_tcp_ao_rotation_tick(session_id)
+        except Exception as exc:
+            log_bgp_tcp_ao(
+                f"CYCLE FAILED session={session_id} error_type={type(exc).__name__} error={str(exc)}",
+                "ERROR",
+            )
 
 
 
@@ -2789,6 +3563,69 @@ def link_stagger_minutes(link):
 
 def junos_start_time_from_epoch(epoch_seconds):
     return time.strftime("%Y-%m-%d.%H:%M:%S +0000", time.gmtime(int(epoch_seconds)))
+
+
+def build_bgp_tcp_ao_junos_commands(session, local_device, group_name, neighbor_address, entries, activate=False):
+    keychain = str(session.get("keychain_name") or "")
+    if not keychain or len(keychain) > 32 or not all(c.isalnum() or c in "_-" for c in keychain):
+        raise ValueError("invalid TCP-AO keychain name")
+    if not group_name or not all(c.isalnum() or c in "_.-" for c in str(group_name)):
+        raise ValueError("invalid BGP group name")
+    if not neighbor_address or not all(c.isalnum() or c in ".:%" for c in str(neighbor_address)):
+        raise ValueError("invalid BGP neighbor address")
+
+    endpoint = (session.get("endpoints") or {}).get(local_device)
+    if not isinstance(endpoint, dict):
+        raise ValueError(f"missing TCP-AO endpoint configuration for {local_device}")
+    send_id_base = int(endpoint["send_id_base"])
+    recv_id_base = int(endpoint["recv_id_base"])
+    key_count = int(session["key_count"])
+    if key_count < 3 or key_count > 64:
+        raise ValueError("TCP-AO key count must be between 3 and 64")
+    algorithm = str(session.get("cryptographic_algorithm", "aes-128-cmac-96"))
+    if algorithm not in ("aes-128-cmac-96", "hmac-sha-1-96"):
+        raise ValueError("unsupported TCP-AO cryptographic algorithm")
+
+    commands = [
+        f"set security authentication-key-chains key-chain {keychain}",
+        f"set security authentication-key-chains key-chain {keychain} tolerance {int(session.get('tolerance_seconds', 30))}",
+    ]
+    seen_slots = set()
+    for entry in entries:
+        slot = int(entry["slot"])
+        secret = str(entry["secret"]).lower()
+        start_epoch = int(entry["start_epoch"])
+        if slot < 0 or slot >= key_count or slot > 63 or slot in seen_slots:
+            raise ValueError(f"invalid or duplicate TCP-AO slot {slot}")
+        if len(secret) < 32 or len(secret) % 2 or not all(c in "0123456789abcdef" for c in secret):
+            raise ValueError(f"invalid TCP-AO secret encoding for slot {slot}")
+        seen_slots.add(slot)
+        send_id = send_id_base + slot
+        recv_id = recv_id_base + slot
+        if max(send_id, recv_id) > 255 or send_id == recv_id:
+            raise ValueError(f"invalid TCP-AO send/recv IDs for slot {slot}")
+        key_prefix = f"set security authentication-key-chains key-chain {keychain} key {slot}"
+        start_time = junos_start_time_from_epoch(start_epoch)
+        commands.extend(
+            [
+                f'{key_prefix} secret "{secret}"',
+                f'{key_prefix} start-time "{start_time}"',
+                f"{key_prefix} algorithm ao",
+                f"{key_prefix} ao-attribute send-id {send_id}",
+                f"{key_prefix} ao-attribute recv-id {recv_id}",
+                f"{key_prefix} ao-attribute tcp-ao-option enabled",
+                f"{key_prefix} ao-attribute cryptographic-algorithm {algorithm}",
+            ]
+        )
+
+    if activate:
+        commands.extend(
+            [
+                f"set protocols bgp group {group_name} neighbor {neighbor_address} authentication-algorithm ao",
+                f"set protocols bgp group {group_name} neighbor {neighbor_address} authentication-key-chain {keychain}",
+            ]
+        )
+    return commands
 
 
 def format_start_time_cli(start_time):
@@ -4763,6 +5600,27 @@ def parse_slave():
     return action, key_id, iface, generation, start_time, batch_b64, source_device, pubkey_b64
 
 
+def cli_argument_value(name):
+    token = str(name).lstrip("-")
+    for index, argument in enumerate(sys.argv[:-1]):
+        if argument.lstrip("-") == token:
+            return sys.argv[index + 1]
+    return None
+
+
+def cli_bgp_tcp_ao_entries():
+    encoded = cli_argument_value("entries-b64")
+    if not encoded:
+        return None
+    try:
+        entries = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"invalid BGP TCP-AO entries payload: {exc}") from exc
+    if not isinstance(entries, list):
+        raise ValueError("BGP TCP-AO entries payload must be a list")
+    return entries
+
+
 # ----------------------------
 # SLAVE ACTION HANDLERS
 # ----------------------------
@@ -6328,6 +7186,11 @@ def run_master():
                     mode="RPC-KEY-ROTATION",
                 )
 
+    try:
+        run_master_bgp_tcp_ao()
+    except Exception as exc:
+        log_bgp_tcp_ao(f"CYCLE FAILED error_type={type(exc).__name__} error={str(exc)}", "ERROR")
+
     return
 
 
@@ -6366,6 +7229,41 @@ def main():
     action, key_id, iface, generation, start_time, batch_b64, source_device, pubkey_b64 = parse_slave()
 
     if action:
+        if action == "bgp-tcp-ao-start":
+            session_id = cli_argument_value("session")
+            if not session_id:
+                log_bgp_tcp_ao("START REJECTED reason=missing_session", "ERROR")
+                print("ERROR BGP-TCP-AO START MISSING SESSION")
+                sys.exit(1)
+            try:
+                ok = run_bgp_tcp_ao_start(session_id)
+            except Exception as exc:
+                log_bgp_tcp_ao(
+                    f"START FAILED session={session_id} error_type={type(exc).__name__} error={str(exc)}",
+                    "ERROR",
+                )
+                print(f"ERROR BGP-TCP-AO START {type(exc).__name__}: {str(exc)}")
+                sys.exit(1)
+            sys.exit(0 if ok else 1)
+
+        if action.startswith("bgp-tcp-ao-"):
+            session_id = cli_argument_value("session")
+            if not session_id:
+                log_bgp_tcp_ao(f"ACTION REJECTED action={action} reason=missing_session", "ERROR")
+                print(f"ERROR {action.upper()} MISSING SESSION")
+                sys.exit(1)
+            try:
+                ok = _bgp_tcp_ao_peer_action(session_id, action, cli_bgp_tcp_ao_entries())
+            except Exception as exc:
+                log_bgp_tcp_ao(
+                    f"ACTION FAILED action={action} session={session_id} "
+                    f"error_type={type(exc).__name__} error={str(exc)}",
+                    "ERROR",
+                )
+                print(f"ERROR {action.upper()} {type(exc).__name__}: {str(exc)}")
+                sys.exit(1)
+            sys.exit(0 if ok else 1)
+
         if action == "install-key":
             if not key_id or not iface:
                 log("INVALID INSTALL-KEY ARGUMENTS", "ERROR", iface, "SLAVE")

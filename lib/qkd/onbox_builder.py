@@ -229,7 +229,7 @@ def resolve_pki_runtime():
 # BUILD ONBOX CONFIG
 # ----------------------------
 
-def build_onbox_config(name, device):
+def build_onbox_config(name, device, bgp_tcp_ao=None):
     """
         Build the shared runtime config payload for qkd_onbox.py.
 
@@ -258,6 +258,8 @@ def build_onbox_config(name, device):
 
         # QKD runtime policy
         "qkd_policy": qkd_policy,
+        "bgp_tcp_ao": bgp_tcp_ao or {"enabled": False, "sessions": {}},
+        "bgp_tcp_ao_log_file": f"{ssh_home_base}/{device.get('script_user') or QKD['SCRIPT_USER']}/logs/bgp-tcp-ao.log",
 
         # Runtime identity
         "script_user": device.get("script_user") or QKD["SCRIPT_USER"],
@@ -347,14 +349,14 @@ def generate_onbox_script(name, device, out_dir):
     return dst
 
 
-def generate_onbox_sidecars(name, device, out_dir):
+def generate_onbox_sidecars(name, device, out_dir, bgp_tcp_ao=None):
     """
     Generate runtime JSON files consumed by qkd_onbox.py on device.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    config = build_onbox_config(name, device)
+    config = build_onbox_config(name, device, bgp_tcp_ao=bgp_tcp_ao)
     inventory = build_onbox_inventory(name, device)
 
     sidecars = {
@@ -363,6 +365,8 @@ def generate_onbox_sidecars(name, device, out_dir):
     }
 
     sidecars["config"].write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    if bgp_tcp_ao and bgp_tcp_ao.get("enabled"):
+        sidecars["config"].chmod(0o600)
     sidecars["inventory"].write_text(json.dumps(inventory, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
     return sidecars
@@ -372,7 +376,7 @@ def generate_onbox_sidecars(name, device, out_dir):
 # BUILD ONBOX ARTIFACTS
 # ----------------------------
 
-def build_onbox_artifacts(devices):
+def build_onbox_artifacts(devices, bgp_tcp_ao=None):
     """
     Build per-device onbox scripts.
 
@@ -416,6 +420,7 @@ def build_onbox_artifacts(devices):
                 name,
                 device,
                 out_dir=device_runtime_dir,
+                bgp_tcp_ao=bgp_tcp_ao,
             )
 
             outputs[name]["script"] = script

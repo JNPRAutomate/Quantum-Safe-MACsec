@@ -61,8 +61,13 @@ from lib.qkd.pki_self_signed import build_self_signed_pki
 from lib.qkd.pki_hierarchical import build_hierarchical_pki
 from lib.qkd.onbox_builder import build_onbox_artifacts
 from lib.qkd.provisioning import run_provisioning
-from lib.qkd.identity import validate_all_devices
+from lib.qkd.identity import ssh_script_user_onbox_cmd, validate_all_devices
 from lib.qkd.clean import handle_clean
+from lib.qkd.bgp_tcp_ao import (
+    load_bgp_tcp_ao_settings,
+    load_persisted_bgp_tcp_ao_settings,
+    mark_bgp_tcp_ao_settings_active,
+)
 from lib.kme.instructions import print_manual_kme_copy_instructions
 
 
@@ -389,6 +394,14 @@ def parse_args():
     )
 
     deploy.add_argument("--dry-run", action="store_true")
+    deploy.add_argument(
+        "--bgp.tcp.ao",
+        dest="bgp_tcp_ao",
+        action="store_true",
+        help="Deploy independent TCP-AO authentication and KME key rotation for configured eBGP peers only.",
+    )
+    deploy.add_argument("--keys", type=int, help="TCP-AO keyring size, including bootstrap slot 0.")
+    deploy.add_argument("--timers", type=int, help="TCP-AO key activation/rotation interval in seconds.")
     deploy.add_argument(
         "--preview",
         "--show-config",
@@ -728,7 +741,10 @@ def deploy_onbox(
         for src, dst in zip(sidecar_remote_tmps, sidecar_remote_ops):
             sidecar_copy_cmds.append(f"cp {src} {dst}")
             sidecar_cleanup_cmds.append(f"rm -f {src}")
-            sidecar_harden_cmds.append(f"chown {resolved_script_user} {dst}; chmod 644 {dst}")
+            sidecar_mode = "600" if dst.endswith("/qkd_onbox_config.json") else "640"
+            sidecar_harden_cmds.append(
+                f"chown {resolved_script_user} {dst}; chmod {sidecar_mode} {dst}"
+            )
 
         sidecar_copy = "; ".join(sidecar_copy_cmds)
         sidecar_cleanup = "; ".join(sidecar_cleanup_cmds)
@@ -1438,8 +1454,21 @@ def handle_deploy(args):
             print(f"Purpose: {purpose}")
         print(line)
 
+    bgp_tcp_ao_requested = bool(getattr(args, "bgp_tcp_ao", False))
+    bgp_tcp_ao_keys = getattr(args, "keys", None)
+    bgp_tcp_ao_timers = getattr(args, "timers", None)
+
     if args.onbox_only and args.shipment_preload:
         raise ValueError("--onbox-only cannot be combined with --shipment-preload")
+
+    bgp_tcp_ao_settings = None
+    if bgp_tcp_ao_requested:
+        if bgp_tcp_ao_keys is None or bgp_tcp_ao_timers is None:
+            raise ValueError("--bgp.tcp.ao requires both --keys N and --timers SECONDS")
+        if args.onbox_only or args.shipment_preload:
+            raise ValueError("--bgp.tcp.ao cannot be combined with --onbox-only or --shipment-preload")
+    elif bgp_tcp_ao_keys is not None or bgp_tcp_ao_timers is not None:
+        raise ValueError("--keys and --timers are only valid with --bgp.tcp.ao")
 
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
@@ -1449,6 +1478,18 @@ def handle_deploy(args):
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
     if not isinstance(secrets, dict):
         secrets = {}
+
+    if bgp_tcp_ao_requested:
+        bgp_tcp_ao_settings = load_bgp_tcp_ao_settings(
+            bgp_tcp_ao_keys,
+            bgp_tcp_ao_timers,
+            devices,
+            persist_seed=not (args.preview or args.dry_run),
+        )
+        if bgp_tcp_ao_timers < 1800:
+            print("[WARN] Juniper recommends at least 1800 seconds between TCP-AO key start-times.")
+    else:
+        bgp_tcp_ao_settings = load_persisted_bgp_tcp_ao_settings(devices)
 
     bootstrap_user = (
         getattr(args, "bootstrap_user", None)
@@ -1489,6 +1530,14 @@ def handle_deploy(args):
     )
 
     if args.preview or args.dry_run:
+        if bgp_tcp_ao_settings:
+            print(
+                "BGP TCP-AO plan: "
+                f"sessions={','.join(sorted(bgp_tcp_ao_settings['sessions']))} "
+                f"keys={bgp_tcp_ao_settings['key_count']} "
+                f"timer_seconds={bgp_tcp_ao_settings['rotation_interval_seconds']} "
+                "macsec_provisioning=disabled"
+            )
         print_step_banner(
             "0/5",
             "PREVIEW OR DRY-RUN",
@@ -1651,7 +1700,7 @@ def handle_deploy(args):
     )
     # Always refresh runtime on-box artifacts at deploy time so the latest
     # qkd_onbox.py logic is applied even when create is not re-run.
-    artifacts = build_onbox_artifacts(devices)
+    artifacts = build_onbox_artifacts(devices, bgp_tcp_ao=bgp_tcp_ao_settings)
     for name, device in devices.items():
         if device.get("managed") is False:
             continue
@@ -1702,16 +1751,39 @@ def handle_deploy(args):
             "START",
             "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
         )
-        run_provisioning(
-            log=log,
-            dry_run=False,
-            preview=False,
-            ssh_key=args.ssh_key,
-            debug=args.debug,
-            verbose=args.verbose,
-            devices=devices,
-        )
+        if bgp_tcp_ao_requested:
+            print("Skipped MACsec provisioning: --bgp.tcp.ao changes BGP authentication only.")
+        else:
+            run_provisioning(
+                log=log,
+                dry_run=False,
+                preview=False,
+                ssh_key=args.ssh_key,
+                debug=args.debug,
+                verbose=args.verbose,
+                devices=devices,
+            )
         print_step_banner("4/5", "QKD PROVISIONING", "END")
+
+    if bgp_tcp_ao_requested:
+        for session_id, session in bgp_tcp_ao_settings["sessions"].items():
+            master_name = session["master"]
+            master_device = devices.get(master_name)
+            if not isinstance(master_device, dict):
+                raise RuntimeError(f"BGP TCP-AO master missing from runtime devices: {master_name}")
+            print(f"Starting TCP-AO bootstrap session={session_id} master={master_name}")
+            result = ssh_script_user_onbox_cmd(
+                master_device,
+                f"op qkd_onbox.py action bgp-tcp-ao-start session {session_id}",
+                timeout=900,
+            )
+            if result.returncode != 0 or "OK BGP-TCP-AO start" not in result.stdout:
+                raise RuntimeError(
+                    f"BGP TCP-AO bootstrap failed for {session_id}: "
+                    f"stdout={result.stdout[-500:]} stderr={result.stderr[-500:]}"
+                )
+            print(f"[OK] BGP TCP-AO bootstrap complete: {session_id}")
+            mark_bgp_tcp_ao_settings_active(bgp_tcp_ao_settings)
 
     if args.skip_post_validation or args.shipment_preload:
         reason = (
