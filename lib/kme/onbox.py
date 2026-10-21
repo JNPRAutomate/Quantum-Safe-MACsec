@@ -82,7 +82,7 @@ def _ensure_remote_image(router: Device, image: str) -> str:
     if local:
         return str(local[0]["Id"])
     archive = _image_archive(image)
-    with SCP(router, timeout=600) as scp:
+    with SCP(router) as scp:
         scp.put(str(archive), remote_path=f"/var/tmp/{archive.name}")
     _shell(router, f"docker load -i /var/tmp/{archive.name} && rm -f /var/tmp/{archive.name}")
     loaded = _remote_json(router, f"docker image inspect {shlex.quote(image)}")
@@ -157,7 +157,7 @@ def _ensure_router_container(router: Device, target: dict[str, Any], image: str,
             return
         _shell(router, f"docker rm -f {container}")
     if needs_create:
-        with SCP(router, timeout=600) as scp:
+        with SCP(router) as scp:
             scp.put(str(env_file), remote_path="/var/tmp/kme.env")
         _shell(
             router,
