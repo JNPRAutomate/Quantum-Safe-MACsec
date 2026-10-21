@@ -54,6 +54,14 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
 
 def _shell(router: Device, command: str) -> str:
     result = router.rpc.request_shell_execute(command="/bin/sh -c " + shlex.quote(command))
+    if isinstance(result, bool):
+        if not result:
+            raise RuntimeError(f"Junos shell command failed: {command}")
+        return ""
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result.strip()
     return "".join(result.itertext()).strip()
 
 

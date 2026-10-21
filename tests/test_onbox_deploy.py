@@ -1,6 +1,33 @@
 from lib.kme import onbox
 
 
+def test_shell_accepts_boolean_success_for_no_output_command():
+    class Rpc:
+        def request_shell_execute(self, command):
+            return True
+
+    class Router:
+        rpc = Rpc()
+
+    assert onbox._shell(Router(), "uname -m >/dev/null") == ""
+
+
+def test_shell_rejects_boolean_failure():
+    class Rpc:
+        def request_shell_execute(self, command):
+            return False
+
+    class Router:
+        rpc = Rpc()
+
+    try:
+        onbox._shell(Router(), "uname -m >/dev/null")
+    except RuntimeError as exc:
+        assert "Junos shell command failed" in str(exc)
+    else:
+        raise AssertionError("Expected a failed boolean RPC result to raise")
+
+
 def test_onbox_dry_run_counts_inventory_devices(monkeypatch, capsys):
     monkeypatch.setattr(
         onbox,
