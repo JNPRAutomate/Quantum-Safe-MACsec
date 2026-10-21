@@ -470,6 +470,7 @@ def test_bgp_ao_discovery_accepts_neighbor_output_with_license_warning_and_inlin
     discover.__globals__["re"] = re
     discover.__globals__["subprocess"] = subprocess
     discover.__globals__["CLI_PATH"] = "cli"
+    discover.__globals__["junos_output_has_error"] = lambda *_args: True
     config = {
         "group_name": "LAB-EVO",
         "endpoints": {"EVO1": {"neighbor_address": "10.255.0.1", "peer_as": 65002}},

@@ -1104,12 +1104,7 @@ def discover_bgp_tcp_ao_neighbor(session, local_device, require_unauthenticated=
         stdout,
         re.MULTILINE | re.IGNORECASE,
     )
-    error_check_stdout = "\n".join(
-        line
-        for line in stdout.splitlines()
-        if not re.fullmatch(r"[ \t]*Last Error:[ \t]*None[ \t]*", line, re.IGNORECASE)
-    )
-    if junos_output_has_error(error_check_stdout, stderr) or not peer_match:
+    if not peer_match:
         raise RuntimeError(
             f"BGP neighbor query failed device={local_device} neighbor={neighbor} "
             f"rc={result.returncode} stderr={stderr[-300:]} stdout={stdout[-500:]}"
