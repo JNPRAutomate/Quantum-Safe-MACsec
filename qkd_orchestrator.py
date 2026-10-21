@@ -68,13 +68,18 @@ from lib.qkd.bgp_tcp_ao import (
     load_persisted_bgp_tcp_ao_settings,
     mark_bgp_tcp_ao_settings_active,
 )
+from lib.qkd.ldp_tcp_ao import (
+    load_ldp_tcp_ao_settings,
+    load_persisted_ldp_tcp_ao_settings,
+    mark_ldp_tcp_ao_settings_active,
+)
 from lib.kme.instructions import print_manual_kme_copy_instructions
 
 
 ONBOX_SCRIPT_NAME = "qkd_onbox.py"
 script_name = ONBOX_SCRIPT_NAME
 BASE_DIR = Path(__file__).resolve().parent
-SCRIPT_VERSION = "ver3.3.4.1"
+SCRIPT_VERSION = "ver3.3.4.3"
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +407,14 @@ def parse_args():
     )
     deploy.add_argument("--keys", type=int, help="TCP-AO keyring size, including bootstrap slot 0.")
     deploy.add_argument("--timers", type=int, help="TCP-AO key activation/rotation interval in seconds.")
+    deploy.add_argument(
+        "--ldp.tcp.ao",
+        dest="ldp_tcp_ao",
+        action="store_true",
+        help="Deploy independent TCP-AO authentication and KME key rotation for configured LDP sessions only.",
+    )
+    deploy.add_argument("--ldp-keys", type=int, help="LDP TCP-AO keyring size, including bootstrap slot 0.")
+    deploy.add_argument("--ldp-timers", type=int, help="LDP TCP-AO key activation/rotation interval in seconds.")
     deploy.add_argument(
         "--preview",
         "--show-config",
@@ -1439,7 +1452,6 @@ def handle_bootstrap(args):
     print("      (will skip unavailable devices)")
 
 
-
 # ---------------------------------------------------------------------------
 # DEPLOY HANDLER
 # ---------------------------------------------------------------------------
@@ -1457,6 +1469,9 @@ def handle_deploy(args):
     bgp_tcp_ao_requested = bool(getattr(args, "bgp_tcp_ao", False))
     bgp_tcp_ao_keys = getattr(args, "keys", None)
     bgp_tcp_ao_timers = getattr(args, "timers", None)
+    ldp_tcp_ao_requested = bool(getattr(args, "ldp_tcp_ao", False))
+    ldp_tcp_ao_keys = getattr(args, "ldp_keys", None)
+    ldp_tcp_ao_timers = getattr(args, "ldp_timers", None)
 
     if args.onbox_only and args.shipment_preload:
         raise ValueError("--onbox-only cannot be combined with --shipment-preload")
@@ -1469,6 +1484,13 @@ def handle_deploy(args):
             raise ValueError("--bgp.tcp.ao cannot be combined with --onbox-only or --shipment-preload")
     elif bgp_tcp_ao_keys is not None or bgp_tcp_ao_timers is not None:
         raise ValueError("--keys and --timers are only valid with --bgp.tcp.ao")
+    if ldp_tcp_ao_requested:
+        if ldp_tcp_ao_keys is None or ldp_tcp_ao_timers is None:
+            raise ValueError("--ldp.tcp.ao requires both --ldp-keys N and --ldp-timers SECONDS")
+        if args.onbox_only or args.shipment_preload:
+            raise ValueError("--ldp.tcp.ao cannot be combined with --onbox-only or --shipment-preload")
+    elif ldp_tcp_ao_keys is not None or ldp_tcp_ao_timers is not None:
+        raise ValueError("--ldp-keys and --ldp-timers are only valid with --ldp.tcp.ao")
 
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
@@ -1490,6 +1512,19 @@ def handle_deploy(args):
             print("[WARN] Juniper recommends at least 1800 seconds between TCP-AO key start-times.")
     else:
         bgp_tcp_ao_settings = load_persisted_bgp_tcp_ao_settings(devices)
+
+    ldp_tcp_ao_settings = None
+    if ldp_tcp_ao_requested:
+        ldp_tcp_ao_settings = load_ldp_tcp_ao_settings(
+            ldp_tcp_ao_keys,
+            ldp_tcp_ao_timers,
+            devices,
+            persist_seed=not (args.preview or args.dry_run),
+        )
+        if ldp_tcp_ao_timers < 1800:
+            print("[WARN] Juniper recommends at least 1800 seconds between LDP TCP-AO key start-times.")
+    else:
+        ldp_tcp_ao_settings = load_persisted_ldp_tcp_ao_settings(devices)
 
     bootstrap_user = (
         getattr(args, "bootstrap_user", None)
@@ -1538,6 +1573,31 @@ def handle_deploy(args):
                 f"timer_seconds={bgp_tcp_ao_settings['rotation_interval_seconds']} "
                 "macsec_provisioning=disabled"
             )
+        if bgp_tcp_ao_requested:
+            for session_id, session in bgp_tcp_ao_settings["sessions"].items():
+                for name in session["devices"]:
+                    endpoint = session["endpoints"][name]
+                    print(
+                        f"BGP TCP-AO target: session={session_id} device={name} "
+                        f"group={session['group_name']} neighbor={endpoint['neighbor_address']} "
+                        f"peer_as={endpoint['peer_as']} keychain={session['keychain_name']}"
+                    )
+        if ldp_tcp_ao_requested:
+            for session_id, session in ldp_tcp_ao_settings["sessions"].items():
+                for name in session["devices"]:
+                    endpoint = session["endpoints"][name]
+                    print(
+                        f"LDP TCP-AO target: session={session_id} device={name} "
+                        f"peer={endpoint['peer_address']} keychain={session['keychain_name']}"
+                    )
+            print(
+                f"LDP TCP-AO plan: keys={ldp_tcp_ao_settings['key_count']} "
+                f"timer_seconds={ldp_tcp_ao_settings['rotation_interval_seconds']} "
+                "MACsec provisioning disabled"
+            )
+        if bgp_tcp_ao_requested or ldp_tcp_ao_requested:
+            print("AO preview performs no peer discovery, key retrieval, or Junos commit.")
+            return
         print_step_banner(
             "0/5",
             "PREVIEW OR DRY-RUN",
@@ -1700,7 +1760,11 @@ def handle_deploy(args):
     )
     # Always refresh runtime on-box artifacts at deploy time so the latest
     # qkd_onbox.py logic is applied even when create is not re-run.
-    artifacts = build_onbox_artifacts(devices, bgp_tcp_ao=bgp_tcp_ao_settings)
+    artifacts = build_onbox_artifacts(
+        devices,
+        bgp_tcp_ao=bgp_tcp_ao_settings,
+        ldp_tcp_ao=ldp_tcp_ao_settings,
+    )
     for name, device in devices.items():
         if device.get("managed") is False:
             continue
@@ -1751,8 +1815,17 @@ def handle_deploy(args):
             "START",
             "Apply runtime QKD/MACsec configuration and peer SSH key distribution.",
         )
-        if bgp_tcp_ao_requested:
-            print("Skipped MACsec provisioning: --bgp.tcp.ao changes BGP authentication only.")
+        if bgp_tcp_ao_requested or ldp_tcp_ao_requested:
+            selected = []
+            if bgp_tcp_ao_requested:
+                selected.append("BGP")
+            if ldp_tcp_ao_requested:
+                selected.append("LDP")
+            print(
+                "Skipped MACsec provisioning: TCP-AO-only deployment for "
+                + "+".join(selected)
+                + "."
+            )
         else:
             run_provisioning(
                 log=log,
@@ -1784,6 +1857,26 @@ def handle_deploy(args):
                 )
             print(f"[OK] BGP TCP-AO bootstrap complete: {session_id}")
             mark_bgp_tcp_ao_settings_active(bgp_tcp_ao_settings)
+
+    if ldp_tcp_ao_requested:
+        for session_id, session in ldp_tcp_ao_settings["sessions"].items():
+            master_name = session["master"]
+            master_device = devices.get(master_name)
+            if not isinstance(master_device, dict):
+                raise RuntimeError(f"LDP TCP-AO master missing from runtime devices: {master_name}")
+            print(f"Starting LDP TCP-AO bootstrap session={session_id} master={master_name}")
+            result = ssh_script_user_onbox_cmd(
+                master_device,
+                f"op qkd_onbox.py action ldp-tcp-ao-start session {session_id}",
+                timeout=900,
+            )
+            if result.returncode != 0 or "OK LDP-TCP-AO start" not in result.stdout:
+                raise RuntimeError(
+                    f"LDP TCP-AO bootstrap failed for {session_id}: "
+                    f"stdout={result.stdout[-500:]} stderr={result.stderr[-500:]}"
+                )
+            print(f"[OK] LDP TCP-AO bootstrap complete: {session_id}")
+        mark_ldp_tcp_ao_settings_active(ldp_tcp_ao_settings)
 
     if args.skip_post_validation or args.shipment_preload:
         reason = (

@@ -8,18 +8,20 @@ integration. The generated runtime is documented under
 ## Canonical reading order
 
 1. [First EVO Lab Deployment](evo_lab_first_deploy.md)
-2. [Architecture](architecture.md)
-3. [Inventory and Link-Driven Model](inventory_and_link_model.md)
-4. [Configuration Generation and Runtime Contract](config_generation.md)
-5. [CLI Reference](cli_reference.md)
-6. [Deploy Phases and Recovery](qkd_deploy_phases.md)
-7. [Identity and Access](identity_and_access.md)
-8. [Certificates and PKI](certificates_and_pki.md)
-9. [Platform Differences: MX and ACX EVO](platform_differences_mx_acx_evo.md)
-10. [Release History and Architectural Milestones](release_history.md)
-11. [Architecture Evolution](../architecture_evolution.md)
-12. [Product Roadmap](../roadmap.md)
-13. [Runtime Logs and State Files](logs/runtime_logs_and_state_files.md)
+2. [BGP TCP-AO QKD Rotation](bgp_tcp_ao.md)
+3. [LDP TCP-AO QKD Rotation](ldp_tcp_ao.md)
+4. [Architecture](architecture.md)
+5. [Inventory and Link-Driven Model](inventory_and_link_model.md)
+6. [Configuration Generation and Runtime Contract](config_generation.md)
+7. [CLI Reference](cli_reference.md)
+8. [Deploy Phases and Recovery](qkd_deploy_phases.md)
+9. [Identity and Access](identity_and_access.md)
+10. [Certificates and PKI](certificates_and_pki.md)
+11. [Platform Differences: MX and ACX EVO](platform_differences_mx_acx_evo.md)
+12. [Release History and Architectural Milestones](release_history.md)
+13. [Architecture Evolution](../architecture_evolution.md)
+14. [Product Roadmap](../roadmap.md)
+15. [Runtime Logs and State Files](logs/runtime_logs_and_state_files.md)
 
 ## Domain boundaries
 

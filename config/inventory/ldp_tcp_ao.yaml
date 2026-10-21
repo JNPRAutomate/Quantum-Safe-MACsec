@@ -1,0 +1,18 @@
+ldp_tcp_ao:
+  keychain_prefix: QKD_LDP_AO
+  cryptographic_algorithm: aes-128-cmac-96
+  tolerance_seconds: 30
+  sessions:
+    EVO1-EVO2:
+      devices:
+        - EVO1
+        - EVO2
+      endpoints:
+        EVO1:
+          peer_address: 10.255.255.2
+          send_id_base: 0
+          recv_id_base: 128
+        EVO2:
+          peer_address: 10.255.255.1
+          send_id_base: 128
+          recv_id_base: 0

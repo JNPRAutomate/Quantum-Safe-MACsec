@@ -93,6 +93,8 @@ nav:
           - Inventory and link model: qkd/inventory_and_link_model.md
           - Configuration generation: qkd/config_generation.md
           - Deploy phases: qkd/qkd_deploy_phases.md
+          - BGP TCP-AO QKD rotation: qkd/bgp_tcp_ao.md
+          - LDP TCP-AO QKD rotation: qkd/ldp_tcp_ao.md
           - Identity and access: qkd/identity_and_access.md
           - Certificates and PKI: qkd/certificates_and_pki.md
           - Platform differences: qkd/platform_differences_mx_acx_evo.md

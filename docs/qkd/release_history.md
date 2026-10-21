@@ -6,6 +6,28 @@ next architecture. The consolidated decision narrative is in
 [Architecture Evolution](../architecture_evolution.md), while current
 normative behavior is documented by domain.
 
+## ver3.3.4.3 (Development)
+
+**Branch**: `ver3.3.4.3`
+**Status**: TCP-AO implementation in progress; lab end-to-end verification
+required before this milestone is declared complete.
+
+### Planned milestone: QKD-backed BGP/LDP TCP-AO
+
+- Keep BGP and LDP TCP-AO state, keychains, timers, and separate
+  `bgp-tcp-ao.log` / `ldp-tcp-ao.log` files independent from MACsec while
+  reusing the existing on-box runtime and ETSI 014 KME transport.
+- Restrict initial deployment to one explicitly mapped, established,
+  unauthenticated eBGP neighbor.
+- Require successful two-peer key installation and post-activation BGP
+  verification before confirming the Junos commits.
+- Do not mark complete until the branch is committed/pushed and initial
+  activation, repeated rollover, and failure recovery are proven on the lab.
+
+See [BGP TCP-AO QKD Rotation](bgp_tcp_ao.md) and
+[LDP TCP-AO QKD Rotation](ldp_tcp_ao.md) for implementation contracts and
+operational verification steps.
+
 ## ver3.3.1
 
 **Release Date**: 2026-07-21

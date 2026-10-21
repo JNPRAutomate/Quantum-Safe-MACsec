@@ -9,10 +9,16 @@ import time
 
 import pytest
 
+import qkd_orchestrator
 from lib.qkd.bgp_tcp_ao import (
     load_bgp_tcp_ao_settings,
     load_persisted_bgp_tcp_ao_settings,
     mark_bgp_tcp_ao_settings_active,
+)
+from lib.qkd.ldp_tcp_ao import (
+    load_ldp_tcp_ao_settings,
+    load_persisted_ldp_tcp_ao_settings,
+    mark_ldp_tcp_ao_settings_active,
 )
 from lib.qkd import onbox_builder
 
@@ -56,10 +62,70 @@ PROFILE = {
         },
     }
 }
+LDP_PROFILE = {
+    "ldp_tcp_ao": {
+        "keychain_prefix": "QKD_LDP_AO",
+        "cryptographic_algorithm": "aes-128-cmac-96",
+        "tolerance_seconds": 30,
+        "sessions": {
+            "EVO1-EVO2": {
+                "devices": ["EVO1", "EVO2"],
+                "endpoints": {
+                    "EVO1": {"peer_address": "10.255.255.2", "send_id_base": 0, "recv_id_base": 128},
+                    "EVO2": {"peer_address": "10.255.255.1", "send_id_base": 128, "recv_id_base": 0},
+                },
+            }
+        },
+    }
+}
 DEVICES = {
     "EVO1": {"links": [{"peer": "EVO2", "role": "master"}]},
     "EVO2": {"links": [{"peer": "EVO1", "role": "slave"}]},
 }
+
+
+def test_deploy_parser_accepts_requested_bgp_tcp_ao_syntax(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "qkd_orchestrator.py",
+            "deploy",
+            "--bgp.tcp.ao",
+            "--keys",
+            "5",
+            "--timers",
+            "180",
+        ],
+    )
+
+    args = qkd_orchestrator.parse_args()
+
+    assert args.command == "deploy"
+    assert args.bgp_tcp_ao is True
+    assert args.keys == 5
+    assert args.timers == 180
+
+
+def test_deploy_parser_accepts_independent_ldp_tcp_ao_syntax(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "qkd_orchestrator.py",
+            "deploy",
+            "--ldp.tcp.ao",
+            "--ldp-keys",
+            "5",
+            "--ldp-timers",
+            "300",
+        ],
+    )
+
+    args = qkd_orchestrator.parse_args()
+
+    assert args.command == "deploy"
+    assert args.ldp_tcp_ao is True
+    assert args.ldp_keys == 5
+    assert args.ldp_timers == 300
 
 
 def write_profile(tmp_path):
@@ -67,6 +133,14 @@ def write_profile(tmp_path):
 
     profile = tmp_path / "bgp_tcp_ao.yaml"
     profile.write_text(yaml.safe_dump(PROFILE), encoding="utf-8")
+    return profile
+
+
+def write_ldp_profile(tmp_path):
+    import yaml
+
+    profile = tmp_path / "ldp_tcp_ao.yaml"
+    profile.write_text(yaml.safe_dump(LDP_PROFILE), encoding="utf-8")
     return profile
 
 
@@ -136,6 +210,20 @@ def test_active_ao_deployment_rejects_peer_rebinding(tmp_path):
         PROFILE.update(original)
 
 
+def test_ldp_ao_uses_separate_profile_keychain_seed_and_state(tmp_path):
+    profile = write_ldp_profile(tmp_path)
+    state_file = tmp_path / "ldp_state.json"
+    settings = load_ldp_tcp_ao_settings(5, 180, DEVICES, profile, state_file)
+
+    assert settings["sessions"]["EVO1-EVO2"]["keychain_name"] == "QKD_LDP_AO_EVO1_EVO2"
+    assert load_persisted_ldp_tcp_ao_settings(DEVICES, profile, state_file) is None
+    mark_ldp_tcp_ao_settings_active(settings, state_file)
+    restored = load_persisted_ldp_tcp_ao_settings(DEVICES, profile, state_file)
+    assert restored is not None
+    assert restored["rotation_interval_seconds"] == 180
+    assert restored["sessions"]["EVO1-EVO2"]["seed_secret"] == settings["sessions"]["EVO1-EVO2"]["seed_secret"]
+
+
 @pytest.mark.parametrize("keys,timer", [(2, 180), (65, 180), (5, 29)])
 def test_load_bgp_tcp_ao_rejects_invalid_ring_or_timer(tmp_path, keys, timer):
     profile = write_profile(tmp_path)
@@ -154,7 +242,11 @@ def test_load_bgp_tcp_ao_rejects_non_matching_peer_runtime(tmp_path):
 
 
 def test_bgp_tcp_ao_commands_are_independent_and_reverse_directional_ids():
-    build = load_onbox_functions("junos_start_time_from_epoch", "build_bgp_tcp_ao_junos_commands")[
+    build = load_onbox_functions(
+        "junos_start_time_from_epoch",
+        "build_tcp_ao_keychain_commands",
+        "build_bgp_tcp_ao_junos_commands",
+    )[
         "build_bgp_tcp_ao_junos_commands"
     ]
     session = {
@@ -180,12 +272,132 @@ def test_bgp_tcp_ao_commands_are_independent_and_reverse_directional_ids():
     assert not any("security macsec" in command for command in evo1 + evo2)
 
 
+def test_ldp_tcp_ao_renderer_binds_only_the_ldp_session():
+    functions = load_onbox_functions(
+        "junos_start_time_from_epoch",
+        "build_tcp_ao_keychain_commands",
+        "build_bgp_tcp_ao_junos_commands",
+        "build_ldp_tcp_ao_junos_commands",
+    )
+    session = {
+        "keychain_name": "QKD_LDP_AO_EVO1_EVO2",
+        "key_count": 5,
+        "cryptographic_algorithm": "aes-128-cmac-96",
+        "tolerance_seconds": 30,
+        "endpoints": {"EVO1": {"send_id_base": 0, "recv_id_base": 128}},
+    }
+    entry = {"slot": 0, "secret": "ab" * 32, "start_epoch": 1792514104}
+
+    commands = functions["build_ldp_tcp_ao_junos_commands"](
+        session, "EVO1", "10.255.255.2", [entry], activate=True
+    )
+
+    assert "set protocols ldp session 10.255.255.2 authentication-algorithm ao" in commands
+    assert "set protocols ldp session 10.255.255.2 authentication-key-chain QKD_LDP_AO_EVO1_EVO2" in commands
+    assert not any(command.startswith("set protocols bgp") for command in commands)
+    assert not any("security macsec" in command for command in commands)
+
+
+def test_ldp_tcp_ao_kdf_is_separate_from_bgp():
+    functions = load_onbox_functions("derive_bgp_tcp_ao_secret", "derive_ldp_tcp_ao_secret")
+    functions["hmac"] = __import__("hmac")
+    functions["hashlib"] = __import__("hashlib")
+    material = bytes(range(32))
+    bgp_secret = functions["derive_bgp_tcp_ao_secret"](material, "EVO1-EVO2", 0, "key-0", "aes-128-cmac-96")
+    ldp_secret = functions["derive_ldp_tcp_ao_secret"](material, "EVO1-EVO2", 0, "key-0", "aes-128-cmac-96")
+    assert len(bgp_secret) == len(ldp_secret) == 32
+    assert bgp_secret != ldp_secret
+
+
+def test_master_uses_enc_material_while_peer_uses_etsi_dec():
+    import base64 as base64_module
+
+    install_entries = load_onbox_functions(
+        "_bgp_tcp_ao_entries_for_install",
+        "derive_bgp_tcp_ao_secret",
+    )["_bgp_tcp_ao_entries_for_install"]
+    raw = bytes(range(32))
+    encoded = base64_module.b64encode(raw).decode("ascii")
+    namespace = install_entries.__globals__
+    namespace["base64"] = base64_module
+    namespace["hmac"] = __import__("hmac")
+    namespace["hashlib"] = __import__("hashlib")
+    namespace["log_bgp_tcp_ao"] = lambda *_args, **_kwargs: None
+
+    descriptor = [{"slot": 1, "key_id": "etsi-key-1", "start_epoch": 1200}]
+    session = {"cryptographic_algorithm": "aes-128-cmac-96"}
+    link = {"peer_sae": "sae-002"}
+
+    namespace["do_dec"] = lambda *_args, **_kwargs: pytest.fail("master must use enc_keys material")
+    master = install_entries(
+        "EVO1-EVO2", session, link, descriptor,
+        key_material_by_slot={"1": encoded},
+    )
+
+    dec_calls = []
+    namespace["do_dec"] = lambda *_args, **_kwargs: (
+        dec_calls.append(_args) or encoded,
+        {"reason_code": "DEC_OK", "attempts": 1, "duration_ms": 2},
+    )
+    peer = install_entries("EVO1-EVO2", session, link, descriptor)
+
+    assert master == peer
+    assert dec_calls == [("sae-002", "etsi-key-1")]
+    assert len(master[0]["secret"]) == 32
+
+
 def test_peer_check_decoder_accepts_onbox_action_marker():
     decode = load_onbox_functions("_bgp_tcp_ao_decode_peer_check")["_bgp_tcp_ao_decode_peer_check"]
     payload = {"device": "EVO2", "authenticated": False, "state": "Established"}
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
 
     assert decode(f"OK BGP-TCP-AO bgp-tcp-ao-check {encoded}") == payload
+
+
+def test_bgp_tcp_ao_clock_guard_enforces_keychain_tolerance():
+    validate = load_onbox_functions("validate_bgp_tcp_ao_clock_offset")[
+        "validate_bgp_tcp_ao_clock_offset"
+    ]
+
+    assert validate(1000, 1029, 30) == 29
+    with pytest.raises(RuntimeError, match="clock skew 31s exceeds tolerance 30s"):
+        validate(1000, 1031, 30)
+
+
+@pytest.mark.parametrize("protocol,minutes", [("BGP", 10), ("LDP", 2)])
+def test_junos_commit_confirmed_argument_is_minutes(protocol, minutes):
+    commit = load_onbox_functions("commit_bgp_tcp_ao_commands")["commit_bgp_tcp_ao_commands"]
+    commands = []
+
+    class Result:
+        returncode = 0
+        stdout = b"commit complete"
+        stderr = b""
+
+    logged = {"BGP": [], "LDP": []}
+    namespace = commit.__globals__
+    namespace["CLI_PATH"] = "cli"
+    namespace["subprocess"] = type(
+        "FakeSubprocess",
+        (),
+        {
+            "PIPE": -1,
+            "run": staticmethod(lambda command, **_kwargs: commands.append(command) or Result()),
+        },
+    )
+    namespace["acquire_junos_commit_lock"] = lambda: True
+    namespace["release_junos_commit_lock"] = lambda: None
+    namespace["junos_output_has_error"] = lambda *_args: False
+    namespace["log_bgp_tcp_ao"] = lambda message, *_args, **_kwargs: logged["BGP"].append(message)
+    namespace["log_ldp_tcp_ao"] = lambda message, *_args, **_kwargs: logged["LDP"].append(message)
+
+    assert commit(
+        "EVO1-EVO2", ["set protocols ldp session 10.255.255.2 authentication-algorithm ao"],
+        confirmed_minutes=minutes, protocol=protocol,
+    )
+    assert f"commit confirmed {minutes} comment \"QKD: {protocol} TCP-AO session=EVO1-EVO2\"" in commands[0][-1]
+    assert logged[protocol] == ["COMMIT OK session=EVO1-EVO2 confirmed=True"]
+    assert logged["LDP" if protocol == "BGP" else "BGP"] == []
 
 
 @pytest.mark.parametrize(
@@ -235,6 +447,48 @@ def test_bgp_ao_discovery_is_peer_scoped_and_fails_closed(
         assert result["state"] == "Established"
 
 
+@pytest.mark.parametrize(
+    "auth_type,should_fail",
+    [
+        ("none", False),
+        ("QKD_LDP_AO_EVO1_EVO2(ao key-chain, 10.255.255.2/32)", True),
+    ],
+)
+def test_ldp_ao_discovery_requires_operational_unauthenticated_session(
+    monkeypatch, auth_type, should_fail
+):
+    discover = load_onbox_functions("discover_ldp_tcp_ao_session", "junos_output_has_error")[
+        "discover_ldp_tcp_ao_session"
+    ]
+    outputs = iter(
+        [
+            f"Address: 10.255.255.2, State: Operational, Connection: Open\nAuthentication type: {auth_type}\n",
+            "",
+        ]
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=next(outputs).encode(), stderr=b""
+        ),
+    )
+    discover.__globals__["re"] = re
+    discover.__globals__["subprocess"] = subprocess
+    discover.__globals__["CLI_PATH"] = "cli"
+    discover.__globals__["junos_output_has_error"] = lambda *_args: False
+    session = {"endpoints": {"EVO1": {"peer_address": "10.255.255.2"}}}
+
+    if should_fail:
+        with pytest.raises(RuntimeError, match="already has authentication"):
+            discover(session, "EVO1", require_unauthenticated=True)
+    else:
+        result = discover(session, "EVO1", require_unauthenticated=True)
+        assert result["peer_address"] == "10.255.255.2"
+        assert result["state"].lower() == "operational"
+        assert result["authenticated"] is False
+
+
 def test_bgp_tcp_ao_rotation_waits_for_next_key_and_tolerance():
     planner = load_onbox_functions("plan_bgp_tcp_ao_rotation")["plan_bgp_tcp_ao_rotation"]
     ring = [
@@ -272,21 +526,27 @@ def test_initial_bgp_tcp_ao_ring_uses_seed_then_exact_independent_interval():
 
 
 def test_bgp_tcp_ao_log_uses_separate_log_file(tmp_path):
-    logger = load_onbox_functions("log_bgp_tcp_ao")["log_bgp_tcp_ao"]
+    functions = load_onbox_functions("_log_tcp_ao_file", "log_bgp_tcp_ao", "log_ldp_tcp_ao")
+    logger = functions["log_bgp_tcp_ao"]
+    ldp_logger = functions["log_ldp_tcp_ao"]
     ao_log = tmp_path / "logs" / "bgp-tcp-ao.log"
+    ldp_log = tmp_path / "logs" / "ldp-tcp-ao.log"
     qkd_log = tmp_path / "logs" / "qkd_debug.log"
     namespace = {
         "LOG_LEVEL": "INFO",
         "BGP_TCP_AO_LOG_FILE": str(ao_log),
+        "LDP_TCP_AO_LOG_FILE": str(ldp_log),
         "LOG_MAX_BYTES": 100000,
         "LOG_BACKUP_COUNT": 2,
         "DEVICE": "EVO1",
         "Path": Path,
         "time": time,
     }
-    logger.__globals__.update(namespace)
+    functions["_log_tcp_ao_file"].__globals__.update(namespace)
 
     logger("ROTATION COMPLETE session=EVO1-EVO2 slot=0")
+    ldp_logger("ROTATION COMPLETE session=EVO1-EVO2 slot=0")
 
     assert "ROTATION COMPLETE" in ao_log.read_text(encoding="utf-8")
+    assert "LDP-TCP-AO" in ldp_log.read_text(encoding="utf-8")
     assert not qkd_log.exists()

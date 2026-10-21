@@ -195,6 +195,8 @@ STATE_DIR = CONFIG.get("state_dir", f"/var/home/{SCRIPT_USER}")
 LOG_DIR = CONFIG.get("log_dir", f"/var/home/{SCRIPT_USER}/logs")
 BGP_TCP_AO_CONFIG = CONFIG.get("bgp_tcp_ao", {}) or {}
 BGP_TCP_AO_LOG_FILE = CONFIG.get("bgp_tcp_ao_log_file", f"{LOG_DIR}/bgp-tcp-ao.log")
+LDP_TCP_AO_CONFIG = CONFIG.get("ldp_tcp_ao", {}) or {}
+LDP_TCP_AO_LOG_FILE = CONFIG.get("ldp_tcp_ao_log_file", f"{LOG_DIR}/ldp-tcp-ao.log")
 PEER_STATUS_DIR = CONFIG.get("peer_status_dir", f"{STATE_DIR}/peer_status")
 PIPELINE_TIMING_DIR = CONFIG.get("pipeline_timing_dir", f"{LOG_DIR}/pipeline_timing")
 PIPELINE_TIMING_FILE = CONFIG.get(
@@ -423,8 +425,7 @@ def log(msg, level="INFO", iface=None, mode=None):
         write_log_line(link_log_file)
 
 
-def log_bgp_tcp_ao(msg, level="INFO"):
-    """Write TCP-AO lifecycle messages only to its independent log."""
+def _log_tcp_ao_file(log_file, protocol, msg, level="INFO"):
     levels = {"DEBUG": 10, "INFO": 20, "WARN": 25, "WARNING": 25, "ERROR": 30}
     level = str(level or "INFO").upper()
     if levels.get(level, 20) < levels.get(str(LOG_LEVEL or "INFO").upper(), 20):
@@ -432,9 +433,9 @@ def log_bgp_tcp_ao(msg, level="INFO"):
 
     line = (
         f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{level}] "
-        f"[BGP-TCP-AO][{DEVICE}] {msg}\n"
+        f"[{protocol}][{DEVICE}] {msg}\n"
     )
-    path = Path(BGP_TCP_AO_LOG_FILE)
+    path = Path(log_file)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and path.stat().st_size >= LOG_MAX_BYTES:
@@ -453,6 +454,14 @@ def log_bgp_tcp_ao(msg, level="INFO"):
             handle.write(line)
     except Exception:
         pass
+
+
+def log_bgp_tcp_ao(msg, level="INFO"):
+    _log_tcp_ao_file(BGP_TCP_AO_LOG_FILE, "BGP-TCP-AO", msg, level)
+
+
+def log_ldp_tcp_ao(msg, level="INFO"):
+    _log_tcp_ao_file(LDP_TCP_AO_LOG_FILE, "LDP-TCP-AO", msg, level)
 
 
 # ----------------------------
@@ -1019,6 +1028,53 @@ def save_bgp_tcp_ao_state(session_id, state):
         tmp.chmod(0o600)
     except OSError:
         pass
+
+
+def ldp_tcp_ao_session_config(session_id):
+    if not LDP_TCP_AO_CONFIG.get("enabled"):
+        raise RuntimeError("LDP TCP-AO is not enabled in the runtime config")
+    session = (LDP_TCP_AO_CONFIG.get("sessions") or {}).get(str(session_id))
+    if not isinstance(session, dict):
+        raise RuntimeError(f"LDP TCP-AO session not found: {session_id}")
+    return session
+
+
+def ldp_tcp_ao_state_file(session_id):
+    safe_session = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_id))
+    return f"{STATE_DIR}/qkd_ldp_tcp_ao_{safe_session}.json"
+
+
+def load_ldp_tcp_ao_state(session_id):
+    path = Path(ldp_tcp_ao_state_file(session_id))
+    if not path.exists():
+        return {"session_id": str(session_id), "phase": "uninitialized", "ring": [], "rotation_count": 0}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"invalid LDP TCP-AO state file={path}: {exc}") from exc
+    if not isinstance(state, dict) or state.get("session_id") != str(session_id):
+        raise RuntimeError(f"invalid LDP TCP-AO state identity file={path}")
+    if not isinstance(state.get("ring", []), list):
+        raise RuntimeError(f"invalid LDP TCP-AO ring file={path}")
+    return state
+
+
+def save_ldp_tcp_ao_state(session_id, state):
+    payload = dict(state or {})
+    payload["session_id"] = str(session_id)
+    path = Path(ldp_tcp_ao_state_file(session_id))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(f"{path}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    os.replace(str(tmp), str(path))
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
     os.replace(str(tmp), str(path))
     try:
         path.chmod(0o600)
@@ -1084,6 +1140,72 @@ def discover_bgp_tcp_ao_neighbor(session, local_device, require_unauthenticated=
     }
 
 
+def discover_ldp_tcp_ao_session(session, local_device, require_unauthenticated=True):
+    endpoint = (session.get("endpoints") or {}).get(local_device)
+    if not isinstance(endpoint, dict):
+        raise RuntimeError(f"LDP TCP-AO endpoint missing for device={local_device}")
+    peer_address = str(endpoint.get("peer_address") or "")
+    if not peer_address:
+        raise RuntimeError(f"LDP TCP-AO peer address missing for device={local_device}")
+
+    result = subprocess.run(
+        [CLI_PATH, "-c", f"show ldp session {peer_address} detail"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+    )
+    stdout = result.stdout.decode(errors="ignore")
+    stderr = result.stderr.decode(errors="ignore")
+    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
+        raise RuntimeError(f"LDP session query failed device={local_device} peer={peer_address}")
+    address_state = re.search(
+        rf"^\s*Address:\s*{re.escape(peer_address)}\s*,\s*State:\s*(\w+)",
+        stdout,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if not address_state or address_state.group(1).lower() != "operational":
+        raise RuntimeError(
+            f"LDP session is not Operational device={local_device} peer={peer_address} "
+            f"state={address_state.group(1) if address_state else 'missing'}"
+        )
+
+    config_result = subprocess.run(
+        [CLI_PATH, "-c", f"show configuration protocols ldp session {peer_address} | display set"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=15,
+    )
+    config_stdout = config_result.stdout.decode(errors="ignore")
+    config_stderr = config_result.stderr.decode(errors="ignore")
+    if config_result.returncode != 0 or junos_output_has_error(config_stdout, config_stderr):
+        raise RuntimeError(f"LDP session config query failed device={local_device} peer={peer_address}")
+    auth_lines = [
+        line.strip() for line in config_stdout.splitlines()
+        if "authentication-algorithm" in line or "authentication-key-chain" in line
+    ]
+    effective_auth = re.search(r"^\s*Authentication type:\s*(.+)$", stdout, re.MULTILINE | re.IGNORECASE)
+    if effective_auth:
+        auth_type = effective_auth.group(1).strip()
+        if auth_type.lower() not in ("none", "not configured", "unknown"):
+            auth_lines.append(f"Authentication type: {auth_type}")
+            ao_chain = re.search(r"([^\s(]+)\(ao key-chain,", auth_type, re.IGNORECASE)
+            if ao_chain:
+                auth_lines.append(f"Authentication key chain: {ao_chain.group(1)}")
+                auth_lines.append("Authentication algorithm: ao")
+    if require_unauthenticated and auth_lines:
+        raise RuntimeError(
+            f"LDP peer already has authentication device={local_device} peer={peer_address}; "
+            "refusing to replace existing authentication"
+        )
+    return {
+        "peer_address": peer_address,
+        "state": address_state.group(1),
+        "authenticated": bool(auth_lines),
+        "auth_lines": auth_lines,
+        "observed_epoch": int(time.time()),
+    }
+
+
 def derive_bgp_tcp_ao_secret(material, session_id, slot, key_id, cryptographic_algorithm):
     raw = base64.b64decode(material) if isinstance(material, str) else bytes(material)
     if len(raw) < 16:
@@ -1095,18 +1217,30 @@ def derive_bgp_tcp_ao_secret(material, session_id, slot, key_id, cryptographic_a
     return derived.hex()
 
 
-def commit_bgp_tcp_ao_commands(session_id, commands, confirmed_seconds=None):
+def derive_ldp_tcp_ao_secret(material, session_id, slot, key_id, cryptographic_algorithm):
+    raw = base64.b64decode(material) if isinstance(material, str) else bytes(material)
+    if len(raw) < 16:
+        raise ValueError("ETSI 014 key material is shorter than 128 bits")
+    context = f"QKD-LDP-TCP-AO-v1|{session_id}|{int(slot)}|{key_id}".encode("utf-8")
+    derived = hmac.new(raw, context, hashlib.sha256).digest()
+    if cryptographic_algorithm == "aes-128-cmac-96":
+        derived = derived[:16]
+    return derived.hex()
+
+
+def commit_bgp_tcp_ao_commands(session_id, commands, confirmed_minutes=None, protocol="BGP"):
     if not commands:
         return True
-    comment = f"QKD: BGP TCP-AO session={session_id}"
+    log_commit = log_ldp_tcp_ao if str(protocol).upper() == "LDP" else log_bgp_tcp_ao
+    comment = f"QKD: {protocol} TCP-AO session={session_id}"
     commit_command = (
-        f"commit confirmed {int(confirmed_seconds)} comment \"{comment}\""
-        if confirmed_seconds
+        f"commit confirmed {int(confirmed_minutes)} comment \"{comment}\""
+        if confirmed_minutes
         else f"commit comment \"{comment}\""
     )
     cli_commands = ["configure", *commands, commit_command, "exit"]
     if not acquire_junos_commit_lock():
-        log_bgp_tcp_ao(f"COMMIT DEFERRED session={session_id} reason=junos_commit_lock_busy", "WARN")
+        log_commit(f"COMMIT DEFERRED session={session_id} reason=junos_commit_lock_busy", "WARN")
         return False
     try:
         try:
@@ -1117,18 +1251,18 @@ def commit_bgp_tcp_ao_commands(session_id, commands, confirmed_seconds=None):
                 timeout=35,
             )
         except Exception as exc:
-            log_bgp_tcp_ao(f"COMMIT FAILED session={session_id} error_type={type(exc).__name__}", "ERROR")
+            log_commit(f"COMMIT FAILED session={session_id} error_type={type(exc).__name__}", "ERROR")
             return False
         stdout = result.stdout.decode(errors="ignore")
         stderr = result.stderr.decode(errors="ignore")
         if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-            log_bgp_tcp_ao(
+            log_commit(
                 f"COMMIT FAILED session={session_id} rc={result.returncode} "
                 f"stdout={stdout[-500:]} stderr={stderr[-500:]}",
                 "ERROR",
             )
             return False
-        log_bgp_tcp_ao(f"COMMIT OK session={session_id} confirmed={bool(confirmed_seconds)}")
+        log_commit(f"COMMIT OK session={session_id} confirmed={bool(confirmed_minutes)}")
         return True
     finally:
         release_junos_commit_lock()
@@ -1220,10 +1354,19 @@ def _bgp_tcp_ao_entries_for_install(session_id, session, link, descriptors, key_
         elif str(slot) in key_material_by_slot:
             material = base64.b64decode(key_material_by_slot[str(slot)])
         else:
-            encoded = do_dec(link["peer_sae"], key_id)
+            encoded, dec_details = do_dec(link["peer_sae"], key_id, return_details=True)
             if not encoded:
+                log_bgp_tcp_ao(
+                    f"KME DEC FAILED session={session_id} slot={slot} key_id={key_id} "
+                    f"reason={dec_details.get('reason_code')} http_status={dec_details.get('http_status')}",
+                    "ERROR",
+                )
                 raise RuntimeError(f"ETSI 014 dec_keys failed session={session_id} slot={slot}")
             material = base64.b64decode(encoded)
+            log_bgp_tcp_ao(
+                f"KME DEC OK session={session_id} slot={slot} key_id={key_id} "
+                f"attempts={dec_details.get('attempts')} duration_ms={dec_details.get('duration_ms')}"
+            )
         secret = derive_bgp_tcp_ao_secret(material, session_id, slot, key_id, algorithm)
         result.append(
             {
@@ -1236,7 +1379,7 @@ def _bgp_tcp_ao_entries_for_install(session_id, session, link, descriptors, key_
     return result
 
 
-def install_bgp_tcp_ao_entries(session_id, session, entries, activate=False, confirmed_seconds=None):
+def install_bgp_tcp_ao_entries(session_id, session, entries, activate=False, confirmed_minutes=None):
     local_device = DEVICE_NAME
     endpoint = (session.get("endpoints") or {}).get(local_device)
     if not isinstance(endpoint, dict):
@@ -1249,7 +1392,7 @@ def install_bgp_tcp_ao_entries(session_id, session, entries, activate=False, con
         entries,
         activate=activate,
     )
-    if not commit_bgp_tcp_ao_commands(session_id, commands, confirmed_seconds=confirmed_seconds):
+    if not commit_bgp_tcp_ao_commands(session_id, commands, confirmed_minutes=confirmed_minutes):
         return False
     log_bgp_tcp_ao(
         f"KEYS INSTALLED session={session_id} slots={[int(item['slot']) for item in entries]} "
@@ -1309,6 +1452,7 @@ def _bgp_tcp_ao_peer_action(session_id, action, entries=None):
             "authenticated": info["authenticated"],
             "auth_lines": info["auth_lines"],
             "state": "Established",
+            "observed_epoch": int(time.time()),
         }
         encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
         print(f"OK BGP-TCP-AO bgp-tcp-ao-check {encoded}")
@@ -1380,12 +1524,12 @@ def _bgp_tcp_ao_peer_action(session_id, action, entries=None):
 
     if action == "bgp-tcp-ao-activate":
         if state.get("phase") not in ("prepared", "activation_pending"):
-            raise RuntimeError(f"cannot activate TCP-AO when phase={state.get('phase')}")
-        if not install_bgp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_seconds=10):
+            raise RuntimeError(f"cannot activate TCP-AO from phase={state.get('phase')}")
+        if not install_bgp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_minutes=10):
             raise RuntimeError("TCP-AO peer activation commit failed")
         state["phase"] = "activation_pending"
         save_bgp_tcp_ao_state(session_id, state)
-        log_bgp_tcp_ao(f"ACTIVATION COMMIT-CONFIRMED session={session_id} timeout_seconds=600")
+        log_bgp_tcp_ao(f"ACTIVATION COMMIT-CONFIRMED session={session_id} timeout_seconds=10")
         print("OK BGP-TCP-AO bgp-tcp-ao-activate")
         return True
 
@@ -1439,6 +1583,19 @@ def _bgp_tcp_ao_decode_peer_check(output):
     return payload
 
 
+def validate_bgp_tcp_ao_clock_offset(local_epoch, remote_epoch, tolerance_seconds):
+    try:
+        offset = abs(int(local_epoch) - int(remote_epoch))
+    except Exception as exc:
+        raise ValueError("invalid BGP TCP-AO peer clock timestamp") from exc
+    tolerance = int(tolerance_seconds)
+    if tolerance < 0:
+        raise ValueError("BGP TCP-AO time tolerance must be >= 0")
+    if offset > tolerance:
+        raise RuntimeError(f"BGP TCP-AO peer clock skew {offset}s exceeds tolerance {tolerance}s")
+    return offset
+
+
 def _bgp_tcp_ao_wait_established(session_id, session, link, timeout_seconds=45):
     deadline = time.time() + int(timeout_seconds)
     last_error = "not checked"
@@ -1448,6 +1605,11 @@ def _bgp_tcp_ao_wait_established(session_id, session, link, timeout_seconds=45):
             peer_ok, peer_output = _bgp_tcp_ao_rpc(link, "check", session_id, timeout=15)
             if peer_ok:
                 remote = _bgp_tcp_ao_decode_peer_check(peer_output)
+                validate_bgp_tcp_ao_clock_offset(
+                    time.time(),
+                    remote.get("observed_epoch"),
+                    session.get("tolerance_seconds", 30),
+                )
                 local_chain = " ".join(local.get("auth_lines") or []).lower()
                 remote_chain = " ".join(remote.get("auth_lines") or []).lower()
                 expected_chain = session["keychain_name"].lower()
@@ -1504,14 +1666,27 @@ def run_bgp_tcp_ao_start(session_id):
         remote = _bgp_tcp_ao_decode_peer_check(peer_output)
         if remote.get("authenticated"):
             raise RuntimeError("remote BGP peer already has authentication configured")
+        skew = validate_bgp_tcp_ao_clock_offset(
+            time.time(),
+            remote.get("observed_epoch"),
+            session.get("tolerance_seconds", 30),
+        )
+        log_bgp_tcp_ao(
+            f"CLOCK CHECK OK session={session_id} skew_seconds={skew} "
+            f"tolerance_seconds={session.get('tolerance_seconds', 30)}"
+        )
         now = int(time.time())
         key_count = int(session["key_count"])
         key_ids = []
         pending_key_material = {}
         for slot in range(1, key_count):
-            key_id, key_material = do_enc(link["peer_sae"], return_details=False)
+            key_id, key_material, enc_details = do_enc(link["peer_sae"], return_details=True)
             if not key_id or not key_material:
-                log_bgp_tcp_ao(f"BOOTSTRAP ABORTED session={session_id} reason=enc_keys_failed slot={slot}", "ERROR")
+                log_bgp_tcp_ao(
+                    f"BOOTSTRAP ABORTED session={session_id} reason=enc_keys_failed slot={slot} "
+                    f"detail={enc_details.get('reason_code')} http_status={enc_details.get('http_status')}",
+                    "ERROR",
+                )
                 raise RuntimeError(f"ETSI 014 enc_keys failed while filling TCP-AO slot={slot}")
             key_ids.append(str(key_id))
             pending_key_material[str(slot)] = str(key_material)
@@ -1550,7 +1725,7 @@ def run_bgp_tcp_ao_start(session_id):
         if not peer_ok:
             raise RuntimeError(f"remote TCP-AO activation failed: {peer_output[-300:]}")
         if state.get("phase") != "activation_pending":
-            if not install_bgp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_seconds=10):
+            if not install_bgp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_minutes=10):
                 raise RuntimeError("local TCP-AO activation commit failed")
             state["phase"] = "activation_pending"
             save_bgp_tcp_ao_state(session_id, state)
@@ -1641,9 +1816,13 @@ def run_bgp_tcp_ao_rotation_tick(session_id):
                 "INFO",
             )
             return True
-        key_id, key_material = do_enc(link["peer_sae"], return_details=False)
+        key_id, key_material, enc_details = do_enc(link["peer_sae"], return_details=True)
         if not key_id or not key_material:
-            log_bgp_tcp_ao(f"ROTATION ABORTED session={session_id} reason=ENC_FAILED slot={plan['entry']['slot']}", "ERROR")
+            log_bgp_tcp_ao(
+                f"ROTATION ABORTED session={session_id} reason=ENC_FAILED slot={plan['entry']['slot']} "
+                f"detail={enc_details.get('reason_code')} http_status={enc_details.get('http_status')}",
+                "ERROR",
+            )
             return False
         entry = dict(plan["entry"])
         entry.update({
@@ -1717,6 +1896,452 @@ def run_master_bgp_tcp_ao():
                 "ERROR",
             )
 
+
+def _ldp_tcp_ao_peer_link(session):
+    peer_names = [name for name in session.get("devices", []) if name != DEVICE_NAME]
+    if len(peer_names) != 1:
+        raise RuntimeError("LDP TCP-AO requires exactly one direct peer")
+    peer_name = peer_names[0]
+    links = [link for link in managed_links() if link.get("peer") == peer_name]
+    if len(links) != 1:
+        raise RuntimeError(f"expected one QKD transport link for LDP peer={peer_name}")
+    link = links[0]
+    if not link.get("peer_ip") or not link.get("peer_sae"):
+        raise RuntimeError(f"QKD transport metadata missing for LDP peer={peer_name}")
+    return peer_name, link
+
+
+def _ldp_tcp_ao_check(session_id, session, require_unauthenticated=True):
+    info = discover_ldp_tcp_ao_session(session, DEVICE_NAME, require_unauthenticated)
+    if info["authenticated"]:
+        auth_text = " ".join(info["auth_lines"]).lower()
+        if session["keychain_name"].lower() not in auth_text or "authentication-algorithm ao" not in auth_text:
+            raise RuntimeError(f"Unexpected LDP authentication peer={info['peer_address']}")
+    elif not require_unauthenticated:
+        raise RuntimeError(f"LDP TCP-AO authentication missing peer={info['peer_address']}")
+    return info
+
+
+def _ldp_tcp_ao_rpc(link, action, session_id, entries=None, timeout=90):
+    token = {
+        "check": "ldp-tcp-ao-check",
+        "prepare-ring": "ldp-tcp-ao-prepare-ring",
+        "install-key": "ldp-tcp-ao-install-key",
+        "activate": "ldp-tcp-ao-activate",
+        "confirm": "ldp-tcp-ao-confirm",
+    }.get(action)
+    if not token:
+        raise ValueError(f"unsupported LDP TCP-AO RPC action={action}")
+    session_token = str(session_id)
+    if not session_token or not all(c.isalnum() or c in "_.-" for c in session_token):
+        raise ValueError("invalid LDP TCP-AO session id")
+    command = f"op qkd_onbox.py action {token} session {session_token}"
+    if entries is not None:
+        payload = base64.urlsafe_b64encode(json.dumps(entries, separators=(",", ":")).encode()).decode()
+        command += f" entries-b64 {payload}"
+    try:
+        result = subprocess.run(
+            ["ssh", *ssh_transport_options(RPC_SSH_KEY), "-o", "ConnectTimeout=10", f"{SCRIPT_USER}@{link['peer_ip']}", command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        log_ldp_tcp_ao(f"RPC FAILED action={action} error_type={type(exc).__name__}", "ERROR")
+        return False, ""
+    stdout = result.stdout.decode(errors="ignore").strip()
+    stderr = result.stderr.decode(errors="ignore").strip()
+    if result.returncode != 0 or f"OK LDP-TCP-AO {token}" not in stdout:
+        log_ldp_tcp_ao(f"RPC FAILED action={action} rc={result.returncode} stdout={stdout[-300:]} stderr={stderr[-300:]}", "ERROR")
+        return False, stdout
+    log_ldp_tcp_ao(f"RPC OK action={action} peer={link['peer_ip']}")
+    return True, stdout
+
+
+def _ldp_tcp_ao_decode_check(output):
+    marker = "OK LDP-TCP-AO ldp-tcp-ao-check "
+    index = output.find(marker)
+    if index < 0:
+        raise RuntimeError("remote LDP TCP-AO check result missing")
+    encoded = output[index + len(marker):].splitlines()[0].strip()
+    payload = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode())
+    if not isinstance(payload, dict):
+        raise RuntimeError("remote LDP TCP-AO check payload invalid")
+    return payload
+
+
+def _ldp_tcp_ao_entries_for_install(session_id, session, link, descriptors, key_material_by_slot=None):
+    key_material_by_slot = key_material_by_slot or {}
+    algorithm = str(session.get("cryptographic_algorithm", "aes-128-cmac-96"))
+    result = []
+    for descriptor in descriptors:
+        slot = int(descriptor["slot"])
+        key_id = str(descriptor["key_id"])
+        if key_id == "bootstrap-seed":
+            material = bytes.fromhex(str(session["seed_secret"]))
+        elif str(slot) in key_material_by_slot:
+            material = base64.b64decode(key_material_by_slot[str(slot)])
+        else:
+            encoded, details = do_dec(link["peer_sae"], key_id, return_details=True)
+            if not encoded:
+                log_ldp_tcp_ao(f"KME DEC FAILED session={session_id} slot={slot} reason={details.get('reason_code')}", "ERROR")
+                raise RuntimeError(f"ETSI 014 dec_keys failed for LDP slot={slot}")
+            material = base64.b64decode(encoded)
+            log_ldp_tcp_ao(f"KME DEC OK session={session_id} slot={slot} key_id={key_id}")
+        secret = derive_ldp_tcp_ao_secret(material, session_id, slot, key_id, algorithm)
+        result.append({"slot": slot, "key_id": key_id, "secret": secret, "start_epoch": int(descriptor["start_epoch"])})
+    return result
+
+
+def _install_ldp_tcp_ao_entries(session_id, session, entries, activate=False, confirmed_minutes=None):
+    endpoint = (session.get("endpoints") or {}).get(DEVICE_NAME)
+    if not isinstance(endpoint, dict):
+        raise RuntimeError(f"LDP TCP-AO local endpoint missing for {DEVICE_NAME}")
+    commands = build_ldp_tcp_ao_junos_commands(session, DEVICE_NAME, endpoint["peer_address"], entries, activate=activate)
+    if not commit_bgp_tcp_ao_commands(f"LDP-{session_id}", commands, confirmed_minutes=confirmed_minutes, protocol="LDP"):
+        return False
+    log_ldp_tcp_ao(f"KEYS INSTALLED session={session_id} slots={[item['slot'] for item in entries]} activate={activate}")
+    return True
+
+
+def _ldp_tcp_ao_peer_action(session_id, action, entries=None):
+    session = ldp_tcp_ao_session_config(session_id)
+    state = load_ldp_tcp_ao_state(session_id)
+    if action == "ldp-tcp-ao-check":
+        require_unauth = state.get("phase") in ("uninitialized", "preparing", "prepared")
+        info = _ldp_tcp_ao_check(session_id, session, require_unauthenticated=require_unauth)
+        payload = {
+            "device": DEVICE_NAME,
+            "peer_address": info["peer_address"],
+            "state": info["state"],
+            "authenticated": info["authenticated"],
+            "auth_lines": info["auth_lines"],
+            "observed_epoch": int(time.time()),
+        }
+        encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+        print(f"OK LDP-TCP-AO ldp-tcp-ao-check {encoded}")
+        return True
+
+    peer_name, link = _ldp_tcp_ao_peer_link(session)
+    if action == "ldp-tcp-ao-prepare-ring":
+        if state.get("phase") not in ("uninitialized", "preparing", "prepared"):
+            raise RuntimeError(f"cannot prepare LDP AO ring from phase={state.get('phase')}")
+        _ldp_tcp_ao_check(session_id, session, require_unauthenticated=True)
+        if not isinstance(entries, list) or len(entries) != int(session["key_count"]):
+            raise RuntimeError("LDP AO bootstrap ring count mismatch")
+        local = _ldp_tcp_ao_entries_for_install(session_id, session, link, entries)
+        if not _install_ldp_tcp_ao_entries(session_id, session, local):
+            raise RuntimeError("LDP AO peer keychain preparation failed")
+        state.update({
+            "phase": "prepared",
+            "ring": [{key: item[key] for key in ("slot", "key_id", "start_epoch")} for item in entries],
+            "rotation_count": 0,
+        })
+        save_ldp_tcp_ao_state(session_id, state)
+        log_ldp_tcp_ao(f"RING PREPARED session={session_id} key_count={len(entries)} keychain={session['keychain_name']}")
+        print("OK LDP-TCP-AO ldp-tcp-ao-prepare-ring")
+        return True
+
+    if action == "ldp-tcp-ao-install-key":
+        if state.get("phase") != "active":
+            raise RuntimeError(f"cannot rotate LDP AO key from phase={state.get('phase')}")
+        _ldp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+        if not isinstance(entries, list) or len(entries) != 1:
+            raise RuntimeError("LDP AO rotation requires exactly one key")
+        wanted = entries[0]
+        current = next((item for item in state.get("ring", []) if int(item.get("slot", -1)) == int(wanted["slot"])), None)
+        if current and current.get("key_id") == wanted.get("key_id") and int(current.get("start_epoch", 0)) == int(wanted.get("start_epoch", 0)):
+            print("OK LDP-TCP-AO ldp-tcp-ao-install-key")
+            return True
+        local = _ldp_tcp_ao_entries_for_install(session_id, session, link, entries)
+        if not _install_ldp_tcp_ao_entries(session_id, session, local):
+            raise RuntimeError("LDP AO peer rotation key commit failed")
+        ring = [item for item in state.get("ring", []) if int(item.get("slot", -1)) != int(wanted["slot"])]
+        ring.append({key: wanted[key] for key in ("slot", "key_id", "start_epoch")})
+        state["ring"] = ring
+        state["rotation_count"] = int(state.get("rotation_count", 0)) + 1
+        save_ldp_tcp_ao_state(session_id, state)
+        print("OK LDP-TCP-AO ldp-tcp-ao-install-key")
+        return True
+
+    if action == "ldp-tcp-ao-activate":
+        if state.get("phase") == "active":
+            _ldp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+            print("OK LDP-TCP-AO ldp-tcp-ao-activate")
+            return True
+        if state.get("phase") == "activation_pending":
+            current = discover_ldp_tcp_ao_session(session, DEVICE_NAME, require_unauthenticated=False)
+            if current["authenticated"]:
+                log_ldp_tcp_ao(f"ACTIVATION ALREADY PENDING session={session_id} no_commit_refresh=True")
+                print("OK LDP-TCP-AO ldp-tcp-ao-activate")
+                return True
+            state["phase"] = "prepared"
+            save_ldp_tcp_ao_state(session_id, state)
+            log_ldp_tcp_ao(f"CONFIRMED COMMIT ROLLED BACK session={session_id} action=explicit_retry", "WARN")
+        if state.get("phase") != "prepared":
+            raise RuntimeError(f"cannot activate LDP AO from phase={state.get('phase')}")
+        if not _install_ldp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_minutes=2):
+            raise RuntimeError("LDP AO peer activation commit failed")
+        state["phase"] = "activation_pending"
+        state["activation_confirm_deadline"] = int(time.time()) + 120
+        save_ldp_tcp_ao_state(session_id, state)
+        print("OK LDP-TCP-AO ldp-tcp-ao-activate")
+        return True
+
+    if action == "ldp-tcp-ao-confirm":
+        if state.get("phase") == "active":
+            _ldp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+            print("OK LDP-TCP-AO ldp-tcp-ao-confirm")
+            return True
+        if state.get("phase") != "activation_pending":
+            raise RuntimeError(f"cannot confirm LDP AO from phase={state.get('phase')}")
+        if not confirm_bgp_tcp_ao_commit(f"LDP-{session_id}"):
+            raise RuntimeError("LDP AO peer commit confirmation failed")
+        state["phase"] = "active"
+        save_ldp_tcp_ao_state(session_id, state)
+        print("OK LDP-TCP-AO ldp-tcp-ao-confirm")
+        return True
+
+    raise ValueError(f"unknown LDP TCP-AO action={action} peer={peer_name}")
+
+
+def _ldp_tcp_ao_wait_operational(session_id, session, link, timeout_seconds=60):
+    deadline = time.time() + int(timeout_seconds)
+    last_error = "not checked"
+    while time.time() < deadline:
+        try:
+            local = _ldp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+            peer_ok, output = _ldp_tcp_ao_rpc(link, "check", session_id, timeout=15)
+            if peer_ok:
+                remote = _ldp_tcp_ao_decode_check(output)
+                validate_bgp_tcp_ao_clock_offset(
+                    time.time(), remote.get("observed_epoch"), session.get("tolerance_seconds", 30)
+                )
+                keychain = session["keychain_name"].lower()
+                local_auth = " ".join(local.get("auth_lines", [])).lower()
+                remote_auth = " ".join(remote.get("auth_lines", [])).lower()
+                if (
+                    local["authenticated"]
+                    and remote.get("authenticated")
+                    and keychain in local_auth
+                    and keychain in remote_auth
+                    and "authentication-algorithm ao" in local_auth
+                    and "authentication-algorithm ao" in remote_auth
+                ):
+                    return True
+                last_error = "LDP AO keychain or algorithm not effective on both peers"
+            else:
+                last_error = output[-250:]
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(2)
+    log_ldp_tcp_ao(f"VERIFY TIMEOUT session={session_id} timeout_seconds={timeout_seconds} detail={last_error}", "ERROR")
+    return False
+
+
+def run_ldp_tcp_ao_start(session_id):
+    session = ldp_tcp_ao_session_config(session_id)
+    if session.get("master") != DEVICE_NAME:
+        raise RuntimeError(f"LDP TCP-AO bootstrap must run on master={session.get('master')}")
+    peer_name, link = _ldp_tcp_ao_peer_link(session)
+    state = load_ldp_tcp_ao_state(session_id)
+    if state.get("phase") == "active":
+        return run_ldp_tcp_ao_rotation_tick(session_id)
+
+    if state.get("phase") == "uninitialized":
+        _ldp_tcp_ao_check(session_id, session, require_unauthenticated=True)
+        peer_ok, peer_output = _ldp_tcp_ao_rpc(link, "check", session_id, timeout=15)
+        if not peer_ok:
+            raise RuntimeError(f"remote LDP discovery failed: {peer_output[-300:]}")
+        remote = _ldp_tcp_ao_decode_check(peer_output)
+        if remote.get("authenticated"):
+            raise RuntimeError("remote LDP session already has TCP authentication")
+        skew = validate_bgp_tcp_ao_clock_offset(
+            time.time(), remote.get("observed_epoch"), session.get("tolerance_seconds", 30)
+        )
+        log_ldp_tcp_ao(f"CLOCK CHECK OK session={session_id} skew_seconds={skew}")
+
+        key_ids = []
+        pending_material = {}
+        for slot in range(1, int(session["key_count"])):
+            key_id, material, details = do_enc(link["peer_sae"], return_details=True)
+            if not key_id or not material:
+                log_ldp_tcp_ao(
+                    f"BOOTSTRAP ABORTED session={session_id} slot={slot} reason={details.get('reason_code')}",
+                    "ERROR",
+                )
+                raise RuntimeError(f"ETSI enc_keys failed for LDP slot={slot}")
+            key_ids.append(str(key_id))
+            pending_material[str(slot)] = str(material)
+            log_ldp_tcp_ao(f"KME ENC OK session={session_id} slot={slot} key_id={key_id}")
+
+        activation_epoch = int(time.time())
+        ring = build_bgp_tcp_ao_initial_ring(
+            key_ids,
+            activation_epoch,
+            int(session["rotation_interval_seconds"]),
+        )
+        state.update({
+            "phase": "preparing",
+            "ring": ring,
+            "pending_key_material": pending_material,
+            "rotation_count": 0,
+            "bootstrap_epoch": activation_epoch,
+        })
+        save_ldp_tcp_ao_state(session_id, state)
+        log_ldp_tcp_ao(
+            f"BOOTSTRAP START session={session_id} key_count={len(ring)} "
+            f"timer_seconds={session['rotation_interval_seconds']} peer={peer_name}"
+        )
+
+    if state.get("phase") == "preparing":
+        descriptors = [
+            {key: item[key] for key in ("slot", "key_id", "start_epoch")}
+            for item in state.get("ring", [])
+        ]
+        peer_ok, peer_output = _ldp_tcp_ao_rpc(link, "prepare-ring", session_id, descriptors, timeout=180)
+        if not peer_ok:
+            raise RuntimeError(f"remote LDP ring preparation failed: {peer_output[-300:]}")
+        local_entries = _ldp_tcp_ao_entries_for_install(
+            session_id,
+            session,
+            link,
+            descriptors,
+            key_material_by_slot=state.get("pending_key_material", {}),
+        )
+        if not _install_ldp_tcp_ao_entries(session_id, session, local_entries):
+            raise RuntimeError("local LDP ring preparation commit failed")
+        state["phase"] = "prepared"
+        save_ldp_tcp_ao_state(session_id, state)
+
+    if state.get("phase") == "activation_pending":
+        current = discover_ldp_tcp_ao_session(session, DEVICE_NAME, require_unauthenticated=False)
+        if not current["authenticated"]:
+            state["phase"] = "prepared"
+            state.pop("activation_confirm_deadline", None)
+            save_ldp_tcp_ao_state(session_id, state)
+            log_ldp_tcp_ao(f"LOCAL CONFIRMED COMMIT ROLLED BACK session={session_id} action=explicit_retry", "WARN")
+
+    if state.get("phase") == "prepared":
+        peer_ok, peer_output = _ldp_tcp_ao_rpc(link, "activate", session_id, timeout=60)
+        if not peer_ok:
+            raise RuntimeError(f"remote LDP AO activation failed: {peer_output[-300:]}")
+        if not _install_ldp_tcp_ao_entries(session_id, session, [], activate=True, confirmed_minutes=2):
+            raise RuntimeError("local LDP AO activation commit failed")
+        state["phase"] = "activation_pending"
+        state["activation_confirm_deadline"] = int(time.time()) + 120
+        save_ldp_tcp_ao_state(session_id, state)
+
+    if state.get("phase") == "activation_pending":
+        if not _ldp_tcp_ao_wait_operational(session_id, session, link):
+            raise RuntimeError("LDP AO session did not return Operational; confirmed commits will roll back")
+        peer_ok, peer_output = _ldp_tcp_ao_rpc(link, "confirm", session_id, timeout=60)
+        if not peer_ok:
+            raise RuntimeError(f"remote LDP AO confirmation failed: {peer_output[-300:]}")
+        if not confirm_bgp_tcp_ao_commit(f"LDP-{session_id}"):
+            raise RuntimeError("local LDP AO confirmation failed")
+        state["phase"] = "active"
+        state.pop("pending_key_material", None)
+        state["activated_at"] = int(time.time())
+        save_ldp_tcp_ao_state(session_id, state)
+        log_ldp_tcp_ao(f"BOOTSTRAP COMPLETE session={session_id} key_count={len(state.get('ring', []))}")
+
+    print("OK LDP-TCP-AO start")
+    return True
+
+
+def run_ldp_tcp_ao_rotation_tick(session_id):
+    session = ldp_tcp_ao_session_config(session_id)
+    if session.get("master") != DEVICE_NAME:
+        return True
+    state = load_ldp_tcp_ao_state(session_id)
+    if state.get("phase") == "activation_pending":
+        log_ldp_tcp_ao(f"ACTIVATION PENDING session={session_id} no_commit_refresh=True", "WARN")
+        return True
+    if state.get("phase") in ("preparing", "prepared"):
+        return run_ldp_tcp_ao_start(session_id)
+    if state.get("phase") != "active":
+        return True
+
+    _ldp_tcp_ao_check(session_id, session, require_unauthenticated=False)
+    peer_name, link = _ldp_tcp_ao_peer_link(session)
+    transaction = state.get("transaction")
+    if not isinstance(transaction, dict):
+        plan = plan_bgp_tcp_ao_rotation(
+            state.get("ring", []),
+            int(time.time()),
+            int(session["rotation_interval_seconds"]),
+            int(session.get("tolerance_seconds", 30)),
+        )
+        if plan["action"] == "wait":
+            log_ldp_tcp_ao(f"ROTATION WAIT session={session_id} reason={plan['reason']}")
+            return True
+        key_id, material, details = do_enc(link["peer_sae"], return_details=True)
+        if not key_id or not material:
+            log_ldp_tcp_ao(
+                f"ROTATION ABORTED session={session_id} reason={details.get('reason_code')}",
+                "ERROR",
+            )
+            return False
+        entry = {
+            **plan["entry"],
+            "key_id": str(key_id),
+            "key_material": str(material),
+        }
+        transaction = {"phase": "installing", "entry": entry}
+        state["transaction"] = transaction
+        save_ldp_tcp_ao_state(session_id, state)
+        log_ldp_tcp_ao(
+            f"KME ENC OK session={session_id} peer={peer_name} slot={entry['slot']} "
+            f"key_id={entry['key_id']} start_time={format_epoch_human(entry['start_epoch'])}"
+        )
+    entry = transaction.get("entry")
+    if not isinstance(entry, dict) or not entry.get("key_material"):
+        log_ldp_tcp_ao(f"ROTATION BLOCKED session={session_id} reason=missing_enc_material", "ERROR")
+        return False
+    descriptor = [{key: entry[key] for key in ("slot", "key_id", "start_epoch")}]
+    peer_ok, peer_output = _ldp_tcp_ao_rpc(link, "install-key", session_id, descriptor)
+    if not peer_ok:
+        log_ldp_tcp_ao(f"ROTATION RETRY session={session_id} phase=peer_install", "WARN")
+        return False
+    local_entries = _ldp_tcp_ao_entries_for_install(
+        session_id,
+        session,
+        link,
+        descriptor,
+        key_material_by_slot={str(entry["slot"]): entry["key_material"]},
+    )
+    if not _install_ldp_tcp_ao_entries(session_id, session, local_entries):
+        log_ldp_tcp_ao(f"ROTATION RETRY session={session_id} phase=local_install", "WARN")
+        return False
+
+    ring = [item for item in state.get("ring", []) if int(item.get("slot", -1)) != int(entry["slot"])]
+    ring.append(descriptor[0])
+    state["ring"] = ring
+    state["rotation_count"] = int(state.get("rotation_count", 0)) + 1
+    state["last_rotation_timestamp"] = int(time.time())
+    state["transaction"] = None
+    save_ldp_tcp_ao_state(session_id, state)
+    log_ldp_tcp_ao(
+        f"ROTATION COMPLETE session={session_id} slot={entry['slot']} "
+        f"rotation_count={state['rotation_count']} next_start_time={format_epoch_human(entry['start_epoch'])}"
+    )
+    return True
+
+
+def run_master_ldp_tcp_ao():
+    if not LDP_TCP_AO_CONFIG.get("enabled"):
+        return
+    for session_id, session in (LDP_TCP_AO_CONFIG.get("sessions") or {}).items():
+        if session.get("master") != DEVICE_NAME:
+            continue
+        try:
+            run_ldp_tcp_ao_rotation_tick(session_id)
+        except Exception as exc:
+            log_ldp_tcp_ao(
+                f"CYCLE FAILED session={session_id} error_type={type(exc).__name__} error={str(exc)}",
+                "ERROR",
+            )
 
 
 def _get_all_junos_auth_keys_for_user(username):
@@ -3565,15 +4190,10 @@ def junos_start_time_from_epoch(epoch_seconds):
     return time.strftime("%Y-%m-%d.%H:%M:%S +0000", time.gmtime(int(epoch_seconds)))
 
 
-def build_bgp_tcp_ao_junos_commands(session, local_device, group_name, neighbor_address, entries, activate=False):
+def build_tcp_ao_keychain_commands(session, local_device, entries):
     keychain = str(session.get("keychain_name") or "")
     if not keychain or len(keychain) > 32 or not all(c.isalnum() or c in "_-" for c in keychain):
         raise ValueError("invalid TCP-AO keychain name")
-    if not group_name or not all(c.isalnum() or c in "_.-" for c in str(group_name)):
-        raise ValueError("invalid BGP group name")
-    if not neighbor_address or not all(c.isalnum() or c in ".:%" for c in str(neighbor_address)):
-        raise ValueError("invalid BGP neighbor address")
-
     endpoint = (session.get("endpoints") or {}).get(local_device)
     if not isinstance(endpoint, dict):
         raise ValueError(f"missing TCP-AO endpoint configuration for {local_device}")
@@ -3618,11 +4238,36 @@ def build_bgp_tcp_ao_junos_commands(session, local_device, group_name, neighbor_
             ]
         )
 
+    return commands
+
+
+def build_bgp_tcp_ao_junos_commands(session, local_device, group_name, neighbor_address, entries, activate=False):
+    if not group_name or not all(c.isalnum() or c in "_.-" for c in str(group_name)):
+        raise ValueError("invalid BGP group name")
+    if not neighbor_address or not all(c.isalnum() or c in ".:%" for c in str(neighbor_address)):
+        raise ValueError("invalid BGP neighbor address")
+    commands = build_tcp_ao_keychain_commands(session, local_device, entries)
     if activate:
+        keychain = str(session["keychain_name"])
         commands.extend(
             [
                 f"set protocols bgp group {group_name} neighbor {neighbor_address} authentication-algorithm ao",
                 f"set protocols bgp group {group_name} neighbor {neighbor_address} authentication-key-chain {keychain}",
+            ]
+        )
+    return commands
+
+
+def build_ldp_tcp_ao_junos_commands(session, local_device, peer_address, entries, activate=False):
+    if not peer_address or not all(c.isalnum() or c in ".:%" for c in str(peer_address)):
+        raise ValueError("invalid LDP peer address")
+    commands = build_tcp_ao_keychain_commands(session, local_device, entries)
+    if activate:
+        keychain = str(session["keychain_name"])
+        commands.extend(
+            [
+                f"set protocols ldp session {peer_address} authentication-algorithm ao",
+                f"set protocols ldp session {peer_address} authentication-key-chain {keychain}",
             ]
         )
     return commands
@@ -7191,6 +7836,11 @@ def run_master():
     except Exception as exc:
         log_bgp_tcp_ao(f"CYCLE FAILED error_type={type(exc).__name__} error={str(exc)}", "ERROR")
 
+    try:
+        run_master_ldp_tcp_ao()
+    except Exception as exc:
+        log_ldp_tcp_ao(f"CYCLE FAILED error_type={type(exc).__name__} error={str(exc)}", "ERROR")
+
     return
 
 
@@ -7258,6 +7908,40 @@ def main():
                 log_bgp_tcp_ao(
                     f"ACTION FAILED action={action} session={session_id} "
                     f"error_type={type(exc).__name__} error={str(exc)}",
+                    "ERROR",
+                )
+                print(f"ERROR {action.upper()} {type(exc).__name__}: {str(exc)}")
+                sys.exit(1)
+            sys.exit(0 if ok else 1)
+
+        if action == "ldp-tcp-ao-start":
+            session_id = cli_argument_value("session")
+            if not session_id:
+                log_ldp_tcp_ao("START REJECTED reason=missing_session", "ERROR")
+                print("ERROR LDP-TCP-AO START MISSING SESSION")
+                sys.exit(1)
+            try:
+                ok = run_ldp_tcp_ao_start(session_id)
+            except Exception as exc:
+                log_ldp_tcp_ao(
+                    f"START FAILED session={session_id} error_type={type(exc).__name__} error={str(exc)}",
+                    "ERROR",
+                )
+                print(f"ERROR LDP-TCP-AO START {type(exc).__name__}: {str(exc)}")
+                sys.exit(1)
+            sys.exit(0 if ok else 1)
+
+        if action.startswith("ldp-tcp-ao-"):
+            session_id = cli_argument_value("session")
+            if not session_id:
+                log_ldp_tcp_ao(f"ACTION REJECTED action={action} reason=missing_session", "ERROR")
+                print(f"ERROR {action.upper()} MISSING SESSION")
+                sys.exit(1)
+            try:
+                ok = _ldp_tcp_ao_peer_action(session_id, action, cli_bgp_tcp_ao_entries())
+            except Exception as exc:
+                log_ldp_tcp_ao(
+                    f"ACTION FAILED action={action} session={session_id} error_type={type(exc).__name__} error={str(exc)}",
                     "ERROR",
                 )
                 print(f"ERROR {action.upper()} {type(exc).__name__}: {str(exc)}")
