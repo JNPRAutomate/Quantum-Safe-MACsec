@@ -17,6 +17,7 @@ Public commands:
     status          show runtime status
     restart         restart KME containers
     validate        validate deployed KME lab
+    clean           remove managed embedded KME containers and local DB
     stop            stop KME lab
     destroy         destroy KME lab, requires --force
 
@@ -308,6 +309,17 @@ def cmd_onbox_deploy(args: argparse.Namespace) -> None:
     run_onbox_deploy(config_path=args.onbox_config, dry_run=args.dry_run)
 
 
+def cmd_clean(args: argparse.Namespace) -> None:
+    run_clean = load_symbol("lib.kme.onbox_clean", "run_onbox_clean")
+    banner("KME: clean")
+    run_clean(
+        config_path=args.onbox_config,
+        dry_run=args.dry_run,
+        force=args.force,
+        onbox_only=args.onbox_only,
+    )
+
+
 def cmd_stop(args: argparse.Namespace) -> None:
     run_stop = load_symbol("lib.kme.stop", "run_stop", required=False)
     if run_stop is None:
@@ -471,6 +483,24 @@ def build_parser() -> argparse.ArgumentParser:
     add_onbox_args(p_onbox_deploy)
     p_onbox_deploy.add_argument("--dry-run", action="store_true", help="Show intended actions without changing anything")
     p_onbox_deploy.set_defaults(func=cmd_onbox_deploy)
+
+    p_clean = subparsers.add_parser(
+        "clean",
+        help="Remove managed on-box KME containers and optionally the local database",
+    )
+    add_onbox_args(p_clean)
+    p_clean.add_argument(
+        "--onbox-only",
+        action="store_true",
+        help="Keep the local PostgreSQL container and its volume",
+    )
+    p_clean.add_argument("--dry-run", action="store_true", help="Show intended actions without changing anything")
+    p_clean.add_argument(
+        "--force",
+        action="store_true",
+        help="Perform the destructive cleanup after reviewing the dry-run",
+    )
+    p_clean.set_defaults(func=cmd_clean)
 
     p_stop = subparsers.add_parser("stop", help="Stop KME lab")
     add_common_args(p_stop)

@@ -19,6 +19,7 @@ Commands:
 - `status`
 - `restart`
 - `validate`
+- `clean` (embedded on-box KME only; separate from Compose `destroy`)
 - `stop`
 - `destroy`
 
@@ -140,6 +141,25 @@ KME-only restart (DB untouched).
 ## validate
 
 Validate deployment health.
+
+## clean (embedded on-box KME)
+
+`clean` removes only the managed `etsi14-kme` containers and their KME
+certificate directories from devices in `config/runtime/devices.yaml`. By
+default it also stops the local PostgreSQL Compose service and removes the
+configured named volume. It preserves Docker images and router networking.
+
+Preview first, then explicitly authorize destructive cleanup:
+
+```bash
+python3 kme_orchestrator.py clean --onbox-config config/kme/onbox.yaml --dry-run
+python3 kme_orchestrator.py clean --onbox-config config/kme/onbox.yaml --force
+```
+
+Use `--onbox-only --force` to preserve the PostgreSQL container and volume
+during a live cleanup. This command is not an alias for Compose `destroy`; the
+generic KME lifecycle commands target the off-box Compose backend. It does not
+remove containers outside the managed on-box KME scope.
 
 ## stop
 
