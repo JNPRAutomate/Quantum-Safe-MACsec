@@ -60,7 +60,7 @@ from lib.qkd.inventory_builder import (
 from lib.qkd.pki_self_signed import build_self_signed_pki
 from lib.qkd.pki_hierarchical import build_hierarchical_pki
 from lib.qkd.onbox_builder import build_onbox_artifacts
-from lib.qkd.provisioning import configure_tcp_ao_op_script, run_provisioning
+from lib.qkd.provisioning import configure_tcp_ao_runtime_access, run_provisioning
 from lib.qkd.identity import ssh_script_user_onbox_cmd, validate_all_devices
 from lib.qkd.clean import handle_clean
 from lib.qkd.bgp_tcp_ao import (
@@ -1020,7 +1020,13 @@ def deploy_onbox(
                 log.debug(f"[{name}] ONBOX install output:\n{output}")
 
             if register_op_script:
-                configure_tcp_ao_op_script(dev, name)
+                configure_tcp_ao_runtime_access(
+                    dev,
+                    name,
+                    device,
+                    devices,
+                    inventory_base,
+                )
 
             sync_to_re1_if_needed(dev, name, extra_paths=remote_sidecar_ops)
 

@@ -938,6 +938,17 @@ def apply_script_user_rpc_keys_config(dev, device_name, device_dict, all_devices
     sync_authorized_keys_from_config(dev, device_name, script_user)
 
 
+def configure_tcp_ao_runtime_access(dev, device_name, device_dict, all_devices_dict, base):
+    configure_tcp_ao_op_script(dev, device_name)
+    apply_script_user_rpc_keys_config(
+        dev,
+        device_name,
+        device_dict,
+        all_devices_dict,
+        base,
+    )
+
+
 def sync_authorized_keys_from_config(dev, device_name, script_user):
     """Ensure every SSH key configured for script_user is in authorized_keys.
 

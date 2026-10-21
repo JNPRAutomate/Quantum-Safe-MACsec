@@ -95,6 +95,40 @@ def test_tcp_ao_op_script_registration_only_sets_python_op_script(monkeypatch):
     ]
 
 
+def test_tcp_ao_runtime_access_registers_script_then_distributes_peer_keys(monkeypatch):
+    calls = []
+    device = SimpleNamespace()
+    device_config = {"script_user": "admin"}
+    all_devices = {"EVO1": device_config, "EVO2": {"script_user": "admin"}}
+    base = {"secrets": {"script_user": "admin"}}
+
+    monkeypatch.setattr(
+        provisioning,
+        "configure_tcp_ao_op_script",
+        lambda current_device, name: calls.append(("op_script", current_device, name)),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "apply_script_user_rpc_keys_config",
+        lambda current_device, name, current_config, devices, inventory: calls.append(
+            ("rpc_keys", current_device, name, current_config, devices, inventory)
+        ),
+    )
+
+    provisioning.configure_tcp_ao_runtime_access(
+        device,
+        "EVO1",
+        device_config,
+        all_devices,
+        base,
+    )
+
+    assert calls == [
+        ("op_script", device, "EVO1"),
+        ("rpc_keys", device, "EVO1", device_config, all_devices, base),
+    ]
+
+
 def test_direct_rpc_peers_resolve_names_ips_and_duplicates():
     device = {
         "links": [
