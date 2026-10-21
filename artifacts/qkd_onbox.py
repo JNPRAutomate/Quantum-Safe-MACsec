@@ -1028,6 +1028,7 @@ def save_bgp_tcp_ao_state(session_id, state):
         tmp.chmod(0o600)
     except OSError:
         pass
+    os.replace(str(tmp), str(path))
 
 
 def ldp_tcp_ao_session_config(session_id):

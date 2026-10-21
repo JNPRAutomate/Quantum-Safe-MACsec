@@ -2,6 +2,7 @@ import json
 import ast
 import base64
 import copy
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -142,6 +143,32 @@ def write_ldp_profile(tmp_path):
     profile = tmp_path / "ldp_tcp_ao.yaml"
     profile.write_text(yaml.safe_dump(LDP_PROFILE), encoding="utf-8")
     return profile
+
+
+def test_bgp_tcp_ao_state_save_persists_pending_keys_atomically(tmp_path):
+    save = load_onbox_functions("save_bgp_tcp_ao_state")["save_bgp_tcp_ao_state"]
+    state_path = tmp_path / "qkd_bgp_tcp_ao_EVO1-EVO2.json"
+    save.__globals__.update(
+        {
+            "Path": Path,
+            "json": json,
+            "os": os,
+            "bgp_tcp_ao_state_file": lambda _session_id: str(state_path),
+        }
+    )
+
+    save(
+        "EVO1-EVO2",
+        {
+            "phase": "preparing",
+            "pending_key_material": {"1": "ZW5jLWtleS1tYXRlcmlhbA=="},
+        },
+    )
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["pending_key_material"] == {"1": "ZW5jLWtleS1tYXRlcmlhbA=="}
+    assert state_path.stat().st_mode & 0o777 == 0o600
+    assert not Path(f"{state_path}.tmp").exists()
 
 
 def test_load_bgp_tcp_ao_settings_keeps_seed_and_separates_ring(tmp_path):
