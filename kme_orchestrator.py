@@ -463,6 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_onbox_deploy = subparsers.add_parser("onbox-deploy", help="Deploy embedded KME containers onto selected routers")
     add_onbox_args(p_onbox_deploy)
+    p_onbox_deploy.add_argument("--dry-run", action="store_true", help="Show intended actions without changing anything")
     p_onbox_deploy.set_defaults(func=cmd_onbox_deploy)
 
     p_stop = subparsers.add_parser("stop", help="Stop KME lab")
