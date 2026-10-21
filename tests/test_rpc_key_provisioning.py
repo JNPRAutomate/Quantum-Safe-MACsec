@@ -48,6 +48,53 @@ def test_script_config_honors_resolved_runtime_user(monkeypatch, runtime_user):
     assert not any("etsi_user" in command for command in loaded)
 
 
+def test_tcp_ao_op_script_registration_only_sets_python_op_script(monkeypatch):
+    loaded = []
+    commits = []
+
+    class FakeConfig:
+        def __init__(self, _dev):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def load(self, commands, **kwargs):
+            loaded.append((commands.splitlines(), kwargs))
+
+    monkeypatch.setattr(provisioning, "Config", FakeConfig)
+    monkeypatch.setattr(
+        provisioning,
+        "commit_safely",
+        lambda dev, cu, name, **kwargs: commits.append((name, kwargs)),
+    )
+
+    provisioning.configure_tcp_ao_op_script(SimpleNamespace(), "EVO1")
+
+    assert loaded == [
+        (
+            [
+                "set system scripts language python3",
+                "set system scripts op file qkd_onbox.py",
+            ],
+            {"format": "set", "merge": True},
+        )
+    ]
+    assert commits == [
+        (
+            "EVO1",
+            {
+                "sync": True,
+                "phase": "TCP_AO_OP_SCRIPT",
+                "detail": "script=qkd_onbox.py",
+            },
+        )
+    ]
+
+
 def test_direct_rpc_peers_resolve_names_ips_and_duplicates():
     device = {
         "links": [

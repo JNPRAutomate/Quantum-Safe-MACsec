@@ -813,6 +813,24 @@ def configure_qkd_scripts(dev, name, base, script_user=None):
     # Attempting to sync them causes data loss of existing keys on device
 
 
+def configure_tcp_ao_op_script(dev, name):
+    op_cfg = render_common_template(
+        "op_script.j2",
+        {"script_name": ONBOX_SCRIPT_NAME},
+    )
+    with Config(dev) as cu:
+        cu.load(op_cfg, format="set", merge=True)
+        commit_safely(
+            dev,
+            cu,
+            name,
+            sync=True,
+            phase="TCP_AO_OP_SCRIPT",
+            detail=f"script={ONBOX_SCRIPT_NAME}",
+        )
+    print(f"[{name}] TCP-AO op script registration configured OK")
+
+
 def direct_rpc_peer_names(device_name, device_dict, all_devices_dict):
     ip_to_name = {}
     for name, device in (all_devices_dict or {}).items():

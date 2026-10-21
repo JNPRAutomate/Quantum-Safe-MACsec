@@ -60,7 +60,7 @@ from lib.qkd.inventory_builder import (
 from lib.qkd.pki_self_signed import build_self_signed_pki
 from lib.qkd.pki_hierarchical import build_hierarchical_pki
 from lib.qkd.onbox_builder import build_onbox_artifacts
-from lib.qkd.provisioning import run_provisioning
+from lib.qkd.provisioning import configure_tcp_ao_op_script, run_provisioning
 from lib.qkd.identity import ssh_script_user_onbox_cmd, validate_all_devices
 from lib.qkd.clean import handle_clean
 from lib.qkd.bgp_tcp_ao import (
@@ -587,6 +587,7 @@ def deploy_onbox(
     upload_user=None,
     upload_password=None,
     shipment_preload=False,
+    register_op_script=False,
 ):
     """
     Upload qkd_onbox.py through the selected transport user, then install it
@@ -1017,6 +1018,9 @@ def deploy_onbox(
 
             if output:
                 log.debug(f"[{name}] ONBOX install output:\n{output}")
+
+            if register_op_script:
+                configure_tcp_ao_op_script(dev, name)
 
             sync_to_re1_if_needed(dev, name, extra_paths=remote_sidecar_ops)
 
@@ -1794,6 +1798,7 @@ def handle_deploy(args):
         upload_user=upload_user,
         upload_password=upload_password,
         shipment_preload=args.shipment_preload,
+        register_op_script=bgp_tcp_ao_requested or ldp_tcp_ao_requested,
     )
     print_step_banner("3/5", "ONBOX FILE DEPLOY", "END")
 
