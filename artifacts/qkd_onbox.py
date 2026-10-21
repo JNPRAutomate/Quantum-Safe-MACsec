@@ -1099,12 +1099,20 @@ def discover_bgp_tcp_ao_neighbor(session, local_device, require_unauthenticated=
     )
     stdout = result.stdout.decode(errors="ignore")
     stderr = result.stderr.decode(errors="ignore")
-    if result.returncode != 0 or junos_output_has_error(stdout, stderr):
-        raise RuntimeError(f"BGP neighbor query failed device={local_device} neighbor={neighbor}")
+    peer_match = re.search(
+        rf"^\s*Peer:\s*{re.escape(neighbor)}(?:\+|\s)",
+        stdout,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if junos_output_has_error(stdout, stderr) or not peer_match:
+        raise RuntimeError(
+            f"BGP neighbor query failed device={local_device} neighbor={neighbor} "
+            f"rc={result.returncode} stderr={stderr[-300:]} stdout={stdout[-500:]}"
+        )
     group_match = re.search(r"^\s*Group:\s*(\S+)", stdout, re.MULTILINE | re.IGNORECASE)
     peer_line = next((line for line in stdout.splitlines() if re.search(r"^\s*Peer:\s*", line, re.IGNORECASE)), "")
     as_match = re.search(r"\bAS\s+(\d+)\b", peer_line)
-    state_match = re.search(r"^\s*(?:BGP )?State:\s*(\w+)", stdout, re.MULTILINE | re.IGNORECASE)
+    state_match = re.search(r"\bState:\s*(\w+)", stdout, re.IGNORECASE)
     if not group_match or group_match.group(1) != expected_group:
         raise RuntimeError(
             f"BGP group mismatch device={local_device} expected={expected_group} "

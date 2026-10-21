@@ -447,6 +447,39 @@ def test_bgp_ao_discovery_is_peer_scoped_and_fails_closed(
         assert result["state"] == "Established"
 
 
+def test_bgp_ao_discovery_accepts_neighbor_output_with_license_warning_and_inline_state(monkeypatch):
+    discover = load_onbox_functions(
+        "discover_bgp_tcp_ao_neighbor",
+        "junos_output_has_error",
+    )["discover_bgp_tcp_ao_neighbor"]
+    output = (
+        "Warning: License key missing; requires 'BGP' license\n\n"
+        "Peer: 10.255.0.1+179 AS 65002 Local: 10.255.0.0+51884 AS 65001\n"
+        "  Group: LAB-EVO               Routing-Instance: master\n"
+        "  Type: External    State: Established    Flags: <Sync>\n"
+        "  Last State: OpenConfirm   Last Event: RecvKeepAlive\n"
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[], returncode=256, stdout=output.encode(), stderr=b""
+        ),
+    )
+    discover.__globals__["re"] = re
+    discover.__globals__["subprocess"] = subprocess
+    discover.__globals__["CLI_PATH"] = "cli"
+    config = {
+        "group_name": "LAB-EVO",
+        "endpoints": {"EVO1": {"neighbor_address": "10.255.0.1", "peer_as": 65002}},
+    }
+
+    result = discover(config, "EVO1")
+
+    assert result["state"] == "Established"
+    assert result["neighbor_address"] == "10.255.0.1"
+
+
 @pytest.mark.parametrize(
     "auth_type,should_fail",
     [
