@@ -1469,6 +1469,7 @@ def handle_deploy(args):
     )
 
     script_user = get_script_user(inventory_base)
+    QKD["SCRIPT_USER"] = script_user
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
@@ -1574,7 +1575,6 @@ def handle_deploy(args):
             "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
         )
 
-    QKD["SCRIPT_USER"] = script_user
     if bootstrap_user:
         QKD["DEPLOY_USER"] = bootstrap_user
 
