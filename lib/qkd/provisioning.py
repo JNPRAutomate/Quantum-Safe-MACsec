@@ -944,9 +944,12 @@ def sync_authorized_keys_from_config(dev, device_name, script_user):
         print(f"[{device_name}] WARN no SSH keys configured for {script_user}; authorized_keys sync skipped")
         return
 
-    ssh_dir = f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{script_user}/.ssh"
+    ssh_home = f"{QKD.get('SSH_HOME_BASE', '/var/home')}/{script_user}"
+    ssh_home_q = shlex.quote(ssh_home)
+    ssh_dir = f"{ssh_home}/.ssh"
     auth_path = f"{ssh_dir}/authorized_keys"
     parts = [
+        f"chmod 2750 {ssh_home_q} || exit 1",
         f"mkdir -p {shlex.quote(ssh_dir)}",
         f"touch {shlex.quote(auth_path)}",
     ]

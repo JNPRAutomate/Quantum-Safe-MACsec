@@ -198,6 +198,7 @@ def test_authorized_keys_sync_appends_every_configured_key_without_truncating():
     command = shell_commands[0]
     assert "ssh-ed25519 AAAAORCH etsi_user@qkd-script-bootstrap" in command
     assert "ssh-ed25519 AAAAEVO1 qkd-rpc@EVO1" in command
+    assert "chmod 2750 /var/home/etsi_user || exit 1" in command
     assert "/var/home/etsi_user/.ssh/authorized_keys" in command
     assert ">> /var/home/etsi_user/.ssh/authorized_keys" in command
     assert "> /var/home/etsi_user/.ssh/authorized_keys" not in command.replace(">>", "")

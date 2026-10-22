@@ -716,6 +716,7 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
 
     return (
         "set -e; "
+        "chmod 2750 {home}; "
         "mkdir -p {ssh_dir}; "
         "touch {authorized_keys}; "
         "{append_public_key}"
@@ -735,6 +736,7 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
         "echo __QKD_SSH_HOME_FIX_OK__"
     ).format(
         user=shlex.quote(script_user),
+        home=shlex.quote(home),
         ssh_dir=shlex.quote(ssh_dir),
         authorized_keys=shlex.quote(authorized_keys),
         append_public_key=append_public_key,
@@ -858,13 +860,20 @@ def run_script_user_key_fix(
             _print_shell_output(name, label, "\n".join(transcript))
 
     try:
+        ssh_home = f"{ssh_home_base}/{script_user}"
         ssh_dir = f"{ssh_home_base}/{script_user}/.ssh"
 
-        _run(
-            f"mkdir -p {shlex.quote(ssh_dir)}; "
-            f"chown {shlex.quote(script_user)} {shlex.quote(ssh_dir)}; "
-            f"chmod 700 {shlex.quote(ssh_dir)}"
+        home_setup = _run(
+            f"chmod 2750 {shlex.quote(ssh_home)} && "
+            f"mkdir -p {shlex.quote(ssh_dir)} && "
+            f"chown {shlex.quote(script_user)} {shlex.quote(ssh_dir)} && "
+            f"chmod 700 {shlex.quote(ssh_dir)} && "
+            "echo __QKD_HOME_SSH_SETUP_OK__"
         )
+        if "__QKD_HOME_SSH_SETUP_OK__" not in home_setup:
+            _dump_transcript()
+            print("[%s] FAIL %s: SCRIPT_USER home permissions could not be secured" % (name, label))
+            return False
 
         key_probe = _run(f"ls -l {shlex.quote(key_path)}")
         generated = False
@@ -946,6 +955,7 @@ def sync_user_keypair_from_local(
     multiple routers: all routers get the same private/public keypair.
     """
     ssh_home_base = QKD.get("SSH_HOME_BASE", "/var/home")
+    ssh_home = f"{ssh_home_base}/{script_user}"
     ssh_dir = f"{ssh_home_base}/{script_user}/.ssh"
     key_path = f"{ssh_dir}/{key_name}"
     pub_path = f"{key_path}.pub"
@@ -969,15 +979,16 @@ def sync_user_keypair_from_local(
 
         result = dev.rpc.request_shell_execute(
             command=(
-                f"mkdir -p {ssh_dir}; "
-                f"mv -f {remote_tmp_priv} {key_path}; "
-                f"mv -f {remote_tmp_pub} {pub_path}; "
-                f"chown {script_user} {ssh_dir} {key_path} {pub_path}; "
-                f"chmod 700 {ssh_dir}; "
-                f"chmod 600 {key_path}; "
-                f"chmod 644 {pub_path}; "
-                f"ls -l {key_path}; "
-                f"ls -l {pub_path}"
+                f"chmod 2750 {shlex.quote(ssh_home)} && "
+                f"mkdir -p {shlex.quote(ssh_dir)} && "
+                f"mv -f {shlex.quote(remote_tmp_priv)} {shlex.quote(key_path)} && "
+                f"mv -f {shlex.quote(remote_tmp_pub)} {shlex.quote(pub_path)} && "
+                f"chown {shlex.quote(script_user)} {shlex.quote(ssh_dir)} {shlex.quote(key_path)} {shlex.quote(pub_path)} && "
+                f"chmod 700 {shlex.quote(ssh_dir)} && "
+                f"chmod 600 {shlex.quote(key_path)} && "
+                f"chmod 644 {shlex.quote(pub_path)} && "
+                f"ls -l {shlex.quote(key_path)} && "
+                f"ls -l {shlex.quote(pub_path)}"
             )
         )
         text = _rpc_text(result).strip()
