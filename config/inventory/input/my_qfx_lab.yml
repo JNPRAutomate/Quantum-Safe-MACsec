@@ -1,0 +1,31 @@
+topology: links
+platform: mixed
+mode: qkd
+pki_profile: self_signed
+devices:
+- name: QFX5700_1_400G
+  hostname: dc-tme-qfx5700-01
+  platform: qfx
+  ip: 10.92.72.28
+  kme:
+    ip: 10.10.10.50
+    port: 8443
+  interfaces:
+  - et-4/0/1
+- name: QFX5700_2_400G
+  hostname: dc-tme-qfx5700-04
+  platform: qfx
+  ip: 10.92.72.35
+  kme:
+    ip: 10.10.10.51 
+    port: 8443
+  interfaces:
+  - et-4/0/0
+links:
+- id: QFX5700_1-QFX5700_2
+  node_a: QFX5700_1_400G
+  interface_a: et-4/0/1
+  node_b: QFX5700_2_400G
+  interface_b: et-4/0/0
+  ca_name: CA_QFX5700_1_2
+  keychain_name: QKD_CA_QFX5700_400G
