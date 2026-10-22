@@ -171,6 +171,24 @@ def test_bgp_tcp_ao_state_save_persists_pending_keys_atomically(tmp_path):
     assert not Path(f"{state_path}.tmp").exists()
 
 
+def test_bgp_tcp_ao_start_active_state_emits_success_marker(monkeypatch, capsys):
+    start = load_onbox_functions("run_bgp_tcp_ao_start")["run_bgp_tcp_ao_start"]
+    session = {"master": "EVO1"}
+    state = {"phase": "active", "rotation_count": 3}
+    rotation_calls = []
+    namespace = start.__globals__
+    namespace["bgp_tcp_ao_session_config"] = lambda _session_id: session
+    namespace["DEVICE_NAME"] = "EVO1"
+    namespace["_bgp_tcp_ao_peer_link"] = lambda _session: ("EVO2", {})
+    namespace["load_bgp_tcp_ao_state"] = lambda _session_id: state
+    namespace["log_bgp_tcp_ao"] = lambda *_args, **_kwargs: None
+    namespace["run_bgp_tcp_ao_rotation_tick"] = lambda session_id: rotation_calls.append(session_id) or True
+
+    assert start("EVO1-EVO2") is True
+    assert rotation_calls == ["EVO1-EVO2"]
+    assert "OK BGP-TCP-AO start" in capsys.readouterr().out
+
+
 def test_load_bgp_tcp_ao_settings_keeps_seed_and_separates_ring(tmp_path):
     profile = write_profile(tmp_path)
     state_file = tmp_path / "state.json"

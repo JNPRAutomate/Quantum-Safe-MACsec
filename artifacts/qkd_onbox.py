@@ -1665,7 +1665,10 @@ def run_bgp_tcp_ao_start(session_id):
     state = load_bgp_tcp_ao_state(session_id)
     if state.get("phase") == "active":
         log_bgp_tcp_ao(f"START ALREADY ACTIVE session={session_id} rotation_count={state.get('rotation_count', 0)}")
-        return run_bgp_tcp_ao_rotation_tick(session_id)
+        ok = run_bgp_tcp_ao_rotation_tick(session_id)
+        if ok:
+            print("OK BGP-TCP-AO start")
+        return ok
 
     if state.get("phase") == "uninitialized":
         local = _bgp_tcp_ao_check(session_id, session, require_unauthenticated=True)
