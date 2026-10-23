@@ -23,3 +23,5 @@ Decisions taken with the owner on 2026-10-23:
 | KEM versus QKD | Both modes, chosen per link: QKD-only, KEM-only, or hybrid QKD+KEM. |
 | Language | Python first, reusing tested code. Go later only where it pays off. |
 | Containers | One orchestrator container and one separate PKI container. KMEs, PostgreSQL, Vault stay separate workloads. |
+| Home of the new code | evokme repo; QSM code brought in as the "standard KME" provider. |
+| Linux targets | Ubuntu 22.04/24.04, RHEL 8 and RHEL 9. |
