@@ -135,5 +135,6 @@ nav:
           - Coverage map: test/coverage_map.md
           - Lab scripts: test/lab_scripts.md
           - Test runbook: test/test_runbook.md
+          - QFX lab reset and deployment: test/qfx_lab_full_reset_runbook.md
           - Fixtures and artifacts: test/fixtures_and_artifacts.md
           - Troubleshooting: test/troubleshooting.md

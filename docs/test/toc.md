@@ -12,8 +12,9 @@ or generate private PKI material.
 3. [Coverage map](coverage_map.md)
 4. [Lab scripts and safety](lab_scripts.md)
 5. [Test execution runbook](test_runbook.md)
-6. [Fixtures and generated artifacts](fixtures_and_artifacts.md)
-7. [Troubleshooting](troubleshooting.md)
+6. [QFX lab full reset and deployment](qfx_lab_full_reset_runbook.md)
+7. [Fixtures and generated artifacts](fixtures_and_artifacts.md)
+8. [Troubleshooting](troubleshooting.md)
 
 ## Source-code location
 
