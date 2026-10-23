@@ -66,6 +66,6 @@ retained. Runtime on-box scripts are generated from `artifacts/qkd_onbox.py`.
 | 5 | Customer wrapper: wrong KME argument order; KME before PKI | QSM `tools/customer_deploy.py:58-61` |
 | 6 | AO-only deploy installs no rotation timer | QSM `lib/qkd/provisioning.py:941` |
 | 7 | DB `content` type replacement has no effect; readiness wait unbounded | QSM `lib/kme/db_init.py:164,203` |
-| 8 | Uninstall keeps protection config; clean leaves images, networks, `.replaced-*` dirs with old credentials | evokme `lib/evokme/onbox_deploy.py:744`, `router_host_lab.py:536` |
-| 9 | Operator image lacks Docker CLI and scripts | evokme `deployment/orchestrator/Dockerfile` |
-| 10 | Default KEM level differs: runtime 5, components 3 | evokme `lib/evokme/kem_levels.py`, `component_compose.py:116` |
+| 8 | **Fixed:** opt-in, journal-owned protection/image retirement and labelled unused network cleanup with previews; successful extraction deletes its rollback credentials and failure restores them. Defaults retain protection/images/networks; legacy backups require manual retirement. | evokme `lib/evokme/onbox_deploy.py:744`, `router_host_lab.py:536` |
+| 9 | **Fixed:** operator image includes a version-pinned Docker CLI and `scripts/`. | evokme `deployment/orchestrator/Dockerfile` |
+| 10 | **Fixed:** one shared default NIST level 3 matches explicit lab levels; Compose accepts peer-level compatibility checks. Explicit level 5 remains supported. | evokme `lib/evokme/kem_levels.py`, `component_compose.py:116` |
