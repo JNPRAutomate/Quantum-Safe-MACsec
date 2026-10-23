@@ -1,0 +1,303 @@
+# Operator-facing tools
+
+[Index](README.md) · [All knobs](knob_matrix.md) · [PKI tools](pki.md)
+
+## Safety classification and prerequisites
+
+The tools are not all passive report readers. Collectors/observers/health monitors contact routers; analytics collects unless --skip-collect; customer_deploy can launch the full lifecycle; generators write new configuration and credentials. No tool was executed in this analysis. Sources: `tools/collect_device_logs.py:514`, `tools/observe_qkd_rotation.py:900`, `tools/qkd_pipeline_analytics.py:976`, `tools/customer_deploy.py:82`, `tools/generate_lab_config.py:276`.
+
+## `tools/cert_manager.py`
+
+Inspect PEM certificate/private-key blocks from files/directories; certificate expiry/extensions/SAN/key information and parse errors; strict errors exit 1, password flags conflict. No PKI generation. Sources: `tools/cert_manager.py:368`, `tools/cert_manager.py:484`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | inputs | required positional | Files and/or directories to inspect. | tools/cert_manager.py:450 |
+| standalone | -r / --recursive | False | Recursively walk input directories. | tools/cert_manager.py:455 |
+| standalone | --json | False | Output JSON instead of human-readable text. | tools/cert_manager.py:461 |
+| standalone | --password | None | Password used to try decrypting encrypted private keys. | tools/cert_manager.py:466 |
+| standalone | --password-prompt | False | Prompt for private key password securely. | tools/cert_manager.py:471 |
+| standalone | --strict | False | Exit with code 1 if any file has parse errors. | tools/cert_manager.py:476 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/cert_manager.py:476 |
+
+## `tools/cert_report_filter.py`
+
+Read cert-manager JSON list; classify/filter severity/expiry/name/key-encryption issues; text/JSON stdout or output file. Invalid input exits 2, filtered errors 1; no material modification. Sources: `tools/cert_report_filter.py:243`, `tools/cert_report_filter.py:261`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --input | "cert_report.json" | Input JSON report produced by tools/cert_manager.py | tools/cert_report_filter.py:17 |
+| standalone | --expiry-days | 30 | Warn if certificate expires in <= N days (default: 30) | tools/cert_report_filter.py:22 |
+| standalone | --flag-unencrypted-keys | False | Flag unencrypted private keys as warnings (disabled by default) | tools/cert_report_filter.py:28 |
+| standalone | --allow-underscore-identifiers | False | Allow underscore in Subject CN and SAN DNS names (disabled by default) | tools/cert_report_filter.py:33 |
+| standalone | --json | False | Print filtered issues as JSON | tools/cert_report_filter.py:38 |
+| standalone | --output | None | Optional output file for filtered issues (text or JSON). | tools/cert_report_filter.py:43 |
+| standalone | --min-severity | "warning" ; choices=["info", "warning", "error"] | Minimum severity to include (default: warning) | tools/cert_report_filter.py:48 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/cert_report_filter.py:48 |
+
+## `tools/collect_device_logs.py`
+
+Load inventory/base and filter devices; resolve user/identity, create unique local snapshot even in dry-run, collect in parallel using SCP and Junos file-show/list fallbacks, write manifest. Failed transfers return 1. It copies diagnostics, not runtime recovery state back to routers. Sources: `tools/collect_device_logs.py:255`, `tools/collect_device_logs.py:342`, `tools/collect_device_logs.py:403`, `tools/collect_device_logs.py:514`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --inventory | DEFAULT_INVENTORY | Device inventory YAML (default: %(default)s) | tools/collect_device_logs.py:55 |
+| standalone | --base-inventory | DEFAULT_BASE_INVENTORY | Base inventory containing script_user (default: %(default)s) | tools/collect_device_logs.py:61 |
+| standalone | --output-root | DEFAULT_OUTPUT_ROOT | Root directory for timestamped collections (default: %(default)s) | tools/collect_device_logs.py:67 |
+| standalone | --snapshot-name | None | ( "Snapshot directory name; defaults to " "qkd_logs_YYYY-MM-DD_HH-MM-SS_UTC" ) | tools/collect_device_logs.py:73 |
+| standalone | --remote-path | DEFAULT_REMOTE_PATH | Remote log directory to copy (default: %(default)s) | tools/collect_device_logs.py:80 |
+| standalone | --user | None | SSH user; defaults to secrets.script_user in the base inventory | tools/collect_device_logs.py:85 |
+| standalone | --identity-file | None | ( "SSH private key; defaults to the etsi_user key generated by the " "first deployment" ) | tools/collect_device_logs.py:89 |
+| standalone | --jobs | 4 | Maximum concurrent SCP transfers (default: %(default)s) | tools/collect_device_logs.py:97 |
+| standalone | --connect-timeout | 15 | SSH connection timeout in seconds (default: %(default)s) | tools/collect_device_logs.py:103 |
+| standalone | --device | None | Collect only this device name; may be repeated | tools/collect_device_logs.py:109 |
+| standalone | --dry-run | False | Print planned transfers without connecting | tools/collect_device_logs.py:115 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/collect_device_logs.py:115 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/collect_device_logs.py:22.
+- `DEFAULT_INVENTORY = (` — tools/collect_device_logs.py:23.
+- `DEFAULT_BASE_INVENTORY = ROOT / "config" / "inventory" / "inventory_base.yaml"` — tools/collect_device_logs.py:26.
+- `DEFAULT_OUTPUT_ROOT = ROOT / "logs"` — tools/collect_device_logs.py:27.
+- `DEFAULT_REMOTE_PATH = "/var/home/etsi_user/logs"` — tools/collect_device_logs.py:28.
+
+## `tools/customer_deploy.py`
+
+Locate timestamped generated inventory/KME/env files by required name; parse exports with shlex; print sequence unless --run, then subprocess each until first nonzero. Sequence is KME create → QKD create → bootstrap → prevalidate → deploy → postvalidate. BUG: constructed KME --config is before subcommand, incompatible with parser; fresh KME cert install also precedes QKD PKI generation. Sources: `tools/customer_deploy.py:28`, `tools/customer_deploy.py:58`, `tools/customer_deploy.py:82`, `kme_orchestrator.py:326`, `kme_orchestrator.py:354`, `lib/kme/cert_install.py:229`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --name | required | Name used by generate_customer_lab_config_interactive.py | tools/customer_deploy.py:18 |
+| standalone | --run | False | Execute commands after displaying them | tools/customer_deploy.py:23 |
+| standalone | --skip-kme | False | Skip KME creation if it is already running | tools/customer_deploy.py:24 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/customer_deploy.py:24 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/customer_deploy.py:13.
+
+## `tools/generate_customer_lab_config_interactive.py`
+
+Interactive-only generator described below.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | -h / --help | exit with usage | Implicit argparse help | tools/generate_customer_lab_config_interactive.py:162 |
+| interactive prompt | Lab name | "customer-lab" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:57 |
+| interactive prompt | Number of routers | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:58 |
+| interactive prompt | Name | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:63 |
+| interactive prompt | Hostname | router_name.lower() | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:67 |
+| interactive prompt | Platform (mx/qfx/acx/ptx/...) | "mx" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:68 |
+| interactive prompt | Management IP | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:69 |
+| interactive prompt | KME IP | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:71 |
+| interactive prompt | KME port | "8443" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:72 |
+| interactive prompt | Interfaces (optional; linked interfaces are added automatically) | empty list | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:74 |
+| interactive prompt | Number of links | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:78 |
+| interactive prompt | Node A | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:83 |
+| interactive prompt | Interface A | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:84 |
+| interactive prompt | Node B | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:85 |
+| interactive prompt | Interface B | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:86 |
+| interactive prompt | PKI profile (self_signed/hierarchical_ca) | "hierarchical_ca" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:102 |
+| interactive prompt | Default user | "labuser" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:113 |
+| interactive prompt | Bootstrap/deploy user | "root" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:114 |
+| interactive prompt | QKD script user | "etsi_user" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:115 |
+| interactive prompt | QKD script user class | "super-user" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:116 |
+| interactive prompt | QKD script authentication (key-only/password) | "key-only" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:117 |
+| interactive prompt | Default password | <redacted>; hidden input, confirmation required | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:119 |
+| interactive prompt | Bootstrap password | <redacted>; hidden input, confirmation required | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:120 |
+| interactive prompt | QKD script-user password | <redacted>; hidden input, confirmation required | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:121 |
+| interactive prompt | KME environment name | "lab" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:129 |
+| interactive prompt | KME host OS (ubuntu/rhel) | "ubuntu" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:130 |
+| interactive prompt | KME SSH owner | "andrea" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:132 |
+| interactive prompt | KME host IP | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:134 |
+| interactive prompt | KME SSH user | "andrea" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:135 |
+| interactive prompt | KME SSH alias | "qkd-kme-lab" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:136 |
+| interactive prompt | KME SSH key name | "qkd_kme_ed25519" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:137 |
+| interactive prompt | KME Docker host IP | required, no default | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:141 |
+| interactive prompt | KME Docker network subnet | "192.168.2.0/24" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:142 |
+| interactive prompt | KME Docker network gateway | "192.168.2.113" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:143 |
+| interactive prompt | KME Docker network parent interface | "ens33" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:144 |
+| interactive prompt | KME database service IP | "192.168.2.230" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:146 |
+| interactive prompt | First KME service IP | "192.168.2.205" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:148 |
+| interactive prompt | KME API port | "8443" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:149 |
+| interactive prompt | KME database username | "db_user" | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:156 |
+| interactive prompt | KME database password | <redacted>; hidden input, confirmation required | Generate input field without contacting hosts | tools/generate_customer_lab_config_interactive.py:157 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/generate_customer_lab_config_interactive.py:14.
+
+## `tools/generate_lab_config.py`
+
+Choose --inventory ahead of --spec; --init-spec writes starter spec and exits; otherwise normalize link-driven topology, derive KME IP allocation, timestamp/refuse existing output paths, write new inventory and KME YAML and mode-0600 env file; print base-inventory suggestions rather than edit base. Secrets optionally prompt; DB password can be in generated KME YAML. Sources: `tools/generate_lab_config.py:276`, `tools/generate_lab_config.py:313`, `tools/generate_lab_config.py:376`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --spec | None | Optional YAML containing inventory and kme sections (read only) | tools/generate_lab_config.py:320 |
+| standalone | --inventory | None | Existing inventory YAML, read only and never modified (no second spec required) | tools/generate_lab_config.py:325 |
+| standalone | --init-spec | None | Write a starter input spec (_<UTC> is added to the name) instead of generating output | tools/generate_lab_config.py:330 |
+| standalone | --inventory-out | None | Inventory YAML path; _<UTC> is added (default: config/inventory/input/<name>_<UTC>.yaml) | tools/generate_lab_config.py:335 |
+| standalone | --kme-out | None | KME YAML path; _<UTC> is added (default: config/kme/<name>_<UTC>.yaml) | tools/generate_lab_config.py:340 |
+| standalone | --kme-template | DEFAULT_KME_TEMPLATE | Select input/action parameter | tools/generate_lab_config.py:345 |
+| standalone | --inventory-base | DEFAULT_INVENTORY_BASE | Read only: source of default user names; differences are printed, never written | tools/generate_lab_config.py:346 |
+| standalone | --env-out | None | Mode-0600 environment file; _<UTC> is added (default: config/kme/<name>_<UTC>.env) | tools/generate_lab_config.py:352 |
+| standalone | --prompt-secrets | False | Prompt securely for password values missing from inventory_base.yaml | tools/generate_lab_config.py:357 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/generate_lab_config.py:357 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/generate_lab_config.py:26.
+- `DEFAULT_KME_TEMPLATE = ROOT / "config" / "kme" / "lab.yaml"` — tools/generate_lab_config.py:29.
+- `DEFAULT_INVENTORY_DIR = ROOT / "config" / "inventory" / "input"` — tools/generate_lab_config.py:30.
+- `DEFAULT_KME_DIR = ROOT / "config" / "kme"` — tools/generate_lab_config.py:31.
+- `DEFAULT_INVENTORY_BASE = ROOT / "config" / "inventory" / "inventory_base.yaml"` — tools/generate_lab_config.py:32.
+
+## `tools/macsec_monitor_inventory.py`
+
+Shared inventory/link selection helper, not a CLI. Requires devices list, qkd.sae_id matching SAE-number format and IP validation; selects explicit link when ambiguity exists. Source: `tools/macsec_monitor_inventory.py:1`.
+
+## `tools/macsec_tunnel_health_monitor.py`
+
+Resolve selected direct link from inventory, print targets and return on dry-run; otherwise prompt password, SSH poll MKA/MACsec at configured cadence/duration, correlate statistics/errors. --reset-statistics clears MKA statistics, not read-only. Inventory helper requires explicit SAE IDs and validates management addresses. Sources: `tools/macsec_tunnel_health_monitor.py:1474`, `tools/macsec_monitor_inventory.py:1`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | -d / --duration | 300 | Monitoring duration in seconds (default: 300s = 5min) | tools/macsec_tunnel_health_monitor.py:1478 |
+| standalone | -i / --interval | 10 | Poll interval in seconds (default: 10s) | tools/macsec_tunnel_health_monitor.py:1484 |
+| standalone | -v / --verbose | False | Enable verbose debug output | tools/macsec_tunnel_health_monitor.py:1490 |
+| standalone | --inventory | DEFAULT_INVENTORY | Select input/action parameter | tools/macsec_tunnel_health_monitor.py:1495 |
+| standalone | --link | None | Monitor only the endpoints of this inventory link ID | tools/macsec_tunnel_health_monitor.py:1496 |
+| standalone | --dry-run | False | List targets without connecting | tools/macsec_tunnel_health_monitor.py:1497 |
+| standalone | --reset-statistics | False | Clear MKA statistics before monitoring (changes device state) | tools/macsec_tunnel_health_monitor.py:1498 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/macsec_tunnel_health_monitor.py:1498 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `WORKSPACE_ROOT = Path(__file__).resolve().parent.parent` — tools/macsec_tunnel_health_monitor.py:26.
+- `DEFAULT_INVENTORY = WORKSPACE_ROOT / "config" / "inventory" / "input" / "lab_vmm.yaml"` — tools/macsec_tunnel_health_monitor.py:36.
+
+## `tools/macsec_tunnel_health_monitor_link_correlation.py`
+
+Variant with bilateral link correlation; same seven operator knobs, duration/interval and optional counter reset. Not a continuous managed daemon/service. Sources: `tools/macsec_tunnel_health_monitor_link_correlation.py:1658`, `tools/macsec_monitor_inventory.py:1`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | -d / --duration | 300 | Monitoring duration in seconds (default: 300s = 5min) | tools/macsec_tunnel_health_monitor_link_correlation.py:1662 |
+| standalone | -i / --interval | 10 | Poll interval in seconds (default: 10s) | tools/macsec_tunnel_health_monitor_link_correlation.py:1668 |
+| standalone | -v / --verbose | False | Enable verbose debug output | tools/macsec_tunnel_health_monitor_link_correlation.py:1674 |
+| standalone | --inventory | DEFAULT_INVENTORY | Select input/action parameter | tools/macsec_tunnel_health_monitor_link_correlation.py:1679 |
+| standalone | --link | None | Monitor only the endpoints of this inventory link ID | tools/macsec_tunnel_health_monitor_link_correlation.py:1680 |
+| standalone | --dry-run | False | List targets without connecting | tools/macsec_tunnel_health_monitor_link_correlation.py:1681 |
+| standalone | --reset-statistics | False | Clear MKA statistics before monitoring (changes device state) | tools/macsec_tunnel_health_monitor_link_correlation.py:1682 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/macsec_tunnel_health_monitor_link_correlation.py:1682 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `WORKSPACE_ROOT = Path(__file__).resolve().parent.parent` — tools/macsec_tunnel_health_monitor_link_correlation.py:26.
+- `DEFAULT_INVENTORY = WORKSPACE_ROOT / "config" / "inventory" / "input" / "lab_vmm.yaml"` — tools/macsec_tunnel_health_monitor_link_correlation.py:36.
+
+## `tools/observe_qkd_rotation.py`
+
+Build schedule from execution/activation/grace/rotation policy: T1 zero, T2 execution plus rounded grace, final covers replacement horizon and RPC rotation. --plan exits before output directory/collection. Actual run creates unique observation dir, running manifest, waits monotonic schedule, collects T1/T2/final, writes fleet/device/link reports and complete/failed manifest. No rotation is commanded by observing. Sources: `tools/observe_qkd_rotation.py:144`, `tools/observe_qkd_rotation.py:900`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --inventory | DEFAULT_INVENTORY | Select input/action parameter | tools/observe_qkd_rotation.py:92 |
+| standalone | --policy | DEFAULT_POLICY | Select input/action parameter | tools/observe_qkd_rotation.py:93 |
+| standalone | --base-inventory | DEFAULT_BASE_INVENTORY | Select input/action parameter | tools/observe_qkd_rotation.py:94 |
+| standalone | --output-root | DEFAULT_OUTPUT_ROOT | Select input/action parameter | tools/observe_qkd_rotation.py:95 |
+| standalone | --remote-path | DEFAULT_REMOTE_PATH | Select input/action parameter | tools/observe_qkd_rotation.py:96 |
+| standalone | --user | None | Select input/action parameter | tools/observe_qkd_rotation.py:97 |
+| standalone | --identity-file | None | Select input/action parameter | tools/observe_qkd_rotation.py:98 |
+| standalone | --jobs | 4 | Select input/action parameter | tools/observe_qkd_rotation.py:99 |
+| standalone | --connect-timeout | 15 | Select input/action parameter | tools/observe_qkd_rotation.py:100 |
+| standalone | --observation-name | None | Output directory name; defaults to qkd_observation_<UTC timestamp> | tools/observe_qkd_rotation.py:101 |
+| standalone | --plan | False | Print policy-derived snapshot timing without collecting logs | tools/observe_qkd_rotation.py:105 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/observe_qkd_rotation.py:105 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/observe_qkd_rotation.py:20.
+- `DEFAULT_POLICY = ROOT / "config" / "inventory" / "qkd_policy.yaml"` — tools/observe_qkd_rotation.py:35.
+
+## `tools/qkd_link_rotation_report.py`
+
+Local snapshot + link inventory analyzer, bilateral endpoint classification and error samples; writes Markdown and JSON defaults inside snapshot. No router contact. Sources: `tools/qkd_link_rotation_report.py:85`, `tools/qkd_link_rotation_report.py:950`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | snapshot | required positional | Collected snapshot directory | tools/qkd_link_rotation_report.py:92 |
+| standalone | --inventory | DEFAULT_INVENTORY | Link inventory YAML (default: %(default)s) | tools/qkd_link_rotation_report.py:93 |
+| standalone | --output | None | Markdown output (default: SNAPSHOT/qkd_link_rotation_report.md) | tools/qkd_link_rotation_report.py:99 |
+| standalone | --json-output | None | JSON output (default: SNAPSHOT/qkd_link_rotation_report.json) | tools/qkd_link_rotation_report.py:104 |
+| standalone | --error-samples | 5 | Maximum error/warning samples per endpoint (default: %(default)s) | tools/qkd_link_rotation_report.py:109 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/qkd_link_rotation_report.py:109 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/qkd_link_rotation_report.py:18.
+- `DEFAULT_INVENTORY = (` — tools/qkd_link_rotation_report.py:19.
+
+## `tools/qkd_observation_summary.py`
+
+Read supplied or latest observation under output root; summarize manifest/fleet outputs; JSON optional, strict returns 2 for failed outcome. No collection/deployment. Sources: `tools/qkd_observation_summary.py:19`, `tools/qkd_observation_summary.py:271`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | observation | None | Observation directory (default: latest logs/qkd_observation_*) | tools/qkd_observation_summary.py:26 |
+| standalone | --output-root | DEFAULT_OUTPUT_ROOT | Root folder that contains qkd_observation_* directories | tools/qkd_observation_summary.py:32 |
+| standalone | --json | False | Emit the condensed summary as JSON instead of text | tools/qkd_observation_summary.py:38 |
+| standalone | --strict | False | Exit non-zero when the observation is incomplete or needs attention | tools/qkd_observation_summary.py:43 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/qkd_observation_summary.py:43 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/qkd_observation_summary.py:12.
+
+## `tools/qkd_pipeline_analytics.py`
+
+Default performs remote collection through collect_device_logs; --skip-collect selects existing local timing snapshot. Parse timing JSONL and aggregate by platform; JSON or per-platform HTML output derived from requested report base. It is not read-only by default. Sources: `tools/qkd_pipeline_analytics.py:45`, `tools/qkd_pipeline_analytics.py:976`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --inventory | DEFAULT_INVENTORY | Device inventory YAML (default: %(default)s) | tools/qkd_pipeline_analytics.py:51 |
+| standalone | --base-inventory | DEFAULT_BASE_INVENTORY | Base inventory (default: %(default)s) | tools/qkd_pipeline_analytics.py:57 |
+| standalone | --output-dir | Path.cwd() / "qkd_timings" | Directory to store collected files (default: %(default)s) | tools/qkd_pipeline_analytics.py:63 |
+| standalone | --output | "qkd_pipeline_report.html" | Base output report name; HTML mode writes one file per platform (default: %(default)s) | tools/qkd_pipeline_analytics.py:69 |
+| standalone | --json | False | Output as JSON instead of HTML | tools/qkd_pipeline_analytics.py:74 |
+| standalone | --skip-collect | False | Skip SCP collection, analyze existing files only | tools/qkd_pipeline_analytics.py:79 |
+| standalone | --remote-path | "/var/home/etsi_user/logs/pipeline_timing" | Remote directory on devices (default: %(default)s) | tools/qkd_pipeline_analytics.py:84 |
+| standalone | --jobs | 4 | Parallel collection jobs (default: %(default)s) | tools/qkd_pipeline_analytics.py:89 |
+| standalone | --user | None | SSH user (defaults to script_user from base inventory) | tools/qkd_pipeline_analytics.py:95 |
+| standalone | --identity-file | None | SSH private key | tools/qkd_pipeline_analytics.py:99 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/qkd_pipeline_analytics.py:99 |
+
+Symbolic defaults/constants (paths relative to repository unless expression says cwd):
+
+- `ROOT = Path(__file__).resolve().parents[1]` — tools/qkd_pipeline_analytics.py:29.
+- `DEFAULT_INVENTORY = ROOT / "config" / "inventory" / "input" / "ring_mx_acx_unified_link_driven.yml"` — tools/qkd_pipeline_analytics.py:31.
+- `DEFAULT_BASE_INVENTORY = ROOT / "config" / "inventory" / "inventory_base.yaml"` — tools/qkd_pipeline_analytics.py:32.
+
+## `tools/qkd_rotation_log_summary.py`
+
+Local log paths/globs → customer Markdown summary, required output. Similar implementation also exists as lib.qkd.log_summary; do not assume fixes propagate between copies. Sources: `tools/qkd_rotation_log_summary.py:28`, `tools/qkd_rotation_log_summary.py:260`, `lib/qkd/log_summary.py:27`, `lib/qkd/log_summary.py:234`.
+
+| Command/input | Flag / aliases | Exact declared default / choices | Purpose | Source |
+|---|---|---|---|---|
+| standalone | --logs | required | One or more qkd_debug log files or shell globs | tools/qkd_rotation_log_summary.py:32 |
+| standalone | --output | required | Output summary file path | tools/qkd_rotation_log_summary.py:38 |
+| standalone | --title | "QKD/MACsec Customer Summary" | Summary title | tools/qkd_rotation_log_summary.py:43 |
+| standalone | -h / --help | exit with usage | Argparse-generated help; QKD/KME root logger can create local files before parse | tools/qkd_rotation_log_summary.py:43 |
+
+## Interactive generator order and output ownership
+
+`tools/generate_customer_lab_config_interactive.py` defines no custom argparse options beyond help. It prompts inventory/topology → credentials → KME host/network/DB; inventory count is user-selected, no routers contacted. It creates timestamped files and a credential env file. Inventory defaults include customer-lab, platform mx, KME port 8443, hierarchical PKI; DB password is written into KME YAML, not only env. Treat generated YAML/env as sensitive. Sources: `tools/generate_customer_lab_config_interactive.py:56`, `tools/generate_customer_lab_config_interactive.py:109`, `tools/generate_customer_lab_config_interactive.py:125`, `tools/generate_customer_lab_config_interactive.py:161`.
+
+## Ordering, idempotence, failure and cleanup
+
+- Generators use timestamped names and existing-path refusal rather than an in-place desired-state reconciler; rerun creates another config set. No router rollback applies because generation is local. Sources: `tools/generate_lab_config.py:276`, `tools/generate_customer_lab_config_interactive.py:161`.
+- Collector/observer require inventory and SSH access established independently. Their outputs do not reset keys; dry-run can still create snapshot directory, while observer --plan returns before creation. Sources: `tools/collect_device_logs.py:514`, `tools/observe_qkd_rotation.py:900`.
+- Report output paths can replace prior reports according to normal write behavior; retain collected raw snapshots when auditability matters. Sources: `tools/qkd_link_rotation_report.py:950`, `tools/qkd_rotation_log_summary.py:260`.
+- customer_deploy stops after a command error, without reversing earlier KME/router changes, and inherits orchestrator partial-success behavior; fix/verify invocation and PKI ordering before relying on it. Sources: `tools/customer_deploy.py:82`, `lib/qkd/provisioning.py:1299`.
+- QKD/KME clean do not constitute cleanup for these local reports, generated customer config/env or arbitrary collector output directories; their deletion scopes are separate. Sources: `lib/qkd/clean.py:85`, `lib/kme/destroy.py:13`.
