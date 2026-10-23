@@ -1088,12 +1088,21 @@ def discover_bgp_tcp_ao_neighbor(session, local_device, require_unauthenticated=
     if not isinstance(endpoint, dict):
         raise RuntimeError(f"BGP TCP-AO endpoint missing for device={local_device}")
     neighbor = str(endpoint.get("neighbor_address") or "")
-    expected_group = str(session.get("group_name") or "")
+    routing_instance = str(endpoint.get("routing_instance") or "")
+    expected_group = str(
+        endpoint.get("group_name")
+        or (session.get("group_names") or {}).get(local_device)
+        or session.get("group_name")
+        or ""
+    )
     expected_peer_as = int(endpoint.get("peer_as", 0))
     if not neighbor or not expected_group or not expected_peer_as:
         raise RuntimeError(f"incomplete BGP TCP-AO endpoint for device={local_device}")
+    if routing_instance and not all(c.isalnum() or c in "_.-" for c in routing_instance):
+        raise RuntimeError(f"invalid BGP routing-instance for device={local_device}")
+    instance_clause = f" instance {routing_instance}" if routing_instance else ""
     result = subprocess.run(
-        [CLI_PATH, "-c", f"show bgp neighbor {neighbor} extensive"],
+        [CLI_PATH, "-c", f"show bgp neighbor {neighbor}{instance_clause} extensive"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=15,
@@ -1396,7 +1405,9 @@ def install_bgp_tcp_ao_entries(session_id, session, entries, activate=False, con
     commands = build_bgp_tcp_ao_junos_commands(
         session,
         local_device,
-        session["group_name"],
+        endpoint.get("group_name")
+        or (session.get("group_names") or {}).get(local_device)
+        or session["group_name"],
         endpoint["neighbor_address"],
         entries,
         activate=activate,
@@ -4258,13 +4269,22 @@ def build_bgp_tcp_ao_junos_commands(session, local_device, group_name, neighbor_
         raise ValueError("invalid BGP group name")
     if not neighbor_address or not all(c.isalnum() or c in ".:%" for c in str(neighbor_address)):
         raise ValueError("invalid BGP neighbor address")
+    endpoint = (session.get("endpoints") or {}).get(local_device, {})
+    routing_instance = str(endpoint.get("routing_instance") or "")
+    if routing_instance and not all(c.isalnum() or c in "_.-" for c in routing_instance):
+        raise ValueError("invalid BGP routing-instance")
     commands = build_tcp_ao_keychain_commands(session, local_device, entries)
     if activate:
         keychain = str(session["keychain_name"])
+        bgp_prefix = (
+            f"set routing-instances {routing_instance} protocols bgp"
+            if routing_instance
+            else "set protocols bgp"
+        )
         commands.extend(
             [
-                f"set protocols bgp group {group_name} neighbor {neighbor_address} authentication-algorithm ao",
-                f"set protocols bgp group {group_name} neighbor {neighbor_address} authentication-key-chain {keychain}",
+                f"{bgp_prefix} group {group_name} neighbor {neighbor_address} authentication-algorithm ao",
+                f"{bgp_prefix} group {group_name} neighbor {neighbor_address} authentication-key-chain {keychain}",
             ]
         )
     return commands

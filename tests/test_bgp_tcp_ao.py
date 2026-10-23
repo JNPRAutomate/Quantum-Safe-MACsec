@@ -7,6 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,9 @@ from lib.qkd.ldp_tcp_ao import (
     mark_ldp_tcp_ao_settings_active,
 )
 from lib.qkd import onbox_builder
+from lib.qkd.tcp_ao_discovery import parse_bgp_configuration, parse_ldp_sessions
+from lib.qkd.tcp_ao_cli import build_parser
+from lib.qkd import tcp_ao_cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -209,6 +213,163 @@ def test_load_bgp_tcp_ao_settings_keeps_seed_and_separates_ring(tmp_path):
     assert saved["sessions"]["EVO1-EVO2"]["seed_secret"] == session["seed_secret"]
 
 
+def test_load_bgp_tcp_ao_settings_accepts_multiple_sessions_and_local_groups(tmp_path):
+    profile_data = copy.deepcopy(PROFILE)
+    first = profile_data["bgp_tcp_ao"]["sessions"]["EVO1-EVO2"]
+    first["endpoints"]["EVO1"]["group_name"] = "LAB-EDGE"
+    first["endpoints"]["EVO2"]["group_name"] = "LAB-CORE"
+    second = copy.deepcopy(first)
+    second["endpoints"]["EVO1"]["neighbor_address"] = "10.255.1.1"
+    second["endpoints"]["EVO2"]["neighbor_address"] = "10.255.1.0"
+    profile_data["bgp_tcp_ao"]["sessions"]["EVO1-EVO2-ALT"] = second
+    profile_path = tmp_path / "bgp_tcp_ao.yaml"
+    import yaml
+
+    profile_path.write_text(yaml.safe_dump(profile_data), encoding="utf-8")
+
+    settings = load_bgp_tcp_ao_settings(
+        5,
+        1800,
+        DEVICES,
+        profile_path,
+        tmp_path / "state.json",
+        persist_seed=False,
+    )
+
+    assert set(settings["sessions"]) == {"EVO1-EVO2", "EVO1-EVO2-ALT"}
+    assert settings["sessions"]["EVO1-EVO2"]["group_names"] == {
+        "EVO1": "LAB-EDGE",
+        "EVO2": "LAB-CORE",
+    }
+    assert all(session.get("enabled", True) for session in profile_data["bgp_tcp_ao"]["sessions"].values())
+
+
+def test_bgp_tcp_ao_disabled_sessions_are_not_selected(tmp_path):
+    profile_data = copy.deepcopy(PROFILE)
+    profile_data["bgp_tcp_ao"]["sessions"]["EVO1-EVO2-ALT"] = copy.deepcopy(
+        profile_data["bgp_tcp_ao"]["sessions"]["EVO1-EVO2"]
+    )
+    profile_data["bgp_tcp_ao"]["sessions"]["EVO1-EVO2-ALT"]["enabled"] = False
+    profile_path = tmp_path / "bgp_tcp_ao.yaml"
+    import yaml
+
+    profile_path.write_text(yaml.safe_dump(profile_data), encoding="utf-8")
+
+    settings = load_bgp_tcp_ao_settings(
+        5,
+        1800,
+        DEVICES,
+        profile_path,
+        tmp_path / "state.json",
+        persist_seed=False,
+    )
+
+    assert set(settings["sessions"]) == {"EVO1-EVO2"}
+
+
+def test_load_ldp_tcp_ao_settings_accepts_multiple_sessions(tmp_path):
+    profile_data = copy.deepcopy(LDP_PROFILE)
+    profile_data["ldp_tcp_ao"]["sessions"]["EVO1-EVO2-ALT"] = copy.deepcopy(
+        profile_data["ldp_tcp_ao"]["sessions"]["EVO1-EVO2"]
+    )
+    profile_path = tmp_path / "ldp_tcp_ao.yaml"
+    import yaml
+
+    profile_path.write_text(yaml.safe_dump(profile_data), encoding="utf-8")
+
+    settings = load_ldp_tcp_ao_settings(
+        5,
+        1800,
+        DEVICES,
+        profile_path,
+        tmp_path / "ldp-state.json",
+        persist_seed=False,
+    )
+
+    assert set(settings["sessions"]) == {"EVO1-EVO2", "EVO1-EVO2-ALT"}
+
+
+def test_tcp_ao_discovery_parses_effective_bgp_groups_and_ldp_neighbors():
+    bgp = parse_bgp_configuration(
+        "set protocols bgp group CORE type external\n"
+        "set protocols bgp group CORE peer-as 65002\n"
+        "set protocols bgp group CORE neighbor 192.0.2.2\n"
+        "set protocols bgp group CORE neighbor 192.0.2.2 authentication-key-chain EXISTING\n"
+        "set protocols bgp group CORE neighbor 192.0.2.3\n"
+        "set protocols bgp group EDGE neighbor 198.51.100.2 peer-as 65100\n"
+    )
+    ldp = parse_ldp_sessions(
+        "Address: 192.0.2.2, State: Operational, Connection: Open\n"
+        "Address: 198.51.100.2, State: Nonexistent, Connection: Closed\n"
+    )
+
+    assert bgp == [
+        {"group_name": "CORE", "neighbor_address": "192.0.2.2", "auth_configured": True, "peer_as": 65002},
+        {"group_name": "CORE", "neighbor_address": "192.0.2.3", "auth_configured": False, "peer_as": 65002},
+        {"group_name": "EDGE", "neighbor_address": "198.51.100.2", "auth_configured": False, "peer_as": 65100},
+    ]
+    assert [row["state"] for row in ldp] == ["Operational", "Nonexistent"]
+
+
+def test_bgp_discovery_keeps_routing_instances_and_group_scope_separate():
+    peers = parse_bgp_configuration(
+        "set protocols bgp group EDGE peer-as 65002\n"
+        "set protocols bgp group EDGE neighbor 192.0.2.2\n"
+        "set routing-instances BLUE protocols bgp group EDGE peer-as 65100\n"
+        "set routing-instances BLUE protocols bgp group EDGE neighbor 198.51.100.2\n"
+    )
+
+    assert peers == [
+        {"group_name": "EDGE", "neighbor_address": "192.0.2.2", "auth_configured": False, "peer_as": 65002},
+        {
+            "group_name": "EDGE",
+            "neighbor_address": "198.51.100.2",
+            "routing_instance": "BLUE",
+            "auth_configured": False,
+            "peer_as": 65100,
+        },
+    ]
+
+
+@pytest.mark.parametrize("protocol", ["bgp", "ldp"])
+def test_tcp_ao_standalone_cli_exposes_discover_preview_deploy_validate_status(protocol):
+    parser = build_parser(protocol)
+
+    for command in ("discover", "preview", "deploy", "validate", "status"):
+        args = parser.parse_args([command] + (["--keys", "5", "--timers", "1800"] if command in {"preview", "deploy"} else []))
+        assert args.command == command
+
+
+@pytest.mark.parametrize("protocol", ["bgp", "ldp"])
+def test_standalone_dispatch_sets_protocol_scope_and_profile(monkeypatch, protocol):
+    captured = {}
+
+    monkeypatch.setattr(tcp_ao_cli, "load_runtime_devices", lambda: {"R1": {"ip": "192.0.2.1"}})
+    monkeypatch.setattr(tcp_ao_cli, "load_inventory_base", lambda: {"secrets": {}})
+    monkeypatch.setattr(tcp_ao_cli, "get_script_user", lambda _base: "admin")
+    monkeypatch.setattr(qkd_orchestrator, "handle_deploy", lambda args: captured.update(vars(args)))
+
+    tcp_ao_cli._dispatch_deploy(
+        protocol,
+        SimpleNamespace(
+            profile="selected.yaml",
+            bgp_profile="bgp.yaml",
+            ldp_profile="ldp.yaml",
+            keys=5,
+            timers=1800,
+            verbose=0,
+            command="preview",
+        ),
+    )
+
+    assert captured["tcpao_scope"] == protocol
+    assert captured[f"{protocol}_profile"] == "selected.yaml"
+    assert captured["bgp_profile"] == ("selected.yaml" if protocol == "bgp" else "bgp.yaml")
+    assert captured["ldp_profile"] == ("selected.yaml" if protocol == "ldp" else "ldp.yaml")
+    assert captured["bgp_tcp_ao"] is (protocol == "bgp")
+    assert captured["ldp_tcp_ao"] is (protocol == "ldp")
+
+
 def test_onbox_sidecar_with_tcp_ao_seed_is_owner_only(tmp_path, monkeypatch):
     monkeypatch.setattr(onbox_builder, "build_onbox_config", lambda *_args, **_kwargs: {"bgp_tcp_ao": {"enabled": True}})
     monkeypatch.setattr(onbox_builder, "build_onbox_inventory", lambda *_args: {"local_sae": "sae-001"})
@@ -308,10 +469,21 @@ def test_bgp_tcp_ao_commands_are_independent_and_reverse_directional_ids():
 
     evo1 = build(session, "EVO1", "LAB-EVO", "10.255.0.1", [entry], activate=True)
     evo2 = build(session, "EVO2", "LAB-EVO", "10.255.0.0", [entry], activate=True)
+    routing_instance_session = copy.deepcopy(session)
+    routing_instance_session["endpoints"]["EVO1"]["routing_instance"] = "BLUE"
+    routing_instance_commands = build(
+        routing_instance_session,
+        "EVO1",
+        "LAB-EVO",
+        "10.255.0.1",
+        [entry],
+        activate=True,
+    )
 
     assert "set security authentication-key-chains key-chain QKD_AO_EVO1_EVO2 key 0 ao-attribute send-id 0" in evo1
     assert "set security authentication-key-chains key-chain QKD_AO_EVO1_EVO2 key 0 ao-attribute recv-id 128" in evo1
     assert "set security authentication-key-chains key-chain QKD_AO_EVO1_EVO2 key 0 ao-attribute send-id 128" in evo2
+    assert "set routing-instances BLUE protocols bgp group LAB-EVO neighbor 10.255.0.1 authentication-algorithm ao" in routing_instance_commands
     assert "set security authentication-key-chains key-chain QKD_AO_EVO1_EVO2 key 0 ao-attribute recv-id 0" in evo2
     assert "set protocols bgp group LAB-EVO neighbor 10.255.0.1 authentication-algorithm ao" in evo1
     assert not any("security macsec" in command for command in evo1 + evo2)

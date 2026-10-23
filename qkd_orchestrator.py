@@ -1504,37 +1504,60 @@ def handle_deploy(args):
 
     log = setup_logger(verbose=args.verbose)
     devices = load_runtime_devices()
+    artifact_devices = devices
     initial_targets = sorted([name for name, dev in devices.items() if isinstance(dev, dict)])
     bootstrap_failed = []
     inventory_base = load_inventory_base()
+    tcpao_scope = getattr(args, "tcpao_scope", None)
     secrets = inventory_base.get("secrets", {}) if isinstance(inventory_base, dict) else {}
     if not isinstance(secrets, dict):
         secrets = {}
 
     if bgp_tcp_ao_requested:
+        bgp_profile = getattr(args, "bgp_profile", None)
         bgp_tcp_ao_settings = load_bgp_tcp_ao_settings(
             bgp_tcp_ao_keys,
             bgp_tcp_ao_timers,
             devices,
+            **({"profile_path": bgp_profile} if bgp_profile else {}),
             persist_seed=not (args.preview or args.dry_run),
         )
         if bgp_tcp_ao_timers < 1800:
             print("[WARN] Juniper recommends at least 1800 seconds between TCP-AO key start-times.")
     else:
-        bgp_tcp_ao_settings = load_persisted_bgp_tcp_ao_settings(devices)
+        bgp_tcp_ao_settings = load_persisted_bgp_tcp_ao_settings(
+            devices,
+            **({"profile_path": getattr(args, "bgp_profile")} if getattr(args, "bgp_profile", None) else {}),
+        )
 
     ldp_tcp_ao_settings = None
     if ldp_tcp_ao_requested:
+        ldp_profile = getattr(args, "ldp_profile", None)
         ldp_tcp_ao_settings = load_ldp_tcp_ao_settings(
             ldp_tcp_ao_keys,
             ldp_tcp_ao_timers,
             devices,
+            **({"profile_path": ldp_profile} if ldp_profile else {}),
             persist_seed=not (args.preview or args.dry_run),
         )
         if ldp_tcp_ao_timers < 1800:
             print("[WARN] Juniper recommends at least 1800 seconds between LDP TCP-AO key start-times.")
     else:
-        ldp_tcp_ao_settings = load_persisted_ldp_tcp_ao_settings(devices)
+        ldp_tcp_ao_settings = load_persisted_ldp_tcp_ao_settings(
+            devices,
+            **({"profile_path": getattr(args, "ldp_profile")} if getattr(args, "ldp_profile", None) else {}),
+        )
+
+    if tcpao_scope:
+        selected_settings = bgp_tcp_ao_settings if tcpao_scope == "bgp" else ldp_tcp_ao_settings
+        selected_names = {
+            name
+            for session in (selected_settings or {}).get("sessions", {}).values()
+            for name in session.get("devices", [])
+        }
+        devices = {name: device for name, device in devices.items() if name in selected_names}
+        if not devices:
+            raise RuntimeError(f"No runtime devices selected for {tcpao_scope.upper()} TCP-AO")
 
     bootstrap_user = (
         getattr(args, "bootstrap_user", None)
@@ -1555,6 +1578,7 @@ def handle_deploy(args):
     )
 
     script_user = get_script_user(inventory_base)
+    QKD["SCRIPT_USER"] = script_user
     script_password = (
         os.getenv("QKD_SCRIPT_PASSWORD")
         or secrets.get("script_password")
@@ -1693,7 +1717,6 @@ def handle_deploy(args):
             "QKD_DEFAULT_PASSWORD, or inventory_base secrets.default_password."
         )
 
-    QKD["SCRIPT_USER"] = script_user
     if bootstrap_user:
         QKD["DEPLOY_USER"] = bootstrap_user
 
@@ -1771,7 +1794,7 @@ def handle_deploy(args):
     # Always refresh runtime on-box artifacts at deploy time so the latest
     # qkd_onbox.py logic is applied even when create is not re-run.
     artifacts = build_onbox_artifacts(
-        devices,
+        artifact_devices,
         bgp_tcp_ao=bgp_tcp_ao_settings,
         ldp_tcp_ao=ldp_tcp_ao_settings,
     )

@@ -100,6 +100,8 @@ nav:
           - Platform differences: qkd/platform_differences_mx_acx_evo.md
           - CLI reference: qkd/cli_reference.md
           - Release history: qkd/release_history.md
+          - TCP-AO orchestrators:
+            - Guide overview: tcpao/index.md
       - On-box runtime:
           - Guide overview: onbox/toc.md
           - Runtime model: onbox/runtime_model.md

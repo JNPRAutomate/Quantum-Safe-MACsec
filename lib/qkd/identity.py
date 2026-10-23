@@ -457,13 +457,15 @@ def check_script_user_home_simple(device):
     name = device_name(device)
     ssh_home = qkd_ssh_home()
     ssh_dir = qkd_ssh_dir()
+    ssh_home_q = shlex.quote(ssh_home)
+    ssh_dir_q = shlex.quote(ssh_dir)
     cmd = (
-        f"echo ### home; "
-        f"ls -ld {ssh_home}; "
-        f"echo ### ssh-dir; "
-        f"mkdir -p {ssh_dir}; "
-        f"chmod 700 {ssh_dir}; "
-        f"ls -ld {ssh_dir}"
+        f"ls -ld {ssh_home_q} && "
+        f"chmod 2750 {ssh_home_q} && "
+        f"ls -ld {ssh_home_q} && "
+        f"mkdir -p {ssh_dir_q} && "
+        f"chmod 700 {ssh_dir_q} && "
+        f"ls -ld {ssh_dir_q}"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=30)
     if result.returncode != 0:

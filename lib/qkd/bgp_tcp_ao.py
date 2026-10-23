@@ -34,9 +34,17 @@ def load_bgp_tcp_ao_settings(
     if not isinstance(config, dict):
         raise ValueError("BGP TCP-AO profile must contain a 'bgp_tcp_ao' mapping")
 
-    sessions = config.get("sessions")
-    if not isinstance(sessions, dict) or len(sessions) != 1:
-        raise ValueError("this TCP-AO deployment supports exactly one existing BGP session")
+    configured_sessions = config.get("sessions")
+    if not isinstance(configured_sessions, dict) or not configured_sessions:
+        raise ValueError("BGP TCP-AO profile must contain at least one BGP session")
+    sessions = {}
+    for session_id, raw in configured_sessions.items():
+        if not isinstance(raw, dict):
+            raise ValueError(f"BGP TCP-AO session {session_id} must be a mapping")
+        if raw.get("enabled", True):
+            sessions[session_id] = raw
+    if not sessions:
+        raise ValueError("BGP TCP-AO profile has no enabled sessions")
 
     state_file = Path(state_path).expanduser()
     persisted: dict[str, Any] = {}
@@ -50,6 +58,8 @@ def load_bgp_tcp_ao_settings(
     persisted_sessions = persisted.get("sessions", {})
     if not isinstance(persisted_sessions, dict):
         raise ValueError(f"Invalid BGP TCP-AO seed state {state_file}: sessions must be a mapping")
+    if persisted.get("enabled") and set(persisted_sessions) != {str(key) for key in sessions}:
+        raise ValueError("Selected BGP TCP-AO sessions differ from active state; refusing an implicit transition")
 
     result_sessions: dict[str, Any] = {}
     new_persisted: dict[str, Any] = {
@@ -61,15 +71,15 @@ def load_bgp_tcp_ao_settings(
         "sessions": {},
     }
     for session_id, raw in sessions.items():
-        if not isinstance(raw, dict):
-            raise ValueError(f"BGP TCP-AO session {session_id} must be a mapping")
+        if not session_id or not all(c.isalnum() or c in "_-" for c in str(session_id)):
+            raise ValueError(f"Invalid BGP TCP-AO session id: {session_id}")
         names = raw.get("devices")
         endpoints = raw.get("endpoints")
         if not isinstance(names, list) or len(names) != 2 or len(set(names)) != 2:
             raise ValueError(f"BGP TCP-AO session {session_id} must name two distinct devices")
         group_name = str(raw.get("group_name") or "")
-        if not group_name or len(group_name) > 63 or not all(c.isalnum() or c in "_.-" for c in group_name):
-            raise ValueError(f"BGP TCP-AO session {session_id} requires a valid existing group_name")
+        if group_name and (len(group_name) > 63 or not all(c.isalnum() or c in "_.-" for c in group_name)):
+            raise ValueError(f"BGP TCP-AO session {session_id} has an invalid group_name")
         if not isinstance(endpoints, dict) or set(endpoints) != set(names):
             raise ValueError(f"BGP TCP-AO session {session_id} needs endpoint settings for both devices")
         if any(name not in devices for name in names):
@@ -77,10 +87,18 @@ def load_bgp_tcp_ao_settings(
             raise ValueError(f"BGP TCP-AO session {session_id} devices missing from runtime: {missing}")
 
         master_names: set[str] = set()
+        group_names: dict[str, str] = {}
         for name in names:
             endpoint = endpoints[name]
             if not isinstance(endpoint, dict):
                 raise ValueError(f"BGP TCP-AO endpoint {session_id}/{name} must be a mapping")
+            endpoint_group = str(endpoint.get("group_name") or group_name)
+            if not endpoint_group or len(endpoint_group) > 63 or not all(c.isalnum() or c in "_.-" for c in endpoint_group):
+                raise ValueError(f"BGP TCP-AO endpoint {session_id}/{name} requires a valid existing group_name")
+            group_names[name] = endpoint_group
+            routing_instance = str(endpoint.get("routing_instance") or "")
+            if routing_instance and (len(routing_instance) > 63 or not all(c.isalnum() or c in "_.-" for c in routing_instance)):
+                raise ValueError(f"Invalid BGP routing-instance for {session_id}/{name}: {routing_instance}")
             try:
                 ipaddress.ip_address(str(endpoint["neighbor_address"]))
                 peer_as = int(endpoint["peer_as"])
@@ -120,6 +138,7 @@ def load_bgp_tcp_ao_settings(
             if (
                 old.get("keychain_name", keychain_name) != keychain_name
                 or old.get("group_name", group_name) != group_name
+                or old.get("group_names", group_names) != group_names
                 or old.get("devices", list(names)) != list(names)
                 or old.get("endpoints", endpoints) != endpoints
             ):
@@ -136,6 +155,7 @@ def load_bgp_tcp_ao_settings(
             "seed_secret": seed_secret,
             "keychain_name": keychain_name,
             "group_name": group_name,
+            "group_names": group_names,
             "devices": list(names),
             "endpoints": endpoints,
         }
@@ -143,6 +163,7 @@ def load_bgp_tcp_ao_settings(
         result_sessions[str(session_id)] = {
             "devices": list(names),
             "group_name": group_name,
+            "group_names": group_names,
             "master": next(iter(master_names)),
             "endpoints": endpoints,
             "keychain_name": keychain_name,
@@ -200,6 +221,7 @@ def mark_bgp_tcp_ao_settings_active(
                 "seed_secret": session["seed_secret"],
                 "keychain_name": session["keychain_name"],
                 "group_name": session["group_name"],
+                "group_names": session.get("group_names", {}),
                 "devices": list(session["devices"]),
                 "endpoints": session["endpoints"],
             }

@@ -4,6 +4,7 @@ ldp_tcp_ao:
   tolerance_seconds: 30
   sessions:
     EVO1-EVO2:
+      enabled: true
       devices:
         - EVO1
         - EVO2

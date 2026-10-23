@@ -7,6 +7,7 @@ bgp_tcp_ao:
     # local routers receiving AO config; `neighbor_address` is that router's
     # existing BGP peer, not a link/interface address to be created here.
     EVO1-EVO2:
+      enabled: true
       group_name: LAB-EVO
       devices:
         - EVO1

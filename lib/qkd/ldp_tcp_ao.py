@@ -33,9 +33,17 @@ def load_ldp_tcp_ao_settings(
     config = profile.get("ldp_tcp_ao")
     if not isinstance(config, dict):
         raise ValueError("LDP TCP-AO profile must contain an 'ldp_tcp_ao' mapping")
-    sessions = config.get("sessions")
-    if not isinstance(sessions, dict) or len(sessions) != 1:
-        raise ValueError("this LDP TCP-AO deployment supports exactly one existing LDP session")
+    configured_sessions = config.get("sessions")
+    if not isinstance(configured_sessions, dict) or not configured_sessions:
+        raise ValueError("LDP TCP-AO profile must contain at least one LDP session")
+    sessions = {}
+    for session_id, raw in configured_sessions.items():
+        if not isinstance(raw, dict):
+            raise ValueError(f"LDP TCP-AO session {session_id} must be a mapping")
+        if raw.get("enabled", True):
+            sessions[session_id] = raw
+    if not sessions:
+        raise ValueError("LDP TCP-AO profile has no enabled sessions")
 
     state_file = Path(state_path).expanduser()
     persisted: dict[str, Any] = {}
@@ -48,6 +56,8 @@ def load_ldp_tcp_ao_settings(
             raise ValueError(f"Invalid saved LDP TCP-AO state {state_file}: expected session mapping")
 
     old_sessions = persisted.get("sessions", {})
+    if persisted.get("enabled") and set(old_sessions) != {str(key) for key in sessions}:
+        raise ValueError("Selected LDP TCP-AO sessions differ from active state; refusing an implicit transition")
     next_state: dict[str, Any] = {
         "enabled": bool(persisted.get("enabled", False)),
         "key_count": int(key_count),
@@ -59,8 +69,8 @@ def load_ldp_tcp_ao_settings(
     output_sessions: dict[str, Any] = {}
 
     for session_id, raw in sessions.items():
-        if not isinstance(raw, dict):
-            raise ValueError(f"LDP TCP-AO session {session_id} must be a mapping")
+        if not session_id or not all(c.isalnum() or c in "_-" for c in str(session_id)):
+            raise ValueError(f"Invalid LDP TCP-AO session id: {session_id}")
         names = raw.get("devices")
         endpoints = raw.get("endpoints")
         if not isinstance(names, list) or len(names) != 2 or len(set(names)) != 2:

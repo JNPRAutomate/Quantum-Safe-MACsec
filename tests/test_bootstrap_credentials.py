@@ -250,6 +250,39 @@ def test_create_uses_resolved_script_identity(
         qkd_orchestrator.handle_create(SimpleNamespace(inventory="test", pki_profile="hierarchical_ca"))
 
 
+def test_deploy_preview_uses_resolved_script_identity(monkeypatch):
+    clear_credential_environment(monkeypatch)
+    monkeypatch.delenv("QKD_SCRIPT_USER", raising=False)
+    monkeypatch.setitem(qkd_orchestrator.QKD, "SCRIPT_USER", "etsi_user")
+    monkeypatch.setattr(qkd_orchestrator, "load_runtime_devices", lambda: {})
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "load_inventory_base",
+        lambda: {"secrets": {"script_user": "admin"}},
+    )
+    monkeypatch.setattr(qkd_orchestrator, "setup_logger", lambda **_kwargs: None)
+    preview_users = []
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "run_provisioning",
+        lambda **_kwargs: preview_users.append(qkd_orchestrator.QKD["SCRIPT_USER"]),
+    )
+
+    qkd_orchestrator.handle_deploy(
+        SimpleNamespace(
+            onbox_only=False,
+            shipment_preload=False,
+            verbose=0,
+            preview=True,
+            dry_run=False,
+            ssh_key=None,
+            debug=False,
+        )
+    )
+
+    assert preview_users == ["admin"]
+
+
 def test_create_resolves_credentials_before_runtime_cleanup():
     tree = ast.parse(ORCHESTRATOR.read_text(encoding="utf-8"))
     handle_create = next(

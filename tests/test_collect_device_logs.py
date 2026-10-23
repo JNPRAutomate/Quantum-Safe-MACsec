@@ -35,7 +35,7 @@ def test_canonical_inventory_contains_all_eleven_devices():
 def test_script_user_comes_from_base_inventory():
     assert (
         load_script_user(ROOT / "config" / "inventory" / "inventory_base.yaml")
-        == "etsi_user"
+        == "admin"
     )
 
 
