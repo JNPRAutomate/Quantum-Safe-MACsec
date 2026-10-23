@@ -1,6 +1,6 @@
 # Architecture Evolution and Decision History
 
-This document explains how the project reached the `ver3.3.4.2` architecture.
+This document explains how the project reached the `ver3.3.4.3` architecture.
 It preserves superseded models because they explain current constraints,
 failure handling, and compatibility choices. The current normative behavior is
 documented in the domain guides under `pqc/`, `kme/`, `qkd/`, `onbox/`, and
@@ -228,15 +228,21 @@ especially after a clean deployment.
 - a privileged bootstrap/install identity performs operations that require
   root or Junos configuration privilege;
 - an upload identity may stage artifacts under `/var/tmp`;
-- `etsi_user` owns and executes the op/event script;
+- the inventory-selected `SCRIPT_USER` owns and executes the op/event script
+  (default `etsi_user`; lab deployments can select `admin`);
 - `qkd_id_ed25519` supports orchestrator-to-device management and validation;
 - each router owns a unique `qkd_rpc_id_ed25519` private key for runtime
   peer RPC;
 - private runtime RPC keys never leave their owning router.
 
 Hardcoded lab passwords were removed. Missing privileged credentials are
-prompted or injected through the supported credential context. A full clean
-removes managed runtime identity, so bootstrap must precede deploy.
+prompted or injected through the supported credential context. Identity
+resolution must remain consistent through runtime generation, bootstrap,
+validation, preview, and deploy; hard-coded fallbacks can silently make preview
+or SSH transport use a different account from the inventory. A full clean
+removes managed runtime identity, so bootstrap must precede deploy. The
+configured user's home and `.ssh` permissions are explicitly secured during
+key bootstrap.
 
 ## 6. Self-signed certificates to selectable hierarchical PKI
 
@@ -331,9 +337,29 @@ Current documentation:
 - [Collection and analytics](tools/collection_and_analytics.md)
 - [Troubleshooting and recovery](tools/troubleshooting_and_recovery.md)
 
-## 9. Current baseline and future evolution
+## 9. BGP/LDP authentication alongside QKD/MACsec
 
-`ver3.3.4.2` consolidates:
+QKD/MACsec link protection and TCP-AO authentication for routing adjacencies
+are separate protocol concerns. TCP-AO uses its own selected peer sessions,
+authentication keychains, controller seed/state, timers, and logs; it reuses
+ETSI 014 key retrieval and the on-box SSH-RPC runtime without invoking MACsec
+provisioning. The standalone BGP/LDP CLIs make that operational boundary
+explicit.
+
+Peer discovery is read-only and produces candidate reports. An operator still
+selects and pairs the endpoints in the protocol profile; discovery alone never
+authorizes authentication. Deployment validates the selected existing peer
+and fails closed if its state or configuration does not match.
+
+The full QKD clean remains destructive: it deletes all `event-options`, and
+`--full-macsec` deletes all MACsec and authentication keychains. TCP-AO
+bindings described by enabled profiles are removed before keychain deletion so
+Junos can commit without dangling references. A protocol-scoped AO reset is
+still future work.
+
+## 10. Current baseline and future evolution
+
+`ver3.3.4.3` consolidates:
 
 - link-driven orchestration;
 - profile-based PKI with hierarchical support;
@@ -341,10 +367,15 @@ Current documentation:
 - transactional RPC identity rotation;
 - four-slot hitless ring with reconciliation and self-healing;
 - separate QKD/KME orchestration lifecycles;
+- standalone multi-session BGP/LDP TCP-AO orchestration over the existing QKD
+  key-delivery and on-box RPC facilities;
+- inventory-selected `SCRIPT_USER` resolution and secure account-home setup;
 - correlated health and performance tooling.
 
 The next architectural steps are class-based decomposition of
 `qkd_onbox.py`, `qkd_orchestrator.py`, and `kme_orchestrator.py`, plus an
-explicit embedded-KME backend for qualified Junos EVO ACX/PTX platforms.
-These are tracked in [the roadmap](roadmap.md); they are not described as
-current behavior.
+explicit embedded-KME backend for qualified Junos EVO ACX/PTX platforms. TCP-AO
+still needs controlled lab validation at the intended interval, including
+repeated rollover and bilateral failure recovery. LDP remains blocked by the
+lab license prerequisite. These items are tracked in
+[the roadmap](roadmap.md) and are not described as completed behavior.

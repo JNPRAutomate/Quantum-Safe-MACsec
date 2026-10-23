@@ -84,6 +84,186 @@ session; schedule deployment in a maintenance window. Active session
 selection or endpoint changes are rejected rather than silently changing the
 keychain mapping.
 
+## Full EVO lab reset after a timer mismatch
+
+Use this procedure when the controller reports that the requested TCP-AO
+timer differs from the active saved deployment, for example an active
+180-second state when the intended timer is 1800 seconds. Do not bypass the
+state check. This is a full QKD/MACsec reset, not a TCP-AO-only reset.
+
+Run the commands in order, one at a time, and stop at the first failure. In
+particular, do not run `validate` or `status` after a failed deploy and treat
+their success as evidence that deploy succeeded.
+
+### 1. Update the Linux controller
+
+```sh
+cd ~/macsec3343
+git status --short --branch
+git pull --ff-only origin ver3.3.4.3
+git log -1 --oneline
+```
+
+Confirm the checkout includes commit `c294972` or a later commit. Review any
+pre-existing local changes before continuing.
+
+### 2. Confirm the router cleanup scope
+
+On both EVO1 and EVO2, inspect these hierarchies before cleaning:
+
+```text
+show configuration event-options | display set
+show configuration security macsec | display set
+show configuration security authentication-key-chains | display set
+show configuration protocols bgp | display set | match authentication
+```
+
+The full clean deletes the entire `event-options` hierarchy, all MACsec
+configuration, and all authentication keychains. The selected session in
+`config/inventory/bgp_tcp_ao.yaml` must remain enabled and must describe the
+live EVO1/EVO2 BGP groups, neighbors, and any routing instances. The cleanup
+fix uses this profile to remove BGP TCP-AO bindings before deleting keychains.
+Stop if the hierarchies contain non-lab configuration or the profile does not
+match the live routers. Do not share command output containing secrets.
+
+### 3. Provide bootstrap credentials
+
+On the Linux controller, ensure shell tracing is disabled. Enter the router
+root/bootstrap password without echoing or saving it in a file:
+
+```sh
+set +x
+export QKD_BOOTSTRAP_USER=root
+read -rsp 'Router root/bootstrap password: ' QKD_BOOTSTRAP_PASSWORD
+printf '\n'
+export QKD_BOOTSTRAP_PASSWORD
+```
+
+### 4. Complete the QKD full clean
+
+Run once and confirm the operation succeeds on both routers:
+
+```sh
+python qkd_orchestrator.py clean --pki --full-macsec
+```
+
+If either device fails, stop. Do not remove controller AO state or recreate
+runtime until the Junos clean commits successfully on both devices. This clean
+also removes the `SCRIPT_USER` account (`admin` in this lab), local generated
+runtime/PKI artifacts, and on-router QKD files/certificates.
+
+### 5. Archive and remove the old controller AO state
+
+Only after successful router cleanup, preserve the old seed/state and remove
+the active state file so the next deployment can initialize the requested
+1800-second timer:
+
+```sh
+state="$HOME/.local/state/qkd/bgp_tcp_ao.json"
+if [ -f "$state" ]; then
+  install -d -m 700 "$HOME/.local/state/qkd/backup"
+  backup="$HOME/.local/state/qkd/backup/bgp_tcp_ao.json.pre-reset.$(date +%Y%m%d_%H%M%S)"
+  cp -p "$state" "$backup"
+  chmod 600 "$backup"
+  rm "$state"
+fi
+```
+
+Do not remove this state while its keychain or BGP binding remains on a router.
+
+### 6. Recreate runtime, PKI, and SCRIPT_USER
+
+```sh
+python qkd_orchestrator.py create \
+  --inventory config/inventory/input/lab1_vmm.yaml \
+  --pki-profile hierarchical_ca
+```
+
+```sh
+python qkd_orchestrator.py bootstrap -v
+```
+
+```sh
+python qkd_orchestrator.py validate --phase predeploy -v
+```
+
+Stop if bootstrap or pre-deploy validation fails.
+
+### 7. Recreate and validate the KME
+
+Use the private KME profile with the real database password, not a committed
+example profile. In the reported recovery, `kme_orchestrator.py destroy` has
+already succeeded; **do not run destroy again**. Destroy removed the Docker
+network and database volumes, so `create` must run `build-env` again. The
+existing image can be reused:
+
+```sh
+export KME_CONFIG="$HOME/.config/qkd/lab_evo.yaml"
+python kme_orchestrator.py create \
+  --config "$KME_CONFIG" \
+  --count 2 \
+  --skip-bootstrap \
+  --skip-install-host \
+  --skip-build-image \
+  --validate
+```
+
+```sh
+python kme_orchestrator.py status --config "$KME_CONFIG"
+```
+
+### 8. Deploy and validate QKD/MACsec
+
+```sh
+python qkd_orchestrator.py deploy -v
+```
+
+```sh
+python qkd_orchestrator.py validate --phase full -v
+```
+
+Stop if deploy or full validation fails.
+
+### 9. Preview and deploy BGP TCP-AO at 1800 seconds
+
+First confirm the BGP session is `Established` on both routers. Initial
+TCP-AO activation can interrupt the session; use a maintenance window. Review
+the preview, then run each command separately and check its exit status:
+
+```sh
+python tcpao_orchestrator.py preview --keys 5 --timers 1800
+```
+
+```sh
+python tcpao_orchestrator.py deploy --keys 5 --timers 1800 -v
+```
+
+Only after deploy succeeds, run:
+
+```sh
+python tcpao_orchestrator.py validate
+```
+
+```sh
+python tcpao_orchestrator.py status
+```
+
+On EVO1 and EVO2, verify the session and active keychain:
+
+```text
+show bgp summary
+show bgp neighbor <peer-address> | match "Authentication|State"
+show security authentication-key-chains key-chain QKD_AO_EVO1_EVO2
+```
+
+Use neighbor `10.255.0.1` on EVO1 and `10.255.0.0` on EVO2. LDP remains
+excluded until its Juniper license is available. Remove the bootstrap password
+from the Linux shell when finished:
+
+```sh
+unset QKD_BOOTSTRAP_PASSWORD
+```
+
 ## LDP TCP-AO
 
 Edit `config/inventory/ldp_tcp_ao.yaml`. Each enabled session names both

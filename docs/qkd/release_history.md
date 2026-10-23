@@ -9,24 +9,70 @@ normative behavior is documented by domain.
 ## ver3.3.4.3 (Development)
 
 **Branch**: `ver3.3.4.3`
-**Status**: TCP-AO implementation in progress; lab end-to-end verification
-required before this milestone is declared complete.
+**Status**: implementation and offline suite are present on the branch;
+end-to-end BGP TCP-AO qualification at the intended 1800-second interval and
+LDP qualification remain open. Do not treat preview or unit-test success as
+production validation.
 
-### Planned milestone: QKD-backed BGP/LDP TCP-AO
+### Delivered: standalone BGP/LDP TCP-AO orchestration
 
-- Keep BGP and LDP TCP-AO state, keychains, timers, and separate
-  `bgp-tcp-ao.log` / `ldp-tcp-ao.log` files independent from MACsec while
-  reusing the existing on-box runtime and ETSI 014 KME transport.
-- Restrict initial deployment to one explicitly mapped, established,
-  unauthenticated eBGP neighbor.
-- Require successful two-peer key installation and post-activation BGP
-  verification before confirming the Junos commits.
-- Do not mark complete until the branch is committed/pushed and initial
-  activation, repeated rollover, and failure recovery are proven on the lab.
+- Added `tcpao_orchestrator.py` and `ldp_orchestrator.py` with independent
+  `discover`, `preview`, `deploy`, `validate`, and `status` commands.
+- Added read-only peer discovery reports. Discovery does not automatically pair
+  opposite endpoints or enable a session; operators explicitly select sessions
+  in the BGP/LDP profile.
+- Extended BGP/LDP settings to multiple enabled sessions. BGP endpoints can
+  specify different local groups and routing instances.
+- Reused QKD KME key delivery and the on-box runtime while keeping BGP and LDP
+  state/logs separate and skipping MACsec provisioning for protocol-only
+  deploys.
+- Added a full-clean fix that removes configured TCP-AO neighbor bindings
+  before deleting authentication keychains, avoiding Junos dangling-keychain
+  commit failures.
 
-See [BGP TCP-AO QKD Rotation](bgp_tcp_ao.md) and
-[LDP TCP-AO QKD Rotation](ldp_tcp_ao.md) for implementation contracts and
-operational verification steps.
+### Significant fixes
+
+- **SCRIPT_USER is inventory-selected, not hard-coded.** Fixed identity
+  resolution through create/bootstrap/validation/deploy preview so a configured
+  account such as `admin` is honored instead of stale `etsi_user` defaults.
+  Bootstrap and key synchronization now secure the configured user's home
+  (`2750`) before preparing `.ssh` (`700`) and fail explicitly when that setup
+  cannot be completed. This fixes the deployment failure when changing
+  `SCRIPT_USER` to a non-default account.
+- **TCP-AO peer validation hardened.** BGP neighbor output is validated by
+  semantic peer/group/ASN/state fields, tolerating Junos CRLF output and benign
+  license/last-error text while still failing closed on mismatches or existing
+  authentication.
+- **Bilateral bootstrap and retries hardened.** Persisted bootstrap key
+  material survives retries; peer RPC keys and required KME certificates are
+  installed for AO-only deployment; an already-active session reports success
+  rather than a false failure.
+- **Full clean handles TCP-AO references.** The cleanup sequence removes
+  profile-selected BGP/LDP authentication bindings before deleting all
+  authentication keychains. This does not make full clean protocol-scoped:
+  `--full-macsec` still removes the entire MACsec and authentication-key-chain
+  hierarchies.
+
+### Lab status and remaining validation
+
+- EVO1/EVO2 were observed with the BGP TCP-AO session `Established` under the
+  earlier 180-second controller state.
+- A request to redeploy that active state with `--timers 1800` was correctly
+  rejected. Timer/key-count changes on active state fail closed; the documented
+  full reset/redeploy procedure is required to establish a new controller seed
+  and interval.
+- Still required: a clean 1800-second activation, repeated rotation, and
+  controlled failure/retry/rollback testing on both routers.
+- LDP deployment is blocked until the required Juniper license is available;
+  no licensed LDP end-to-end result is claimed.
+- The repository Python suite passed 249 tests after the full-clean binding
+  fix. MkDocs build was not verified because MkDocs was unavailable in the
+  local virtual environment.
+
+See [BGP TCP-AO QKD Rotation](bgp_tcp_ao.md),
+[LDP TCP-AO QKD Rotation](ldp_tcp_ao.md), and the
+[TCP-AO recovery runbook](../tcpao/index.md#full-evo-lab-reset-after-a-timer-mismatch)
+for current configuration and operational steps.
 
 ## ver3.3.1
 
