@@ -26,6 +26,10 @@ production validation.
 - Reused QKD KME key delivery and the on-box runtime while keeping BGP and LDP
   state/logs separate and skipping MACsec provisioning for protocol-only
   deploys.
+- Added link-specific SSH-RPC peer addresses (`peer_ip_a` / `peer_ip_b`) to
+  inventory, independent of the interfaces carrying the MACsec link. This
+  allows router-to-router coordination to use a separately routed transport
+  network.
 - Added a full-clean fix that removes configured TCP-AO neighbor bindings
   before deleting authentication keychains, avoiding Junos dangling-keychain
   commit failures.
@@ -45,13 +49,28 @@ production validation.
   authentication.
 - **Bilateral bootstrap and retries hardened.** Persisted bootstrap key
   material survives retries; peer RPC keys and required KME certificates are
-  installed for AO-only deployment; an already-active session reports success
-  rather than a false failure.
+  installed for AO-only deployment; bootstrap fails if RPC key setup is
+  incomplete; an already-active session reports success rather than a false
+  failure.
+- **KME host checks remain active when installation is skipped.** The
+  `--skip-install-host` path verifies the existing host prerequisites rather
+  than assuming Docker and the Compose runtime are ready.
 - **Full clean handles TCP-AO references.** The cleanup sequence removes
   profile-selected BGP/LDP authentication bindings before deleting all
   authentication keychains. This does not make full clean protocol-scoped:
   `--full-macsec` still removes the entire MACsec and authentication-key-chain
   hierarchies.
+
+### Lab and deployment documentation
+
+- Added a QFX full-reset and deployment runbook covering the destructive clean,
+  KME recreation, RPC-key checks, deployment sequence, and runtime qualification.
+  It explicitly warns that legacy QFX validation alone does not prove KME key
+  retrieval or end-to-end RPC operation.
+- Documented the KME certificate bind mount: the host Compose project's
+  `./certs` directory is mounted read-only at `/certs` inside the KME
+  container. The generated certificate files are installed on the KME host
+  before Compose starts the services.
 
 ### Lab status and remaining validation
 
