@@ -22,6 +22,63 @@ def cleanup_script_names(script_name):
     return list(dict.fromkeys((script_name, ONBOX_SCRIPT_NAME, LEGACY_KME_ONBOX_SCRIPT_NAME)))
 
 
+def collect_tcp_ao_auth_cleanup_commands(device_name, profile_dir=None):
+    inventory_dir = Path(profile_dir) if profile_dir else BASE_DIR / "config" / "inventory"
+    commands = []
+    profiles = (
+        ("bgp_tcp_ao.yaml", "bgp_tcp_ao"),
+        ("ldp_tcp_ao.yaml", "ldp_tcp_ao"),
+    )
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-%")
+
+    for filename, protocol in profiles:
+        path = inventory_dir / filename
+        if not path.is_file():
+            continue
+        with path.open("r", encoding="utf-8") as handle:
+            profile = yaml.safe_load(handle) or {}
+        config = profile.get(protocol) if isinstance(profile, dict) else None
+        sessions = config.get("sessions", {}) if isinstance(config, dict) else {}
+        if not isinstance(sessions, dict):
+            continue
+
+        for session in sessions.values():
+            if not isinstance(session, dict) or not session.get("enabled", True):
+                continue
+            endpoints = session.get("endpoints", {})
+            devices = session.get("devices", [])
+            endpoint = endpoints.get(device_name) if isinstance(endpoints, dict) else None
+            if device_name not in devices or not isinstance(endpoint, dict):
+                continue
+
+            if protocol == "bgp_tcp_ao":
+                group = str(endpoint.get("group_name") or session.get("group_name") or "")
+                neighbor = str(endpoint.get("neighbor_address") or "")
+                routing_instance = str(endpoint.get("routing_instance") or "")
+                if not group or not neighbor or not set(group + neighbor + routing_instance) <= allowed:
+                    continue
+                prefix = (
+                    f"routing-instances {routing_instance} protocols bgp"
+                    if routing_instance
+                    else "protocols bgp"
+                )
+                target = f"{prefix} group {group} neighbor {neighbor}"
+            else:
+                peer = str(endpoint.get("peer_address") or "")
+                if not peer or not set(peer) <= allowed:
+                    continue
+                target = f"protocols ldp session {peer}"
+
+            commands.extend(
+                [
+                    f"delete {target} authentication-key-chain",
+                    f"delete {target} authentication-algorithm",
+                ]
+            )
+
+    return list(dict.fromkeys(commands))
+
+
 # ----------------------------------------
 # CLEAN LOCAL RUNTIME
 # ----------------------------------------
@@ -340,6 +397,7 @@ def clean_device(name, device, full_macsec=False):
 
         if full_macsec:
             config_cmds.append("delete security macsec")
+            config_cmds.extend(collect_tcp_ao_auth_cleanup_commands(name))
             config_cmds.append("delete security authentication-key-chains")
         else:
             for iface in iface_candidates:
