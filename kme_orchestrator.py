@@ -130,6 +130,15 @@ def cmd_create(args: argparse.Namespace) -> None:
         )
     else:
         print("[SKIP] install-host")
+        if not args.skip_build_env:
+            results["install_host"] = call_step(
+                "verify-host",
+                run_install_host,
+                config_path=args.config,
+                os_family=args.os_family,
+                dry_run=args.dry_run,
+                verify_only=True,
+            )
 
     if not args.skip_build_env:
         results["build_env"] = call_step(
@@ -213,7 +222,12 @@ def cmd_bootstrap(args: argparse.Namespace) -> None:
 def cmd_install_host(args: argparse.Namespace) -> None:
     run_install_host = load_symbol("lib.kme.install_host", "run_install_host")
     banner("KME: install-host")
-    run_install_host(config_path=args.config, os_family=args.os_family, dry_run=args.dry_run)
+    run_install_host(
+        config_path=args.config,
+        os_family=args.os_family,
+        dry_run=args.dry_run,
+        verify_only=getattr(args, "verify_only", False),
+    )
 
 
 def cmd_build_env(args: argparse.Namespace) -> None:
@@ -354,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_cert_args(p_create)
     add_db_args(p_create)
     p_create.add_argument("--skip-bootstrap", action="store_true", help="Skip SSH bootstrap")
-    p_create.add_argument("--skip-install-host", action="store_true", help="Skip remote host OS/Docker dependency installation")
+    p_create.add_argument("--skip-install-host", action="store_true", help="Skip installation; verify existing host dependencies before build-env")
     p_create.add_argument("--skip-build-env", action="store_true", help="Skip build-env step")
     p_create.add_argument("--skip-build-image", action="store_true", help="Skip build-image step")
     p_create.add_argument("--skip-cert-install", action="store_true", help="Skip KME certificate installation")
@@ -370,6 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_install_host = subparsers.add_parser("install-host", help="Install remote KME host dependencies")
     add_common_args(p_install_host)
     p_install_host.add_argument("--os-family", choices=["ubuntu", "rhel"], default=None, help="Override remote OS family")
+    p_install_host.add_argument("--verify-only", action="store_true", help="Verify existing dependencies and record readiness without installing packages")
     p_install_host.set_defaults(func=cmd_install_host)
 
     p_build_env = subparsers.add_parser("build-env", help="Prepare remote repo, compose, folders and network")

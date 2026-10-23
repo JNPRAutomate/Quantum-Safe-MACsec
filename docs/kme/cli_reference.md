@@ -55,6 +55,13 @@ Example:
 python3 kme_orchestrator.py create --config config/kme/live.yaml --count 2
 ```
 
+When `--skip-install-host` is used and `build-env` is selected, `create`
+verifies the existing Git, Docker client, Compose, Docker daemon access, and
+Docker service. Only successful verification records host readiness in this
+clone's state. No packages, APT repositories, or service settings are changed
+by that verification. A failed check stops the workflow before `build-env`.
+This supports a new controller clone using an already prepared KME host.
+
 ## bootstrap
 
 Prepare SSH key, alias, connectivity, and remote workspace.
@@ -72,11 +79,20 @@ Install and verify remote host dependencies.
 Options:
 
 - `--os-family {ubuntu,rhel}`
+- `--verify-only`: check existing dependencies and record readiness without
+	installing packages or changing OS/service configuration. Requires bootstrap
+	first. Unlike `--dry-run`, it performs real checks and persists success.
 
 Example:
 
 ```bash
 python3 kme_orchestrator.py install-host --config config/kme/live.yaml --os-family rhel
+```
+
+For a host that already has the required dependencies:
+
+```sh
+python3 kme_orchestrator.py install-host --config config/kme/live.yaml --verify-only
 ```
 
 ## build-env

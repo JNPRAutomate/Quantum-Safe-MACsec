@@ -445,6 +445,12 @@ def verify_installation(config: dict[str, Any], dry_run: bool = False) -> dict[s
             "docker compose version",
             dry_run=dry_run,
         ),
+        "docker_access": verify_remote_tool(
+            config,
+            "Docker daemon access",
+            "docker info --format '{{.ServerVersion}}'",
+            dry_run=dry_run,
+        ),
         "docker_service": verify_remote_tool(
             config,
             "docker service",
@@ -495,6 +501,7 @@ def run_install_host(
     config_path: str | Path,
     os_family: str | None = None,
     dry_run: bool = False,
+    verify_only: bool = False,
 ) -> dict[str, Any]:
     config = load_yaml(config_path)
     state = load_state_for_install_host(config, dry_run=dry_run)
@@ -503,7 +510,9 @@ def run_install_host(
     print("=== KME install-host ===")
     print(f"os_family: {resolved_os}")
 
-    if resolved_os == "ubuntu":
+    if verify_only:
+        print("[VERIFY-ONLY] Checking existing prerequisites; no package or service changes")
+    elif resolved_os == "ubuntu":
         install_host_ubuntu(config, dry_run=dry_run)
     elif resolved_os == "rhel":
         install_host_rhel(config, dry_run=dry_run)
@@ -550,6 +559,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Show intended actions without changing anything",
     )
+    parser.add_argument("--verify-only", action="store_true", help="Verify existing dependencies without installing packages")
 
     return parser.parse_args()
 
@@ -561,6 +571,7 @@ def main() -> None:
         config_path=args.config,
         os_family=args.os_family,
         dry_run=args.dry_run,
+        verify_only=args.verify_only,
     )
 
 
