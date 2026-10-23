@@ -1304,3 +1304,4 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
 
     if failed_devices:
         print(f"[WARN] provisioning completed with failures on: {', '.join(sorted(failed_devices))}")
+    return sorted(failed_devices)

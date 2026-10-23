@@ -95,6 +95,9 @@ def test_script_user_home_check_enforces_ssh_safe_permissions(monkeypatch):
 def test_script_user_bootstrap_secures_home_before_ssh_directory():
     command = build_ssh_fix_command("admin")
 
-    assert command.index("chmod 2750 /var/home/admin") < command.index(
+    assert command.index("mkdir -p /var/home/admin") < command.index(
+        "chmod 2750 /var/home/admin"
+    ) < command.index(
         "mkdir -p /var/home/admin/.ssh"
     )
+    assert "chown admin /var/home/admin" in command

@@ -716,6 +716,8 @@ def build_ssh_fix_command(script_user: str, public_key_line: Optional[str] = Non
 
     return (
         "set -e; "
+        "mkdir -p {home}; "
+        "chown {user} {home}; "
         "chmod 2750 {home}; "
         "mkdir -p {ssh_dir}; "
         "touch {authorized_keys}; "
@@ -979,6 +981,8 @@ def sync_user_keypair_from_local(
 
         result = dev.rpc.request_shell_execute(
             command=(
+                f"mkdir -p {shlex.quote(ssh_home)} && "
+                f"chown {shlex.quote(script_user)} {shlex.quote(ssh_home)} && "
                 f"chmod 2750 {shlex.quote(ssh_home)} && "
                 f"mkdir -p {shlex.quote(ssh_dir)} && "
                 f"mv -f {shlex.quote(remote_tmp_priv)} {shlex.quote(key_path)} && "
@@ -1164,24 +1168,20 @@ def bootstrap_script_user_on_device(
             deploy_user,
             public_key_line=public_key_line,
         ):
-            print(
-                "[%s] WARN ssh home setup did not complete; continuing because this can be platform-specific on Junos" %
-                name
-            )
-            print(
-                "[%s] hint: predeploy/provisioning will continue with runtime checks and SCRIPT_USER SSH auth" %
-                name
-            )
+            print("[%s] FAIL SCRIPT_USER bootstrap: SSH home setup did not complete" % name)
+            return False
 
         if script_auth_mode == "key-only":
-            run_script_user_key_fix(
+            if not run_script_user_key_fix(
                 dev,
                 name,
                 script_user,
                 deploy_user,
                 key_name=str(QKD.get("RPC_SSH_KEY_NAME", "qkd_rpc_id_ed25519")),
                 key_comment=f"qkd-rpc@{name}",
-            )
+            ):
+                print("[%s] FAIL SCRIPT_USER bootstrap: RPC SSH key setup did not complete" % name)
+                return False
 
         if not run_shell_fix(dev, name, script_user, deploy_user):
             print(

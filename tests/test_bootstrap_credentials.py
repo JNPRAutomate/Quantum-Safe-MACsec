@@ -201,6 +201,31 @@ def test_bootstrap_dry_run_does_not_prompt(monkeypatch):
     assert calls[0]["dry_run"] is True
 
 
+def test_bootstrap_command_fails_when_any_device_bootstrap_fails(monkeypatch):
+    monkeypatch.setattr(qkd_orchestrator, "load_runtime_devices", lambda: {})
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "load_inventory_base",
+        lambda: {"secrets": {}},
+    )
+    monkeypatch.setattr(qkd_orchestrator, "setup_logger", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "resolve_interactive_bootstrap_credentials",
+        lambda *_args, **_kwargs: ("root", "secret"),
+    )
+    monkeypatch.setattr(
+        qkd_orchestrator,
+        "bootstrap_script_users",
+        lambda **_kwargs: (["QFX2"], ["QFX1"]),
+    )
+
+    with pytest.raises(RuntimeError, match="QFX1"):
+        qkd_orchestrator.handle_bootstrap(
+            SimpleNamespace(dry_run=False, verbose=0, bootstrap_user=None)
+        )
+
+
 @pytest.mark.parametrize(
     "environment_user,inventory_user,expected_user",
     [("admin", "etsi_user", "admin"), (None, "admin", "admin"), (None, None, "etsi_user")],

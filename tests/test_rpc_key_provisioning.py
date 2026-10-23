@@ -178,6 +178,25 @@ def test_rpc_key_provisioning_rejects_missing_direct_peer_key(monkeypatch):
         )
 
 
+def test_run_provisioning_returns_failed_devices(monkeypatch):
+    monkeypatch.setattr(provisioning, "load_inventory", lambda: ({}, {}, {}))
+    monkeypatch.setattr(provisioning, "should_skip_device", lambda *_args: False)
+    monkeypatch.setattr(provisioning, "load_platform", lambda _platform: {})
+    monkeypatch.setattr(provisioning, "build_device_config", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        provisioning,
+        "push_config",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("missing peer RPC key")),
+    )
+
+    failed = provisioning.run_provisioning(
+        log=None,
+        devices={"EVO1": {"platform": "qfx"}},
+    )
+
+    assert failed == ["EVO1"]
+
+
 @pytest.mark.parametrize("runtime_user", [None, "admin"])
 def test_rpc_key_provisioning_only_replaces_direct_source_tag(monkeypatch, runtime_user):
     monkeypatch.delenv("QKD_SCRIPT_USER", raising=False)

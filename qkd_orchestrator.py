@@ -1454,7 +1454,9 @@ def handle_bootstrap(args):
         print_step_banner("SCRIPT_USER", "PARTIAL SUCCESS")
         print(f"[WARN] Bootstrap failed for: {', '.join(failed)}")
         print(f"[WARN] Successfully bootstrapped: {', '.join(ok)}")
-        print("[INFO] Deploy will skip failed devices and continue with successful ones.")
+        raise RuntimeError(
+            "SCRIPT_USER bootstrap failed on: " + ", ".join(failed)
+        )
     else:
         print_step_banner("SCRIPT_USER", "OK")
     
@@ -1861,7 +1863,7 @@ def handle_deploy(args):
                 + "."
             )
         else:
-            run_provisioning(
+            provisioning_failed = run_provisioning(
                 log=log,
                 dry_run=False,
                 preview=False,
@@ -1870,6 +1872,10 @@ def handle_deploy(args):
                 verbose=args.verbose,
                 devices=devices,
             )
+            if provisioning_failed:
+                raise RuntimeError(
+                    "QKD provisioning failed on: " + ", ".join(provisioning_failed)
+                )
         print_step_banner("4/5", "QKD PROVISIONING", "END")
 
     if bgp_tcp_ao_requested:
