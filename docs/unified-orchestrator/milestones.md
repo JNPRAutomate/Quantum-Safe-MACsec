@@ -11,7 +11,7 @@ working until the new path does the same job.
 | M3 | PKI container | `evokme-pki` issues KME, SAE/router, admin and third-party certs over mTLS; QSM dual-domain profile; renewal and revocation; CA keys only in its volume. |
 | M4 | Host adapter | `host check` reports Docker, Compose, K3s on Ubuntu 22.04/24.04, RHEL 8 and RHEL 9 with no changes; `host install` installs only what is missing; second run is a no-op. |
 | M5 | Bootstrap + create + deploy as `start`, and `retire` by journal | N routers from inventory in one command; resume after a killed run; `retire` leaves the router config identical to before (diff is empty). |
-| M6 | KME providers | standard: cybermercury KME + PostgreSQL on Linux, key volumes populated; evokme: current components; optional EVO containers; per-link `key_mode`, KEM set and NIST level. |
+| M6 | KME stacks | evokme stack (preferred): ETSI FE, core, composer, ML-KEM, FrodoKEM, QKD adapter, vendor plug-in, encrypted SQLite per node, site Vault; HQC and Classic McEliece as later KEM containers. Standard stack: cybermercury KME + one PostgreSQL container per KME (no shared DB), key volumes populated. Same lifecycle for both (plan, deploy, status, hot add/remove, retire); optional EVO containers; per-link `key_mode`, KEM set and NIST level. |
 | M7 | Protection adapters with capability gate | MACsec, TCP-AO BGP and LDP applied only when present and licensed; unlicensed router skipped without commit errors. |
 | M8 | SRX IPsec adapter | IKE/IPsec VPN with keychain and quantum slots on SRX only; rekey without outage; full retire. |
 | M9 | Continuous service | `start/status/rotate/diagnose/stop` on the service; recovery tests: crash mid-rotation, lease loss, reboot, KME outage. |

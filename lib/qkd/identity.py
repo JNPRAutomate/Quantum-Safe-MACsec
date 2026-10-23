@@ -496,13 +496,17 @@ def check_script_dirs_simple(device):
     print(result.stdout)
 
 
-def check_runtime_cleanup_simple(device):
+def reset_router_runtime_state(device):
+    """Clear on-box key state and debug logs so deploy starts from a fresh runtime.
+
+    Deploy-only step (never called by validation).
+    """
     device = normalize_device(device)
     name = device_name(device)
     runtime_state_dir = qkd_runtime_state_dir()
     runtime_log_dir = qkd_runtime_log_dir()
     cmd = (
-        "echo ### qkd-runtime-cleanup; "
+        "echo ### qkd-runtime-reset; "
         f"mkdir -p {runtime_log_dir}; "
         f"chflags nouchg,noschg {runtime_state_dir}/qkd_db_*.json; "
         f"chflags nouchg,noschg {runtime_state_dir}/qkd_db_*.json.*.tmp; "
@@ -520,12 +524,12 @@ def check_runtime_cleanup_simple(device):
         "rm -f /var/tmp/qkd_db_*.json.*.tmp; "
         "rm -f /var/tmp/qkd_debug*.log; "
         "rm -rf /var/tmp/qkd_onbox_*; "
-        "echo ### qkd-runtime-cleanup-done"
+        "echo ### qkd-runtime-reset-done"
     )
     result = ssh_deploy_cmd(device, cmd, timeout=60)
     print(result.stdout)
     if result.returncode != 0:
-        print(f"[WARN] runtime cleanup had non-fatal output on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
+        print(f"[WARN] runtime reset had non-fatal output on {name}\nstdout={result.stdout}\nstderr={result.stderr}")
 
 
 def check_remote_certs(device):
@@ -1092,27 +1096,29 @@ def check_no_state_save_errors(device):
 # -------------------------------------------------
 
 
+def check_predeploy_prerequisites(device):
+    name = device_name(device)
+    paths = [qkd_ssh_home(), qkd_ssh_dir()]
+    commands = [f"test -d {shlex.quote(path)}" for path in paths]
+    if not platform_is_legacy_qfx(device):
+        for path in (qkd_ssh_private_key(), qkd_ssh_public_key(), qkd_authorized_keys()):
+            commands.append(f"test -s {shlex.quote(path)}")
+    result = ssh_deploy_cmd(device, " && ".join(commands), timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"pre-deploy prerequisites missing on {name}; run bootstrap to repair them\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+
+
 def validate_device_identity_predeploy(device):
     device = normalize_device(device)
     name = device_name(device)
     validate_device_record(device)
 
-    if platform_is_legacy_qfx(device):
-        print(f"=== QKD legacy QFX pre-deploy validation: {name} ===")
-        check_script_user_exists(device)
-        check_script_user_home_simple(device)
-        check_script_dirs_simple(device)
-        check_runtime_cleanup_simple(device)
-        print(f"[OK] QKD legacy QFX pre-deploy validation passed: {name}")
-        return
-
     print(f"=== QKD pre-deploy validation: {name} ===")
     check_script_user_exists(device)
-    check_script_user_home_simple(device)
-    check_script_dirs_simple(device)
-    check_script_user_ssh_identity(device)
-    check_script_user_authorized_keys(device)
-    check_runtime_cleanup_simple(device)
+    check_predeploy_prerequisites(device)
     print(f"[OK] QKD pre-deploy validation passed: {name}")
 
 

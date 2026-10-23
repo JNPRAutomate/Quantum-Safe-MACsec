@@ -25,3 +25,5 @@ Decisions taken with the owner on 2026-10-23:
 | Containers | One orchestrator container and one separate PKI container. KMEs, PostgreSQL, Vault stay separate workloads. |
 | Home of the new code | evokme repo; QSM code brought in as the "standard KME" provider. |
 | Linux targets | Ubuntu 22.04/24.04, RHEL 8 and RHEL 9. |
+| KME stack model | Two stack types, same lifecycle. **evokme multi-container stack is preferred** (FE, core, composer, ML-KEM, FrodoKEM, QKD adapter, vendor plug-ins, DB, Vault; HQC and Classic McEliece later). Standard cybermercury stack kept for compatibility. |
+| KME databases | Never shared. evokme: encrypted SQLite per node. Standard: one PostgreSQL container per KME. |

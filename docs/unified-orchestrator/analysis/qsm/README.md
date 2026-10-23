@@ -1,5 +1,10 @@
 # Quantum-Safe-MACsec orchestration — implementation analysis
 
+> Historical pre-M1 analysis: path/line citations below and in this directory
+> describe the audited baseline. QSM defects 1–7 have since been fixed; see
+> [M1 status](../../overlap.md#defects-identified-before-reuse) and the linked
+> current CLI references before treating baseline behavior as current.
+
 Static read-and-document analysis of the `unified-orchestrator` worktree. The documents describe implemented behavior, including destructive and incomplete paths, rather than presenting deployment instructions as verified production procedures. No router/Linux/network/container actions, CLI help, tests or project Python imports were executed. Only new Markdown documentation was created.
 
 ## Index

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print or run the ordered KME-then-QKD deployment workflow."""
+"""Print or run the ordered PKI, KME, then QKD deployment workflow."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Deploy a customer KME, then the QKD orchestrator.")
+    parser = argparse.ArgumentParser(description="Generate QKD PKI, deploy the KME, then deploy QKD.")
     parser.add_argument(
         "--name",
         required=True,
@@ -55,22 +55,20 @@ def main() -> int:
         )
         return 2
 
-    commands = []
+    commands = [[python, "qkd_orchestrator.py", "create", "--inventory", str(inventory)]]
     if not args.skip_kme:
         commands.append(
-            [python, "kme_orchestrator.py", "--config", str(kme_config), "create"]
+            [python, "kme_orchestrator.py", "create", "--config", str(kme_config)]
         )
     commands.extend(
         [
-            [python, "qkd_orchestrator.py", "create", "--inventory", str(inventory)],
             [python, "qkd_orchestrator.py", "bootstrap"],
-            [python, "qkd_orchestrator.py", "validate", "--phase", "predeploy"],
             [python, "qkd_orchestrator.py", "deploy"],
             [python, "qkd_orchestrator.py", "validate", "--phase", "postdeploy"],
         ]
     )
 
-    print("Deployment order: KME first, then QKD.\n")
+    print("Deployment order: QKD create (PKI), KME create, QKD bootstrap/deploy.\n")
     print(f"Run this first in your shell:\n  source {env_file}\n")
     for index, command in enumerate(commands, start=1):
         print(f"{index}. {' '.join(command)}")

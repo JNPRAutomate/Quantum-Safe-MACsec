@@ -41,9 +41,21 @@ product's key store on the other.
 | Locks | runtime lock files | device-wide Junos lock, bastion lock, K8s Lease | evokme | Works across hosts and pods. |
 | Observability | `tools/*` log and rotation reports | Loki/Grafana/collector/triage catalogue | evokme stack; port QSM reports as queries | One logging stack. |
 
-## Defects to fix before reuse
+## Defects identified before reuse
 
-Copying these into a container would only package the bugs.
+The table below records the original analysis and its pre-fix line references.
+**QSM defects 1–7 are fixed in milestone M1**; evokme defects 8–10 remain outside
+that milestone. Current behavior is documented in the
+[QKD CLI reference](../qkd/cli_reference.md) and
+[KME CLI reference](../kme/cli_reference.md).
+
+M1 makes validation and on-box status read-only (the fresh-deploy runtime reset
+is now an explicit `deploy` step), scopes default cleanup to
+known objects, propagates provisioning failures, orders PKI before KME creation,
+installs/verifies the AO rotation timer, and fixes the SQL content type and
+bounded PostgreSQL readiness wait. The documented, explicit `--full-macsec`
+wide reset and rotation-path seed safety reconciliation are intentionally
+retained. Runtime on-box scripts are generated from `artifacts/qkd_onbox.py`.
 
 | # | Defect | Where |
 |---|---|---|

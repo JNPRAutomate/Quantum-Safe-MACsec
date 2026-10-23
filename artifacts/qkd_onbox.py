@@ -6656,43 +6656,10 @@ def _status_payload_for_link(link):
     if not iface:
         return None
 
-    runtime_mode, effective_batch = log_runtime_mode(iface, "STATUS")
+    runtime_mode = active_rotation_mode()
+    effective_batch = key_batch_size() if batch_mode_enabled() else 1
     peer = link["peer"]
     state = load_link_state(peer, iface, link)
-    seed_reset = configured_bootstrap_seed_only(link, iface)
-    if not keychain_state_valid(state) or seed_reset:
-        previous_active = state.get("active_key_id")
-        state, adopted = adopt_bootstrap_seed(link, iface, state)
-        if not adopted:
-            return None
-        if seed_reset and previous_active != state.get("active_key_id"):
-            log(
-                f"ORCHESTRATOR SEED RESET RECONCILED old_active_key_id={previous_active} "
-                f"new_active_key_id={state.get('active_key_id')}",
-                "INFO",
-                iface,
-                "BOOTSTRAP",
-            )
-        if not save_db_state(peer, iface, state):
-            log(
-                "STATUS SUPPRESSED reason=SEED_STATE_SAVE_FAILED",
-                "ERROR",
-                iface,
-                "STATUS",
-            )
-            return None
-    before_reconcile = json.dumps(state, sort_keys=True)
-    state = reconcile_state_with_router(link, iface, state)
-    state, promoted = promote_pending_key_if_mka_confirmed(peer, iface, state)
-    if promoted or before_reconcile != json.dumps(state, sort_keys=True):
-        if not save_db_state(peer, iface, state):
-            log(
-                "STATUS SUPPRESSED reason=RECONCILED_STATE_SAVE_FAILED",
-                "ERROR",
-                iface,
-                "STATUS",
-            )
-            return None
 
     configured_entries = get_configured_keychain_entries(
         stable_keychain_name(link),
@@ -6818,7 +6785,6 @@ def run_slave_status(iface):
         for link in managed_links():
             state = _status_payload_for_link(link)
             if state is not None:
-                export_peer_status_snapshot(link, state)
                 payload.append(state)
         print(json.dumps(payload))
         return True
@@ -6829,7 +6795,6 @@ def run_slave_status(iface):
     state = _status_payload_for_link(link)
     if state is None:
         return False
-    export_peer_status_snapshot(link, state)
     print(json.dumps(state))
     return True
 
@@ -7877,7 +7842,6 @@ def run_master():
 
 
 def main():
-    log(f"SCRIPT START version={SCRIPT_VERSION}", "INFO")
 
     # Refuse to run as root or as any user other than SCRIPT_USER.
     # On Junos EVO (ACX) the script must execute as etsi_user via event-options
@@ -7898,6 +7862,12 @@ def main():
         print(f"ERROR WRONG RUNTIME USER runtime_user={_runtime_user} expected={SCRIPT_USER}")
         sys.exit(1)
 
+    action, key_id, iface, generation, start_time, batch_b64, source_device, pubkey_b64 = parse_slave()
+    if action == "status":
+        ok = run_slave_status(iface)
+        sys.exit(0 if ok else 1)
+
+    log(f"SCRIPT START version={SCRIPT_VERSION}", "INFO")
     if not enforce_runtime_file_permissions():
         log("PERM GUARD FAILED -> EXIT", "ERROR")
         print("ERROR PERM GUARD FAILED")
@@ -7907,8 +7877,6 @@ def main():
         log(f"UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain", "ERROR")
         print(f"ERROR UNSUPPORTED MACSEC_MODEL={MACSEC_MODEL}; expected keychain")
         sys.exit(1)
-
-    action, key_id, iface, generation, start_time, batch_b64, source_device, pubkey_b64 = parse_slave()
 
     if action:
         if action == "bgp-tcp-ao-start":
@@ -7993,10 +7961,6 @@ def main():
                 ok = run_slave_install_key(key_id, iface, generation, start_time)
             finally:
                 release_action_lock(iface, action)
-            sys.exit(0 if ok else 1)
-
-        if action == "status":
-            ok = run_slave_status(iface)
             sys.exit(0 if ok else 1)
 
         if action == "install-key-batch":

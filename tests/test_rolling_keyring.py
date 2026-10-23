@@ -50,6 +50,7 @@ def test_onbox_identity_guard_accepts_admin_and_rejects_other_users(
             "runtime_user": lambda: actual_user,
             "log": lambda message, *_args: messages.append(message),
             "enforce_runtime_file_permissions": lambda: False,
+            "parse_slave": lambda: (None,) * 8,
             "sys": sys,
         }
     )

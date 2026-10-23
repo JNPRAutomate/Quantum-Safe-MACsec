@@ -137,6 +137,23 @@ Options:
 - `--recreate-db`
 - `--content-type {BYTEA,TEXT}`
 
+`--content-type` defaults to `BYTEA` and is applied when creating the `keys`
+table; `TEXT` remains supported. `CREATE TABLE IF NOT EXISTS` does not change
+an existing table's column type. `--recreate-db` explicitly drops the table and
+its data before creating the selected schema.
+
+Database readiness is bounded (default 120 seconds), with each `pg_isready`
+probe limited to two seconds. Configure the positive timeout in the KME YAML:
+
+```yaml
+database:
+  readiness_timeout_seconds: 120
+```
+
+A timeout prints `PostgreSQL readiness timed out after ...s` and fails db-init
+before schema creation or verification. Dry-run prints this bounded wait
+without executing it.
+
 ## deploy
 
 Run compose deployment for selected/all services.

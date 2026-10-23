@@ -37,8 +37,13 @@ def test_script_config_honors_resolved_runtime_user(monkeypatch, runtime_user):
     monkeypatch.setattr(provisioning, "commit_safely", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(provisioning, "load_runtime_qkd_policy", lambda: {})
 
+    monkeypatch.setattr(
+        provisioning,
+        "rpc_text",
+        lambda _response: "\n".join(loaded),
+    )
     provisioning.configure_qkd_scripts(
-        SimpleNamespace(),
+        SimpleNamespace(rpc=SimpleNamespace(cli=lambda *_args, **_kwargs: None)),
         "EVO2",
         {"secrets": {"script_user": "etsi_user"}},
         script_user=runtime_user,
@@ -104,8 +109,8 @@ def test_tcp_ao_runtime_setup_registers_script_distributes_peer_keys_and_certs(m
 
     monkeypatch.setattr(
         provisioning,
-        "configure_tcp_ao_op_script",
-        lambda current_device, name: calls.append(("op_script", current_device, name)),
+        "configure_qkd_scripts",
+        lambda current_device, name, inventory: calls.append(("event_op_scripts", current_device, name, inventory)),
     )
     monkeypatch.setattr(
         provisioning,
@@ -131,7 +136,7 @@ def test_tcp_ao_runtime_setup_registers_script_distributes_peer_keys_and_certs(m
     )
 
     assert calls == [
-        ("op_script", device, "EVO1"),
+        ("event_op_scripts", device, "EVO1", base),
         ("rpc_keys", device, "EVO1", device_config, all_devices, base),
         ("certs", device, "EVO1", device_config),
     ]

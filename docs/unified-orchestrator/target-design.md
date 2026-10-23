@@ -28,17 +28,41 @@ Linux host (Ubuntu or RHEL)
 │     volumes: /state (journal DB), /config (inventory), /secrets (SSH, tokens; read-only)
 ├── evokme-pki          CA keys only here; API over mTLS; issues/renews/revokes
 │     volume: /ca (private, never mounted elsewhere)
-└── workloads managed by the controller (not part of it)
-      ├── KME provider "standard": cybermercury ETSI 014 KME + PostgreSQL (Docker Compose)
-      ├── KME provider "evokme": core, ETSI front end, composer, ML-KEM, FrodoKEM, vendor plug-ins (K3s or EVO)
-      └── Vault / epoch authority (evokme provider only)
+└── workloads managed by the controller (not part of it): KME stacks, see below
 Routers
-  ├── on-box agent (qkd_onbox.py or evokme_onbox.py, per provider)
-  └── optional KME containers on Junos EVO
+  ├── on-box agent (qkd_onbox.py or evokme_onbox.py, per stack type)
+  └── optional KME stack containers on Junos EVO
 ```
 
 The CA private keys never leave `evokme-pki`. Routers and the controller only
 receive leaf certificates and trust bundles.
+
+## KME stacks (unified topology)
+
+Both KME types are modelled as a **KME stack**: a set of containers with the
+same lifecycle (`plan`, `deploy`, `status`, add/remove a component without
+stopping the others, `retire`) and the same inventory section. Each link names
+the stack type it uses.
+
+| Stack type | Status | Containers per KME node |
+|---|---|---|
+| `evokme` | **Preferred, default for new deployments** | ETSI front end (014, and 020 where enabled), KME core, composer, KEM providers (ML-KEM, FrodoKEM; HQC and Classic McEliece planned), QKD adapter, vendor plug-ins (PhioTX, QBT, ...), **own encrypted SQLite database**, link to the site Vault / epoch authority |
+| `standard` | Compatibility (earlier, simpler design) | cybermercury ETSI 014 KME, **own PostgreSQL container** (one instance per KME) |
+
+**No shared database.** Every KME node has its own database and
+credentials. A database failure or compromise affects one KME, not all of
+them. The old layout (N KMEs on one shared PostgreSQL) stays importable but is
+not offered for new deployments.
+
+Topology layers:
+
+1. **Site services, one per site:** PKI, Vault and epoch authority, registry, observability.
+2. **KME stack, one per node:** `evokme` or `standard`. A stack may span hosts, for example front end and core on the EVO router, KEM providers on Linux/K3s.
+3. **Per-link policy:** stack type, `key_mode` (qkd-only / kem-only / hybrid), KEM set, NIST level 1/3/5.
+
+**evokme database.** Encrypted SQLite/SQLCipher, one file per KME node, as
+today. It keeps the one-time key use and per-node envelope encryption that are
+already tested. No PostgreSQL for the evokme stack.
 
 ## Inside the controller
 
@@ -50,7 +74,7 @@ CLI ──► service
           └── adapters
                 ├── host: ubuntu-apt, rhel-dnf (docker, compose, k3s)
                 ├── pki: client for evokme-pki
-                ├── kme: standard (cybermercury+Postgres), evokme
+                ├── kme stacks: evokme (preferred), standard (cybermercury + own PostgreSQL)
                 ├── protection: macsec, tcp-ao-bgp, tcp-ao-ldp, ipsec-srx
                 ├── junos: SSH/NETCONF, confirmed commit, device lock
                 └── k8s: Jobs, leases (existing evokme controller)
@@ -74,7 +98,7 @@ links:
   - id: r1-r2
     endpoints: [R1, R2]
     protection: [macsec, tcp-ao-bgp]     # only those present and licensed are applied
-    kme_provider: evokme                 # or: standard
+    kme_stack: evokme                    # or: standard
     key_mode: hybrid                     # qkd-only | kem-only | hybrid
     kem: [ml-kem, frodo-kem]
     nist_level: 3                        # 1 | 3 | 5, same on both ends

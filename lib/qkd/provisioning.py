@@ -806,11 +806,27 @@ def configure_qkd_scripts(dev, name, base, script_user=None):
             detail=f"script={script_name}",
         )
 
+    verify_qkd_event_timer(dev, name, script_user)
     print(f"[{name}] QKD scripts event and op configured OK")
     
     # NOTE: script_user SSH keys are static and should NOT be modified here
     # They are provisioned separately via bootstrap/manual process
     # Attempting to sync them causes data loss of existing keys on device
+
+
+def verify_qkd_event_timer(dev, name, script_user):
+    output = rpc_text(dev.rpc.cli("show configuration event-options | display set", format="text"))
+    policy = load_runtime_qkd_policy().get("qkd_policy", {})
+    interval = int(policy.get("execution_interval_seconds", policy.get("interval_seconds", 60)))
+    expected = (
+        f"set event-options generate-event QKD_TIMER time-interval {interval}",
+        "set event-options policy QKD events QKD_TIMER",
+        f"set event-options policy QKD then event-script {ONBOX_SCRIPT_NAME}",
+        f"set event-options event-script file {ONBOX_SCRIPT_NAME} python-script-user {script_user}",
+    )
+    configured = {line.strip() for line in output.splitlines()}
+    if any(line not in configured for line in expected):
+        raise RuntimeError(f"[{name}] QKD event timer verification failed")
 
 
 def configure_tcp_ao_op_script(dev, name):
@@ -939,7 +955,7 @@ def apply_script_user_rpc_keys_config(dev, device_name, device_dict, all_devices
 
 
 def prepare_tcp_ao_runtime(dev, device_name, device_dict, all_devices_dict, base):
-    configure_tcp_ao_op_script(dev, device_name)
+    configure_qkd_scripts(dev, device_name, base)
     apply_script_user_rpc_keys_config(
         dev,
         device_name,
@@ -1298,9 +1314,12 @@ def run_provisioning(log, dry_run=False, preview=False, ssh_key=None, debug=Fals
 
             push_config(name, device, commands, base, devices)
         except Exception as exc:
-            failed_devices.append(name)
+            failed_devices.append((name, str(exc)))
             print(f"[{name}] WARN provisioning failed; continuing with remaining devices")
             print(f"[{name}] WARN detail: {exc}")
 
     if failed_devices:
-        print(f"[WARN] provisioning completed with failures on: {', '.join(sorted(failed_devices))}")
+        print("[FAIL] provisioning failure summary:")
+        for name, detail in failed_devices:
+            print(f"- {name}: {detail}")
+        raise RuntimeError("Provisioning failed for: " + ", ".join(name for name, _ in failed_devices))

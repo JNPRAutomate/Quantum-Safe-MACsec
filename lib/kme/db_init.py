@@ -164,7 +164,7 @@ def normalize_content_type(content_type: str) -> str:
 def build_schema_sql(content_type: str, recreate: bool = False) -> str:
     content_type = normalize_content_type(content_type)
     schema_sql = KEYS_SCHEMA_SQL.replace(
-        "content BYTEA NOT NULL",
+        "content TEXT NOT NULL",
         f"content {content_type} NOT NULL",
     )
     if recreate:
@@ -182,6 +182,9 @@ def run_db_init(
     service_name, container_name, user, database, password = get_db_settings(config)
     content_type = normalize_content_type(content_type)
     schema_sql = build_schema_sql(content_type=content_type, recreate=recreate)
+    readiness_timeout = int((config.get("database") or {}).get("readiness_timeout_seconds", 120))
+    if readiness_timeout <= 0:
+        raise ValueError("database.readiness_timeout_seconds must be positive")
 
     print("=== KME db-init ===")
     print(f"compose service : {service_name}")
@@ -201,10 +204,13 @@ def run_db_init(
     # wait for postgres
     #
     wait_cmd = (
+        f"deadline=$(( $(date +%s) + {readiness_timeout} )); "
         f"until docker exec {shell_quote(container_name)} "
-        f"pg_isready -U {shell_quote(user)} "
+        f"pg_isready -t 2 -U {shell_quote(user)} "
         f"-d {shell_quote(database)} >/dev/null 2>&1; "
-        f"do sleep 2; done"
+        f"do if [ $(date +%s) -ge $deadline ]; then "
+        f"echo 'PostgreSQL readiness timed out after {readiness_timeout}s' >&2; exit 1; fi; "
+        f"sleep 2; done"
     )
 
     remote_run(

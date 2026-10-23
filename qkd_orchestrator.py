@@ -61,7 +61,7 @@ from lib.qkd.pki_self_signed import build_self_signed_pki
 from lib.qkd.pki_hierarchical import build_hierarchical_pki
 from lib.qkd.onbox_builder import build_onbox_artifacts
 from lib.qkd.provisioning import prepare_tcp_ao_runtime, run_provisioning
-from lib.qkd.identity import ssh_script_user_onbox_cmd, validate_all_devices
+from lib.qkd.identity import reset_router_runtime_state, ssh_script_user_onbox_cmd, validate_all_devices
 from lib.qkd.clean import handle_clean
 from lib.qkd.bgp_tcp_ao import (
     load_bgp_tcp_ao_settings,
@@ -1763,6 +1763,12 @@ def handle_deploy(args):
             devices = {name: device for name, device in devices.items() if name not in skipped}
             if not devices:
                 raise RuntimeError("No devices remain after pre-deploy validation failures")
+
+        # Deploy starts from fresh on-box state (validation itself is read-only).
+        for name, device in devices.items():
+            if isinstance(device, dict):
+                print(f"[{name}] Resetting on-box runtime state for fresh deploy")
+                reset_router_runtime_state({"name": name, **device})
 
         # After pre-deploy validation, switch transport auth to SCRIPT_USER only
         # when password-based auth is enabled. In key-only mode, keep bootstrap

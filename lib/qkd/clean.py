@@ -1,6 +1,7 @@
 # qkd_clean.py
 
 import os
+import json
 import shlex
 import time
 import yaml
@@ -77,6 +78,48 @@ def collect_tcp_ao_auth_cleanup_commands(device_name, profile_dir=None):
             )
 
     return list(dict.fromkeys(commands))
+
+
+def collect_runtime_tcp_ao_cleanup_commands(device_name):
+    path = BASE_DIR / CONFIG["runtime_dir"] / device_name / "qkd_onbox_config.json"
+    if not path.is_file():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    commands = []
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-%")
+    for protocol in ("bgp_tcp_ao", "ldp_tcp_ao"):
+        config = payload.get(protocol) or {}
+        if not config.get("enabled"):
+            continue
+        for session in (config.get("sessions") or {}).values():
+            if device_name not in session.get("devices", []):
+                continue
+            endpoint = (session.get("endpoints") or {}).get(device_name) or {}
+            keychain = str(session.get("keychain_name") or "")
+            if protocol == "bgp_tcp_ao":
+                group = str(endpoint.get("group_name") or (session.get("group_names") or {}).get(device_name) or session.get("group_name") or "")
+                neighbor = str(endpoint.get("neighbor_address") or "")
+                instance = str(endpoint.get("routing_instance") or "")
+                if not group or not neighbor:
+                    continue
+                prefix = f"routing-instances {instance} protocols bgp" if instance else "protocols bgp"
+                target = f"{prefix} group {group} neighbor {neighbor}"
+            else:
+                peer = str(endpoint.get("peer_address") or "")
+                if not peer:
+                    continue
+                target = f"protocols ldp session {peer}"
+            if not keychain or not set(target.replace(" ", "") + keychain) <= allowed:
+                continue
+            commands.extend([
+                f"delete {target} authentication-key-chain",
+                f"delete {target} authentication-algorithm",
+                f"delete security authentication-key-chains key-chain {keychain}",
+            ])
+    # Detach all selected protocol references before deleting shared keychains.
+    bindings = [command for command in commands if not command.startswith("delete security ")]
+    keychains = [command for command in commands if command.startswith("delete security ")]
+    return list(dict.fromkeys(bindings + keychains))
 
 
 # ----------------------------------------
@@ -190,11 +233,12 @@ def collect_qkd_clean_candidates(device):
         if keychain_name and keychain_name not in keychain_candidates:
             keychain_candidates.append(keychain_name)
 
-    for ca in ca_candidates:
-        fallback_keychain = f"QKD_{ca}"
-
-        if fallback_keychain not in keychain_candidates:
-            keychain_candidates.append(fallback_keychain)
+    for link in device.get("links", []):
+        if link.get("keychain_name"):
+            continue
+        for ca in link.get("ca_names", []) or [link.get("ca_name")]:
+            if ca and f"QKD_{ca}" not in keychain_candidates:
+                keychain_candidates.append(f"QKD_{ca}")
 
     return iface_candidates, ca_candidates, keychain_candidates
 
@@ -325,6 +369,7 @@ def clean_device(name, device, full_macsec=False):
                 )
                 ca_candidates.extend(orphan_cas)
 
+
         def safe_iface_name(iface):
             return iface.replace("/", "_")
 
@@ -380,7 +425,9 @@ def clean_device(name, device, full_macsec=False):
             "/var/tmp/qkd_debug_*.log",
         ]
         config_cmds = [
-            "delete event-options",
+            "delete event-options policy QKD",
+            "delete event-options generate-event QKD_TIMER",
+            *[f"delete event-options event-script file {script}" for script in script_names_to_clean],
             *[
                 f"delete system scripts op file {cleanup_script_name}"
                 for cleanup_script_name in script_names_to_clean
@@ -395,6 +442,7 @@ def clean_device(name, device, full_macsec=False):
         if script_user_class and script_user_class.lower() not in builtin_classes:
             config_cmds.append(f"delete system login class {script_user_class}")
 
+        config_cmds.extend(collect_runtime_tcp_ao_cleanup_commands(name))
         if full_macsec:
             config_cmds.append("delete security macsec")
             config_cmds.extend(collect_tcp_ao_auth_cleanup_commands(name))
@@ -414,11 +462,6 @@ def clean_device(name, device, full_macsec=False):
                 config_cmds.append(
                     f"delete security authentication-key-chains key-chain {keychain}"
                 )
-
-        for iface in iface_candidates:
-            config_cmds.append(
-                f"delete interfaces {iface} description"
-            )
 
         config_body = "; ".join(config_cmds)
 
@@ -723,7 +766,9 @@ def clean_device(name, device, full_macsec=False):
             )
 
             forbidden_patterns = [
-                "set event-options ",
+                "set event-options policy QKD ",
+                "set event-options generate-event QKD_TIMER ",
+                *[f"set event-options event-script file {script} " for script in script_names_to_clean],
                 *[
                     f"set system scripts op file {cleanup_script_name}"
                     for cleanup_script_name in script_names_to_clean
@@ -753,9 +798,10 @@ def clean_device(name, device, full_macsec=False):
                         f"set security authentication-key-chains key-chain {keychain}"
                     )
 
-            for iface in iface_candidates:
-                forbidden_patterns.append(
-                    f"set interfaces {iface} description"
+            if not full_macsec:
+                forbidden_patterns.extend(
+                    command.replace("delete ", "set ", 1) + " "
+                    for command in collect_runtime_tcp_ao_cleanup_commands(name)
                 )
 
             config_leftovers = []
@@ -764,7 +810,7 @@ def clean_device(name, device, full_macsec=False):
                 line = line.strip()
 
                 for pattern in forbidden_patterns:
-                    if pattern in line:
+                    if line == pattern.rstrip() or line.startswith(pattern.rstrip() + " "):
                         config_leftovers.append(line)
                         break
 
